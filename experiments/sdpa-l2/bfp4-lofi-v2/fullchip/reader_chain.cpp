@@ -18,7 +18,7 @@
 // - No dummy or skipped K/V rounds; all active links traverse K then V for each
 //   (local_Q_ordinal, K_chunk) in the same order. Global Q offsets may differ.
 // These make the reserved K/V write pointer identical across an active link:
-// base + ((local_Q_ordinal*k_chunks + K_chunk) % slots)*64*tile_bytes.
+// base + ((local_Q_ordinal*k_chunks + K_chunk) % slots)*kv_tiles*tile_bytes.
 // When a shorter downstream core finishes, forwarding stops BEFORE any pointer
 // equality would be assumed for an event it no longer receives.
 
@@ -34,13 +34,17 @@
 #ifndef SDPA_READER_BARRIER_TILES
 #define SDPA_READER_BARRIER_TILES 2
 #endif
+#ifndef SDPA_K_CHUNK_TILES
+#define SDPA_K_CHUNK_TILES 16
+#endif
+constexpr uint32_t kv_tiles = SDPA_K_CHUNK_TILES * 4;
 
 template <uint32_t tile_bytes, bool transpose, typename Accessor>
 FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint32_t first_page, uint32_t write_ptr) {
     // Sequential source requests distribute traffic over the interleaved banks;
     // K scatters the tile grid in L1, without transposing individual tiles.
-    for (uint32_t p = 0; p < 64; ++p) {
-        const uint32_t dst_tile = transpose ? (p % 4) * 16 + p / 4 : p;
+    for (uint32_t p = 0; p < kv_tiles; ++p) {
+        const uint32_t dst_tile = transpose ? (p % 4) * SDPA_K_CHUNK_TILES + p / 4 : p;
         noc.async_read(
             tensor,
             CoreLocalMem<uint32_t>(write_ptr + dst_tile * tile_bytes),
@@ -60,7 +64,7 @@ void kernel_main() {
     constexpr uint32_t q_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t k_chunks = get_compile_time_arg_val(1);
     constexpr uint32_t queries_per_head = get_compile_time_arg_val(2);
-    static_assert(q_tiles == 8, "Private chain experiment fixes Q256/K512/D128");
+    static_assert(q_tiles > 0 && q_tiles % 2 == 0);
     static_assert(k_chunks > 0 && queries_per_head > 0);
     constexpr auto qa = TensorAccessorArgs<3>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
@@ -105,7 +109,7 @@ void kernel_main() {
         0,
         0,
         0,  // Multicast rectangle/destination count: unused for unicast.
-        64,
+        kv_tiles,
         kbytes,
         head,
         next_jobs);
@@ -119,7 +123,7 @@ void kernel_main() {
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(4), 0x3f803f80);
 
-    const uint32_t kvbase = head * k_chunks * 64;
+    const uint32_t kvbase = head * k_chunks * kv_tiles;
     for (uint32_t qi = 0; qi < jobs; ++qi) {
         const uint32_t qbase = (first_job + qi) * q_tiles * 4;
         qcb.reserve_back(q_tiles * 4);
@@ -133,9 +137,9 @@ void kernel_main() {
         const bool receive = link.should_receive(head);
         const bool forward = link.should_forward(head, qi);
         for (uint32_t ki = 0; ki < k_chunks; ++ki) {
-            const uint32_t first_kv_page = kvbase + ki * 64;
+            const uint32_t first_kv_page = kvbase + ki * kv_tiles;
 
-            kcb.reserve_back(64);
+            kcb.reserve_back(kv_tiles);
             const uint32_t kptr = kcb.get_write_ptr();
             if (receive) {
                 link.receive(noc);
@@ -145,14 +149,14 @@ void kernel_main() {
             if (forward) {
                 // Production ChainLink waits for downstream reservation, sends
                 // to (next_x,next_y,kptr), flushes its source, then relays valid.
-                link.forward(noc, kptr, 64, kbytes);
+                link.forward(noc, kptr, kv_tiles, kbytes);
             }
             // Publish on every rank only AFTER forwarding has released its source.
             // Crucially, K is published BEFORE reserving V, retaining K lookahead
             // when the previous iteration still occupies the one-slot V buffer.
-            kcb.push_back(64);
+            kcb.push_back(kv_tiles);
 
-            vcb.reserve_back(64);
+            vcb.reserve_back(kv_tiles);
             const uint32_t vptr = vcb.get_write_ptr();
             if (receive) {
                 link.receive(noc);
@@ -160,9 +164,9 @@ void kernel_main() {
                 read_kv_from_dram<vbytes, false>(noc, v, first_kv_page, vptr);
             }
             if (forward) {
-                link.forward(noc, vptr, 64, vbytes);
+                link.forward(noc, vptr, kv_tiles, vbytes);
             }
-            vcb.push_back(64);
+            vcb.push_back(kv_tiles);
         }
     }
     noc.async_write_barrier();

@@ -1,0 +1,576 @@
+MessageName;total_ns
+perf_event_paranoid: 4;212735726
+Failed to get tracefs path, cannot setup system tracing.;212929330
+SYNC_CHECK;4070198063
+`TT_DNN_DEVICE_OP: "GenericOpDeviceOperation", 17134344485103918731, 0, false, 1024 ->
+{
+    "attributes": {
+        "num_mesh_programs": "1"
+    },
+    "device_id": 0,
+    "global_call_count": 1024,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "LoFi",
+                "name": "compute/7470036541968557747/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/compute.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer/4143966473012110697/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp"
+            },
+            {
+                "name": "reader/14273529329970245668/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1424,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1236,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1580,
+            "TENSIX_DM_0_max_kernel_size": 728,
+            "TENSIX_DM_1_max_kernel_size": 688
+        }
+    },
+    "op_code": "GenericOpDeviceOperation",
+    "op_hash": 17134344485103918731,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;4666820948
+`TT_DNN_DEVICE_OP: "GenericOpDeviceOperation", 8813444657351496901, 0, false, 2048 ->
+{
+    "attributes": {
+        "num_mesh_programs": "1"
+    },
+    "device_id": 0,
+    "global_call_count": 2048,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "512[512]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "512[512]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "512[512]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "LoFi",
+                "name": "compute/3694141438208553724/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/compute.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer/17137332370199420129/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp"
+            },
+            {
+                "name": "reader/17424946697496238567/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 1424,
+            "TENSIX_COMPUTE_1_max_kernel_size": 1240,
+            "TENSIX_COMPUTE_2_max_kernel_size": 1580,
+            "TENSIX_DM_0_max_kernel_size": 724,
+            "TENSIX_DM_1_max_kernel_size": 688
+        }
+    },
+    "op_code": "GenericOpDeviceOperation",
+    "op_hash": 8813444657351496901,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "512[512]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;5211984247
+`TT_DNN_DEVICE_OP: "GenericOpDeviceOperation", 8813444657351496901, 0, false, 3072`;5212319633
+`TT_DNN_DEVICE_OP: "GenericOpDeviceOperation", 8525838246561840962, 0, false, 4096 ->
+{
+    "attributes": {
+        "num_mesh_programs": "1"
+    },
+    "device_id": 0,
+    "global_call_count": 4096,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "512[512]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "512[512]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "LoFi",
+                "name": "compute/12920430427994273118/",
+                "source": "experiments/sdpa-l2/compute-sprint-v1/lowp/compute.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer/15886565141194923379/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp"
+            },
+            {
+                "name": "reader/14175368314363672253/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 16248,
+            "TENSIX_COMPUTE_1_max_kernel_size": 12252,
+            "TENSIX_COMPUTE_2_max_kernel_size": 14280,
+            "TENSIX_DM_0_max_kernel_size": 760,
+            "TENSIX_DM_1_max_kernel_size": 1660
+        }
+    },
+    "op_code": "GenericOpDeviceOperation",
+    "op_hash": 8525838246561840962,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;6762623743
+`TT_DNN_DEVICE_OP: "GenericOpDeviceOperation", 734807170053171540, 0, false, 5120 ->
+{
+    "attributes": {
+        "num_mesh_programs": "1"
+    },
+    "device_id": 0,
+    "global_call_count": 5120,
+    "input_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "512[512]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT8_B",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "512[512]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        },
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "kernel_info": {
+        "compute_kernels": [
+            {
+                "math_fidelity": "LoFi",
+                "name": "compute/10271151949020545748/",
+                "source": "experiments/sdpa-l2/compute-sprint-v1/lowp/compute.cpp"
+            }
+        ],
+        "datamovement_kernels": [
+            {
+                "name": "writer/15886565141194923379/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp"
+            },
+            {
+                "name": "reader/14175368314363672253/",
+                "source": "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp"
+            }
+        ],
+        "kernel_sizes": {
+            "ACTIVE_ETH_DM_0_max_kernel_size": 0,
+            "ACTIVE_ETH_DM_1_max_kernel_size": 0,
+            "IDLE_ETH_DM_0_max_kernel_size": 0,
+            "IDLE_ETH_DM_1_max_kernel_size": 0,
+            "TENSIX_COMPUTE_0_max_kernel_size": 16476,
+            "TENSIX_COMPUTE_1_max_kernel_size": 12308,
+            "TENSIX_COMPUTE_2_max_kernel_size": 14156,
+            "TENSIX_DM_0_max_kernel_size": 760,
+            "TENSIX_DM_1_max_kernel_size": 1660
+        }
+    },
+    "op_code": "GenericOpDeviceOperation",
+    "op_hash": 734807170053171540,
+    "op_type": "tt_dnn_device",
+    "optional_input_tensors": [],
+    "output_tensors": [
+        {
+            "dtype": "BFLOAT16",
+            "layout": "TILE",
+            "shape": {
+                "W": "1[1]",
+                "X": "128[128]",
+                "Y": "256[256]",
+                "Z": "1[1]"
+            },
+            "storage_type": {
+                "device_id": 1,
+                "memory_config": {
+                    "buffer_type": "DRAM",
+                    "memory_layout": "INTERLEAVED"
+                }
+            }
+        }
+    ],
+    "performance_model": {
+        "bandwidth_ns": 1,
+        "compute_ns": 1,
+        "ideal_ns": 1,
+        "input_bws": [],
+        "output_bws": []
+    },
+    "program_cache_hit": false
+}`;8493063206
+`TT_METAL_TRACE_BEGIN: 0, 0`;8637097315
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 0, 0, 6`;8637217577
+`TT_DNN_DEVICE_OP: "GenericOpDeviceOperation", 8525838246561840962, 0, false, 6144`;8637283788
+`TT_METAL_TRACE_END: 0, 0`;8637296428
+`TT_METAL_TRACE_BEGIN: 0, 1`;8637429481
+`TT_METAL_TRACE_ENQUEUE_PROGRAM: 0, 1, 7`;8637464631
+`TT_DNN_DEVICE_OP: "GenericOpDeviceOperation", 734807170053171540, 0, false, 7168`;8637483952
+`TT_METAL_TRACE_END: 0, 1`;8637490642
+`TT_METAL_TRACE_REPLAY: 0, 0`;8637584913
+`TT_METAL_TRACE_REPLAY: 0, 0`;8784700098
+`TT_METAL_TRACE_REPLAY: 0, 1`;8931834812
+`TT_METAL_TRACE_REPLAY: 0, 1`;9076081074
+`TT_METAL_TRACE_RELEASE: 0, 0`;9220689542
+`TT_METAL_TRACE_RELEASE: 0, 1`;9220714223
+FINISH_SYNC;9266145219

@@ -1,0 +1,2683 @@
+{
+  "arguments": {
+    "variant": "B",
+    "candidate": "pack_overlap",
+    "label": "B-overlap-transfer-01",
+    "q_length": 2048,
+    "k_length": 1536,
+    "cores": 2,
+    "seed": 20260920,
+    "distributions": "normal,growing_max,outliers,common_v"
+  },
+  "results": [
+    {
+      "distribution": "normal",
+      "mode": "canonical",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "31d9bfecbbee60bbd990cdd7f00d1b6b0cf3c30100f26440463a0aa97ad6d5e2",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "normal",
+      "mode": "disabled",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "31d9bfecbbee60bbd990cdd7f00d1b6b0cf3c30100f26440463a0aa97ad6d5e2",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "normal",
+      "mode": "pack_overlap",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "31d9bfecbbee60bbd990cdd7f00d1b6b0cf3c30100f26440463a0aa97ad6d5e2",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ],
+            [
+              "SDPA_REVIEW_PACK_OVERLAP",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ],
+            [
+              "SDPA_REVIEW_PACK_OVERLAP",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "growing_max",
+      "mode": "canonical",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "de53e7fcbcc5692ae66b07f0f8625dfde7974b239086c41c55a7f2d1f741d1c2",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "growing_max",
+      "mode": "disabled",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "de53e7fcbcc5692ae66b07f0f8625dfde7974b239086c41c55a7f2d1f741d1c2",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "growing_max",
+      "mode": "pack_overlap",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "de53e7fcbcc5692ae66b07f0f8625dfde7974b239086c41c55a7f2d1f741d1c2",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ],
+            [
+              "SDPA_REVIEW_PACK_OVERLAP",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ],
+            [
+              "SDPA_REVIEW_PACK_OVERLAP",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "outliers",
+      "mode": "canonical",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "bad12ea58244c995d4e1600e2b872cfe0917053e4bebc28ee73015880b45bcf8",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "outliers",
+      "mode": "disabled",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "bad12ea58244c995d4e1600e2b872cfe0917053e4bebc28ee73015880b45bcf8",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "outliers",
+      "mode": "pack_overlap",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "bad12ea58244c995d4e1600e2b872cfe0917053e4bebc28ee73015880b45bcf8",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ],
+            [
+              "SDPA_REVIEW_PACK_OVERLAP",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ],
+            [
+              "SDPA_REVIEW_PACK_OVERLAP",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "common_v",
+      "mode": "canonical",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "bb43cef6582246106afd5fd2d255e8ffaeb875fa4cf33aeeb527705aaeeedd21",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "common_v",
+      "mode": "disabled",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "bb43cef6582246106afd5fd2d255e8ffaeb875fa4cf33aeeb527705aaeeedd21",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    },
+    {
+      "distribution": "common_v",
+      "mode": "pack_overlap",
+      "bitwise_equal": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "output_sha256": "bb43cef6582246106afd5fd2d255e8ffaeb875fa4cf33aeeb527705aaeeedd21",
+      "descriptors": [
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ],
+            [
+              "SDPA_REVIEW_PACK_OVERLAP",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+          "defines": [
+            [
+              "SDPA_READER_BARRIER_TILES",
+              "2"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ]
+          ],
+          "compile_time_args": [
+            8,
+            3,
+            8,
+            2,
+            2048,
+            2,
+            2048,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+          "defines": [],
+          "compile_time_args": [
+            8,
+            2,
+            2048
+          ]
+        },
+        {
+          "kernel_source": "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp",
+          "defines": [
+            [
+              "EXP_APPROX_MODE",
+              "1"
+            ],
+            [
+              "STATS_GRANULARITY",
+              "8"
+            ],
+            [
+              "SUB_EXP_GRANULARITY",
+              "8"
+            ],
+            [
+              "MUL_BCAST_GRANULARITY",
+              "8"
+            ],
+            [
+              "DHT_GRANULARITY",
+              "4"
+            ],
+            [
+              "REDUCE_GRANULARITY",
+              "4"
+            ],
+            [
+              "SDPA_STREAMING_ACCURACY",
+              "1"
+            ],
+            [
+              "SDPA_STREAMING_NUMERATOR_COMPENSATION",
+              "1"
+            ],
+            [
+              "SDPA_OUT_A_CB",
+              "8"
+            ],
+            [
+              "SDPA_OUT_B_CB",
+              "9"
+            ],
+            [
+              "SDPA_LOFI_FIX_CORRECTION",
+              "1"
+            ],
+            [
+              "SDPA_K_CHUNK_TILES",
+              "16"
+            ],
+            [
+              "SDPA_BF16_BLOCK_STATE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_REUSE",
+              "1"
+            ],
+            [
+              "SDPA_BF16_CORRECTION_FENCE",
+              "1"
+            ],
+            [
+              "SDPA_REVIEW_PACK_OVERLAP",
+              "1"
+            ]
+          ],
+          "compile_time_args": [
+            3,
+            1035273459,
+            8
+          ]
+        }
+      ],
+      "trace_replays": 2
+    }
+  ],
+  "source_sha256": {
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "54c51c56aa457134aed0181202c6fd3cad66df0a507659f364857c77dca9bb42",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b471e527b61f55f2c9f30573ee4cdd82f5cbad7d0b02e1c654814835d3d0916b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_refiner.hpp": "bfd75a1f702827ceefebc7255a47621b96d0438eefa5f79af60dbba62f791a00",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fast_correction.hpp": "1e6905b04d9afdea8498b4bbdbe43c0ae988896b5051dfa46137df1389d9f632",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/bench.py": "c2b6c04a2f4c8880abfeb8ab69e043836975714c0c0ee13c5207004ef3d57074",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compensated_block.hpp": "875923d51d836ff3b855c6c572d789eb09daeac82646576a672f2ba21e40b224",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compensated_reuse.hpp": "ea88f95690f556cf38db78f6660c910508fe4838d49f69f0f14cc62e78ee13bc",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp": "52b9caf31f5673637fd6ceab124c146cc0743036823b9e1878cc54ece194a65a",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_B.hpp": "862795195787049b6372c1463a8a64b9ac69986e62921190ab5b759fd7dd1463",
+    "experiments/sdpa-l2/compute-sprint-v1/lowp/block_state/compensated_block.hpp": "875923d51d836ff3b855c6c572d789eb09daeac82646576a672f2ba21e40b224",
+    "experiments/sdpa-l2/compute-sprint-v1/lowp/correction_reuse/compensated_reuse.hpp": "50087cbaaa273b5e88aa5358b2aa74bae17ca794c908039bee88dc26d049e6cc",
+    "experiments/sdpa-l2/compute-sprint-v2/compensated/correction_cache/compute_streaming.hpp": "14eaadbd35fd1120f1657e495fa2ce315c504ff3ef9068c43f4bdfc4cea24e2e",
+    "experiments/sdpa-l2/compute-sprint-v2/compensated/correction_cache/retain_release.hpp": "308f9466c62ebe81e564921e32ebb9a1c74f52f8a875a3087801b863dd1d53f1",
+    "experiments/sdpa-l2/compute-sprint-v2/compensated/pack_overlap/compute_streaming.hpp": "c2812c7d3b09b121e5cad5bcd84c2e46c8f81cfc39d93446ad26874c10c63bd9",
+    "experiments/sdpa-l2/compute-sprint-v2/compensated/pack_overlap/overlap.hpp": "2297d102d3a863475d9ec08bdfe2e8f68a79217b395bbcd9178357c9edd78014",
+    "experiments/sdpa-l2/compute-sprint-v2/review/compute.cpp": "db5da1b65e81198f40abcc49b3315f29d4bec4f32710436bffe3ca5d9b5968c1",
+    "experiments/sdpa-l2/compute-sprint-v2/review/profile_streaming.hpp": "35989836180c2371b0f81ed7bf554c719976b1ab5d22eb49dea67f85b0571401",
+    "experiments/sdpa-l2/compute-sprint-v2/review/transfer.py": "980d373cdc1be44151fe00e128f62ac39473cdcdc531639886e529906600fac6",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe",
+    "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "221331267dcdd1cc8acd4967b47779db7c671e03aa0506f67f0ea63237d5b48e",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "e216a923296e053f86c3aaa6bce3a097f79e323197023bc1a773e6ceef521a6d",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "e531a51efc6c47c4e4634b088f3d0256354c2096419379b1861b6f565a085ef6",
+    "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py": "8a78370d89e0a11f22e1d835b53b88141cb81b6b7e1a3e963228ea365631ae2d",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h": "563813232a5aaebc83f53425ccbb0d49a0eeb991742cc1e07e9e679b04a0a5b0",
+    "tt_metal/hw/inc/api/compute/reg_api.h": "c5b712643f005a05a09a92674d88e820d199acd22294640c86d4d184409701f5",
+    "tt_metal/hw/inc/api/compute/tile_move_copy.h": "eb260c9dffbc01c11c97b86e5eaf612814a7e20155288cbf83f3f0fd6574739c",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h": "2dd9b24481e98a00b0f365ed494e8f1d467fbf81de9e11905f7dff355b17377c",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_common.h": "b48e25251623a85e5e2fc04f5c765b2c82c3892e3be4739f10d09250819b5c7f"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "latents": "/localdev/cglagovich/flux2-frontier-20260915/suite-01/D/D-prompt0-seed0-latents.pt",
+  "latents_sha256": "37fcef70704ccdfd959c93ac25834b00b0e868bfbab95deb568a5985e1d6b6d1",
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "decoder": "Diffusers AutoencoderKLFlux2 CPU FP32, no tiling",
+  "elapsed_seconds": 28.968319228999462,
+  "decoded_min": -0.7566823959350586,
+  "decoded_max": 0.8979722857475281,
+  "decoded_std": 0.10713022202253342,
+  "image_sha256": "d4845063c11f277b2975eadebdf3b4e0d41f9943910de31509af373135b3fd15"
+}

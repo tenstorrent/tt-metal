@@ -31,7 +31,7 @@ from ...utils.tracing import StateTensor, traced_function
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from PIL import Image
 
@@ -72,6 +72,7 @@ class Flux2Pipeline:
         trace_warmup: bool = False,
         vae_use_conv3d: bool = False,
         shard_prompt: bool = False,
+        transformer_setup: Callable[[Flux2Transformer], None] | None = None,
     ) -> None:
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
@@ -140,6 +141,10 @@ class Flux2Pipeline:
             is_fsdp=self.is_fsdp,
             shard_prompt=self._shard_prompt,
         )
+        # Optional evaluation instrumentation/attention overrides must be installed
+        # before constructor warmup and trace capture. Default execution is unchanged.
+        if transformer_setup is not None:
+            transformer_setup(self.transformer)
 
         self._pos_embed = self._torch_transformer.pos_embed
 
@@ -283,6 +288,7 @@ class Flux2Pipeline:
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
         shard_prompt: bool = False,
+        transformer_setup: Callable[[Flux2Transformer], None] | None = None,
     ) -> Flux2Pipeline:
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
@@ -310,6 +316,7 @@ class Flux2Pipeline:
             trace_warmup=trace_warmup,
             vae_use_conv3d=vae_use_conv3d,
             shard_prompt=shard_prompt,
+            transformer_setup=transformer_setup,
         )
 
     def __call__(

@@ -1,0 +1,18 @@
+{
+  "all_pass": true,
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/codegen/pragma-qual-D-v1.json",
+      "sha256": "d21c510fb7040189703c6aff17faf8c15449948a25da19203de1b6d337084582",
+      "records_checked": 24,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/codegen/pragma-sustained-D-v1.json",
+      "sha256": "28a67c5b4663e9c1bb21ef411643c61514397a1fc375d10b2bb2ac342619cad1",
+      "records_checked": 6,
+      "pass": true
+    }
+  ],
+  "scope": "Saved raw-output/trace equality, private wrapper source hashes, unchanged numeric defines/geometry and useful FLOP arithmetic; not an independent device run or transitive compiler audit"
+}

@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/fp32/identity-long-C-v1.json",
+      "sha256": "55aa0fd4756e53d6c10d79be6102ac65ba643043b6b2324dbe51fb494e9bc741",
+      "records_checked": 8,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/fp32/identity-long-D-v1.json",
+      "sha256": "290eacc7e689c3466bbc2b1791918cd039ee5c38098a7a3fb36881ee21f4a26f",
+      "records_checked": 8,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-overlap-transfer-01.json",
+      "sha256": "63abe8f628e16fbccc757e90c789239bd646de8b9323e6b860205b5462d98787",
+      "records_checked": 12,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-overlap-paired-01.json",
+      "sha256": "bf2f8218c0969978400febe204eb7596e3691823d4a45e1c687a3d7dd383886f",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/e-pack-overlap-resident-v1.json",
+      "sha256": "9ae358dae8513865aa0f160747c5e86abfcc5d69db1553034804c8494440c1e3",
+      "records_checked": 1,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

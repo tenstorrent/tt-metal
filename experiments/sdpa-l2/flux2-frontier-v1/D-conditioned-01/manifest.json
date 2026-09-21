@@ -1,0 +1,837 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "variant": "D",
+  "conditioning": "corrected",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "ba95ed3dfdfb4a3622707544f286322aa697b10d83bd7e0fdc74922ad01667f2",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "451726d8aa456be4732ba1009d4ed1d8dc9f4d41841189ad3df7e9cb76e80747",
+    "experiments/sdpa-l2/flux2-frontier-v1/conditioning.py": "751456805a36bf1e8d166a44002b9eaba47e3d595f53d537ba8de8c914f703b7"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": false,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset"
+  ],
+  "seeds": [
+    0
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "local Q, prepared-format KV all-gather, rectangular attention",
+  "attention_recipe": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_FP32_FUSED_EXP": "1",
+    "SDPA_FP32_REUSE_EXP": "1",
+    "SDPA_FP32_EXTRA_CONST": "1",
+    "SDPA_FP32_PAIRED_UNPACK": "1",
+    "SDPA_FP32_PAIRED_PACK": "1",
+    "SDPA_FP32_L1_SUB": "1",
+    "SDPA_FP32_L1_MACRO": "1",
+    "SDPA_FP32_REFINE_MACRO": "1",
+    "SDPA_DIAG_EXP_MODE": "4",
+    "SDPA_FP32_SUB_BATCH": "2",
+    "SDPA_DENOM_PHASES": "2",
+    "SDPA_DIAG_SCORE_CB": "7"
+  },
+  "attention_qk_chunks": [
+    256,
+    512
+  ],
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "D-prompt0-seed0.png",
+      "image_sha256": "3225d02de30f9c4e648241aa92b57b3d0faefb35f314a67bb8c661d52457c849",
+      "latents": "D-prompt0-seed0-latents.pt",
+      "latents_sha256": "a8bab08886bc255f8324e12fa8615ac4b31eaa6eadd5ec7e34dc6531fb6a7cc5",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        1.328722,
+        0.257287,
+        0.255484,
+        0.255291,
+        0.257278,
+        0.308186,
+        0.406534,
+        0.413632,
+        0.419466,
+        0.423188,
+        0.427415,
+        0.432654,
+        0.43657,
+        0.441103,
+        0.446085,
+        0.449421,
+        0.456179,
+        0.464933,
+        0.469456,
+        0.477116,
+        0.482709,
+        0.487346,
+        0.490282,
+        0.495941,
+        0.501763,
+        0.50533,
+        0.675232,
+        0.844957,
+        0.853953,
+        0.863265,
+        0.868238,
+        0.86831,
+        0.869337,
+        0.869976,
+        0.869316,
+        0.868768,
+        0.869398,
+        0.869261,
+        0.869359,
+        0.869437,
+        0.869271,
+        0.869159,
+        0.869255,
+        0.870206,
+        0.868596,
+        0.869499,
+        0.869876,
+        0.868618,
+        0.869318,
+        0.869984
+      ],
+      "host_seconds": {
+        "run": 34.44311,
+        "encoder": 0.027372,
+        "denoising": 32.425047,
+        "vae": 1.972234
+      }
+    }
+  ],
+  "pipeline_setup_seconds": 380.12456571099756,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725"
+  },
+  "observed_attention_transport": {
+    "dual.0": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.1": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.2": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.3": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.4": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.5": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.6": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.7": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.0": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.1": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.2": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.3": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.4": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.5": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.6": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.7": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.8": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.9": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.10": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.11": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.12": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.13": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.14": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.15": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.16": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.17": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.18": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.19": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.20": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.21": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.22": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.23": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.24": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.25": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.26": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.27": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.28": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.29": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.30": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.31": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.32": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.33": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.34": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.35": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.36": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.37": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.38": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.39": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.40": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.41": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.42": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.43": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.44": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.45": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.46": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.47": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    }
+  },
+  "real_input_captures": {
+    "dual.0": {
+      "file": "qkv-dual.0.pt",
+      "sha256": "896a9e4c9aeb14e4603eddbff89552c45b2c53bba5bd86e719372ac5f2b8bfb2",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of 50-step prompt0 seed0 generation",
+      "rms": [
+        1.142043113708496,
+        1.0608783960342407,
+        4.951974391937256
+      ],
+      "max_abs": [
+        7.6875,
+        8.5,
+        44.0
+      ]
+    },
+    "dual.7": {
+      "file": "qkv-dual.7.pt",
+      "sha256": "3543b51e142a5c6700df02c514df61b4222b0df549b1bd75348267e3aa5e025a",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of 50-step prompt0 seed0 generation",
+      "rms": [
+        1.3833625316619873,
+        1.276736855506897,
+        4.402606964111328
+      ],
+      "max_abs": [
+        5.03125,
+        5.53125,
+        16.75
+      ]
+    },
+    "single.23": {
+      "file": "qkv-single.23.pt",
+      "sha256": "adfcbd23d1fa362f4c522087eec18da1dfc4c199412d5b84a8e7390816f69194",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of 50-step prompt0 seed0 generation",
+      "rms": [
+        1.4091670513153076,
+        1.395053744316101,
+        0.6908394694328308
+      ],
+      "max_abs": [
+        7.625,
+        7.125,
+        4.875
+      ]
+    },
+    "single.47": {
+      "file": "qkv-single.47.pt",
+      "sha256": "50b21b5cf5d69f03c6324a7a09f0512fdd88b422b137432af4ebc13c67d81a9f",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of 50-step prompt0 seed0 generation",
+      "rms": [
+        1.2547435760498047,
+        1.2730610370635986,
+        1.0649340152740479
+      ],
+      "max_abs": [
+        6.1875,
+        6.0625,
+        7.03125
+      ]
+    }
+  }
+}

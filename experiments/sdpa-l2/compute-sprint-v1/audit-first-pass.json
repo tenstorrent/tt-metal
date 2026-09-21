@@ -1,0 +1,24 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/C-qualify-v2.json",
+      "sha256": "8f66362eaaa7ecce38ff51875b8502940c7ff1258329e0848174320e72eeedcd",
+      "records_checked": 16,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/B-cache-steady-01.json",
+      "sha256": "9de93811ddf4beb0578486efed0709ac67cee4c5e8b8dd852b9497a439485bcd",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/e-reuse-num-distinct-v1.json",
+      "sha256": "8a47f4601d6eac9ba60c8e997975f247eb021a487d2e3f0ecca013a15461b550",
+      "records_checked": 1,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

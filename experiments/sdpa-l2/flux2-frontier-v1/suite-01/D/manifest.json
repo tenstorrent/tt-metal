@@ -1,0 +1,1545 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "variant": "D",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "f937b1e60dc6494c7e87542b839bcd5756c37a62e3e1dd2b09fc4806701f124e",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "451726d8aa456be4732ba1009d4ed1d8dc9f4d41841189ad3df7e9cb76e80747"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "/localdev/cglagovich/flux2-frontier-20260915/tt-metal/experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": true,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset",
+    "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+    "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors."
+  ],
+  "seeds": [
+    0,
+    42
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "local Q, prepared-format KV all-gather, rectangular attention",
+  "attention_recipe": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_FP32_FUSED_EXP": "1",
+    "SDPA_FP32_REUSE_EXP": "1",
+    "SDPA_FP32_EXTRA_CONST": "1",
+    "SDPA_FP32_PAIRED_UNPACK": "1",
+    "SDPA_FP32_PAIRED_PACK": "1",
+    "SDPA_FP32_L1_SUB": "1",
+    "SDPA_FP32_L1_MACRO": "1",
+    "SDPA_FP32_REFINE_MACRO": "1",
+    "SDPA_DIAG_EXP_MODE": "4",
+    "SDPA_FP32_SUB_BATCH": "2",
+    "SDPA_DENOM_PHASES": "2",
+    "SDPA_DIAG_SCORE_CB": "7"
+  },
+  "attention_qk_chunks": [
+    256,
+    512
+  ],
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "D-prompt0-seed0.png",
+      "image_sha256": "b1529e7cf13efc531950b71148158de424d9a1293259996d7de7d839e5e83ae8",
+      "latents": "D-prompt0-seed0-latents.pt",
+      "latents_sha256": "37fcef70704ccdfd959c93ac25834b00b0e868bfbab95deb568a5985e1d6b6d1",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.812559,
+        0.871192,
+        0.870981,
+        0.871054,
+        0.871446,
+        0.871239,
+        0.871278,
+        0.870936,
+        0.871222,
+        0.871274,
+        0.871064,
+        0.87131,
+        0.871342,
+        0.871396,
+        0.871057,
+        0.871096,
+        0.871641,
+        0.872919,
+        0.871323,
+        0.871357,
+        0.871133,
+        0.871365,
+        0.871277,
+        0.871281,
+        0.871487,
+        0.871327,
+        0.87107,
+        0.871391,
+        0.871275,
+        0.871175,
+        0.871448,
+        0.871126,
+        0.871171,
+        0.871017,
+        0.871443,
+        0.871194,
+        0.871253,
+        0.87115,
+        0.871073,
+        0.871141,
+        0.870999,
+        0.871058,
+        0.871121,
+        0.871183,
+        0.871129,
+        0.871103,
+        0.871271,
+        0.870982,
+        0.871109,
+        0.871165
+      ],
+      "host_seconds": {
+        "run": 44.293336,
+        "encoder": 0.022905,
+        "denoising": 43.515077,
+        "vae": 0.736842
+      }
+    },
+    {
+      "prompt_id": 0,
+      "seed": 42,
+      "image": "D-prompt0-seed42.png",
+      "image_sha256": "f95edb8aaa2c73eab8d59180432d276a5dc907dc6da33bab7cb1cf047d6721d4",
+      "latents": "D-prompt0-seed42-latents.pt",
+      "latents_sha256": "98ae1f4eeaec68a93019ed663d99fbbb05d3685a5cf5855488ad2a1764dbcf1e",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.870883,
+        0.870928,
+        0.871146,
+        0.871256,
+        0.870805,
+        0.871198,
+        0.870957,
+        0.871188,
+        0.870824,
+        0.870963,
+        0.871292,
+        0.871118,
+        0.870826,
+        0.874918,
+        0.88895,
+        0.891693,
+        0.900588,
+        0.908882,
+        0.908951,
+        0.908923,
+        0.908774,
+        0.908697,
+        0.908822,
+        0.909039,
+        0.908931,
+        0.908558,
+        0.90889,
+        0.908924,
+        0.90864,
+        0.908623,
+        0.908804,
+        0.908639,
+        0.908762,
+        0.90895,
+        0.908723,
+        0.908614,
+        0.909152,
+        0.909029,
+        0.90857,
+        0.908733,
+        0.908617,
+        0.908668,
+        0.908758,
+        0.908804,
+        0.908866,
+        0.908687,
+        0.908804,
+        0.910848,
+        0.908623,
+        0.908804
+      ],
+      "host_seconds": {
+        "run": 45.657839,
+        "encoder": 0.023611,
+        "denoising": 44.882989,
+        "vae": 0.73351
+      }
+    },
+    {
+      "prompt_id": 1,
+      "seed": 0,
+      "image": "D-prompt1-seed0.png",
+      "image_sha256": "6cd9ee2d6824550c88e5743c247c583eeb9f89f2bd97a4cc1bbe5f81e0210648",
+      "latents": "D-prompt1-seed0-latents.pt",
+      "latents_sha256": "67384b21a32eaffc405fd8a6c2908cc97f755a7f0e235b31b86bf8aa9074b5cc",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.908334,
+        0.908587,
+        0.908656,
+        0.909375,
+        0.908396,
+        0.908445,
+        0.908499,
+        0.908823,
+        0.90855,
+        0.908751,
+        0.908651,
+        0.908352,
+        0.90845,
+        0.908653,
+        0.90832,
+        0.90846,
+        0.908735,
+        0.90866,
+        0.908375,
+        0.908722,
+        0.908596,
+        0.908708,
+        0.908818,
+        0.908402,
+        0.908425,
+        0.908487,
+        0.908691,
+        0.908413,
+        0.908517,
+        0.90861,
+        0.908422,
+        0.908569,
+        0.908811,
+        0.908603,
+        0.908911,
+        0.908691,
+        0.909312,
+        0.908641,
+        0.908788,
+        0.908912,
+        0.908444,
+        0.908739,
+        0.908669,
+        0.90867,
+        0.908681,
+        0.90853,
+        0.908959,
+        0.909086,
+        0.908649,
+        0.908558
+      ],
+      "host_seconds": {
+        "run": 47.137677,
+        "encoder": 0.944651,
+        "denoising": 45.443275,
+        "vae": 0.732015
+      }
+    },
+    {
+      "prompt_id": 1,
+      "seed": 42,
+      "image": "D-prompt1-seed42.png",
+      "image_sha256": "627de039dfe2f0e80a1f3a795ffa32c3669a59f699052bb61d69a46414e5acda",
+      "latents": "D-prompt1-seed42-latents.pt",
+      "latents_sha256": "4646439d2ab6979c8c02143726bf30983316ec237a16bf5c8e9b6712a46a2a9f",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.908465,
+        0.90906,
+        0.911464,
+        0.908485,
+        0.908487,
+        0.908517,
+        0.908826,
+        0.908687,
+        0.908606,
+        0.908635,
+        0.908692,
+        0.908683,
+        0.90883,
+        0.908934,
+        0.908796,
+        0.90879,
+        0.908829,
+        0.908855,
+        0.909313,
+        0.908737,
+        0.908972,
+        0.908804,
+        0.90867,
+        0.90876,
+        0.908564,
+        0.908819,
+        0.909163,
+        0.908399,
+        0.908365,
+        0.908619,
+        0.90853,
+        0.910134,
+        0.912157,
+        0.908482,
+        0.908556,
+        0.908628,
+        0.90869,
+        0.908775,
+        0.90878,
+        0.908714,
+        0.908758,
+        0.908654,
+        0.908665,
+        0.908743,
+        0.908816,
+        0.908779,
+        0.90883,
+        0.908825,
+        0.908744,
+        0.908749
+      ],
+      "host_seconds": {
+        "run": 46.221529,
+        "encoder": 0.022104,
+        "denoising": 45.455811,
+        "vae": 0.727338
+      }
+    },
+    {
+      "prompt_id": 2,
+      "seed": 0,
+      "image": "D-prompt2-seed0.png",
+      "image_sha256": "a23be1676b48ec8cf71ad5de549470da3b44609c5c98f50af2b5f528a0ebeff9",
+      "latents": "D-prompt2-seed0-latents.pt",
+      "latents_sha256": "d81e9103d2e6e0b56f587d3f1ee0be944b466776a05f43efadac294bce955423",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.908693,
+        0.908926,
+        0.908681,
+        0.908811,
+        0.908604,
+        0.908584,
+        0.90859,
+        0.908634,
+        0.908775,
+        0.908761,
+        0.90861,
+        0.908616,
+        0.909064,
+        0.908691,
+        0.908706,
+        0.908799,
+        0.908878,
+        0.909109,
+        0.908801,
+        0.908987,
+        0.909022,
+        0.908503,
+        0.908572,
+        0.90881,
+        0.908716,
+        0.908592,
+        0.908709,
+        0.908857,
+        0.908676,
+        0.908734,
+        0.908729,
+        0.90874,
+        0.908758,
+        0.908627,
+        0.908884,
+        0.914003,
+        0.90878,
+        0.90907,
+        0.908569,
+        0.908655,
+        0.908698,
+        0.908654,
+        0.908546,
+        0.90862,
+        0.908454,
+        0.908648,
+        0.908658,
+        0.908588,
+        0.908708,
+        0.908734
+      ],
+      "host_seconds": {
+        "run": 47.074727,
+        "encoder": 0.869365,
+        "denoising": 45.454354,
+        "vae": 0.735202
+      }
+    },
+    {
+      "prompt_id": 2,
+      "seed": 42,
+      "image": "D-prompt2-seed42.png",
+      "image_sha256": "4dccbcf9a2051f1d636acf2ed2ce7024e20098ce2f40d5a26084007553cfc554",
+      "latents": "D-prompt2-seed42-latents.pt",
+      "latents_sha256": "1ef5a98bbd00bb509b03c4b05ae92e6e05452c6f6e95193398272cdafbb8bef5",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.908328,
+        0.908503,
+        0.908736,
+        0.908955,
+        0.908691,
+        0.908576,
+        0.9086,
+        0.908951,
+        0.908587,
+        0.908669,
+        0.908736,
+        0.908841,
+        0.911081,
+        0.909216,
+        0.908848,
+        0.908876,
+        0.908795,
+        0.90867,
+        0.90882,
+        0.908649,
+        0.911248,
+        0.909193,
+        0.908754,
+        0.908718,
+        0.908808,
+        0.909039,
+        0.912216,
+        0.908951,
+        0.911362,
+        0.908862,
+        0.908701,
+        0.911995,
+        0.908772,
+        0.908918,
+        0.908885,
+        0.908922,
+        0.908728,
+        0.909463,
+        0.908711,
+        0.908927,
+        0.908506,
+        0.908947,
+        0.908748,
+        0.909329,
+        0.908903,
+        0.909242,
+        0.908523,
+        0.909061,
+        0.908837,
+        0.909732
+      ],
+      "host_seconds": {
+        "run": 46.251127,
+        "encoder": 0.022245,
+        "denoising": 45.469665,
+        "vae": 0.742784
+      }
+    }
+  ],
+  "pipeline_setup_seconds": 383.34606829100085,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725",
+    "8d37170a179a4f84b9c63722a4b87329ec345786c3a12fdff37e0fd87d1acbbb": "6014bc3080f7ee0fed32709605adf0069fb66ceab56ee2fc7909ac16dd4110aa",
+    "50bf80e8ee300bdce8eba5ed77bdea45771f66c1680f94ba58cfa0c0ca341f36": "a758335a4766235612ceca195a0edf50c961b89127e93b6301acc0d1abfd7c73"
+  },
+  "real_input_captures": {
+    "dual.0": {
+      "file": "qkv-dual.0.pt",
+      "sha256": "5d1f4012e4525e03b4ed2ce182eb298b4fa6de476a83b6d570575c29a332c260",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.1420501470565796,
+        1.0600236654281616,
+        5.048369407653809
+      ],
+      "max_abs": [
+        7.65625,
+        8.5,
+        45.0
+      ]
+    },
+    "dual.7": {
+      "file": "qkv-dual.7.pt",
+      "sha256": "d81328358c24d4385933b7c1cb008f27fe91ff2fd817086a3171222f6bf38a9f",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.381414532661438,
+        1.2723093032836914,
+        4.5050458908081055
+      ],
+      "max_abs": [
+        5.0,
+        5.46875,
+        17.125
+      ]
+    },
+    "single.23": {
+      "file": "qkv-single.23.pt",
+      "sha256": "790c5b52a0d1f6eb204e42f14a10f928ecdac4c89a8ecce64f9cd4888914bb9f",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.4091705083847046,
+        1.3949129581451416,
+        0.6862262487411499
+      ],
+      "max_abs": [
+        7.625,
+        7.21875,
+        4.875
+      ]
+    },
+    "single.47": {
+      "file": "qkv-single.47.pt",
+      "sha256": "d656eeb1838ac3994a3f26c32d05333ffe131eff3ff45438731d95efaf05928d",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.2532025575637817,
+        1.2745310068130493,
+        1.061901569366455
+      ],
+      "max_abs": [
+        6.09375,
+        6.15625,
+        6.875
+      ]
+    }
+  },
+  "block_bench": [
+    {
+      "block": "dual.0",
+      "warmup_replays": 250,
+      "median_ms": 10.4167565,
+      "min_ms": 10.258917,
+      "max_ms": 10.737845,
+      "replay_ms": [
+        10.450386,
+        10.378447,
+        10.378537,
+        10.349557,
+        10.304797,
+        10.298438,
+        10.276877,
+        10.296147,
+        10.306438,
+        10.258917,
+        10.288517,
+        10.279188,
+        10.282887,
+        10.309258,
+        10.294598,
+        10.294897,
+        10.290047,
+        10.313308,
+        10.351357,
+        10.353987,
+        10.372847,
+        10.347287,
+        10.364447,
+        10.361017,
+        10.382277,
+        10.431646,
+        10.415447,
+        10.426977,
+        10.418066,
+        10.485027,
+        10.499146,
+        10.493636,
+        10.506636,
+        10.507267,
+        10.499286,
+        10.485646,
+        10.524716,
+        10.569566,
+        10.576596,
+        10.575196,
+        10.593026,
+        10.625896,
+        10.631585,
+        10.629776,
+        10.624775,
+        10.646186,
+        10.687635,
+        10.692186,
+        10.737845,
+        10.709215
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.3",
+      "warmup_replays": 250,
+      "median_ms": 10.8370845,
+      "min_ms": 10.688115,
+      "max_ms": 11.062734,
+      "replay_ms": [
+        10.844534,
+        10.785765,
+        10.773965,
+        10.750865,
+        10.751245,
+        10.752355,
+        10.751765,
+        10.717545,
+        10.699735,
+        10.688115,
+        10.698496,
+        10.747665,
+        10.791944,
+        10.750715,
+        10.766855,
+        10.783435,
+        10.758105,
+        10.772995,
+        10.783025,
+        10.832914,
+        10.831865,
+        10.841255,
+        10.829024,
+        10.831125,
+        10.827974,
+        10.820555,
+        10.851644,
+        10.822655,
+        10.848385,
+        10.896784,
+        10.923614,
+        10.928204,
+        10.893544,
+        10.910034,
+        10.910215,
+        10.908434,
+        10.913264,
+        10.938534,
+        10.967414,
+        10.971584,
+        10.981333,
+        10.966774,
+        10.997314,
+        10.991024,
+        11.056523,
+        11.058014,
+        11.041253,
+        11.062734,
+        11.051123,
+        11.035894
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.7",
+      "warmup_replays": 250,
+      "median_ms": 11.2375625,
+      "min_ms": 11.085923,
+      "max_ms": 11.90776,
+      "replay_ms": [
+        11.90776,
+        11.237413,
+        11.200823,
+        11.176952,
+        11.158633,
+        11.121164,
+        11.128283,
+        11.123563,
+        11.134373,
+        11.145803,
+        11.114103,
+        11.111803,
+        11.113373,
+        11.085923,
+        11.163373,
+        11.140063,
+        11.123673,
+        11.120903,
+        11.137433,
+        11.147403,
+        11.219953,
+        11.215483,
+        11.215802,
+        11.227983,
+        11.235192,
+        11.208343,
+        11.237712,
+        11.285913,
+        11.281402,
+        11.289112,
+        11.284132,
+        11.306613,
+        11.323532,
+        11.373521,
+        11.397552,
+        11.360652,
+        11.381782,
+        11.377661,
+        11.360352,
+        11.377422,
+        11.418482,
+        11.455361,
+        11.465881,
+        11.461092,
+        11.475351,
+        11.541131,
+        11.541431,
+        11.541331,
+        11.531931,
+        11.533881
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.0",
+      "warmup_replays": 250,
+      "median_ms": 15.107808,
+      "min_ms": 15.095793,
+      "max_ms": 15.127953,
+      "replay_ms": [
+        15.110123,
+        15.107803,
+        15.108022,
+        15.098113,
+        15.103073,
+        15.104193,
+        15.103242,
+        15.115263,
+        15.111123,
+        15.111542,
+        15.106393,
+        15.118243,
+        15.108872,
+        15.116753,
+        15.120453,
+        15.109662,
+        15.112733,
+        15.109913,
+        15.108702,
+        15.117343,
+        15.107813,
+        15.107572,
+        15.120993,
+        15.107003,
+        15.104803,
+        15.104853,
+        15.095793,
+        15.107933,
+        15.101202,
+        15.102833,
+        15.101493,
+        15.104673,
+        15.119192,
+        15.108843,
+        15.112163,
+        15.104762,
+        15.111773,
+        15.108003,
+        15.103402,
+        15.112443,
+        15.127953,
+        15.107612,
+        15.100803,
+        15.107683,
+        15.104123,
+        15.099282,
+        15.105893,
+        15.101093,
+        15.103702,
+        15.112873
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.23",
+      "warmup_replays": 250,
+      "median_ms": 15.1043125,
+      "min_ms": 15.094162,
+      "max_ms": 15.129352,
+      "replay_ms": [
+        15.121802,
+        15.105463,
+        15.100932,
+        15.099503,
+        15.107312,
+        15.101383,
+        15.100893,
+        15.103972,
+        15.105853,
+        15.102162,
+        15.106223,
+        15.124352,
+        15.105343,
+        15.110552,
+        15.102463,
+        15.103182,
+        15.098373,
+        15.102542,
+        15.103073,
+        15.094162,
+        15.107873,
+        15.107012,
+        15.097783,
+        15.095902,
+        15.109043,
+        15.099313,
+        15.108222,
+        15.102933,
+        15.097813,
+        15.120903,
+        15.100832,
+        15.104653,
+        15.103892,
+        15.098423,
+        15.108012,
+        15.101953,
+        15.106612,
+        15.106763,
+        15.129352,
+        15.106803,
+        15.095882,
+        15.102353,
+        15.115232,
+        15.102593,
+        15.106712,
+        15.112253,
+        15.101712,
+        15.107833,
+        15.112082,
+        15.113523
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.47",
+      "warmup_replays": 250,
+      "median_ms": 15.0696275,
+      "min_ms": 15.059962,
+      "max_ms": 15.100832,
+      "replay_ms": [
+        15.067093,
+        15.075113,
+        15.073162,
+        15.084353,
+        15.069513,
+        15.065932,
+        15.079493,
+        15.066303,
+        15.075892,
+        15.064743,
+        15.063953,
+        15.073923,
+        15.062162,
+        15.074143,
+        15.060163,
+        15.067152,
+        15.071113,
+        15.073153,
+        15.085652,
+        15.063893,
+        15.074863,
+        15.068813,
+        15.065272,
+        15.077603,
+        15.070033,
+        15.067692,
+        15.078923,
+        15.074293,
+        15.063362,
+        15.070933,
+        15.076853,
+        15.073172,
+        15.069833,
+        15.064183,
+        15.064173,
+        15.059962,
+        15.064973,
+        15.065903,
+        15.063623,
+        15.069742,
+        15.069993,
+        15.075653,
+        15.060152,
+        15.065303,
+        15.075903,
+        15.060123,
+        15.100832,
+        15.082233,
+        15.066112,
+        15.066233
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    }
+  ],
+  "discarded_capture_run_l2_vs_untraced_pct": 27.43622660636902,
+  "two_step_trace_latents_bitwise_equal": true,
+  "observed_attention_transport": {
+    "dual.0": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.1": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.2": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.3": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.4": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.5": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.6": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.7": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.0": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.1": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.2": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.3": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.4": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.5": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.6": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.7": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.8": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.9": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.10": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.11": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.12": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.13": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.14": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.15": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.16": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.17": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.18": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.19": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.20": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.21": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.22": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.23": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.24": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.25": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.26": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.27": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.28": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.29": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.30": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.31": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.32": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.33": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.34": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.35": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.36": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.37": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.38": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.39": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.40": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.41": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.42": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.43": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.44": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.45": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.46": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.47": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    }
+  }
+}

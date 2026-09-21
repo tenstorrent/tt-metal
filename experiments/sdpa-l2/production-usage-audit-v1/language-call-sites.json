@@ -1,0 +1,436 @@
+[
+  {
+    "file": "models/tt_transformers/tt/attention.py",
+    "line": 1250,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b, is_causal=True, sliding_window_size=self.sliding_window, scale=self.scale, compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg, program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None))",
+    "test": false
+  },
+  {
+    "file": "models/tt_transformers/tt/attention.py",
+    "line": 1226,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q_heads_1QSD_8b, input_tensor_k=keys_BKSD, input_tensor_v=values_BKSD, page_table_tensor=page_table, chunk_start_idx=None, chunk_start_idx_tensor=chunk_start_idx, compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg, program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None))",
+    "test": false
+  },
+  {
+    "file": "models/tt_transformers/tt/attention.py",
+    "line": 1237,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q_heads_1QSD_8b, input_tensor_k=keys_BKSD, input_tensor_v=values_BKSD, page_table_tensor=page_table, chunk_start_idx=chunk_start_idx, compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg, program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None))",
+    "test": false
+  },
+  {
+    "file": "models/tt_transformers/tt/multimodal/llama_cross_attention.py",
+    "line": 356,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(xq, k_cache_user, v_cache_user, is_causal=False, attn_mask=xattn_mask, scale=self.scale, program_config=program_config, compute_kernel_config=self.compute_kernel_config_sdpa)",
+    "test": false
+  },
+  {
+    "file": "models/tt_transformers/tt/multimodal/llama_image_attention.py",
+    "line": 249,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_heads_1QSD, k_heads_1KSD, v_heads_1VSD, is_causal=False, scale=self.scale, attn_mask=mask, program_config=sdpa_cfg, compute_kernel_config=self.compute_kernel_config_sdpa)",
+    "test": false
+  },
+  {
+    "file": "models/tt_transformers/tt/multimodal/mistral_24b/vision_attention.py",
+    "line": 198,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_heads_1QSD, k_heads_1KSD, v_heads_1VSD, is_causal=False, scale=self.scale, program_config=sdpa_cfg, compute_kernel_config=self.compute_kernel_config_sdpa)",
+    "test": false
+  },
+  {
+    "file": "models/common/modules/attention/attention_1d.py",
+    "line": 647,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_heads_sdpa, k_heads_cache_dtype, v_heads_cache_dtype, is_causal=True, sliding_window_size=cfg.sliding_window, scale=cfg.scale, compute_kernel_config=self.config.sdpa_prefill_compute_kernel_cfg, program_config=cfg.prefill_sdpa_prg_config(sdpa_seq_len, None))",
+    "test": false
+  },
+  {
+    "file": "models/common/modules/attention/attention_1d.py",
+    "line": 625,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q_heads_sdpa, input_tensor_k=keys, input_tensor_v=values, page_table_tensor=page_table, chunk_start_idx=chunk_start_idx, compute_kernel_config=self.config.sdpa_prefill_compute_kernel_cfg, program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx))",
+    "test": false
+  },
+  {
+    "file": "models/common/modules/attention/attention_1d.py",
+    "line": 636,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q_heads_sdpa, input_tensor_k=keys, input_tensor_v=values, page_table_tensor=page_table, chunk_start_idx_tensor=chunk_start_idx_tensor, compute_kernel_config=self.config.sdpa_prefill_compute_kernel_cfg, program_config=cfg.prefill_sdpa_prg_config(seq_len, block_size))",
+    "test": false
+  },
+  {
+    "file": "models/demos/deepseek_v3/tt/mla/mla1d.py",
+    "line": 1664,
+    "op": "ttnn.transformer.flash_mla_prefill",
+    "arguments": "ttnn.transformer.flash_mla_prefill(tt_q, tt_kvpe, **cfg['flash_mla'])",
+    "test": false
+  },
+  {
+    "file": "models/demos/deepseek_v3/tt/mla/mla1d.py",
+    "line": 1828,
+    "op": "ttnn.transformer.chunked_flash_mla_prefill",
+    "arguments": "ttnn.transformer.chunked_flash_mla_prefill(tt_q, kvpe_cache, cfg['flash_mla']['head_dim_v'], page_table, chunk_start_idx, scale=cfg['flash_mla']['scale'], program_config=cfg['flash_mla']['program_config'], compute_kernel_config=cfg['flash_mla']['compute_kernel_config'], memory_config=cfg['flash_mla']['memory_config'])",
+    "test": false
+  },
+  {
+    "file": "models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py",
+    "line": 802,
+    "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.ring_joint_scaled_dot_product_attention(tt_Q, tt_K, tt_V, tt_joint_Q, tt_joint_K, tt_joint_V, persistent_output_buffer_k=persistent_output_buffers[iter_idx][0], persistent_output_buffer_v=persistent_output_buffers[iter_idx][1], joint_strategy='rear', logical_n=base_seq_len, program_config=program_config, compute_kernel_config=compute_kernel_config, dim=2, multi_device_global_semaphore=ccl_semaphore_handles[iter_idx], num_links=num_links, cluster_axis=rp_axis, mesh_device=submesh, topology=all_gather_topology, subdevice_id=worker_sub_device_id, ccl_core_grid_offset=ccl_core_grid_offset, use_column_major_ccl=True, is_causal=is_causal, is_balanced=is_balanced)",
+    "test": true
+  },
+  {
+    "file": "models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py",
+    "line": 350,
+    "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.ring_joint_scaled_dot_product_attention(tt_Q, tt_K, tt_V, tt_joint_Q, tt_joint_K, tt_joint_V, persistent_output_buffer_k=persistent_output_buffers[i][0], persistent_output_buffer_v=persistent_output_buffers[i][1], joint_strategy='rear', logical_n=base_seq_len, program_config=program_config, compute_kernel_config=compute_kernel_config, dim=2, multi_device_global_semaphore=ccl_semaphore_handles[i], num_links=num_links, cluster_axis=rp_axis, mesh_device=submesh, topology=all_gather_topology, subdevice_id=worker_sub_device_id, ccl_core_grid_offset=ccl_core_grid_offset, use_column_major_ccl=True, is_causal=is_causal, is_balanced=is_balanced)",
+    "test": true
+  },
+  {
+    "file": "models/demos/deepseek_v3_d_p/tt/mla/heavily_compressed_attention.py",
+    "line": 436,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q, kv, kv, attn_mask=mask, is_causal=False, scale=self.scaling, attention_sink=self.sinks_sdpa, program_config=ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False))",
+    "test": false
+  },
+  {
+    "file": "models/demos/deepseek_v3_d_p/tt/mla/mla.py",
+    "line": 1005,
+    "op": "ttnn.transformer.ring_mla",
+    "arguments": "ttnn.transformer.ring_mla(tt_q, kvpe_cache.storage, persistent_output_buffer_kv=self._chunked_kv_buf, head_dim_v=self.kv_lora_rank, logical_n=ring_logical_n, program_config=self._get_sdpa_program_config(seq_len_local), scale=self.scale, compute_kernel_config=self.default_compute_kernel_config, dim=2, multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles, num_links=self.ccl_num_links, cluster_axis=self.sp_axis, mesh_device=self.mesh_device, topology=self.sp_ccl_topology, ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset, use_column_major_ccl=True, is_balanced=self.is_balanced, **meta_slot_kwargs)",
+    "test": false
+  },
+  {
+    "file": "models/demos/deepseek_v3_d_p/tt/mla/mla.py",
+    "line": 1503,
+    "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.ring_joint_scaled_dot_product_attention(tt_q, tt_kvpe, tt_v_embedding, self.joint_q, self.joint_kv, self.joint_v, persistent_output_buffer_k=self.persistent_k_output_buffer, persistent_output_buffer_v=self.persistent_v_output_buffer, joint_strategy='rear', logical_n=seq_len_local * self.sp_factor, program_config=self._get_sdpa_program_config(seq_len_local), compute_kernel_config=self.default_compute_kernel_config, dim=2, multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles, num_links=self.ccl_num_links, cluster_axis=self.sp_axis, mesh_device=self.mesh_device, topology=self.sp_ccl_topology, ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset, use_column_major_ccl=True, is_causal=True, scale=self.scale, is_balanced=self.is_balanced)",
+    "test": false
+  },
+  {
+    "file": "models/demos/deepseek_v3_d_p/tt/mla/mla.py",
+    "line": 1786,
+    "op": "ttnn.transformer.sparse_sdpa",
+    "arguments": "ttnn.transformer.sparse_sdpa(q_rm, kvpe.storage, idx, v_dim=self.kv_lora_rank, kv_format=kvpe.format.sparse_sdpa_format, scale=self.scale, k_chunk_size=k_chunk, block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None, block_cyclic_chunk_local=block_cyclic_chunk_local, block_cyclic_cache_tp_sharded=self.tp_shard_kv and block_cyclic_chunk_local is not None, cache_batch_idx=cache_batch_idx)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gpt_oss/tt/attention/prefill.py",
+    "line": 147,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=True, sliding_window_size=config.sliding_window, program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len), compute_kernel_config=program_config.get_compute_kernel_config(), attention_sink=weights.sinks)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gpt_oss_d_p/tt/attention/dense_sp.py",
+    "line": 106,
+    "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.ring_joint_scaled_dot_product_attention(tt_q, cache_k, cache_v, None, None, None, persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer(f'dense_k_{_bufseq}', n_kv, _bufseq, head_dim, ttnn.bfloat8_b), persistent_output_buffer_v=ccl_manager.get_ring_gather_buffer(f'dense_v_{_bufseq}', n_kv, _bufseq, head_dim, ttnn.bfloat8_b), joint_strategy='rear', logical_n=logical_n, program_config=program_config, compute_kernel_config=compute_kernel_config, dim=2, multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles, num_links=ccl_manager.num_links, cluster_axis=cluster_axis, mesh_device=mesh_device, topology=ccl_manager.topology, ccl_core_grid_offset=ccl_manager.ring_attention_ccl_core_grid_offset, use_column_major_ccl=True, is_causal=True, scale=scale, is_balanced=False, kv_cache_batch_idx=slot_idx * num_layers + layer_idx, kv_actual_isl=kv_actual, attention_sink=attention_sink, sliding_window_size=sliding_window_size)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gpt_oss_d_p/tt/attention/prefill.py",
+    "line": 36,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=True, scale=config.scaling, sliding_window_size=config.sliding_window, attention_sink=weights.sinks, program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len), compute_kernel_config=program_config.get_compute_kernel_config())",
+    "test": false
+  },
+  {
+    "file": "models/demos/gemma4/tt/attention/operations.py",
+    "line": 483,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_slice, k_slice, v_slice, is_causal=True, scale=scale, sliding_window_size=sliding_window, program_config=prefill_sdpa_program_config(head_dim, slice_len, sliding_window=sliding_window), compute_kernel_config=compute_kernel_config)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gemma4/tt/attention/operations.py",
+    "line": 385,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(q_chunk, k_cache, v_cache, user_pt, chunk_start_idx_tensor=chunk_start_t, scale=scale, program_config=program_config, compute_kernel_config=compute_kernel_config, paged_cache_geometry=paged_cache_geometry)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gemma4/tt/attention/operations.py",
+    "line": 399,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(q_chunk, k_cache, v_cache, user_pt, chunk_start_idx=base_offset + start, scale=scale, program_config=program_config, compute_kernel_config=compute_kernel_config, paged_cache_geometry=paged_cache_geometry)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gemma4/tt/attention/prefill.py",
+    "line": 1114,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=True, scale=1.0, sliding_window_size=sliding_window, program_config=prefill_sdpa_program_config(config.head_dim, int(tt_q.shape[-2]), sliding_window=sliding_window), compute_kernel_config=sdpa_compute_kernel_config)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gemma4/tt/attention/prefill.py",
+    "line": 670,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_cat, k_cat, v_cat, is_causal=True, scale=1.0, sliding_window_size=sliding_window, program_config=prefill_sdpa_program_config(config.head_dim, hist + seq_len, sliding_window=sliding_window), compute_kernel_config=sdpa_ckc)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gemma4/tt/attention/prefill.py",
+    "line": 706,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=True, scale=1.0, sliding_window_size=sliding_window, program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window), compute_kernel_config=sdpa_ckc)",
+    "test": false
+  },
+  {
+    "file": "models/demos/gemma4/tt/attention/prefill.py",
+    "line": 796,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=True, scale=1.0, sliding_window_size=sliding_window, program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window), compute_kernel_config=sdpa_compute_kernel_config)",
+    "test": false
+  },
+  {
+    "file": "models/demos/minimax_m3/tests/unit/test_msa_prefill_vs_ref.py",
+    "line": 76,
+    "op": "ttnn.transformer.sparse_sdpa_msa",
+    "arguments": "ttnn.transformer.sparse_sdpa_msa(dev_rm(q.to(torch.float32), ttnn.bfloat16), dev_tile(k), dev_tile(v), dev_rm(block_ids, ttnn.uint32), scale=HEAD_DIM ** (-0.5), block_size=BLOCK)",
+    "test": true
+  },
+  {
+    "file": "models/demos/minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py",
+    "line": 105,
+    "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.ring_joint_scaled_dot_product_attention(tt_q, tt_k, tt_v, None, None, None, persistent_output_buffer_k=pbuf(NKV), persistent_output_buffer_v=pbuf(NKV), joint_strategy='rear', logical_n=seq_len, program_config=prog, compute_kernel_config=kernel_cfg, dim=2, multi_device_global_semaphore=ccl.ring_attention_ccl_semaphore_handles, num_links=ccl.num_links, cluster_axis=sp_axis, mesh_device=mesh_device, topology=ttnn.Topology.Linear, ccl_core_grid_offset=ccl.ring_attention_ccl_core_grid_offset, use_column_major_ccl=True, is_causal=True, scale=HEAD_DIM ** (-0.5), is_balanced=False)",
+    "test": true
+  },
+  {
+    "file": "models/demos/minimax_m3/tt/attention/dense_sp.py",
+    "line": 78,
+    "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.ring_joint_scaled_dot_product_attention(tt_q, cache_k, cache_v, None, None, None, persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer('dense_k', n_kv, cache_global, head_dim, ttnn.bfloat8_b), persistent_output_buffer_v=ccl_manager.get_ring_gather_buffer('dense_v', n_kv, cache_global, head_dim, ttnn.bfloat8_b), joint_strategy='rear', logical_n=logical_n, program_config=program_config, compute_kernel_config=compute_kernel_config, dim=2, multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles, num_links=ccl_manager.num_links, cluster_axis=cluster_axis, mesh_device=mesh_device, topology=ttnn.Topology.Linear, ccl_core_grid_offset=ccl_manager.ring_attention_ccl_core_grid_offset, use_column_major_ccl=True, is_causal=True, scale=scale, is_balanced=False, kv_cache_batch_idx=slot_idx * num_layers + layer_idx, kv_actual_isl=kv_actual)",
+    "test": false
+  },
+  {
+    "file": "models/demos/minimax_m3/tt/attention/dense_sp.py",
+    "line": 145,
+    "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.ring_joint_scaled_dot_product_attention(tt_q, tt_k, tt_v, None, None, None, persistent_output_buffer_k=ccl_manager.get_ring_gather_buffer('nocache_k', n_kv, logical_n, head_dim, ttnn.bfloat16), persistent_output_buffer_v=ccl_manager.get_ring_gather_buffer('nocache_v', n_kv, logical_n, head_dim, ttnn.bfloat16), joint_strategy='rear', logical_n=logical_n, program_config=program_config, compute_kernel_config=compute_kernel_config, dim=2, multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles, num_links=ccl_manager.num_links, cluster_axis=sp_axis, mesh_device=mesh_device, topology=ttnn.Topology.Linear, ccl_core_grid_offset=ccl_manager.ring_attention_ccl_core_grid_offset, use_column_major_ccl=True, is_causal=True, scale=scale, is_balanced=False)",
+    "test": false
+  },
+  {
+    "file": "models/demos/minimax_m3/tt/attention/msa.py",
+    "line": 153,
+    "op": "ttnn.transformer.sparse_sdpa_msa",
+    "arguments": "ttnn.transformer.sparse_sdpa_msa(ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT), k, v, block_ids, scale=scale, block_size=block_size, chunk_start_idx=chunk_start_idx, cluster_axis=cluster_axis, block_cyclic_sp_axis=block_cyclic_sp_axis, block_cyclic_chunk_local=block_cyclic_chunk_local)",
+    "test": false
+  },
+  {
+    "file": "models/demos/minimax_m3/tt/attention/prefill.py",
+    "line": 327,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=True, program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len), compute_kernel_config=program_config.get_compute_kernel_config())",
+    "test": false
+  },
+  {
+    "file": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+    "line": 1225,
+    "op": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.ring_distributed_scaled_dot_product_attention(q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b, ring_size=4, scale=self.scale, compute_kernel_config=self.compute_kernel_config_hifi4, program_config=self.model_config['SDPA_PROGCFG'](seq_len, chunk_start_idx=0), page_table=None, chunk_start_idx=None)",
+    "test": false
+  },
+  {
+    "file": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+    "line": 1245,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q_heads_1QSD_8b, input_tensor_k=keys_BKSD, input_tensor_v=values_BKSD, page_table_tensor=page_table, chunk_start_idx_tensor=chunk_start_idx_tensor, compute_kernel_config=self.compute_kernel_config_hifi4, program_config=self.model_config['SDPA_PROGCFG_FLEXIBLE_CHUNK'](seq_len, page_size))",
+    "test": false
+  },
+  {
+    "file": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+    "line": 1275,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b, is_causal=True, scale=self.scale, compute_kernel_config=self.compute_kernel_config_hifi4, program_config=self.model_config['SDPA_PROGCFG'](seq_len // batch_size if seq_len // batch_size == 128 else seq_len))",
+    "test": false
+  },
+  {
+    "file": "models/demos/blackhole/qwen36/tt/attention/tp.py",
+    "line": 453,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q8, k8, v8, is_causal=True, scale=self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=sdpa_cfg)",
+    "test": false
+  },
+  {
+    "file": "models/demos/blackhole/qwen36/tt/attention/tp.py",
+    "line": 776,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q8, input_tensor_k=k_paged, input_tensor_v=v_paged, page_table_tensor=sdpa_page_table, chunk_start_idx_tensor=chunk_start_idx_tensor, compute_kernel_config=self.compute_cfg, program_config=sdpa_cfg)",
+    "test": false
+  },
+  {
+    "file": "models/demos/blackhole/qwen36/tt/attention/tp.py",
+    "line": 786,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q8, input_tensor_k=k_paged, input_tensor_v=v_paged, page_table_tensor=sdpa_page_table, chunk_start_idx=chunk_start_idx, compute_kernel_config=self.compute_cfg, program_config=sdpa_cfg)",
+    "test": false
+  },
+  {
+    "file": "models/demos/blackhole/qwen36/tt/vision/vision_attention.py",
+    "line": 377,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b, is_causal=False, scale=self.scale, compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg, program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None))",
+    "test": false
+  },
+  {
+    "file": "models/demos/t3000/falcon40b/tt/falcon_attention.py",
+    "line": 350,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(query_layer, key_layer, value_layer, is_causal=True, scale=self.scalar, program_config=self.model_config['SDPA_PROGCFG'])",
+    "test": false
+  },
+  {
+    "file": "models/experimental/diffusion_gemma/tests/test_attention.py",
+    "line": 894,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_query, tt_key, tt_value, attn_mask=tt_mask, is_causal=False, program_config=program_config, compute_kernel_config=compute_kernel_config)",
+    "test": true
+  },
+  {
+    "file": "models/experimental/diffusion_gemma/tests/test_commit.py",
+    "line": 276,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_query, cache_k, cache_v, is_causal=False, scale=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=program_config)",
+    "test": true
+  },
+  {
+    "file": "models/experimental/diffusion_gemma/tt/chunked_prefill.py",
+    "line": 161,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=True, scale=scale, sliding_window_size=sliding_window, compute_kernel_config=compute_kernel_config)",
+    "test": false
+  },
+  {
+    "file": "models/experimental/diffusion_gemma/tt/chunked_prefill.py",
+    "line": 422,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(q_in, k_cache, v_cache, user_pt, chunk_start_idx=ctx.chunk_start_idx, scale=1.0, program_config=_chunked_sdpa_program_config(head_dim), compute_kernel_config=compute_kernel_config)",
+    "test": false
+  },
+  {
+    "file": "models/experimental/diffusion_gemma/tt/commit_batched.py",
+    "line": 662,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(q_in, k_cache, v_cache, page_table, chunk_start_idx=aligned_start, scale=1.0, program_config=_chunked_sdpa_program_config(head_dim), compute_kernel_config=ttnn.init_device_compute_kernel_config(tt_q.device().arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))",
+    "test": false
+  },
+  {
+    "file": "models/experimental/diffusion_gemma/tt/commit_batched.py",
+    "line": 784,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False, attn_mask=attn_mask, scale=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=program_config)",
+    "test": false
+  },
+  {
+    "file": "models/experimental/diffusion_gemma/tt/diffusion_attention.py",
+    "line": 222,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs)",
+    "test": false
+  },
+  {
+    "file": "models/experimental/gated_attention_gated_deltanet/tt/ttnn_gated_attention.py",
+    "line": 306,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(query_states, paged_kv_cache_key, paged_kv_cache_value, page_table, chunk_start_idx_tensor=chunk_start_idx_tensor, scale=scaling, program_config=_get_flexible_sdpa_program_config(device), compute_kernel_config=_get_sdpa_compute_kernel_config())",
+    "test": false
+  },
+  {
+    "file": "models/experimental/gated_attention_gated_deltanet/tt/ttnn_gated_attention.py",
+    "line": 317,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(query_states, paged_kv_cache_key, paged_kv_cache_value, page_table, chunk_start_idx, scale=scaling, program_config=_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx), compute_kernel_config=_get_sdpa_compute_kernel_config())",
+    "test": false
+  },
+  {
+    "file": "models/experimental/gated_attention_gated_deltanet/tt/ttnn_gated_attention.py",
+    "line": 538,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=_attn_mask, is_causal=is_causal, scale=scaling, program_config=_get_sdpa_program_config(device, S_total, q_seq_len=T), compute_kernel_config=_get_sdpa_compute_kernel_config())",
+    "test": false
+  },
+  {
+    "file": "models/experimental/llama32_1b_quasar/modules/attention/attention_1d.py",
+    "line": 553,
+    "op": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q_heads_sdpa, input_tensor_k=keys, input_tensor_v=values, page_table_tensor=page_table, chunk_start_idx=chunk_start_idx, compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg, program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx))",
+    "test": false
+  },
+  {
+    "file": "models/experimental/llama32_1b_quasar/modules/attention/attention_1d.py",
+    "line": 566,
+    "op": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention(q_heads_sdpa, k_heads_cache_dtype, v_heads_cache_dtype, is_causal=True, sliding_window_size=cfg.sliding_window, scale=cfg.scale, compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg, program_config=cfg.prefill_sdpa_prg_config(per_user_seq_len, None))",
+    "test": false
+  },
+  {
+    "file": "models/experimental/llama32_1b_quasar/tests/ops/test_chunked_scaled_dot_product_attention.py",
+    "line": 89,
+    "op": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q, input_tensor_k=k, input_tensor_v=v, page_table_tensor=page_table_tt, chunk_start_idx=0, program_config=program_config, compute_kernel_config=compute_kernel_config)",
+    "test": true
+  },
+  {
+    "file": "models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py",
+    "line": 72,
+    "op": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, scale=scale, program_config=program_config, compute_kernel_config=compute_kernel_config)",
+    "test": true
+  },
+  {
+    "file": "models/experimental/llama32_1b_quasar/tests/prototype_ops/test_chunked_scaled_dot_product_attention.py",
+    "line": 89,
+    "op": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention(input_tensor_q=q, input_tensor_k=k, input_tensor_v=v, page_table_tensor=page_table_tt, chunk_start_idx=0, program_config=program_config, compute_kernel_config=compute_kernel_config)",
+    "test": true
+  },
+  {
+    "file": "models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention.py",
+    "line": 72,
+    "op": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, scale=scale, program_config=program_config, compute_kernel_config=compute_kernel_config)",
+    "test": true
+  },
+  {
+    "file": "models/experimental/ops/quasar/gpt_oss/tt/attention/prefill.py",
+    "line": 147,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=True, sliding_window_size=config.sliding_window, program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len), compute_kernel_config=program_config.get_compute_kernel_config(), attention_sink=weights.sinks)",
+    "test": false
+  },
+  {
+    "file": "models/experimental/ops/quasar/qwen3_vl/tt/attention.py",
+    "line": 766,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(q_heads_1QSD_8b, keys_BKSD, values_BKSD, page_table, chunk_start_idx, scale=self.scale, compute_kernel_config=self.compute_kernel_config_hifi4, program_config=self.model_config['SDPA_PROGCFG'](seq_len))",
+    "test": false
+  },
+  {
+    "file": "models/experimental/ops/quasar/qwen3_vl/tt/attention.py",
+    "line": 777,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b, is_causal=self.causal_mask, attn_mask=mask, scale=self.scale, compute_kernel_config=self.compute_kernel_config_hifi4, program_config=self.model_config['SDPA_PROGCFG'](seq_len))",
+    "test": false
+  },
+  {
+    "file": "models/experimental/ops/quasar/qwen3_vl/tt/vision_attention.py",
+    "line": 462,
+    "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.chunked_scaled_dot_product_attention(q_heads_1QSD_8b, keys_BKSD, values_BKSD, page_table, chunk_start_idx, scale=self.scale, compute_kernel_config=self.compute_kernel_config_hifi4, program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None))",
+    "test": false
+  },
+  {
+    "file": "models/experimental/ops/quasar/qwen3_vl/tt/vision_attention.py",
+    "line": 475,
+    "op": "ttnn.transformer.scaled_dot_product_attention",
+    "arguments": "ttnn.transformer.scaled_dot_product_attention(q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b, is_causal=False, scale=self.scale, compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg, program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None))",
+    "test": false
+  }
+]

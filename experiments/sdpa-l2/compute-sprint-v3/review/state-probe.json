@@ -1,0 +1,1286 @@
+{
+  "note": "Independent group-two recurrence model; NOT a hardware SDPA emulator.\n\nChunks/corrections are prescribed BF16 values. Scores, exp, PV accumulation,\nreciprocal and final output packing are not modeled. The probe establishes\nstate invariants and looks for arithmetic-association sensitivity only.\n",
+  "total_trials": 8192,
+  "records": [
+    {
+      "k_chunks": 1,
+      "distribution": "coherent",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "coherent",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "coherent",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "coherent",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "constant",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "constant",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "constant",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "constant",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "cancellation",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "cancellation",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "cancellation",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "cancellation",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "normal",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "normal",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "normal",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 1,
+      "distribution": "normal",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "coherent",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "coherent",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.00048828125,
+      "max_candidate_reference_abs": 0.00048828125,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "coherent",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "coherent",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "constant",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "constant",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 7.62939453125e-06,
+      "max_candidate_reference_abs": 7.62939453125e-06,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "constant",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "constant",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "cancellation",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "cancellation",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 7.62939453125e-06,
+      "max_candidate_reference_abs": 7.62939453125e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "cancellation",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "cancellation",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "normal",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "normal",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 7.62939453125e-06,
+      "max_candidate_reference_abs": 7.62939453125e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "normal",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 2,
+      "distribution": "normal",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "coherent",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "coherent",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.00052642822265625,
+      "max_candidate_reference_abs": 0.00052642822265625,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "coherent",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0009765625,
+      "max_candidate_reference_abs": 0.0009765625,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "coherent",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "constant",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "constant",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 1.4483928680419922e-05,
+      "max_candidate_reference_abs": 1.4483928680419922e-05,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "constant",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 1.52587890625e-05,
+      "max_candidate_reference_abs": 1.52587890625e-05,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "constant",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "cancellation",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "cancellation",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 6.9141387939453125e-06,
+      "max_candidate_reference_abs": 6.9141387939453125e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "cancellation",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 7.62939453125e-06,
+      "max_candidate_reference_abs": 7.62939453125e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "cancellation",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "normal",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "normal",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 1.0162591934204102e-05,
+      "max_candidate_reference_abs": 1.0162591934204102e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "normal",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 1.52587890625e-05,
+      "max_candidate_reference_abs": 1.52587890625e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 3,
+      "distribution": "normal",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "coherent",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "coherent",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0005464553833007812,
+      "max_candidate_reference_abs": 0.0005464553833007812,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "coherent",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0009765625,
+      "max_candidate_reference_abs": 0.0009765625,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "coherent",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "constant",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "constant",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 3.252178430557251e-05,
+      "max_candidate_reference_abs": 3.252178430557251e-05,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "constant",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 3.0517578125e-05,
+      "max_candidate_reference_abs": 3.0517578125e-05,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "constant",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "cancellation",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "cancellation",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 8.188188076019287e-06,
+      "max_candidate_reference_abs": 8.188188076019287e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "cancellation",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "cancellation",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "normal",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "normal",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 1.1099502444267273e-05,
+      "max_candidate_reference_abs": 1.1099502444267273e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "normal",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 7.62939453125e-06,
+      "max_candidate_reference_abs": 7.62939453125e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 4,
+      "distribution": "normal",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 7.62939453125e-06,
+      "max_candidate_reference_abs": 7.62939453125e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "coherent",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "coherent",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0009486852213740349,
+      "max_candidate_reference_abs": 0.0009486852213740349,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "coherent",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.001953125,
+      "max_baseline_reference_abs": 0.001537322998046875,
+      "max_candidate_reference_abs": 0.0008916854858398438,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "coherent",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "constant",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "constant",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 2.3174972739070654e-05,
+      "max_candidate_reference_abs": 2.3174972739070654e-05,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "constant",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 3.0517578125e-05,
+      "max_baseline_reference_abs": 3.075599670410156e-05,
+      "max_candidate_reference_abs": 2.9325485229492188e-05,
+      "max_constant_v_ratio_error": 1.2896902163994639e-05
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "constant",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "cancellation",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "cancellation",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 5.17677835887298e-06,
+      "max_candidate_reference_abs": 5.17677835887298e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "cancellation",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 8.225440979003906e-06,
+      "max_candidate_reference_abs": 8.225440979003906e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "cancellation",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "normal",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "normal",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 2.3683808649366256e-05,
+      "max_candidate_reference_abs": 2.3683808649366256e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "normal",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 9.5367431640625e-07,
+      "max_baseline_reference_abs": 1.6570091247558594e-05,
+      "max_candidate_reference_abs": 1.6570091247558594e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 5,
+      "distribution": "normal",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "coherent",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "coherent",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0008337566229386084,
+      "max_candidate_reference_abs": 0.0008337566229386084,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "coherent",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.001953125,
+      "max_baseline_reference_abs": 0.0025136565179764148,
+      "max_candidate_reference_abs": 0.0025136565179764148,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "coherent",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.00390625,
+      "max_baseline_reference_abs": 0.00431060791015625,
+      "max_candidate_reference_abs": 0.00347137451171875,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "constant",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "constant",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 2.0712928896493565e-05,
+      "max_candidate_reference_abs": 2.0712928896493565e-05,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "constant",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0001220703125,
+      "max_baseline_reference_abs": 6.826801863368814e-05,
+      "max_candidate_reference_abs": 6.596088191912486e-05,
+      "max_constant_v_ratio_error": 1.4734267485883024e-05
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "constant",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0001220703125,
+      "max_baseline_reference_abs": 0.00013184547424316406,
+      "max_candidate_reference_abs": 0.00013184547424316406,
+      "max_constant_v_ratio_error": 1.6117334192933264e-05
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "cancellation",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "cancellation",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 4.551731850765961e-06,
+      "max_candidate_reference_abs": 4.551731850765961e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "cancellation",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 3.814697265625e-06,
+      "max_baseline_reference_abs": 1.079715634566547e-05,
+      "max_candidate_reference_abs": 1.079715634566547e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "cancellation",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 1.33514404296875e-05,
+      "max_baseline_reference_abs": 1.2993812561035156e-05,
+      "max_candidate_reference_abs": 1.1026859283447266e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "normal",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 6.103515625e-05,
+      "max_candidate_reference_abs": 6.103515625e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "normal",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 1.6373313415307678e-05,
+      "max_candidate_reference_abs": 1.6373313415307678e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "normal",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 3.0517578125e-05,
+      "max_baseline_reference_abs": 1.987877518239145e-05,
+      "max_candidate_reference_abs": 1.972478206813122e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 16,
+      "distribution": "normal",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 1.52587890625e-05,
+      "max_baseline_reference_abs": 2.4080276489257812e-05,
+      "max_candidate_reference_abs": 2.4080276489257812e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "coherent",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "coherent",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0011728188634663184,
+      "max_candidate_reference_abs": 0.0011728188634663184,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "coherent",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.00390625,
+      "max_baseline_reference_abs": 0.003235988872290818,
+      "max_candidate_reference_abs": 0.0033022882558952915,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "coherent",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0078125,
+      "max_baseline_reference_abs": 0.00942815908774719,
+      "max_candidate_reference_abs": 0.005118887543176243,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "constant",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "constant",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 2.5772834011839052e-05,
+      "max_candidate_reference_abs": 2.5772834011839052e-05,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "constant",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 6.103515625e-05,
+      "max_baseline_reference_abs": 7.967675333730995e-05,
+      "max_candidate_reference_abs": 7.967675333730995e-05,
+      "max_constant_v_ratio_error": 1.3781887842956309e-05
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "constant",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.000244140625,
+      "max_baseline_reference_abs": 0.00021380722670727437,
+      "max_candidate_reference_abs": 0.00021380722670727437,
+      "max_constant_v_ratio_error": 1.4880952381002288e-05
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "cancellation",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "cancellation",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 7.983207408690518e-06,
+      "max_candidate_reference_abs": 7.983207408690518e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "cancellation",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 1.52587890625e-05,
+      "max_baseline_reference_abs": 1.1661508571680912e-05,
+      "max_candidate_reference_abs": 8.99202313320302e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "cancellation",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 1.52587890625e-05,
+      "max_baseline_reference_abs": 1.8348816996249795e-05,
+      "max_candidate_reference_abs": 1.8348816996249795e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "normal",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.000244140625,
+      "max_baseline_reference_abs": 0.00030517578125,
+      "max_candidate_reference_abs": 0.0001220703125,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "normal",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 1.424758956147798e-05,
+      "max_candidate_reference_abs": 1.424758956147798e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "normal",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 3.0517578125e-05,
+      "max_baseline_reference_abs": 2.574744759420433e-05,
+      "max_candidate_reference_abs": 1.748705997517419e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 64,
+      "distribution": "normal",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 3.0517578125e-05,
+      "max_baseline_reference_abs": 3.697936285629311e-05,
+      "max_candidate_reference_abs": 3.697936285629311e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "coherent",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 1.25,
+      "max_baseline_reference_abs": 1.0,
+      "max_candidate_reference_abs": 1.15625,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "coherent",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0008224128356175697,
+      "max_candidate_reference_abs": 0.0008224128356175697,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "coherent",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.001953125,
+      "max_baseline_reference_abs": 0.0022375222483788093,
+      "max_candidate_reference_abs": 0.0022375222483788093,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "coherent",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0078125,
+      "max_baseline_reference_abs": 0.009064165691938797,
+      "max_candidate_reference_abs": 0.009064165691938797,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "constant",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0390625,
+      "max_baseline_reference_abs": 0.046875,
+      "max_candidate_reference_abs": 0.041015625,
+      "max_constant_v_ratio_error": 7.076039116338251e-05
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "constant",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 4.886522624758527e-05,
+      "max_candidate_reference_abs": 4.886522624758527e-05,
+      "max_constant_v_ratio_error": 0.0
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "constant",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0001220703125,
+      "max_baseline_reference_abs": 0.0001102051747334798,
+      "max_candidate_reference_abs": 4.3673810177224937e-05,
+      "max_constant_v_ratio_error": 1.2086783102605025e-05
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "constant",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.00048828125,
+      "max_baseline_reference_abs": 0.0003942397360248151,
+      "max_candidate_reference_abs": 0.0005185721713232283,
+      "max_constant_v_ratio_error": 1.695748757857274e-05
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "cancellation",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 0.0,
+      "max_candidate_reference_abs": 0.0,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "cancellation",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 4.790774401186582e-06,
+      "max_candidate_reference_abs": 4.790774401186582e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "cancellation",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 1.52587890625e-05,
+      "max_baseline_reference_abs": 1.1863437240577923e-05,
+      "max_candidate_reference_abs": 8.436428025060394e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "cancellation",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 2.288818359375e-05,
+      "max_baseline_reference_abs": 2.0827403834466907e-05,
+      "max_candidate_reference_abs": 2.0827403834466907e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "normal",
+      "max_change_pattern": "identity",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.00146484375,
+      "max_baseline_reference_abs": 0.001861572265625,
+      "max_candidate_reference_abs": 0.001861572265625,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "normal",
+      "max_change_pattern": "every",
+      "trials": 64,
+      "max_candidate_baseline_abs": 0.0,
+      "max_baseline_reference_abs": 8.943687560103442e-06,
+      "max_candidate_reference_abs": 8.943687560103442e-06,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "normal",
+      "max_change_pattern": "alternating",
+      "trials": 64,
+      "max_candidate_baseline_abs": 3.0517578125e-05,
+      "max_baseline_reference_abs": 2.1026062639872833e-05,
+      "max_candidate_reference_abs": 2.1026062639872833e-05,
+      "max_constant_v_ratio_error": null
+    },
+    {
+      "k_chunks": 512,
+      "distribution": "normal",
+      "max_change_pattern": "sparse",
+      "trials": 64,
+      "max_candidate_baseline_abs": 6.103515625e-05,
+      "max_baseline_reference_abs": 7.980373462679324e-05,
+      "max_candidate_reference_abs": 5.882400064738391e-05,
+      "max_constant_v_ratio_error": null
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "status": "completed",
+  "verified_videos": 14,
+  "verified_pngs": 112,
+  "rows": [
+    {
+      "variant": "stock",
+      "prompt_id": 0,
+      "video_bytes": 1200181
+    },
+    {
+      "variant": "stock",
+      "prompt_id": 1,
+      "video_bytes": 823568
+    },
+    {
+      "variant": "D",
+      "prompt_id": 0,
+      "video_bytes": 1153224
+    },
+    {
+      "variant": "D",
+      "prompt_id": 1,
+      "video_bytes": 866945
+    },
+    {
+      "variant": "C",
+      "prompt_id": 0,
+      "video_bytes": 1149829
+    },
+    {
+      "variant": "C",
+      "prompt_id": 1,
+      "video_bytes": 862319
+    },
+    {
+      "variant": "B",
+      "prompt_id": 0,
+      "video_bytes": 1080028
+    },
+    {
+      "variant": "B",
+      "prompt_id": 1,
+      "video_bytes": 858481
+    },
+    {
+      "variant": "E",
+      "prompt_id": 0,
+      "video_bytes": 1195378
+    },
+    {
+      "variant": "E",
+      "prompt_id": 1,
+      "video_bytes": 902799
+    },
+    {
+      "variant": "F",
+      "prompt_id": 0,
+      "video_bytes": 1167669
+    },
+    {
+      "variant": "F",
+      "prompt_id": 1,
+      "video_bytes": 910002
+    },
+    {
+      "variant": "G",
+      "prompt_id": 0,
+      "video_bytes": 1422043
+    },
+    {
+      "variant": "G",
+      "prompt_id": 1,
+      "video_bytes": 1026664
+    }
+  ]
+}

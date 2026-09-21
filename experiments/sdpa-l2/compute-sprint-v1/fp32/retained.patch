@@ -1,0 +1,156 @@
+--- a/experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp
++++ b/experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp
+@@ -8,6 +8,9 @@
+ 
+ #pragma once
+ #include "../exp_native.hpp"
++#ifdef SDPA_SPRINT_C_REFINE
++#include "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp"
++#endif
+ 
+ #ifdef SDPA_LOFI_ROUND_P
+ #include "../round_p.hpp"
+@@ -81,7 +84,7 @@
+ #endif
+ 
+ // --- Outlined out-of-order pack (code-size) ---
+-#ifdef SDPA_FP32_PAIRED_UNPACK
++#if defined(SDPA_FP32_PAIRED_UNPACK) || defined(SDPA_SPRINT_STATE_UNPACK_BATCH)
+ // A full tile's four contiguous FP32 faces extend naturally to eight faces
+ // for two adjacent score tiles. One unpack-to-DST handshake owns both tiles.
+ // Only valid for the fixed two-score, full-face, unpadded diagnostic path.
+@@ -1054,10 +1057,12 @@
+     const uint32_t global_row_base = q_subblock * tiles_per_row;
+     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+ 
++#ifndef SDPA_SPRINT_LAZY_INIT
+ #ifdef SDPA_FP32_STREAMING
+     sdpa_stream_reconfig(in0_cb, in1_cb);
+ #endif
+     sub_init(in0_cb, in1_cb);
++#endif
+ 
+     CircularBuffer(in0_cb).wait_front((q_subblock + 1) * tiles_per_row);
+     CircularBuffer(in1_cb).wait_front((q_subblock + 1) * tiles_per_row);
+@@ -1070,6 +1075,20 @@
+                 get_tile_l1_byte_address(get_operand_id(in0_cb), global_row_base + t));
+             auto* new_max = reinterpret_cast<volatile uint32_t*>(
+                 get_tile_l1_byte_address(get_operand_id(in1_cb), global_row_base + t));
++#ifdef SDPA_SPRINT_MAX_SCAN
++            // Same 32 BF16 first-column comparisons, four independent loads
++            // per loop control iteration. Upper halves remain irrelevant.
++            for (uint32_t r = 0; r < 32; r += 4) {
++                const uint32_t offset = (r / 16) * 256 + (r % 16) * 8;
++                const uint32_t difference =
++                    (old_max[offset] ^ new_max[offset]) | (old_max[offset + 8] ^ new_max[offset + 8]) |
++                    (old_max[offset + 16] ^ new_max[offset + 16]) | (old_max[offset + 24] ^ new_max[offset + 24]);
++                if ((difference & 0xffffu) != 0) {
++                    identical = 0;
++                    break;
++                }
++            }
++#else
+             for (uint32_t r = 0; r < 32; ++r) {
+                 const uint32_t offset = (r / 16) * 256 + (r % 16) * 8;
+                 if (((old_max[offset] ^ new_max[offset]) & 0xffffu) != 0) {
+@@ -1077,6 +1096,7 @@
+                     break;
+                 }
+             }
++#endif
+         }
+         mailbox_write(ckernel::ThreadId::MathThreadId, identical);
+         mailbox_write(ckernel::ThreadId::PackThreadId, identical);
+@@ -1088,6 +1108,15 @@
+     }
+ #endif
+ 
++#ifdef SDPA_SPRINT_LAZY_INIT
++    // An exact identity correction never consumes either subtraction input.
++    // Preserve the comparison and arithmetic, but skip unused operation setup.
++#ifdef SDPA_FP32_STREAMING
++    sdpa_stream_reconfig(in0_cb, in1_cb);
++#endif
++    sub_init(in0_cb, in1_cb);
++#endif
++
+     {
+         tile_regs_acquire();
+         for (uint32_t i = 0; i < tiles_per_row; i++) {
+@@ -1189,8 +1218,24 @@
+     tile_regs_acquire();
+     sdpa_stream_reconfig(old_cb, old_cb);
+     unary_bcast_init<BroadcastType::NONE>(old_cb);
+-    for (int p = 0; p < pairs; ++p) {
+-        unary_bcast<BroadcastType::NONE>(old_cb, old_index + p, p);
++#ifdef SDPA_SPRINT_STATE_UNPACK_BATCH
++    if constexpr (pairs > 1) {
++        // Same FP32 values, ordering and destination indices as individual
++        // unary copies. Preserve Blackhole's zero-flag clear for every tile.
++        sdpa_score_unpack_mop(4 * pairs);
++        unary_bcast<BroadcastType::NONE>(old_cb, old_index, 0);
++        MATH(for (uint32_t tile = 1; tile < pairs; ++tile) {
++            for (uint32_t face = 0; face < 4; ++face) {
++                TT_ZEROACC(p_zeroacc::CLR_16, 1, 1, ADDR_MOD_3, get_dest_index_in_faces(tile, face));
++            }
++        })
++        sdpa_score_unpack_mop(4);
++    } else
++#endif
++    {
++        for (int p = 0; p < pairs; ++p) {
++            unary_bcast<BroadcastType::NONE>(old_cb, old_index + p, p);
++        }
+     }
+     unary_bcast_uninit<BroadcastType::NONE>(old_cb);
+     if (!identity_correction) {
+@@ -1258,16 +1303,33 @@
+     configure_single_tile_pack(out_out_cb);
+     for (uint32_t i = 0; i < tiles_per_row; ++i) {
+         const uint32_t read_row = current_sum_popped ? write_row_base + i : sum_row_base + i;
+-        for (uint32_t j = 0; j < tiles_per_column; j += 2) {
+-            sdpa_fp32_state_update<2>(
++#ifdef SDPA_SPRINT_IDENTITY4
++        if (identity_correction && tiles_per_column == 4) {
++            // Identity needs no correction tile, so all four FP32 DST slots
++            // hold independent numerator tiles. L1 adds remain unchanged.
++            sdpa_fp32_state_update<4>(
+                 out_in_cb,
+                 out_out_cb,
+                 bcast_cb,
+-                (ob_row_base + i) * tiles_per_column + j,
+-                read_row * tiles_per_column + j,
+-                (write_row_base + i) * tiles_per_column + j,
++                (ob_row_base + i) * tiles_per_column,
++                read_row * tiles_per_column,
++                (write_row_base + i) * tiles_per_column,
+                 ob_row_base + i,
+-                identity_correction);
++                true);
++        } else
++#endif
++        {
++            for (uint32_t j = 0; j < tiles_per_column; j += 2) {
++                sdpa_fp32_state_update<2>(
++                    out_in_cb,
++                    out_out_cb,
++                    bcast_cb,
++                    (ob_row_base + i) * tiles_per_column + j,
++                    read_row * tiles_per_column + j,
++                    (write_row_base + i) * tiles_per_column + j,
++                    ob_row_base + i,
++                    identity_correction);
++            }
+         }
+         sdpa_fp32_state_update<1, true>(
+             sum_in_cb,
+@@ -2107,6 +2169,9 @@
+     PACK((ckernel::sfpu::calculate_sdpa_fused_sub_exp<scale_fp32, true>()));
+ #else
+     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
++#ifdef SDPA_SPRINT_C_REFINE_HOIST
++    PACK((ckernel::sfpu::init_sdpa_refine_loadmacros()));
++#endif
+ #endif
+ 
+     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations

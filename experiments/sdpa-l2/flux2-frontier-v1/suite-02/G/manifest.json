@@ -1,0 +1,204 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "failed",
+  "variant": "G",
+  "conditioning": "stock",
+  "model_repair": "main_fused",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "0ffc16e30fa306c8f148ba8aed01cb72f025823a3956126460a98398ad2236cd",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "451726d8aa456be4732ba1009d4ed1d8dc9f4d41841189ad3df7e9cb76e80747",
+    "experiments/sdpa-l2/flux2-frontier-v1/conditioning.py": "751456805a36bf1e8d166a44002b9eaba47e3d595f53d537ba8de8c914f703b7",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_fixes.py": "e79f6e1e5228a3df3b2035d0422a052cb13dd36ce552509f9732849f84605d64"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "/localdev/cglagovich/flux2-frontier-20260915/tt-metal/experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": true,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset",
+    "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+    "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors."
+  ],
+  "seeds": [
+    0,
+    42
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "local Q, prepared-format KV all-gather, rectangular attention",
+  "attention_recipe": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "8",
+    "SUB_EXP_GRANULARITY": "8",
+    "MUL_BCAST_GRANULARITY": "8",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "4",
+    "SDPA_STREAMING_ACCURACY": "1",
+    "SDPA_STREAMING_NUMERATOR_COMPENSATION": "1",
+    "SDPA_OUT_A_CB": "8",
+    "SDPA_OUT_B_CB": "9",
+    "SDPA_LOFI_FIX_CORRECTION": "1",
+    "SDPA_LOFI_SAFE_RESCALE": "1"
+  },
+  "attention_qk_chunks": [
+    256,
+    512
+  ],
+  "results": [],
+  "pipeline_setup_seconds": 384.3630762030007,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725"
+  },
+  "real_input_captures": {
+    "dual.0": {
+      "file": "qkv-dual.0.pt",
+      "sha256": "69ef1a3b0ae8508f758dd9b73bceb9a9e5f114ccda1fc2a698333d93a209b62c",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.1666370630264282,
+        1.0763410329818726,
+        5.048369407653809
+      ],
+      "max_abs": [
+        9.6875,
+        9.625,
+        45.0
+      ]
+    },
+    "dual.7": {
+      "file": "qkv-dual.7.pt",
+      "sha256": "1946dc5f4dbc4254a18dc01401df53e8ce3e5552727159ee7fa47b30167ec3af",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.3431062698364258,
+        1.2325084209442139,
+        4.78623628616333
+      ],
+      "max_abs": [
+        6.96875,
+        9.9375,
+        84.0
+      ]
+    },
+    "single.23": {
+      "file": "qkv-single.23.pt",
+      "sha256": "a85d8a77a32903049b87ea987a2ce9cfc2bb8bd551f14758d5a7013ee80e30a7",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.4027403593063354,
+        1.3941936492919922,
+        0.5571048855781555
+      ],
+      "max_abs": [
+        9.4375,
+        9.375,
+        13.0
+      ]
+    },
+    "single.47": {
+      "file": "qkv-single.47.pt",
+      "sha256": "955aaae143bb76391973d8947366c483be08359d81350592350b6e6bca8fc819",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.2334603071212769,
+        1.2620697021484375,
+        0.9899662137031555
+      ],
+      "max_abs": [
+        6.6875,
+        7.84375,
+        7.78125
+      ]
+    }
+  },
+  "error": "AssertionError: Block replay differs for single.47"
+}

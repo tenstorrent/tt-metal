@@ -1,0 +1,33 @@
+{
+  "kind": "EG",
+  "files": 6,
+  "records": 42,
+  "checks_pass": true,
+  "source_mismatches": [],
+  "detail": [
+    {
+      "file": "e-valid-distinct-v1.json",
+      "records": 4
+    },
+    {
+      "file": "e-valid-long-v1.json",
+      "records": 10
+    },
+    {
+      "file": "e-valid-short-v1.json",
+      "records": 5
+    },
+    {
+      "file": "e-valid-stress-v1.json",
+      "records": 9
+    },
+    {
+      "file": "g-valid-short-v1.json",
+      "records": 5
+    },
+    {
+      "file": "g-valid-stress-v1.json",
+      "records": 9
+    }
+  ]
+}

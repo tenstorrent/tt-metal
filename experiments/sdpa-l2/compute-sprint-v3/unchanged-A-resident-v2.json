@@ -1,0 +1,153 @@
+{
+  "variant": "A",
+  "implementation": "unchanged frozen v1 canonical A",
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "dim": 128,
+  "cores": 1,
+  "q_repeats": 8,
+  "k_chunks": 512,
+  "useful_flops": 274877906944,
+  "median_ms": 137.9653059411794,
+  "tflops_per_core": 1.9923697850617055,
+  "replay_ms": [
+    137.9589659627527,
+    137.9582069348544,
+    137.9645571578294,
+    137.9653059411794,
+    137.96649686992168,
+    137.96998700127006,
+    137.96605705283582,
+    137.98249699175358,
+    137.96188705600798
+  ],
+  "actual_replays": 14,
+  "trace_raw_equal": true,
+  "metadata": {
+    "numeric_defines": {
+      "EXP_APPROX_MODE": "1",
+      "STATS_GRANULARITY": "8",
+      "SUB_EXP_GRANULARITY": "8",
+      "MUL_BCAST_GRANULARITY": "8",
+      "DHT_GRANULARITY": "4",
+      "REDUCE_GRANULARITY": "4",
+      "RESIDENT_MAIN": "1"
+    },
+    "implementation_defines": {
+      "SDPA_BF16_BLOCK_STATE": "1",
+      "SDPA_BF16_CORRECTION_REUSE": "1",
+      "SDPA_BF16_CORRECTION_FENCE": "1"
+    },
+    "cb_counts": [
+      [
+        0,
+        64
+      ],
+      [
+        1,
+        128
+      ],
+      [
+        2,
+        128
+      ],
+      [
+        3,
+        1
+      ],
+      [
+        4,
+        1
+      ],
+      [
+        5,
+        1
+      ],
+      [
+        6,
+        128
+      ],
+      [
+        8,
+        32
+      ],
+      [
+        9,
+        32
+      ],
+      [
+        10,
+        8
+      ],
+      [
+        11,
+        8
+      ],
+      [
+        12,
+        8
+      ],
+      [
+        13,
+        8
+      ],
+      [
+        14,
+        8
+      ],
+      [
+        16,
+        16
+      ]
+    ],
+    "kv_slots": 2,
+    "math_fidelity": "MathFidelity.HiFi2",
+    "fp32_dest_acc_en": false,
+    "math_approx_mode": true,
+    "dst_full_sync_en": false
+  },
+  "input_hashes": [
+    "2d5578ed94f6e033e1df76c9098c26dd5b8bb559809c0a3a542694b1f5afb17e",
+    "cf75804c4ab15264ac576d799500daaa112577229b43948153edea9bc1f15133",
+    "5283730c20e6840fed6286cfc164c10e5b221fde6769cfea5bc14baacf51e528"
+  ],
+  "device_inputs_immutable": true,
+  "selected_sources_immutable": true,
+  "selected_source_sha256": {
+    "experiments/sdpa-l2/compute-sprint-v3/control_a.py": "2fe9437fc714ecd74c99a8983ad5084337c84ff9b06ad263fbe469de0dd0fe2b",
+    "experiments/sdpa-l2/compute-sprint-v3/numerics.py": "240cf90f5ad978c84720ba4559a2388a234bb95a3d78962c8ca972e716f726f3",
+    "experiments/sdpa-l2/compute-sprint-v2/review/bench.py": "99de48619402d9f24adbcc84d65410c239b089445082190eb326280596737b98",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe",
+    "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py": "8a78370d89e0a11f22e1d835b53b88141cb81b6b7e1a3e963228ea365631ae2d",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compute.cpp": "d6d444558df138b8d3120b3a1f0bb8f447e9535701c8a5a166a263e019d37470",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_A.hpp": "7ba8e488a35ace619f99e89a4fc2f9917418ddffbdf4061a18771a59cd58de9c",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_B.hpp": "862795195787049b6372c1463a8a64b9ac69986e62921190ab5b759fd7dd1463",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compensated_block.hpp": "875923d51d836ff3b855c6c572d789eb09daeac82646576a672f2ba21e40b224",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/fullchip_compute.cpp": "52b9caf31f5673637fd6ceab124c146cc0743036823b9e1878cc54ece194a65a",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/exp_block.hpp": "f08e222ea8dd25e06c115dc6a14f0981b1b7f79d081c8d9adbd995159c827e64",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compensated_reuse.hpp": "ea88f95690f556cf38db78f6660c910508fe4838d49f69f0f14cc62e78ee13bc",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/compute.cpp": "7a235145fcbe6e05a6ea74fec1930a1b0938bf1c5c0be88a2c34cb9292eccd10",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "221331267dcdd1cc8acd4967b47779db7c671e03aa0506f67f0ea63237d5b48e",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "e216a923296e053f86c3aaa6bce3a097f79e323197023bc1a773e6ceef521a6d",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "e531a51efc6c47c4e4634b088f3d0256354c2096419379b1861b6f565a085ef6"
+  },
+  "metrics": {
+    "finite": true,
+    "reference_is_zero": false,
+    "reference_norm": 13.005718227048062,
+    "reference_rms": 0.07184712150427482,
+    "l2_pct": 20.276226540630805,
+    "pcc": 0.9798905964848212,
+    "max_abs": 0.10430613427827806,
+    "row_l2_pct_p95": 23.269991621815258,
+    "row_l2_pct_p99": 25.269369669588105,
+    "row_l2_pct_max": 27.703664769431278,
+    "zero_reference_rows": 0,
+    "zero_row_mismatches": 0,
+    "zero_row_max_abs": null
+  },
+  "output_sha256": "5b45dbe90b69171a64345f4bcd5c909b67a50a244394cd508423cd930872a83b",
+  "note": "Fresh control only, not an optimization or paired speedup claim; resident repeated KV, preprocessing excluded."
+}

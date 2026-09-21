@@ -1,0 +1,171 @@
+{
+  "metric": "Raw normalized image/text cosine; not scaled CLIPScore, not image-fidelity measurement",
+  "model": "ViT-B/32",
+  "pretrained": "openai",
+  "open_clip_version": "2.26.1",
+  "rows": [
+    {
+      "variant": "D",
+      "prompt_id": 0,
+      "seed": 0,
+      "prompt": "A photo of a cat sitting on a windowsill at sunset",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/D/D-prompt0-seed0.png",
+      "image_sha256": "fce944b24bf0c339249029fad37251e571a96191568b979d8b5b290d8217998a",
+      "clip_cosine": 0.35935646295547485,
+      "manifest_sha256": "3e187e89745f7c66c3920e08f4258a75fe7ddc940b8433462924e287c028debe",
+      "paired_delta_vs_D": 0.0
+    },
+    {
+      "variant": "D",
+      "prompt_id": 0,
+      "seed": 42,
+      "prompt": "A photo of a cat sitting on a windowsill at sunset",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/D/D-prompt0-seed42.png",
+      "image_sha256": "2b666d30407b3a41d26d35a6366c12bc63cd5ddf5f02ade9adac2dcdf82b34ed",
+      "clip_cosine": 0.3561391830444336,
+      "manifest_sha256": "3e187e89745f7c66c3920e08f4258a75fe7ddc940b8433462924e287c028debe",
+      "paired_delta_vs_D": 0.0
+    },
+    {
+      "variant": "D",
+      "prompt_id": 1,
+      "seed": 0,
+      "prompt": "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/D/D-prompt1-seed0.png",
+      "image_sha256": "7e4b3ac1191b3d177c353f4d50d057d13f4d12377fdcc5d8349e6fb8bbea075c",
+      "clip_cosine": 0.3202546536922455,
+      "manifest_sha256": "3e187e89745f7c66c3920e08f4258a75fe7ddc940b8433462924e287c028debe",
+      "paired_delta_vs_D": 0.0
+    },
+    {
+      "variant": "D",
+      "prompt_id": 1,
+      "seed": 42,
+      "prompt": "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/D/D-prompt1-seed42.png",
+      "image_sha256": "01b6111964405c51e110a272f336017a3bc5369fbaff010b73de5a0e97582aba",
+      "clip_cosine": 0.3339657187461853,
+      "manifest_sha256": "3e187e89745f7c66c3920e08f4258a75fe7ddc940b8433462924e287c028debe",
+      "paired_delta_vs_D": 0.0
+    },
+    {
+      "variant": "D",
+      "prompt_id": 2,
+      "seed": 0,
+      "prompt": "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors.",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/D/D-prompt2-seed0.png",
+      "image_sha256": "20086a8ae7158bcd161df5eeee7275d02d2fa6eb622bde27537b7158883c5b6a",
+      "clip_cosine": 0.3523734211921692,
+      "manifest_sha256": "3e187e89745f7c66c3920e08f4258a75fe7ddc940b8433462924e287c028debe",
+      "paired_delta_vs_D": 0.0
+    },
+    {
+      "variant": "D",
+      "prompt_id": 2,
+      "seed": 42,
+      "prompt": "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors.",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/D/D-prompt2-seed42.png",
+      "image_sha256": "e708266fce998dd13c8cc70645be4d610b3f6222e60ba053bb1e0f11c9ce639e",
+      "clip_cosine": 0.36369356513023376,
+      "manifest_sha256": "3e187e89745f7c66c3920e08f4258a75fe7ddc940b8433462924e287c028debe",
+      "paired_delta_vs_D": 0.0
+    },
+    {
+      "variant": "C",
+      "prompt_id": 0,
+      "seed": 0,
+      "prompt": "A photo of a cat sitting on a windowsill at sunset",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/C/C-prompt0-seed0.png",
+      "image_sha256": "81e608c0d9481072e922de4384dbb7912045cf27dc328c08c1cf0def62ff227e",
+      "clip_cosine": 0.3588794767856598,
+      "manifest_sha256": "294912f85f158d738c76702790fae14bde47fabf799b9476af61063498ce72ef",
+      "paired_delta_vs_D": -0.0004769861698150635
+    },
+    {
+      "variant": "C",
+      "prompt_id": 0,
+      "seed": 42,
+      "prompt": "A photo of a cat sitting on a windowsill at sunset",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/C/C-prompt0-seed42.png",
+      "image_sha256": "4f6e25550f4bab3f5884fe449ac9dd8356638adba3d30ebed7d6d96caef82f5a",
+      "clip_cosine": 0.357084184885025,
+      "manifest_sha256": "294912f85f158d738c76702790fae14bde47fabf799b9476af61063498ce72ef",
+      "paired_delta_vs_D": 0.0009450018405914307
+    },
+    {
+      "variant": "C",
+      "prompt_id": 1,
+      "seed": 0,
+      "prompt": "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/C/C-prompt1-seed0.png",
+      "image_sha256": "e4a05b9241ce1219855f765ad821df629475b452fe3e5e7c59c720953f5db4df",
+      "clip_cosine": 0.32223081588745117,
+      "manifest_sha256": "294912f85f158d738c76702790fae14bde47fabf799b9476af61063498ce72ef",
+      "paired_delta_vs_D": 0.0019761621952056885
+    },
+    {
+      "variant": "C",
+      "prompt_id": 1,
+      "seed": 42,
+      "prompt": "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/C/C-prompt1-seed42.png",
+      "image_sha256": "316d29dce89fd3a6d13959a42b3fd3b97620f4b2e72d112973af2c2d0e6e03d2",
+      "clip_cosine": 0.3342352509498596,
+      "manifest_sha256": "294912f85f158d738c76702790fae14bde47fabf799b9476af61063498ce72ef",
+      "paired_delta_vs_D": 0.0002695322036743164
+    },
+    {
+      "variant": "C",
+      "prompt_id": 2,
+      "seed": 0,
+      "prompt": "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors.",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/C/C-prompt2-seed0.png",
+      "image_sha256": "902d774335fce3a581f8857082e1e893111b5ec457b9a190926230d9f9b05ba4",
+      "clip_cosine": 0.3520951271057129,
+      "manifest_sha256": "294912f85f158d738c76702790fae14bde47fabf799b9476af61063498ce72ef",
+      "paired_delta_vs_D": -0.00027829408645629883
+    },
+    {
+      "variant": "C",
+      "prompt_id": 2,
+      "seed": 42,
+      "prompt": "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors.",
+      "image": "/localdev/cglagovich/flux2-frontier-20260915/suite-02/C/C-prompt2-seed42.png",
+      "image_sha256": "968275dd874ee843b600b221951fbdfe051c23f43c3b532c89882f1dcabd01c1",
+      "clip_cosine": 0.36300334334373474,
+      "manifest_sha256": "294912f85f158d738c76702790fae14bde47fabf799b9476af61063498ce72ef",
+      "paired_delta_vs_D": -0.0006902217864990234
+    }
+  ],
+  "suite": {
+    "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+    "width": 1024,
+    "height": 1024,
+    "steps": 50,
+    "guidance": 4.0,
+    "prompts": [
+      "A photo of a cat sitting on a windowsill at sunset",
+      "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+      "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors."
+    ],
+    "seeds": [
+      0,
+      42
+    ],
+    "vae_sdpa_chunks": [
+      64,
+      64
+    ],
+    "embedding_cache": {
+      "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725",
+      "8d37170a179a4f84b9c63722a4b87329ec345786c3a12fdff37e0fd87d1acbbb": "6014bc3080f7ee0fed32709605adf0069fb66ceab56ee2fc7909ac16dd4110aa",
+      "50bf80e8ee300bdce8eba5ed77bdea45771f66c1680f94ba58cfa0c0ca341f36": "a758335a4766235612ceca195a0edf50c961b89127e93b6301acc0d1abfd7c73"
+    },
+    "conditioning": "stock",
+    "model_repair": "main_fused"
+  },
+  "means": {
+    "C": 0.3479213664929072,
+    "D": 0.34763050079345703
+  }
+}

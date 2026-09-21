@@ -1,0 +1,102 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/e-common_k.json",
+      "sha256": "dad7feb33ac6cc88a8a849406bfdf6773c255c41645a02d83f1baf9452217745",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/e-common_q.json",
+      "sha256": "0ddfaef40583db1f903846ae12d2d9a0e0e1539f24fdbea15b90182e7826a859",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/e-common_v.json",
+      "sha256": "beca6ecef80d26b2ea4c668225abf58537ff3110fe4b5a7c7d55e92a1c9a0914",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/e-constant_v.json",
+      "sha256": "e4b3b862da6dcf25a0af6336b4f9567888b3eec4a0ca349342b686e332b5acf7",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/e-identity_transitions.json",
+      "sha256": "f61ac6539bd7cd5e0c801cd8e3c37ec12de73b690a4b8dcd7bdf771f78f87b9e",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/e-normal.json",
+      "sha256": "742ff40d3947a5d936369c0508bab5e7e0c1c263aa5d38291839c47af6aa62bf",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/e-outliers.json",
+      "sha256": "87ac7bc699ea3abb01ecd79d9ae5fa162de2a3f20afcceaee1f61ae46154be3b",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/e-uniform.json",
+      "sha256": "1d6b990205e197d9f0297832525c3c811a546c2274a3170890c8604e0eb63b79",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/g-common_k.json",
+      "sha256": "c2b7d5ffb5bfaec98072eb9d2854554bfbc5e6ecbb21c7c8a4d0e9b066dd9a40",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/g-common_q.json",
+      "sha256": "b0e190226abf8dd587a6245de8aa10838008cb7fc273b0bf87ee7fa550698c5f",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/g-common_v.json",
+      "sha256": "5d34a7b7d31cf1ec6ec6ba87df2e14b35b403c248779ec960b77b72619110f5c",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/g-constant_v.json",
+      "sha256": "79fd7442b3a636d4739b891085b42e4eda9ca09549ac12c4b332d8452e982fc8",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/g-identity_transitions.json",
+      "sha256": "22f91f419b10dcdf6274df608efbfdad18b9ee6048c5af419afaaa18ed8614ec",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/g-normal.json",
+      "sha256": "f30227587dc23f1ba7ccf42eea22def731e20892a404ef2592e23e7259f8ded5",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/g-outliers.json",
+      "sha256": "0e5a6e2e4cef5d619ad968350c3af7bd2d9d2c3bc3bc21fa1838719da7731b3c",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-qualification/g-uniform.json",
+      "sha256": "d859437dff0fa33d2b7e39bbf89709dec661cf1b3d4b79914b3928da6adc1277",
+      "records_checked": 1,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

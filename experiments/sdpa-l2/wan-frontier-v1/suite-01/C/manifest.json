@@ -1,0 +1,3116 @@
+{
+  "status": "completed",
+  "variant": "C",
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/wan-frontier-01/checkpoint/Wan2.2-T2V-A14B-Diffusers",
+  "checkpoint_revision": "5be7df9619b54f4e2667b2755bc6a756675b5cd7",
+  "width": 832,
+  "height": 480,
+  "frames": 81,
+  "steps": 40,
+  "seed": 42,
+  "guidance": [
+    4.0,
+    3.0
+  ],
+  "prompts": [
+    "A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze.",
+    "A woman sits at an outdoor caf\u00e9 in soft daylight, turns toward the camera, smiles, and lifts a ceramic cup with both hands. Natural facial expressions, clearly visible hands, realistic skin texture, a steady camera."
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "sp": 4,
+  "tp": 2,
+  "logical_tokens": 32760,
+  "padded_tokens": 32768,
+  "recipe": {
+    "fp32_dst": true,
+    "defines": {
+      "EXP_APPROX_MODE": "1",
+      "STATS_GRANULARITY": "4",
+      "SUB_EXP_GRANULARITY": "4",
+      "MUL_BCAST_GRANULARITY": "4",
+      "DHT_GRANULARITY": "4",
+      "REDUCE_GRANULARITY": "2",
+      "SDPA_FP32_STREAMING": "1",
+      "SDPA_FP32_STATE": "1",
+      "SDPA_HIFI2_ROUND": "1",
+      "SDPA_QK4": "1"
+    },
+    "fidelity": "MathFidelity.HiFi2",
+    "tail_mask": "native partial-K palette",
+    "explicit_mask_format_reconfig": true
+  },
+  "pipeline_setup_seconds": 8.638546340167522,
+  "attention_schedule": "prepared-format KV all-gather then local Q attention",
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 42,
+      "pipeline_seconds": 236.99120285897516,
+      "phases": {
+        "t5_encoding": 0.0626075800973922,
+        "encoder": 0.06270143110305071,
+        "prepare_latents": 0.006420826073735952,
+        "denoising": 235.87220127810724,
+        "vae": 1.0473464380484074
+      },
+      "step_progress": [
+        {
+          "step": 1,
+          "elapsed_seconds": 6.022857145871967
+        },
+        {
+          "step": 2,
+          "elapsed_seconds": 11.75936956400983
+        },
+        {
+          "step": 3,
+          "elapsed_seconds": 17.512937569990754
+        },
+        {
+          "step": 4,
+          "elapsed_seconds": 23.262325649848208
+        },
+        {
+          "step": 5,
+          "elapsed_seconds": 29.037341452902183
+        },
+        {
+          "step": 6,
+          "elapsed_seconds": 34.81164155295119
+        },
+        {
+          "step": 7,
+          "elapsed_seconds": 40.57856783992611
+        },
+        {
+          "step": 8,
+          "elapsed_seconds": 46.361348962876946
+        },
+        {
+          "step": 9,
+          "elapsed_seconds": 52.14068597392179
+        },
+        {
+          "step": 10,
+          "elapsed_seconds": 57.92604317283258
+        },
+        {
+          "step": 11,
+          "elapsed_seconds": 63.703274675877765
+        },
+        {
+          "step": 12,
+          "elapsed_seconds": 69.48554691998288
+        },
+        {
+          "step": 13,
+          "elapsed_seconds": 75.27813939983025
+        },
+        {
+          "step": 14,
+          "elapsed_seconds": 81.05041567399167
+        },
+        {
+          "step": 15,
+          "elapsed_seconds": 86.84825708786957
+        },
+        {
+          "step": 16,
+          "elapsed_seconds": 92.64444573386572
+        },
+        {
+          "step": 17,
+          "elapsed_seconds": 98.4360029050149
+        },
+        {
+          "step": 18,
+          "elapsed_seconds": 104.23118292191066
+        },
+        {
+          "step": 19,
+          "elapsed_seconds": 110.02005321485922
+        },
+        {
+          "step": 20,
+          "elapsed_seconds": 115.81470974185504
+        },
+        {
+          "step": 21,
+          "elapsed_seconds": 121.61649923794903
+        },
+        {
+          "step": 22,
+          "elapsed_seconds": 127.39720847387798
+        },
+        {
+          "step": 23,
+          "elapsed_seconds": 133.18224456789903
+        },
+        {
+          "step": 24,
+          "elapsed_seconds": 138.97312863683328
+        },
+        {
+          "step": 25,
+          "elapsed_seconds": 144.77633490902372
+        },
+        {
+          "step": 26,
+          "elapsed_seconds": 150.5678423459176
+        },
+        {
+          "step": 27,
+          "elapsed_seconds": 158.66447971900925
+        },
+        {
+          "step": 28,
+          "elapsed_seconds": 164.43723744689487
+        },
+        {
+          "step": 29,
+          "elapsed_seconds": 170.23811239283532
+        },
+        {
+          "step": 30,
+          "elapsed_seconds": 176.0212091789581
+        },
+        {
+          "step": 31,
+          "elapsed_seconds": 181.7989485268481
+        },
+        {
+          "step": 32,
+          "elapsed_seconds": 187.57835938595235
+        },
+        {
+          "step": 33,
+          "elapsed_seconds": 193.36135297897272
+        },
+        {
+          "step": 34,
+          "elapsed_seconds": 199.13737546582706
+        },
+        {
+          "step": 35,
+          "elapsed_seconds": 204.90719372103922
+        },
+        {
+          "step": 36,
+          "elapsed_seconds": 210.67536361701787
+        },
+        {
+          "step": 37,
+          "elapsed_seconds": 216.45506524993107
+        },
+        {
+          "step": 38,
+          "elapsed_seconds": 222.21765406499617
+        },
+        {
+          "step": 39,
+          "elapsed_seconds": 227.99566963803954
+        },
+        {
+          "step": 40,
+          "elapsed_seconds": 233.7677734249737
+        }
+      ],
+      "video": "prompt0-seed42.mp4",
+      "video_sha256": "eb81131bcd90b1584d3d3d202db539e7fd46ae8ccb4477ea28b5570ccc69afac",
+      "sampled_frames": [
+        {
+          "frame": 0,
+          "file": "prompt0-frame000.png",
+          "sha256": "14aa0a3670ef69d292d2c72a59429b4cb5adbdc7c7615c3211acf155358a5bdc"
+        },
+        {
+          "frame": 11,
+          "file": "prompt0-frame011.png",
+          "sha256": "7adaac5493620a9d55d76da4ef4450340046dfe8730c0e2fcec24e0b139761d9"
+        },
+        {
+          "frame": 22,
+          "file": "prompt0-frame022.png",
+          "sha256": "f8e145e8159d6442eb20374075acfbe367bdb28e8b5623e57602651fb51e2dd5"
+        },
+        {
+          "frame": 34,
+          "file": "prompt0-frame034.png",
+          "sha256": "4bce1feb52e1a9bdc40e3b071f20a1141cab1b8ff1a9a7288fa581ae482e2d9b"
+        },
+        {
+          "frame": 45,
+          "file": "prompt0-frame045.png",
+          "sha256": "63bcd83f172a85b7b3691a0dd04f6e7deefaf867e053d6ec598e5efcba54958c"
+        },
+        {
+          "frame": 57,
+          "file": "prompt0-frame057.png",
+          "sha256": "56dacd61f4192e55b938379fb919ac9a6a188ac467b6ad5e186c3421c20c2473"
+        },
+        {
+          "frame": 68,
+          "file": "prompt0-frame068.png",
+          "sha256": "fe7498718704e87a79fcbf9cea9f748f6caf5c43b4d53cb2ee317b02d3f867e3"
+        },
+        {
+          "frame": 80,
+          "file": "prompt0-frame080.png",
+          "sha256": "0f9ba684054e2d6c44b2d06eec2a421db4c5bd1e67b92fcdde813602d93eaedb"
+        }
+      ],
+      "decoded_sha256": "98571d934928850f7558713309e938c74131512870c6bd38589f2f71973bae7f",
+      "pixel_min": 0,
+      "pixel_max": 255
+    },
+    {
+      "prompt_id": 1,
+      "seed": 42,
+      "pipeline_seconds": 237.14378622104414,
+      "phases": {
+        "t5_encoding": 0.06265890109352767,
+        "encoder": 0.06274815206415951,
+        "prepare_latents": 0.006408464862033725,
+        "denoising": 236.0236520981416,
+        "vae": 1.0492210229858756
+      },
+      "step_progress": [
+        {
+          "step": 1,
+          "elapsed_seconds": 5.954777664970607
+        },
+        {
+          "step": 2,
+          "elapsed_seconds": 11.758228176971897
+        },
+        {
+          "step": 3,
+          "elapsed_seconds": 17.542763878125697
+        },
+        {
+          "step": 4,
+          "elapsed_seconds": 23.333087804028764
+        },
+        {
+          "step": 5,
+          "elapsed_seconds": 29.133160575060174
+        },
+        {
+          "step": 6,
+          "elapsed_seconds": 34.933397518936545
+        },
+        {
+          "step": 7,
+          "elapsed_seconds": 40.74416490411386
+        },
+        {
+          "step": 8,
+          "elapsed_seconds": 46.54998524906114
+        },
+        {
+          "step": 9,
+          "elapsed_seconds": 52.35352420411073
+        },
+        {
+          "step": 10,
+          "elapsed_seconds": 58.158580135088414
+        },
+        {
+          "step": 11,
+          "elapsed_seconds": 63.956724292133
+        },
+        {
+          "step": 12,
+          "elapsed_seconds": 69.77597739896737
+        },
+        {
+          "step": 13,
+          "elapsed_seconds": 75.58926798892207
+        },
+        {
+          "step": 14,
+          "elapsed_seconds": 81.39383302209899
+        },
+        {
+          "step": 15,
+          "elapsed_seconds": 87.19666678295471
+        },
+        {
+          "step": 16,
+          "elapsed_seconds": 93.00281742401421
+        },
+        {
+          "step": 17,
+          "elapsed_seconds": 98.80913505912758
+        },
+        {
+          "step": 18,
+          "elapsed_seconds": 104.60736849694513
+        },
+        {
+          "step": 19,
+          "elapsed_seconds": 110.41557311592624
+        },
+        {
+          "step": 20,
+          "elapsed_seconds": 116.2107183879707
+        },
+        {
+          "step": 21,
+          "elapsed_seconds": 122.00697343098
+        },
+        {
+          "step": 22,
+          "elapsed_seconds": 127.8088448450435
+        },
+        {
+          "step": 23,
+          "elapsed_seconds": 133.59841658710502
+        },
+        {
+          "step": 24,
+          "elapsed_seconds": 139.41324873501435
+        },
+        {
+          "step": 25,
+          "elapsed_seconds": 145.20373122300953
+        },
+        {
+          "step": 26,
+          "elapsed_seconds": 151.00056587602012
+        },
+        {
+          "step": 27,
+          "elapsed_seconds": 158.9951123050414
+        },
+        {
+          "step": 28,
+          "elapsed_seconds": 164.76245153602213
+        },
+        {
+          "step": 29,
+          "elapsed_seconds": 170.53856253507547
+        },
+        {
+          "step": 30,
+          "elapsed_seconds": 176.2946927631274
+        },
+        {
+          "step": 31,
+          "elapsed_seconds": 182.0677599669434
+        },
+        {
+          "step": 32,
+          "elapsed_seconds": 187.83072747802362
+        },
+        {
+          "step": 33,
+          "elapsed_seconds": 193.59786457498558
+        },
+        {
+          "step": 34,
+          "elapsed_seconds": 199.37374220998026
+        },
+        {
+          "step": 35,
+          "elapsed_seconds": 205.12558261095546
+        },
+        {
+          "step": 36,
+          "elapsed_seconds": 210.89688652311452
+        },
+        {
+          "step": 37,
+          "elapsed_seconds": 216.65930366399698
+        },
+        {
+          "step": 38,
+          "elapsed_seconds": 222.42589411209337
+        },
+        {
+          "step": 39,
+          "elapsed_seconds": 228.1743534510024
+        },
+        {
+          "step": 40,
+          "elapsed_seconds": 233.9361415610183
+        }
+      ],
+      "video": "prompt1-seed42.mp4",
+      "video_sha256": "26a6e211dcec4c10f24f261d0edf42c088c489088b4f61a9e95b9733d0a575f0",
+      "sampled_frames": [
+        {
+          "frame": 0,
+          "file": "prompt1-frame000.png",
+          "sha256": "52b320f1fadd6c2bdcee77ff70d99af1bc271c99d70b80c5825e9d98d20a55b5"
+        },
+        {
+          "frame": 11,
+          "file": "prompt1-frame011.png",
+          "sha256": "ef37082da77d78f9ca99d1610e3176d43529c59707ef7868eb26a1e8e1bb3d93"
+        },
+        {
+          "frame": 22,
+          "file": "prompt1-frame022.png",
+          "sha256": "1c7e52973e02b7b94640064a7b09d28e9f791ecf68d314368aaae301e01c13fd"
+        },
+        {
+          "frame": 34,
+          "file": "prompt1-frame034.png",
+          "sha256": "06d01de7d1f3ec50d050e9046e3401a5be1c6bff0ebd33b33f1edcbff3dc92e0"
+        },
+        {
+          "frame": 45,
+          "file": "prompt1-frame045.png",
+          "sha256": "2ffe59932e1fe43b9190360065c55694c7d7a2c34743f88d2810e9bae752c9de"
+        },
+        {
+          "frame": 57,
+          "file": "prompt1-frame057.png",
+          "sha256": "e050375e5842e8db63849881eef5bfcb30f9ec80e6f98479566c3085b7d87144"
+        },
+        {
+          "frame": 68,
+          "file": "prompt1-frame068.png",
+          "sha256": "58723b5c958ddc2d8f23f4b943de99277968a1b85a56bde3d9ed6cb6273d3883"
+        },
+        {
+          "frame": 80,
+          "file": "prompt1-frame080.png",
+          "sha256": "b8e2d5395c0a1fe9e26fa578048b8ce83d5c1ac41c0e4b73d68aeb995d8b51ad"
+        }
+      ],
+      "decoded_sha256": "ee0892a0713ce851575e38a06d4f74665dcbd9e3659c1ee6103b6e9014323522",
+      "pixel_min": 0,
+      "pixel_max": 255
+    }
+  ],
+  "block_bench": {
+    "expert0.block0": {
+      "median_ms": 63.754431,
+      "samples_ms": [
+        62.008689,
+        61.990279,
+        62.153942,
+        62.173802,
+        62.248584,
+        62.556439,
+        62.941196,
+        63.754431,
+        64.396902,
+        65.215317,
+        65.863088,
+        66.641153,
+        67.346446,
+        68.207411,
+        68.942465
+      ],
+      "replay_exact": true,
+      "replay_l2_pct": 0.0,
+      "warmup_replays": 5,
+      "scope": "Full block blocking mesh trace; variant's own two-step pilot inputs"
+    },
+    "expert0.block20": {
+      "median_ms": 70.960891,
+      "samples_ms": [
+        70.868949,
+        70.835788,
+        70.831489,
+        70.967291,
+        70.947831,
+        70.875909,
+        70.561174,
+        70.753737,
+        70.960891,
+        71.136984,
+        71.234146,
+        71.250496,
+        71.284497,
+        71.402588,
+        71.645204
+      ],
+      "replay_exact": true,
+      "replay_l2_pct": 0.0,
+      "warmup_replays": 5,
+      "scope": "Full block blocking mesh trace; variant's own two-step pilot inputs"
+    },
+    "expert1.block0": {
+      "median_ms": 63.768251,
+      "samples_ms": [
+        62.048439,
+        62.033709,
+        62.066371,
+        62.195422,
+        62.340026,
+        62.63347,
+        63.089029,
+        63.768251,
+        64.467364,
+        65.074955,
+        66.004161,
+        66.733214,
+        67.345025,
+        68.14495,
+        68.68557
+      ],
+      "replay_exact": true,
+      "replay_l2_pct": 0.0,
+      "warmup_replays": 5,
+      "scope": "Full block blocking mesh trace; variant's own two-step pilot inputs"
+    },
+    "expert1.block20": {
+      "median_ms": 70.178866,
+      "samples_ms": [
+        70.133996,
+        70.177637,
+        70.047135,
+        70.178866,
+        70.097696,
+        70.114695,
+        70.098326,
+        70.136556,
+        70.303669,
+        70.521343,
+        70.432751,
+        70.672396,
+        70.747667,
+        70.710076,
+        70.867119
+      ],
+      "replay_exact": true,
+      "replay_l2_pct": 0.0,
+      "warmup_replays": 5,
+      "scope": "Full block blocking mesh trace; variant's own two-step pilot inputs"
+    }
+  },
+  "captures": {},
+  "converted_weight_cache": "/localdev/cglagovich/flux2-frontier-20260915/dit-cache-v2",
+  "weight_loads": [
+    {
+      "component": "transformer_2",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 2.4089417960494757
+    },
+    {
+      "component": "transformer",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 2.406165565131232
+    },
+    {
+      "component": "text_encoder",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 1.0760864650364965
+    },
+    {
+      "component": "vae_cin3dbc61bd",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 0.048037176951766014
+    },
+    {
+      "component": "text_encoder",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.169981598854065e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.5299453884363174e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 4.652032206999138
+    },
+    {
+      "component": "vae_cin3dbc61bd",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.45009209215641e-06
+    },
+    {
+      "component": "text_encoder",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.319939762353897e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 2.40610413486138
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.870110958814621e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.820052370429039e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.089903086423874e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7599820643663406e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.919936716556549e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.620050847530365e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.230998456478119e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.369998350739479e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.8000289350748062e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.8899015635252e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.119938239455223e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.870110958814621e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.481058567762375e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.939967766404152e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.660105332732201e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.5599805414676666e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.949971869587898e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.389788955450058e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.6598648875951767e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.5800115913152695e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.5800039768218994e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.039844498038292e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.639841452240944e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.6798959374427795e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.9101578295230865e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 4.787878449074924
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.169996827840805e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.4498516470193863e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.080124199390411e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7599820643663406e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.939960151910782e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.840075805783272e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.8100406527519226e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.119938239455223e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.270114004611969e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.739958629012108e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.45008447766304e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.990018740296364e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.059867933392525e-06
+    },
+    {
+      "component": "vae_cin3dbc61bd",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.249857738614082e-06
+    },
+    {
+      "component": "text_encoder",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.939960151910782e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 2.3840936310589314
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.6901252567768097e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.700136974453926e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.580927684903145e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.6598572731018066e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.820044755935669e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.250075340270996e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.6798807084560394e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.5799963623285294e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.8409995138645172e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.8098002076148987e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.9301736503839493e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.700136974453926e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.7099158614873886e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.45007686316967e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.669868990778923e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.570217475295067e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.870103344321251e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.4100299924612045e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.0098017305135727e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.769986167550087e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.6798807084560394e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.5900080800056458e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.749962732195854e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.820044755935669e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.3800024539232254e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 4.876171340001747
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.33995558321476e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.749962732195854e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.7101486921310425e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.920161932706833e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.469867467880249e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.9799994081258774e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.1900126487016678e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.620043233036995e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.5599729269742966e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.8400681912899017e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.8498470783233643e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.3800024539232254e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 2.600019797682762e-06
+    },
+    {
+      "component": "vae_cin3dbc61bd",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.030065611004829e-06
+    },
+    {
+      "component": "text_encoder",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.250082954764366e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 2.414917246904224
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 4.510640942957252
+    },
+    {
+      "component": "vae_cin3dbc61bd",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.349974915385246e-06
+    },
+    {
+      "component": "text_encoder",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.239846020936966e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 2.5342880010139197
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.4901313483715057e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.489898517727852e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7499703466892242e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.990018740296364e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.1299499571323395e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.00003045797348e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.650086000561714e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7299469113349915e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.5499688237905502e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.270114004611969e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.300149157643318e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.4798868000507355e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7301797419786453e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.6510173231363297e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.869878128170967e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.2209867388010025e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.45009209215641e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7599820643663406e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.400033503770828e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.769993782043457e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.489898517727852e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.709931090474129e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.8000289350748062e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.9800070226192474e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.149973392486572e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 4.650505608180538
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.5099219530820847e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.539957106113434e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.639841452240944e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7800054997205734e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.840075805783272e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.920169547200203e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.79001721739769e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.849854692816734e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.819819539785385e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.320164978504181e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.569999873638153e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.250090569257736e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.8000289350748062e-06
+    },
+    {
+      "component": "vae_cin3dbc61bd",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.559988155961037e-06
+    },
+    {
+      "component": "text_encoder",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.070104867219925e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 2.4479429740458727
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.830064088106155e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.6999117583036423e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.059867933392525e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.390021786093712e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.569992259144783e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.79001721739769e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.959983587265015e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7299469113349915e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.089903086423874e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.5800115913152695e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7401914596557617e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.4600961953401566e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.959983587265015e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7101563066244125e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.4910626709461212e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.850087523460388e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.750203177332878e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.8899015635252e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.719935193657875e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.741122782230377e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.5099219530820847e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.6798883229494095e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.059867933392525e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.4901313483715057e-06
+    },
+    {
+      "component": "transformer",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 1.0699965059757233e-05
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": false,
+      "cache_hit": true,
+      "seconds": 4.538953423965722
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.5499688237905502e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.919936716556549e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.5800039768218994e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.070112481713295e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.9101578295230865e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.040077328681946e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.6100391298532486e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.519933670759201e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.620050847530365e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.899913281202316e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.489898517727852e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.2798928916454315e-06
+    },
+    {
+      "component": "transformer_2",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 3.7101563066244125e-06
+    },
+    {
+      "component": "vae_cin3dbc61bd",
+      "already_loaded": true,
+      "cache_hit": false,
+      "seconds": 4.5800115913152695e-06
+    }
+  ],
+  "transport": {
+    "expert0.block0": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block1": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block2": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block3": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block4": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block5": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block6": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block7": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block8": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block9": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block10": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block11": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block12": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block13": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block14": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block15": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block16": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block17": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block18": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block19": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block20": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block21": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block22": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block23": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block24": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block25": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block26": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block27": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block28": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block29": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block30": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block31": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block32": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block33": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block34": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block35": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block36": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block37": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block38": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert0.block39": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block0": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block1": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block2": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block3": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block4": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block5": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block6": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block7": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block8": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block9": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block10": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block11": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block12": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block13": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block14": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block15": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block16": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block17": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block18": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block19": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block20": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block21": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block22": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block23": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block24": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block25": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block26": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block27": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block28": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block29": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block30": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block31": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block32": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block33": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block34": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block35": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block36": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block37": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block38": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    },
+    "expert1.block39": {
+      "q_dtype": "DataType.BFLOAT16",
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "q_shape": [
+        1,
+        20,
+        8192,
+        128
+      ],
+      "kv_shape": [
+        1,
+        20,
+        32768,
+        128
+      ],
+      "logical_k": 32760
+    }
+  },
+  "pilot_seconds": 25.253440147964284
+}

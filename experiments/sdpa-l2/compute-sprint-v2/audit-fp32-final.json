@@ -1,0 +1,30 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/fp32/identity-qual-D-v1.json",
+      "sha256": "8697554f8104315cabcf2e31118f29d2faeb1a22ad00c8a009bc9a77c7a89a97",
+      "records_checked": 16,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/fp32/identity-qual-C-v1.json",
+      "sha256": "66b19784a17605d3ca01660db29f52a67035b7a02e031c264b1a8c6aa504612e",
+      "records_checked": 16,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/fp32/qk22-smoke-v2.json",
+      "sha256": "95cee45211071d7a7d9e2fc7843776cbca7e46e1b14bf075c95f887d3b243548",
+      "records_checked": 4,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/fp32/qk22-screen-v2.json",
+      "sha256": "34281634db892f39303af7a6c5f24dc83faac94304c3dd4de3516a3c42e490c9",
+      "records_checked": 4,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

@@ -2314,6 +2314,11 @@ static void sdpa_inner_loop_step(
             // non-causal padded with a partial-tile mask (single-chip streaming partial-K case).
             // should_apply_lightweight_mask hoisted above the kt loop.
             if (should_apply_lightweight_mask) {
+#if defined(SDPA_K_PARTIAL_COL) && defined(SDPA_FP32_STREAMING)
+                // The previous matmul's SrcA can be BFP8 K (variant F),
+                // whereas the lightweight mask palette is always BF16.
+                sdpa_stream_reconfig_srca(cb_mask_in);
+#endif
                 begin_mask_l1_accumulate<false>(cb_qkt_im, cb_mask_in);
                 apply_lightweight_mask_streaming<
                     KT_stride,

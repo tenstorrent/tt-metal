@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/codegen/pragma-dm-D-v1.json",
+      "sha256": "66e3055fac0d056d8e385faa713b507cd8d7c4b7986ca344f4df959c73365dc5",
+      "records_checked": 16,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/codegen/pragma-long-D-v1.json",
+      "sha256": "996ca80a313729764f6cb65006e2e92243f43d6ba7c8267fa4df5ac2a245f668",
+      "records_checked": 8,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

@@ -1,0 +1,77 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "variant": "stock",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "bfc9df7d14e98cbae373d09226c8f522f70097c3dcd11a4dd6334c372c01ef7a",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "392b52cc16bf3e0312207e671efc95f5f1a58ecc5bc65e92c4834eba67df15be"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 2,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": false,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset"
+  ],
+  "seeds": [
+    0
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "stock ring",
+  "attention_recipe": null,
+  "attention_qk_chunks": null,
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "stock-prompt0-seed0.png",
+      "image_sha256": "7731d56b40f4879ee9e88be2279075d27fc89f8786e3429d2987efd71ae69edc",
+      "latents": "stock-prompt0-seed0-latents.pt",
+      "latents_sha256": "82765cf483053f7688985d9c284ee323b648615c771893ee125d57407b966eca",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.147077,
+        0.145142
+      ],
+      "host_seconds": {
+        "run": 1.548264,
+        "encoder": 0.244447,
+        "denoising": 0.293267,
+        "vae": 0.994203
+      }
+    }
+  ],
+  "pipeline_setup_seconds": 446.2965664960011,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725"
+  }
+}

@@ -612,7 +612,12 @@ class Attention(Module):
         if self.ring_sdpa_worker_grid is None:
             self.ring_sdpa_worker_grid = self.get_ring_sdpa_core_grid(sequence_1_length)
 
-        if self.parallel_config.sequence_parallel.factor > 1:
+        attention_override = getattr(self, "_attention_override", None)
+        if attention_override is not None:
+            spatial, sequence_2 = attention_override(
+                self, q, k, v, add_q, add_k, add_v, sequence_1_length, sequence_2_length
+            )
+        elif self.parallel_config.sequence_parallel.factor > 1:
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,

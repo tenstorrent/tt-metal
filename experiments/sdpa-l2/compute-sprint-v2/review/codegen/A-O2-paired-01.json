@@ -1,0 +1,367 @@
+{
+  "arguments": {
+    "variant": "A",
+    "candidate": "O2",
+    "label": "A-O2-paired-01",
+    "distinct_kv": false,
+    "q_repeats": 16,
+    "k_chunks": 512,
+    "warmup": 12,
+    "iters": 10,
+    "seed": 1236,
+    "distribution": "normal",
+    "device_id": 0
+  },
+  "shape": {
+    "q": 256,
+    "k": 512,
+    "d": 128,
+    "cores": 1
+  },
+  "useful_flops": 549755813888,
+  "sampled_query_max_changes_after_first_chunk": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "warning": "Resident repeated KV, no recurring input DM",
+  "results": {
+    "canonical": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "RESIDENT_MAIN": "1"
+      },
+      "implementation_defines": {
+        "SDPA_BF16_EXP_BLOCK": "1"
+      },
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          32
+        ],
+        [
+          9,
+          32
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "dc61780d95839623b3912989b3b7af26aadb829b411ce4adde1c019eb6037a5b",
+      "l2_pct": 20.40439541601576,
+      "pcc": 0.9795112313736145,
+      "times_ms": [
+        275.1651080325246,
+        275.17344895750284,
+        275.14343801885843,
+        275.16820817254484,
+        275.1533680129796,
+        275.1451679505408,
+        275.1444079913199,
+        275.18551889806986,
+        275.19664797000587,
+        275.1455979887396
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "trace_equal": true,
+      "median_ms": 275.1592380227521,
+      "tflops_per_core": 1.997955139861749
+    },
+    "disabled": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "RESIDENT_MAIN": "1"
+      },
+      "implementation_defines": {
+        "SDPA_BF16_EXP_BLOCK": "1",
+        "SDPA_CODEGEN_OPT": "3"
+      },
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          32
+        ],
+        [
+          9,
+          32
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "dc61780d95839623b3912989b3b7af26aadb829b411ce4adde1c019eb6037a5b",
+      "l2_pct": 20.40439541601576,
+      "pcc": 0.9795112313736145,
+      "times_ms": [
+        275.182468816638,
+        275.1528781373054,
+        275.18102899193764,
+        275.1691990997642,
+        275.165778119117,
+        275.1647380646318,
+        275.15457896515727,
+        275.19753901287913,
+        275.20482894033194,
+        275.1179179176688
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "trace_equal": true,
+      "median_ms": 275.1674886094406,
+      "tflops_per_core": 1.9978952334310713
+    },
+    "O2": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "RESIDENT_MAIN": "1"
+      },
+      "implementation_defines": {
+        "SDPA_BF16_EXP_BLOCK": "1",
+        "SDPA_CODEGEN_OPT": "2"
+      },
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          32
+        ],
+        [
+          9,
+          32
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "dc61780d95839623b3912989b3b7af26aadb829b411ce4adde1c019eb6037a5b",
+      "l2_pct": 20.40439541601576,
+      "pcc": 0.9795112313736145,
+      "times_ms": [
+        283.7101349141449,
+        283.8804579805583,
+        283.7601760402322,
+        283.7388950865716,
+        283.71809399686754,
+        283.6990940850228,
+        283.68090419098735,
+        283.6798040661961,
+        283.6990838404745,
+        283.7070741225034
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "trace_equal": true,
+      "median_ms": 283.70860451832414,
+      "tflops_per_core": 1.9377481159634424
+    }
+  },
+  "source_sha256": {
+    "experiments/sdpa-l2/compute-sprint-v2/review/codegen/bench.py": "90be4d16ed7aa681028f022bc678cfc8fe040bdd022fe7da3c06593ef99cd3db",
+    "experiments/sdpa-l2/compute-sprint-v2/review/codegen/resident.cpp": "68fef251904606c12cf1b4e34aadc4fdf96796a90d72ebb7f5c98643315fa0b5",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compute.cpp": "d6d444558df138b8d3120b3a1f0bb8f447e9535701c8a5a166a263e019d37470",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_A.hpp": "7ba8e488a35ace619f99e89a4fc2f9917418ddffbdf4061a18771a59cd58de9c",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_B.hpp": "862795195787049b6372c1463a8a64b9ac69986e62921190ab5b759fd7dd1463",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compensated_block.hpp": "875923d51d836ff3b855c6c572d789eb09daeac82646576a672f2ba21e40b224",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compensated_reuse.hpp": "ea88f95690f556cf38db78f6660c910508fe4838d49f69f0f14cc62e78ee13bc",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/hybrid-mixed-v1/reader_distinct.cpp": "e4bc5abd4e25a885d293ddfea4b272ef34f01570949e6fe1f4cfae933d708206",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fast_correction.hpp": "1e6905b04d9afdea8498b4bbdbe43c0ae988896b5051dfa46137df1389d9f632",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_refiner.hpp": "bfd75a1f702827ceefebc7255a47621b96d0438eefa5f79af60dbba62f791a00",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h": "563813232a5aaebc83f53425ccbb0d49a0eeb991742cc1e07e9e679b04a0a5b0",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_common.h": "b48e25251623a85e5e2fc04f5c765b2c82c3892e3be4739f10d09250819b5c7f",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h": "2dd9b24481e98a00b0f365ed494e8f1d467fbf81de9e11905f7dff355b17377c",
+    "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "221331267dcdd1cc8acd4967b47779db7c671e03aa0506f67f0ea63237d5b48e",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "e216a923296e053f86c3aaa6bce3a097f79e323197023bc1a773e6ceef521a6d",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "e531a51efc6c47c4e4634b088f3d0256354c2096419379b1861b6f565a085ef6",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "54c51c56aa457134aed0181202c6fd3cad66df0a507659f364857c77dca9bb42",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b471e527b61f55f2c9f30573ee4cdd82f5cbad7d0b02e1c654814835d3d0916b"
+  }
+}

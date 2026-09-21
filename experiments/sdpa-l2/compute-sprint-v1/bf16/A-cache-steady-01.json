@@ -1,0 +1,353 @@
+{
+  "arguments": {
+    "variant": "A",
+    "candidate": "cache",
+    "label": "A-cache-steady-01",
+    "distinct_kv": false,
+    "q_repeats": 16,
+    "k_chunks": 512,
+    "warmup": 12,
+    "iters": 10,
+    "seed": 1236,
+    "distribution": "normal",
+    "device_id": 0
+  },
+  "shape": {
+    "q": 256,
+    "k": 512,
+    "d": 128,
+    "cores": 1
+  },
+  "useful_flops": 549755813888,
+  "sampled_query_max_changes_after_first_chunk": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "warning": "Resident repeated KV, no recurring input DM",
+  "results": {
+    "canonical": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "RESIDENT_MAIN": "1"
+      },
+      "implementation_defines": {},
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          32
+        ],
+        [
+          9,
+          32
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "dc61780d95839623b3912989b3b7af26aadb829b411ce4adde1c019eb6037a5b",
+      "l2_pct": 20.40439541601576,
+      "pcc": 0.9795112313736145,
+      "times_ms": [
+        275.7736810017377,
+        275.8025508373976,
+        275.8616821374744,
+        275.80141206271946,
+        275.7913318928331,
+        275.9160939604044,
+        275.90909390710294,
+        275.71932994760573,
+        275.73544112965465,
+        275.73491097427905
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "median_ms": 275.7963719777763,
+      "tflops_per_core": 1.993339542306595
+    },
+    "disabled": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "RESIDENT_MAIN": "1"
+      },
+      "implementation_defines": {},
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          32
+        ],
+        [
+          9,
+          32
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "dc61780d95839623b3912989b3b7af26aadb829b411ce4adde1c019eb6037a5b",
+      "l2_pct": 20.40439541601576,
+      "pcc": 0.9795112313736145,
+      "times_ms": [
+        275.7729811128229,
+        275.811251020059,
+        275.8658130187541,
+        275.7985810749233,
+        275.8029708638787,
+        275.99968505091965,
+        275.9159039705992,
+        275.780611904338,
+        275.73777991347015,
+        275.7764111738652
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "median_ms": 275.800775969401,
+      "tflops_per_core": 1.9933077126258456
+    },
+    "cache": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "RESIDENT_MAIN": "1"
+      },
+      "implementation_defines": {
+        "SDPA_BF16_PACK_WIDTH_CACHE": "1"
+      },
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          32
+        ],
+        [
+          9,
+          32
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "dc61780d95839623b3912989b3b7af26aadb829b411ce4adde1c019eb6037a5b",
+      "l2_pct": 20.40439541601576,
+      "pcc": 0.9795112313736145,
+      "times_ms": [
+        276.09057701192796,
+        275.97272396087646,
+        275.96181398257613,
+        275.8540220092982,
+        276.08483587391675,
+        275.96215391531587,
+        275.84220189601183,
+        275.85046202875674,
+        275.8523931261152,
+        275.8345028851181
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "median_ms": 275.90791799593717,
+      "tflops_per_core": 1.992533660799453
+    }
+  },
+  "source_sha256": {
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/bench.py": "850aa5f099b5b667ea8bc4851a67b934d8e3dcc71ed88a4796f61ee25df66e23",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compute.cpp": "d6d444558df138b8d3120b3a1f0bb8f447e9535701c8a5a166a263e019d37470",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_A.hpp": "b9cdee9ed3fdee0c57676edb2e58ea856f35ec88273b87607afe72a3f3296f03",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_B.hpp": "59706a3e831f7a6723931ade8be0b47c6c4ed8f1952570abd69e1fc8cfc758c7",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/compute.cpp": "7a235145fcbe6e05a6ea74fec1930a1b0938bf1c5c0be88a2c34cb9292eccd10",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/hybrid-mixed-v1/reader_distinct.cpp": "e4bc5abd4e25a885d293ddfea4b272ef34f01570949e6fe1f4cfae933d708206",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fast_correction.hpp": "1e6905b04d9afdea8498b4bbdbe43c0ae988896b5051dfa46137df1389d9f632",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_refiner.hpp": "bfd75a1f702827ceefebc7255a47621b96d0438eefa5f79af60dbba62f791a00",
+    "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "221331267dcdd1cc8acd4967b47779db7c671e03aa0506f67f0ea63237d5b48e",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "e216a923296e053f86c3aaa6bce3a097f79e323197023bc1a773e6ceef521a6d",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "e531a51efc6c47c4e4634b088f3d0256354c2096419379b1861b6f565a085ef6",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "54c51c56aa457134aed0181202c6fd3cad66df0a507659f364857c77dca9bb42",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b471e527b61f55f2c9f30573ee4cdd82f5cbad7d0b02e1c654814835d3d0916b"
+  }
+}

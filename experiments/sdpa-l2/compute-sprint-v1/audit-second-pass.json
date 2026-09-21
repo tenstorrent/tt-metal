@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/C-final-abba-v1.json",
+      "sha256": "8b2868e33eee54ac94da6ad2501c16e6ef8fc3f6869cf5a8bfbfeaf8b585a899",
+      "records_checked": 4,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/D-final-abba-v1.json",
+      "sha256": "d9268333df7d1842082e0d7c0f3bd1246c635d63b819166db186243f98afd327",
+      "records_checked": 4,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/B-block-reuse-fullchip-01.json",
+      "sha256": "a5c2c97af259ff685c552b3c2eec242e157d2ec8e0afca3bc4f234de30c1403c",
+      "records_checked": 18,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/e-combined-resident-v1.json",
+      "sha256": "a72093ea63d4d3f25dc145f788a14ac4d0ddc3fc7da668f272d39cffc152d708",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/g-combined-resident-v1.json",
+      "sha256": "20fcf98e0bed5e19ef1016a2e6b4a2e4d4143b86fa3457f3555767d2adfcfa39",
+      "records_checked": 1,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

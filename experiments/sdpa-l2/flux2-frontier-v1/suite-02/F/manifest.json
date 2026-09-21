@@ -1,0 +1,1539 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "variant": "F",
+  "conditioning": "stock",
+  "model_repair": "main_fused",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "0ffc16e30fa306c8f148ba8aed01cb72f025823a3956126460a98398ad2236cd",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "451726d8aa456be4732ba1009d4ed1d8dc9f4d41841189ad3df7e9cb76e80747",
+    "experiments/sdpa-l2/flux2-frontier-v1/conditioning.py": "751456805a36bf1e8d166a44002b9eaba47e3d595f53d537ba8de8c914f703b7",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_fixes.py": "e79f6e1e5228a3df3b2035d0422a052cb13dd36ce552509f9732849f84605d64"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "/localdev/cglagovich/flux2-frontier-20260915/tt-metal/experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": true,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset",
+    "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+    "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors."
+  ],
+  "seeds": [
+    0,
+    42
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "local Q, prepared-format KV all-gather, rectangular attention",
+  "attention_recipe": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_MATCH_HIFI2": "1",
+    "SDPA_LOFI_NATIVE_EXP": "1"
+  },
+  "attention_qk_chunks": [
+    256,
+    512
+  ],
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "F-prompt0-seed0.png",
+      "image_sha256": "483b319067693323f8cdc876ce18df2a0b2dd104db409199e8ca6de54acae28f",
+      "latents": "F-prompt0-seed0-latents.pt",
+      "latents_sha256": "daf46852ea5913db7a6a3d2da73ec830e0bac2e3ae223fb57cc113b88a232ac5",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.593129,
+        0.8258,
+        0.825955,
+        0.825847,
+        0.825935,
+        0.82579,
+        0.826115,
+        0.826387,
+        0.825934,
+        0.825873,
+        0.825953,
+        0.825941,
+        0.826296,
+        0.825946,
+        0.825782,
+        0.826143,
+        0.825855,
+        0.829341,
+        0.826988,
+        0.826322,
+        0.825736,
+        0.825968,
+        0.825922,
+        0.825909,
+        0.82605,
+        0.825696,
+        0.825994,
+        0.825946,
+        0.826137,
+        0.825809,
+        0.825702,
+        0.825777,
+        0.82584,
+        0.825684,
+        0.825889,
+        0.825861,
+        0.82585,
+        0.825815,
+        0.825786,
+        0.826101,
+        0.826037,
+        0.825932,
+        0.826022,
+        0.826257,
+        0.826111,
+        0.826121,
+        0.826039,
+        0.82602,
+        0.826053,
+        0.826207
+      ],
+      "host_seconds": {
+        "run": 41.863719,
+        "encoder": 0.027666,
+        "denoising": 41.080252,
+        "vae": 0.736784
+      }
+    },
+    {
+      "prompt_id": 0,
+      "seed": 42,
+      "image": "F-prompt0-seed42.png",
+      "image_sha256": "51c503d6fbb15f74dc58afceebb75d3987ca4331e08541029f95246dd13bfc68",
+      "latents": "F-prompt0-seed42-latents.pt",
+      "latents_sha256": "ceed1f0c4b6c7d1b7dae1a3a84ddf41854f940133d06da448c1d7eac2c7ddefb",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.825765,
+        0.825959,
+        0.826208,
+        0.826395,
+        0.826458,
+        0.826396,
+        0.826638,
+        0.826994,
+        0.827659,
+        0.826382,
+        0.826497,
+        0.826398,
+        0.826483,
+        0.826007,
+        0.82647,
+        0.826436,
+        0.826717,
+        0.826376,
+        0.826497,
+        0.826114,
+        0.830284,
+        0.859878,
+        0.853454,
+        0.845873,
+        0.859742,
+        0.868595,
+        0.86882,
+        0.8688,
+        0.860095,
+        0.868796,
+        0.868725,
+        0.868878,
+        0.868722,
+        0.868621,
+        0.868972,
+        0.860041,
+        0.868887,
+        0.868712,
+        0.868932,
+        0.868815,
+        0.868751,
+        0.868744,
+        0.869046,
+        0.8689,
+        0.868853,
+        0.868902,
+        0.86909,
+        0.868629,
+        0.869216,
+        0.869021
+      ],
+      "host_seconds": {
+        "run": 43.264099,
+        "encoder": 0.02319,
+        "denoising": 42.492581,
+        "vae": 0.732472
+      }
+    },
+    {
+      "prompt_id": 1,
+      "seed": 0,
+      "image": "F-prompt1-seed0.png",
+      "image_sha256": "1894ea145f7c9e79780065e386858a6bbb2303c15e766a170c422bb83382bbb8",
+      "latents": "F-prompt1-seed0-latents.pt",
+      "latents_sha256": "a6c8597b8a5de0b10f386715cc880f89bd4215ff6da2e1600c9c700fa7e8c199",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.868452,
+        0.868665,
+        0.868805,
+        0.868782,
+        0.868759,
+        0.868651,
+        0.86883,
+        0.868468,
+        0.868739,
+        0.868648,
+        0.868642,
+        0.868592,
+        0.868621,
+        0.868548,
+        0.868655,
+        0.868841,
+        0.868686,
+        0.868547,
+        0.868871,
+        0.868614,
+        0.868709,
+        0.868536,
+        0.868446,
+        0.868561,
+        0.868541,
+        0.868661,
+        0.869136,
+        0.868824,
+        0.868503,
+        0.868827,
+        0.869122,
+        0.86892,
+        0.868474,
+        0.868483,
+        0.868459,
+        0.868497,
+        0.868904,
+        0.868691,
+        0.868578,
+        0.868871,
+        0.868809,
+        0.868667,
+        0.868669,
+        0.868847,
+        0.868772,
+        0.868811,
+        0.869039,
+        0.868739,
+        0.868898,
+        0.868653
+      ],
+      "host_seconds": {
+        "run": 44.230934,
+        "encoder": 0.024725,
+        "denoising": 43.444331,
+        "vae": 0.734627
+      }
+    },
+    {
+      "prompt_id": 1,
+      "seed": 42,
+      "image": "F-prompt1-seed42.png",
+      "image_sha256": "3e98c46b5078db2f75e2e93401389c06247f1f7f8fbc082145e1c4fddae7ef2b",
+      "latents": "F-prompt1-seed42-latents.pt",
+      "latents_sha256": "3f8a201b8b18504397a14c79fb3afaf2919a21c7a3c0163b5aa87405d638bef2",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.868524,
+        0.868632,
+        0.868537,
+        0.86886,
+        0.868825,
+        0.869025,
+        0.868602,
+        0.868747,
+        0.868875,
+        0.868884,
+        0.868739,
+        0.868778,
+        0.869038,
+        0.86893,
+        0.868657,
+        0.868802,
+        0.868916,
+        0.868685,
+        0.868618,
+        0.868728,
+        0.868853,
+        0.868913,
+        0.868962,
+        0.86866,
+        0.868852,
+        0.868703,
+        0.868888,
+        0.868747,
+        0.868848,
+        0.869045,
+        0.86867,
+        0.868935,
+        0.868946,
+        0.868948,
+        0.868633,
+        0.868676,
+        0.86868,
+        0.868911,
+        0.868828,
+        0.868806,
+        0.868737,
+        0.868811,
+        0.869009,
+        0.868858,
+        0.868836,
+        0.868848,
+        0.868679,
+        0.868862,
+        0.868896,
+        0.868765
+      ],
+      "host_seconds": {
+        "run": 44.229268,
+        "encoder": 0.032948,
+        "denoising": 43.450209,
+        "vae": 0.730208
+      }
+    },
+    {
+      "prompt_id": 2,
+      "seed": 0,
+      "image": "F-prompt2-seed0.png",
+      "image_sha256": "8f3f011151d2b9d91a9f9a287aa14b1d2555b010655210715f6c7f4038f05880",
+      "latents": "F-prompt2-seed0-latents.pt",
+      "latents_sha256": "a4bae71ac0de55a217f7f2659ea49dc183cb1e62a415f91deb5d4c84a93a2175",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.868597,
+        0.868925,
+        0.868875,
+        0.868857,
+        0.868659,
+        0.868665,
+        0.86938,
+        0.868821,
+        0.868815,
+        0.868818,
+        0.868996,
+        0.868575,
+        0.86899,
+        0.868751,
+        0.869667,
+        0.869105,
+        0.868949,
+        0.868869,
+        0.868897,
+        0.868826,
+        0.868954,
+        0.868817,
+        0.869176,
+        0.868752,
+        0.869164,
+        0.869048,
+        0.869355,
+        0.868654,
+        0.868609,
+        0.868747,
+        0.868636,
+        0.87258,
+        0.868337,
+        0.8689,
+        0.868635,
+        0.868956,
+        0.868536,
+        0.868519,
+        0.86877,
+        0.868874,
+        0.868961,
+        0.868862,
+        0.868906,
+        0.868932,
+        0.868906,
+        0.869142,
+        0.869014,
+        0.868799,
+        0.868846,
+        0.868545
+      ],
+      "host_seconds": {
+        "run": 44.235478,
+        "encoder": 0.023437,
+        "denoising": 43.457541,
+        "vae": 0.738387
+      }
+    },
+    {
+      "prompt_id": 2,
+      "seed": 42,
+      "image": "F-prompt2-seed42.png",
+      "image_sha256": "aca67bc22f3026268e39bc22cdae6179eeeeabd52225f48901d10e23730cd177",
+      "latents": "F-prompt2-seed42-latents.pt",
+      "latents_sha256": "3eadbf7cc32105c1f4bc9ca278281f4f009a30b668656a294603049bff71232a",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.868603,
+        0.868635,
+        0.869274,
+        0.86869,
+        0.868712,
+        0.868688,
+        0.869109,
+        0.868661,
+        0.868729,
+        0.868686,
+        0.86865,
+        0.868839,
+        0.86858,
+        0.868835,
+        0.868825,
+        0.870498,
+        0.868538,
+        0.868798,
+        0.869044,
+        0.868933,
+        0.869006,
+        0.868871,
+        0.86898,
+        0.869021,
+        0.86889,
+        0.868928,
+        0.868576,
+        0.868662,
+        0.868759,
+        0.868982,
+        0.869031,
+        0.868559,
+        0.868944,
+        0.868746,
+        0.868713,
+        0.868888,
+        0.868676,
+        0.868967,
+        0.869042,
+        0.868604,
+        0.868955,
+        0.868583,
+        0.868706,
+        0.869011,
+        0.868812,
+        0.868699,
+        0.86888,
+        0.868726,
+        0.868923,
+        0.868801
+      ],
+      "host_seconds": {
+        "run": 44.223182,
+        "encoder": 0.024349,
+        "denoising": 43.452861,
+        "vae": 0.729126
+      }
+    }
+  ],
+  "pipeline_setup_seconds": 379.7557671729992,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725",
+    "8d37170a179a4f84b9c63722a4b87329ec345786c3a12fdff37e0fd87d1acbbb": "6014bc3080f7ee0fed32709605adf0069fb66ceab56ee2fc7909ac16dd4110aa",
+    "50bf80e8ee300bdce8eba5ed77bdea45771f66c1680f94ba58cfa0c0ca341f36": "a758335a4766235612ceca195a0edf50c961b89127e93b6301acc0d1abfd7c73"
+  },
+  "real_input_captures": {
+    "dual.0": {
+      "file": "qkv-dual.0.pt",
+      "sha256": "69ef1a3b0ae8508f758dd9b73bceb9a9e5f114ccda1fc2a698333d93a209b62c",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.1666370630264282,
+        1.0763410329818726,
+        5.048369407653809
+      ],
+      "max_abs": [
+        9.6875,
+        9.625,
+        45.0
+      ]
+    },
+    "dual.7": {
+      "file": "qkv-dual.7.pt",
+      "sha256": "348013712f6e7f269cf594fd00cf34bbac8e9a5551b03a0c8489ab2779c6452f",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.3433077335357666,
+        1.2322123050689697,
+        4.848747253417969
+      ],
+      "max_abs": [
+        7.0,
+        9.9375,
+        83.0
+      ]
+    },
+    "single.23": {
+      "file": "qkv-single.23.pt",
+      "sha256": "1f585b270647e781653b0cbc09cd7cf19fe619345ac47fd901d57f78c3dcb00e",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.402610182762146,
+        1.394063949584961,
+        0.5545826554298401
+      ],
+      "max_abs": [
+        9.375,
+        9.1875,
+        12.9375
+      ]
+    },
+    "single.47": {
+      "file": "qkv-single.47.pt",
+      "sha256": "b6109e8e111a1b089dcb0ac52c6c0aefc85f972ae953a1636981204d02c401e1",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.2336164712905884,
+        1.2620446681976318,
+        0.9795522689819336
+      ],
+      "max_abs": [
+        6.6875,
+        7.84375,
+        7.8125
+      ]
+    }
+  },
+  "block_bench": [
+    {
+      "block": "dual.0",
+      "warmup_replays": 250,
+      "median_ms": 9.26703,
+      "min_ms": 9.104131,
+      "max_ms": 9.509759,
+      "replay_ms": [
+        9.24085,
+        9.195171,
+        9.152441,
+        9.122691,
+        9.136231,
+        9.111572,
+        9.109721,
+        9.104131,
+        9.118711,
+        9.109361,
+        9.126221,
+        9.116631,
+        9.168941,
+        9.16144,
+        9.172521,
+        9.180371,
+        9.21904,
+        9.227501,
+        9.232,
+        9.222871,
+        9.20476,
+        9.238101,
+        9.24948,
+        9.27839,
+        9.25655,
+        9.249241,
+        9.27751,
+        9.31478,
+        9.32522,
+        9.31342,
+        9.33749,
+        9.355319,
+        9.36177,
+        9.3804,
+        9.356249,
+        9.3897,
+        9.40835,
+        9.397319,
+        9.41026,
+        9.429829,
+        9.453619,
+        9.448279,
+        9.44694,
+        9.477789,
+        9.452539,
+        9.439229,
+        9.490989,
+        9.500899,
+        9.509759,
+        9.506259
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.3",
+      "warmup_replays": 250,
+      "median_ms": 9.802451999999999,
+      "min_ms": 9.724698,
+      "max_ms": 9.959616,
+      "replay_ms": [
+        9.851057,
+        9.756138,
+        9.784267,
+        9.735978,
+        9.746978,
+        9.759137,
+        9.758078,
+        9.748098,
+        9.770557,
+        9.742188,
+        9.735697,
+        9.752068,
+        9.741078,
+        9.740227,
+        9.724698,
+        9.756898,
+        9.756237,
+        9.767398,
+        9.753408,
+        9.757847,
+        9.745998,
+        9.730328,
+        9.778427,
+        9.799157,
+        9.816848,
+        9.806717,
+        9.797287,
+        9.794448,
+        9.831727,
+        9.805747,
+        9.843927,
+        9.844218,
+        9.836947,
+        9.839417,
+        9.851697,
+        9.861637,
+        9.907617,
+        9.903227,
+        9.904357,
+        9.932466,
+        9.919297,
+        9.870297,
+        9.865457,
+        9.897037,
+        9.928066,
+        9.925367,
+        9.940897,
+        9.959616,
+        9.930807,
+        9.958016
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.7",
+      "warmup_replays": 250,
+      "median_ms": 10.624728000000001,
+      "min_ms": 10.462204,
+      "max_ms": 10.842522,
+      "replay_ms": [
+        10.638423,
+        10.572143,
+        10.541984,
+        10.471173,
+        10.475894,
+        10.473094,
+        10.490494,
+        10.500463,
+        10.505634,
+        10.487294,
+        10.475003,
+        10.462204,
+        10.514794,
+        10.508743,
+        10.545444,
+        10.531173,
+        10.532354,
+        10.527704,
+        10.537033,
+        10.533214,
+        10.555643,
+        10.616273,
+        10.596333,
+        10.592403,
+        10.604333,
+        10.633183,
+        10.602643,
+        10.645093,
+        10.683213,
+        10.669192,
+        10.693643,
+        10.690133,
+        10.666502,
+        10.677733,
+        10.722312,
+        10.742183,
+        10.762742,
+        10.743362,
+        10.751573,
+        10.760912,
+        10.765642,
+        10.773802,
+        10.754052,
+        10.754843,
+        10.840691,
+        10.811562,
+        10.831102,
+        10.827392,
+        10.836222,
+        10.842522
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.0",
+      "warmup_replays": 250,
+      "median_ms": 14.340743,
+      "min_ms": 14.317003,
+      "max_ms": 14.365953,
+      "replay_ms": [
+        14.331063,
+        14.336863,
+        14.341283,
+        14.343913,
+        14.344393,
+        14.342163,
+        14.338073,
+        14.350703,
+        14.331683,
+        14.346513,
+        14.343923,
+        14.349443,
+        14.341233,
+        14.346013,
+        14.361043,
+        14.333013,
+        14.350343,
+        14.345933,
+        14.335973,
+        14.339393,
+        14.337513,
+        14.332983,
+        14.335023,
+        14.329953,
+        14.340783,
+        14.341283,
+        14.346453,
+        14.336413,
+        14.341193,
+        14.339723,
+        14.341643,
+        14.330803,
+        14.343503,
+        14.333813,
+        14.342643,
+        14.348643,
+        14.343763,
+        14.340703,
+        14.330973,
+        14.356913,
+        14.338473,
+        14.331613,
+        14.318003,
+        14.325293,
+        14.365953,
+        14.333513,
+        14.342913,
+        14.329363,
+        14.317003,
+        14.328463
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.23",
+      "warmup_replays": 250,
+      "median_ms": 14.343193,
+      "min_ms": 14.329893,
+      "max_ms": 14.379163,
+      "replay_ms": [
+        14.379163,
+        14.359702,
+        14.345463,
+        14.341893,
+        14.334303,
+        14.350273,
+        14.336913,
+        14.338883,
+        14.347533,
+        14.329893,
+        14.344303,
+        14.348333,
+        14.347393,
+        14.339963,
+        14.344063,
+        14.347563,
+        14.345633,
+        14.350103,
+        14.345833,
+        14.345523,
+        14.335863,
+        14.360453,
+        14.361723,
+        14.360163,
+        14.338033,
+        14.341413,
+        14.338503,
+        14.341583,
+        14.338683,
+        14.346583,
+        14.334463,
+        14.337393,
+        14.340743,
+        14.348073,
+        14.341843,
+        14.339483,
+        14.335613,
+        14.342583,
+        14.344053,
+        14.344813,
+        14.336303,
+        14.336873,
+        14.349662,
+        14.352193,
+        14.336523,
+        14.340373,
+        14.340223,
+        14.343803,
+        14.340853,
+        14.354843
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.47",
+      "warmup_replays": 250,
+      "median_ms": 14.321493,
+      "min_ms": 14.313253,
+      "max_ms": 14.334453,
+      "replay_ms": [
+        14.327563,
+        14.322774,
+        14.326353,
+        14.314073,
+        14.317133,
+        14.326913,
+        14.319723,
+        14.315813,
+        14.323113,
+        14.330313,
+        14.325993,
+        14.320663,
+        14.316433,
+        14.316534,
+        14.321903,
+        14.321453,
+        14.325983,
+        14.322783,
+        14.323493,
+        14.322723,
+        14.317123,
+        14.313253,
+        14.323723,
+        14.320914,
+        14.329573,
+        14.318943,
+        14.331213,
+        14.318473,
+        14.315333,
+        14.317343,
+        14.315413,
+        14.317463,
+        14.325643,
+        14.326903,
+        14.320243,
+        14.332873,
+        14.314144,
+        14.325473,
+        14.330023,
+        14.319813,
+        14.319903,
+        14.329033,
+        14.320403,
+        14.315783,
+        14.323583,
+        14.315353,
+        14.330413,
+        14.334453,
+        14.318974,
+        14.321533
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    }
+  ],
+  "discarded_capture_run_l2_vs_untraced_pct": 52.26745009422302,
+  "two_step_trace_latents_bitwise_equal": true,
+  "observed_attention_transport": {
+    "dual.0": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.1": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.2": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.3": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.4": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.5": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.6": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.7": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.0": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.1": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.2": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.3": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.4": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.5": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.6": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.7": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.8": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.9": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.10": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.11": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.12": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.13": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.14": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.15": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.16": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.17": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.18": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.19": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.20": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.21": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.22": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.23": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.24": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.25": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.26": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.27": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.28": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.29": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.30": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.31": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.32": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.33": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.34": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.35": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.36": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.37": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.38": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.39": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.40": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.41": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.42": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.43": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.44": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.45": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.46": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.47": {
+      "k_dtype": "DataType.BFLOAT8_B",
+      "v_dtype": "DataType.BFLOAT8_B",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    }
+  }
+}

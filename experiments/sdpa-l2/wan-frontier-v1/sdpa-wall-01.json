@@ -1,0 +1,593 @@
+{
+  "status": "completed",
+  "scope": "Real high-noise Wan block 20; SP4/TP2; all eight chips",
+  "timed": "Uninstrumented sustained pure SDPA; 100 warmups, five batches of 20 replays",
+  "reference": "Float64 SDPA on original BF16 inputs, chip 0, all 20 heads, 32 spaced query rows",
+  "rows": [
+    {
+      "key": [
+        "stock",
+        256,
+        512,
+        108,
+        2
+      ],
+      "variant": "stock",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 108,
+      "active_cores": null,
+      "reader_barrier": null,
+      "phase": "wall_baseline",
+      "l2_pct": 1.6389745708732097,
+      "pcc": 0.9998720765052512,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          22.29595595,
+          22.3310396,
+          22.384826,
+          21.976601249999998,
+          22.3228799
+        ],
+        "wall_ms": 22.3228799
+      },
+      "tflops_per_chip": 123.10723316663098
+    },
+    {
+      "key": [
+        "stock",
+        512,
+        256,
+        120,
+        2
+      ],
+      "variant": "stock",
+      "q_chunk": 512,
+      "k_chunk": 256,
+      "core_budget": 120,
+      "active_cores": null,
+      "reader_barrier": null,
+      "phase": "wall_best",
+      "l2_pct": 2.4149969478778464,
+      "pcc": 0.9997651198114686,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          20.3163444,
+          20.43456755,
+          20.4328105,
+          20.4328125,
+          20.3728994
+        ],
+        "wall_ms": 20.4328105
+      },
+      "tflops_per_chip": 134.4948596670047
+    },
+    {
+      "key": [
+        "A",
+        256,
+        512,
+        108,
+        2
+      ],
+      "variant": "A",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 108,
+      "active_cores": 100,
+      "reader_barrier": 2,
+      "phase": "wall_baseline",
+      "cb_bytes": 1173504,
+      "l2_pct": 1.6147979625946975,
+      "pcc": 0.9998697994425856,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          22.80491705,
+          22.7551297,
+          22.68222785,
+          22.785732250000002,
+          22.8071576
+        ],
+        "wall_ms": 22.785732250000002
+      },
+      "tflops_per_chip": 120.60652476068657
+    },
+    {
+      "key": [
+        "A",
+        512,
+        256,
+        120,
+        2
+      ],
+      "variant": "A",
+      "q_chunk": 512,
+      "k_chunk": 256,
+      "core_budget": 120,
+      "active_cores": 120,
+      "reader_barrier": 2,
+      "phase": "wall_best",
+      "cb_bytes": 1255424,
+      "l2_pct": 2.2977133866787134,
+      "pcc": 0.9997677636473618,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          20.5299003,
+          20.6121787,
+          20.60763465,
+          20.47548125,
+          20.4768328
+        ],
+        "wall_ms": 20.5299003
+      },
+      "tflops_per_chip": 133.85880791637356
+    },
+    {
+      "key": [
+        "D",
+        256,
+        512,
+        108,
+        2
+      ],
+      "variant": "D",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 108,
+      "active_cores": 100,
+      "reader_barrier": 2,
+      "phase": "wall_baseline",
+      "cb_bytes": 1339392,
+      "l2_pct": 0.16642295024325326,
+      "pcc": 0.9999986149486546,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          47.7541511,
+          47.82983645,
+          47.949249099999996,
+          47.9499996,
+          47.967739449999996
+        ],
+        "wall_ms": 47.949249099999996
+      },
+      "tflops_per_chip": 57.31284707021617
+    },
+    {
+      "key": [
+        "D",
+        128,
+        1024,
+        120,
+        0
+      ],
+      "variant": "D",
+      "q_chunk": 128,
+      "k_chunk": 1024,
+      "core_budget": 120,
+      "active_cores": 120,
+      "reader_barrier": 0,
+      "phase": "wall_best",
+      "cb_bytes": 1339392,
+      "l2_pct": 0.16641793645347785,
+      "pcc": 0.9999986150312115,
+      "reader_sample_exact": true,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          42.1857887,
+          42.24143525,
+          42.4752809,
+          42.4700328,
+          42.4843866
+        ],
+        "wall_ms": 42.4700328
+      },
+      "tflops_per_chip": 64.7069898377851
+    },
+    {
+      "key": [
+        "C",
+        256,
+        512,
+        108,
+        2
+      ],
+      "variant": "C",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 108,
+      "active_cores": 100,
+      "reader_barrier": 2,
+      "phase": "wall_baseline",
+      "cb_bytes": 1339392,
+      "l2_pct": 0.19309770873466536,
+      "pcc": 0.9999982158194968,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          39.3475883,
+          39.08890265,
+          39.08940915,
+          39.14308465,
+          39.210488350000006
+        ],
+        "wall_ms": 39.14308465
+      },
+      "tflops_per_chip": 70.20673013821867
+    },
+    {
+      "key": [
+        "C",
+        256,
+        512,
+        120,
+        2
+      ],
+      "variant": "C",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 120,
+      "active_cores": 120,
+      "reader_barrier": 2,
+      "phase": "wall_best",
+      "cb_bytes": 1339392,
+      "l2_pct": 0.19309770873466536,
+      "pcc": 0.9999982158194968,
+      "grid_sample_exact": true,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          36.1480634,
+          36.149275949999996,
+          36.15654055,
+          36.14869345,
+          36.1816695
+        ],
+        "wall_ms": 36.149275949999996
+      },
+      "tflops_per_chip": 76.02110716134551
+    },
+    {
+      "key": [
+        "B",
+        256,
+        512,
+        108,
+        2
+      ],
+      "variant": "B",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 108,
+      "active_cores": 100,
+      "reader_barrier": 2,
+      "phase": "wall_baseline",
+      "cb_bytes": 1337344,
+      "l2_pct": 1.1790524783930834,
+      "pcc": 0.9999369384591197,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          24.92343405,
+          24.79846535,
+          24.677270150000002,
+          24.62586975,
+          24.6255667
+        ],
+        "wall_ms": 24.677270150000002
+      },
+      "tflops_per_chip": 111.36191175505691
+    },
+    {
+      "key": [
+        "B",
+        256,
+        512,
+        120,
+        8
+      ],
+      "variant": "B",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 120,
+      "active_cores": 120,
+      "reader_barrier": 8,
+      "phase": "wall_best",
+      "cb_bytes": 1337344,
+      "l2_pct": 1.1790524783930834,
+      "pcc": 0.9999369384591197,
+      "reader_sample_exact": true,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          23.326756449999998,
+          23.351842350000002,
+          23.25356365,
+          23.198671100000002,
+          23.198519150000003
+        ],
+        "wall_ms": 23.25356365
+      },
+      "tflops_per_chip": 118.18007863925837
+    },
+    {
+      "key": [
+        "E",
+        256,
+        512,
+        108,
+        2
+      ],
+      "variant": "E",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 108,
+      "active_cores": 100,
+      "reader_barrier": 2,
+      "phase": "wall_baseline",
+      "cb_bytes": 1091584,
+      "l2_pct": 1.1393457575990373,
+      "pcc": 0.9999352016159322,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          18.61707345,
+          18.69130325,
+          18.5759802,
+          18.456581550000003,
+          18.35041515
+        ],
+        "wall_ms": 18.5759802
+      },
+      "tflops_per_chip": 147.93878714405605
+    },
+    {
+      "key": [
+        "E",
+        256,
+        512,
+        120,
+        8
+      ],
+      "variant": "E",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 120,
+      "active_cores": 120,
+      "reader_barrier": 8,
+      "phase": "wall_best",
+      "cb_bytes": 1091584,
+      "l2_pct": 1.1393457575990373,
+      "pcc": 0.9999352016159322,
+      "reader_sample_exact": true,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          16.60452735,
+          16.8640635,
+          16.85343235,
+          16.8255558,
+          16.751121
+        ],
+        "wall_ms": 16.8255558
+      },
+      "tflops_per_chip": 163.3294028123576
+    },
+    {
+      "key": [
+        "F",
+        256,
+        512,
+        108,
+        2
+      ],
+      "variant": "F",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 108,
+      "active_cores": 100,
+      "reader_barrier": 2,
+      "phase": "wall_baseline",
+      "cb_bytes": 1216512,
+      "l2_pct": 0.8484847199881665,
+      "pcc": 0.9999654407069548,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          22.99287995,
+          22.880875449999998,
+          22.83205105,
+          22.880475949999997,
+          22.8810939
+        ],
+        "wall_ms": 22.880875449999998
+      },
+      "tflops_per_chip": 120.10501900616747
+    },
+    {
+      "key": [
+        "F",
+        256,
+        512,
+        120,
+        8
+      ],
+      "variant": "F",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 120,
+      "active_cores": 120,
+      "reader_barrier": 8,
+      "phase": "wall_best",
+      "cb_bytes": 1216512,
+      "l2_pct": 0.8484847199881665,
+      "pcc": 0.9999654407069548,
+      "reader_sample_exact": true,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          20.59127085,
+          20.53902395,
+          20.4257659,
+          20.331184200000003,
+          20.2589989
+        ],
+        "wall_ms": 20.4257659
+      },
+      "tflops_per_chip": 134.5412453199613
+    },
+    {
+      "key": [
+        "G",
+        256,
+        512,
+        108,
+        2
+      ],
+      "variant": "G",
+      "q_chunk": 256,
+      "k_chunk": 512,
+      "core_budget": 108,
+      "active_cores": 100,
+      "reader_barrier": 2,
+      "phase": "wall_baseline",
+      "cb_bytes": 960512,
+      "l2_pct": 5.646560247842763,
+      "pcc": 0.9984160122627669,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          17.8512152,
+          18.024104299999998,
+          18.0823709,
+          18.082404349999997,
+          18.08234985
+        ],
+        "wall_ms": 18.08234985
+      },
+      "tflops_per_chip": 151.97737039691222
+    },
+    {
+      "key": [
+        "G",
+        256,
+        1024,
+        120,
+        8
+      ],
+      "variant": "G",
+      "q_chunk": 256,
+      "k_chunk": 1024,
+      "core_budget": 120,
+      "active_cores": 120,
+      "reader_barrier": 8,
+      "phase": "wall_best",
+      "cb_bytes": 1370112,
+      "l2_pct": 5.638459275656512,
+      "pcc": 0.9984102356343113,
+      "reader_sample_exact": true,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          13.3057557,
+          13.763961900000002,
+          13.9940225,
+          14.019791000000001,
+          14.0160509
+        ],
+        "wall_ms": 13.9940225
+      },
+      "tflops_per_chip": 196.37727328221746
+    },
+    {
+      "key": [
+        "stock",
+        256,
+        256,
+        120,
+        2
+      ],
+      "variant": "stock",
+      "q_chunk": 256,
+      "k_chunk": 256,
+      "core_budget": 120,
+      "active_cores": null,
+      "reader_barrier": null,
+      "phase": "wall_model_stock_chunks",
+      "l2_pct": 2.412919791568403,
+      "pcc": 0.9997652605219591,
+      "perf": {
+        "metric": "Uninstrumented synchronized wall time per queued SDPA replay",
+        "warmup": 100,
+        "replays_per_sample": 20,
+        "samples_ms": [
+          23.41903405,
+          23.3753958,
+          23.4554902,
+          23.3716122,
+          23.361109550000002
+        ],
+        "wall_ms": 23.3753958
+      },
+      "tflops_per_chip": 117.56412615695687
+    }
+  ],
+  "skips": [],
+  "cb_limit": 1441792,
+  "q_shape": [
+    1,
+    20,
+    8192,
+    128
+  ],
+  "kv_shape": [
+    1,
+    20,
+    32768,
+    128
+  ],
+  "logical_k": 32760,
+  "hardware_grid": [
+    12,
+    10
+  ],
+  "old_core_budget": 108,
+  "full_core_budget": 120
+}

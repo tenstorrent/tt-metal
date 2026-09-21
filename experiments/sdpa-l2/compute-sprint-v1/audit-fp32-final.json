@@ -1,0 +1,42 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/C-final-abba-v1.json",
+      "sha256": "8b2868e33eee54ac94da6ad2501c16e6ef8fc3f6869cf5a8bfbfeaf8b585a899",
+      "records_checked": 4,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/D-final-abba-v1.json",
+      "sha256": "d9268333df7d1842082e0d7c0f3bd1246c635d63b819166db186243f98afd327",
+      "records_checked": 4,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/C-final-qualify-v1.json",
+      "sha256": "38325c907b14f42bcc20213a49df945ad85b6dffade75df90e035fd0c1c60005",
+      "records_checked": 16,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/D-final-qualify-v1.json",
+      "sha256": "58e6332019f7d113e4ecf417ef38714c9b25ab4cecd1e5774b6e6110c56c866d",
+      "records_checked": 16,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/C-final-fullchip-v1.json",
+      "sha256": "0a7966d2931be6e5003de4e4be5ee9e6a095b10ce4f9aa60218b2b119bd4f818",
+      "records_checked": 8,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/fp32/D-final-fullchip-v1.json",
+      "sha256": "0ed484eefb18c57c65713b93dd6a861c262b07750db745b7d6f2d66fa52ff183",
+      "records_checked": 8,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/e-correction-cache-smoke-v1.json",
+      "sha256": "a5deab6df25e70ba3eac8a78cba39832e4e2156e41df4f52a01b1092a39e57e6",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/fp32/smoke-v1.json",
+      "sha256": "86cd6741323933a9e73a8b5e89111e5461c905e357959457083ae31cd0111065",
+      "records_checked": 10,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

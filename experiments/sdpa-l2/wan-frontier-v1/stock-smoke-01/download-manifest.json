@@ -1,0 +1,560 @@
+{
+  "_id": "68873d1c06ea615d50f2292a",
+  "id": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+  "private": false,
+  "pipeline_tag": "text-to-video",
+  "library_name": "diffusers",
+  "tags": [
+    "diffusers",
+    "safetensors",
+    "text-to-video",
+    "arxiv:2503.20314",
+    "arxiv:2309.14509",
+    "license:apache-2.0",
+    "diffusers:WanPipeline",
+    "region:us"
+  ],
+  "downloads": 154943,
+  "likes": 157,
+  "modelId": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+  "author": "Wan-AI",
+  "sha": "5be7df9619b54f4e2667b2755bc6a756675b5cd7",
+  "lastModified": "2025-08-09T03:36:13.000Z",
+  "gated": false,
+  "disabled": false,
+  "model-index": null,
+  "config": {
+    "diffusers": {
+      "_class_name": "WanPipeline"
+    }
+  },
+  "cardData": {
+    "license": "apache-2.0",
+    "pipeline_tag": "text-to-video"
+  },
+  "siblings": [
+    {
+      "rfilename": ".gitattributes",
+      "blobId": "75b8d68701da756cee0d6c9fe3bc7b5ed74955a6",
+      "size": 1860
+    },
+    {
+      "rfilename": "README.md",
+      "blobId": "52bfe6e6d881824e9d4db88ac5cffe57dec4b0b9",
+      "size": 18747
+    },
+    {
+      "rfilename": "assets/comp_effic.png",
+      "blobId": "bdc26da30b575b80d78f5972a08811eca9a6c455",
+      "size": 202156,
+      "lfs": {
+        "sha256": "75ee012dcfb08365bec67a3ec7afc126fc2817f79b9f80e38711792d4770e32b",
+        "size": 202156,
+        "pointerSize": 131
+      }
+    },
+    {
+      "rfilename": "assets/logo.png",
+      "blobId": "0c55854cbd9692975f217714ffd83fd4b37f5dca",
+      "size": 56322
+    },
+    {
+      "rfilename": "assets/moe_2.png",
+      "blobId": "c788c691cf96bbf9c0598cb440c23935848e8619",
+      "size": 527914,
+      "lfs": {
+        "sha256": "4ea471ccb64349bd08bc9a78f336ae000e9ca3b40da9a652b8028b214a8c6093",
+        "size": 527914,
+        "pointerSize": 131
+      }
+    },
+    {
+      "rfilename": "assets/moe_arch.png",
+      "blobId": "7822af1e65215ee2a9449c9b7616afd713f67a01",
+      "size": 74900
+    },
+    {
+      "rfilename": "assets/performance.png",
+      "blobId": "ca558e3e33efc415814aeb3b103ae2e2b34ba233",
+      "size": 306535,
+      "lfs": {
+        "sha256": "97ef99c13c8ae717a8a11c8d8ec927b69077c647cc6689755d08fc38e7fbb830",
+        "size": 306535,
+        "pointerSize": 131
+      }
+    },
+    {
+      "rfilename": "assets/vae.png",
+      "blobId": "7d290425cf3f7ab20e2d80bece0d780259b24303",
+      "size": 165486,
+      "lfs": {
+        "sha256": "4aaea5e187f1c5908e15ade5bef24c9fb59882986bc3d2ad75f7fe820f3d772f",
+        "size": 165486,
+        "pointerSize": 131
+      }
+    },
+    {
+      "rfilename": "model_index.json",
+      "blobId": "f622781c91d39ea85a7a2c4e9f3e3652e6a467d8",
+      "size": 498
+    },
+    {
+      "rfilename": "scheduler/scheduler_config.json",
+      "blobId": "b5c4eaa781a10db1471bba005afeb90ce0391df5",
+      "size": 820
+    },
+    {
+      "rfilename": "text_encoder/config.json",
+      "blobId": "ab4a73bce055c6e32e66133032dcb3adfb26ee8d",
+      "size": 855
+    },
+    {
+      "rfilename": "text_encoder/model-00001-of-00003.safetensors",
+      "blobId": "3e671d382b9dd6c7fff4cb11756526032d5e6f6c",
+      "size": 4935812536,
+      "lfs": {
+        "sha256": "a8e861969c7433e707cc5a74065d795d36cca07ec96eb6763eb4083df7248f58",
+        "size": 4935812536,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "text_encoder/model-00002-of-00003.safetensors",
+      "blobId": "b35fc9ac361a2b8ee0289121cd045e00cfe57e49",
+      "size": 4983103192,
+      "lfs": {
+        "sha256": "d57d948ece4837d850b7a859a4415121d57cacf8b9ee1d4db200c67f592902d7",
+        "size": 4983103192,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "text_encoder/model-00003-of-00003.safetensors",
+      "blobId": "a76bb7245d7e1cb456132b1a8abe2b1e48a87481",
+      "size": 1442935480,
+      "lfs": {
+        "sha256": "0da9ee284e21d1406df708788db1d502d95d75f69faa25cd26151bf8829b7c5f",
+        "size": 1442935480,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "text_encoder/model.safetensors.index.json",
+      "blobId": "f3d3d4da90eb33e14c92d88ea346370fa3c0b5b2",
+      "size": 22476
+    },
+    {
+      "rfilename": "tokenizer/special_tokens_map.json",
+      "blobId": "2ed25bf989a28d20b5d4b5822fbc24666d12a6f7",
+      "size": 7079
+    },
+    {
+      "rfilename": "tokenizer/spiece.model",
+      "blobId": "2fe5f347e9f9367585589ae89e997dfbd5cf802c",
+      "size": 4548313,
+      "lfs": {
+        "sha256": "e3909a67b780650b35cf529ac782ad2b6b26e6d1f849d3fbb6a872905f452458",
+        "size": 4548313,
+        "pointerSize": 132
+      }
+    },
+    {
+      "rfilename": "tokenizer/tokenizer.json",
+      "blobId": "9c6427ab2f801c942da4ee9740f1a750d3978a3b",
+      "size": 16837459,
+      "lfs": {
+        "sha256": "20a46ac256746594ed7e1e3ef733b83fbc5a6f0922aa7480eda961743de080ef",
+        "size": 16837459,
+        "pointerSize": 133
+      }
+    },
+    {
+      "rfilename": "tokenizer/tokenizer_config.json",
+      "blobId": "09d434f9457238f697f4c208aab47f58caa15bfe",
+      "size": 61758
+    },
+    {
+      "rfilename": "transformer/config.json",
+      "blobId": "7f44f6167861ec54586f0b9fd7a336de2c4726af",
+      "size": 495
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00001-of-00012.safetensors",
+      "blobId": "7b6899d09fb5891281bef0bb410b8452b3bca696",
+      "size": 4863171808,
+      "lfs": {
+        "sha256": "299e6304544f2783896372fa919e755a8bb9ab8caf898ce08a678dae391e1179",
+        "size": 4863171808,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00002-of-00012.safetensors",
+      "blobId": "d0d0024bddbe4c4e50b2c5d50eb74b7aa108cd82",
+      "size": 4919594456,
+      "lfs": {
+        "sha256": "4eab1c97044607b5cd4c7647dc84d2274214b361018bbfb37f54206521d16440",
+        "size": 4919594456,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00003-of-00012.safetensors",
+      "blobId": "f279639be68d615dbd863406aa61c316559638f7",
+      "size": 4919465128,
+      "lfs": {
+        "sha256": "2404f3bbd9a23e19d831ac7f3c115806f46251e2d2d175080b0ad8cdbe95abf9",
+        "size": 4919465128,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00004-of-00012.safetensors",
+      "blobId": "e2a00836cca7db73e53649bb4e6291b85e05cfc8",
+      "size": 4919594536,
+      "lfs": {
+        "sha256": "b18cf5d61c46273ba8d347279694b58a6bdc9e29d4e517724c358430c5daa71a",
+        "size": 4919594536,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00005-of-00012.safetensors",
+      "blobId": "5568684e6cc7bc545f98401d3486fac9abcdd5b1",
+      "size": 4919465224,
+      "lfs": {
+        "sha256": "928c0d327b1f2634be2efc2d577cd3570a229ac5af28bcd49a7687ab84206765",
+        "size": 4919465224,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00006-of-00012.safetensors",
+      "blobId": "0b45d9a6991c2ebb16c37699a0ef4703d564011e",
+      "size": 4919594552,
+      "lfs": {
+        "sha256": "0083cb21891978e4657b46491b406f008b15dfe5da82762e30b3c9810e2838de",
+        "size": 4919594552,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00007-of-00012.safetensors",
+      "blobId": "4bfc3878a969428ecc9ba8d0e391cfa2bd7319d5",
+      "size": 4919465224,
+      "lfs": {
+        "sha256": "53d13464c39397bea88a5e1ee4c5cee522c9f3e094e4e49b4f4d2f88ef20ccd5",
+        "size": 4919465224,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00008-of-00012.safetensors",
+      "blobId": "538ef171c063268e02d074c4c9a9657db2508da3",
+      "size": 4919594552,
+      "lfs": {
+        "sha256": "55bb416621d2ab08ac17542f854b98775040bd46937d8a4358e5d975f9c54a55",
+        "size": 4919594552,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00009-of-00012.safetensors",
+      "blobId": "9965ec265a60bf1407cb17ddd7275e347dce7d20",
+      "size": 4919465224,
+      "lfs": {
+        "sha256": "147369a6e7ec0344214b6cbca628461ca67d1a5933798dbb5be8af75f64647b5",
+        "size": 4919465224,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00010-of-00012.safetensors",
+      "blobId": "c9b713f0123a80ae00e2a84cf4f12ce7330e14d6",
+      "size": 4919594552,
+      "lfs": {
+        "sha256": "88dd8a815f6458daaea0554dea7a0693c74d22bd38f116a0b489754ce6743b35",
+        "size": 4919594552,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00011-of-00012.safetensors",
+      "blobId": "d14ee60c3905c7a06e3eb77c86a8a15d48352229",
+      "size": 4919465224,
+      "lfs": {
+        "sha256": "e9f0719271fa6363a1eae653e8922b4f5083be18f7db650f0c112ca4a39bc3d4",
+        "size": 4919465224,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model-00012-of-00012.safetensors",
+      "blobId": "4eb26ee96ddef8438c683fc4f4592ab63b251dea",
+      "size": 3095607280,
+      "lfs": {
+        "sha256": "79b5fe7a2de29c3fc2a8eb0833f9d8465b3a070a7ac32bb3cc4a2577b20509cd",
+        "size": 3095607280,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer/diffusion_pytorch_model.safetensors.index.json",
+      "blobId": "b29530a9c245dbd4efd4b75d65fd34111690151b",
+      "size": 97307
+    },
+    {
+      "rfilename": "transformer_2/config.json",
+      "blobId": "7f44f6167861ec54586f0b9fd7a336de2c4726af",
+      "size": 495
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00001-of-00012.safetensors",
+      "blobId": "27de6de1b7793c7ada0316b1b55200505d10f94e",
+      "size": 4863171808,
+      "lfs": {
+        "sha256": "a9278e6e9c82d174e6c67b3c97d8b97fef30af51dcf59160f2fc241f6819f5dc",
+        "size": 4863171808,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00002-of-00012.safetensors",
+      "blobId": "6ae317913a8fbfada73e36b06421d9f601fec5d5",
+      "size": 4919594456,
+      "lfs": {
+        "sha256": "db9212d47d0c3ce8b0e96e2f4def48e16a55b6f044067e6eff2647098c16eaa8",
+        "size": 4919594456,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00003-of-00012.safetensors",
+      "blobId": "05403028d4ec24599c4b5672c0c85286e4a42b07",
+      "size": 4919465128,
+      "lfs": {
+        "sha256": "4764464b6d2023e7f24f135d9703fca28cc437793879292cecf229e0f2dcd564",
+        "size": 4919465128,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00004-of-00012.safetensors",
+      "blobId": "cd3e6cc5ee66d384c735e304920e5db32ff28282",
+      "size": 4919594536,
+      "lfs": {
+        "sha256": "dad95c9d4a568a8222b42cee5d391df2fd0f7c22cea03d8f5f28c71a2070f348",
+        "size": 4919594536,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00005-of-00012.safetensors",
+      "blobId": "abee8440371f1f71b4de097bfa22b8dfc985de4f",
+      "size": 4919465224,
+      "lfs": {
+        "sha256": "f11242f8014d046bb65736a64a20bbb6f8efe566373628307bfd687c811fecc3",
+        "size": 4919465224,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00006-of-00012.safetensors",
+      "blobId": "c180ff2438564025ae96e34c1fe108abd8119ca8",
+      "size": 4919594552,
+      "lfs": {
+        "sha256": "8581b91ab7ecab2bae7f607176119bd8b8ec65ce9f67915ba7a6d9e9a36d2571",
+        "size": 4919594552,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00007-of-00012.safetensors",
+      "blobId": "0fb65b028a46d6247966d52a2ad8a4e55c9ed198",
+      "size": 4919465224,
+      "lfs": {
+        "sha256": "fc658a5689cd15edfc24bf1396bcd9644237ebfa18c2309ece986c99d0c9b054",
+        "size": 4919465224,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00008-of-00012.safetensors",
+      "blobId": "d4f56481832032dfb6ba186d10501d118782cdd1",
+      "size": 4919594552,
+      "lfs": {
+        "sha256": "c1e13c829853f10bd31725b62dc6cfc632de5a168d2520022fa3958edad63334",
+        "size": 4919594552,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00009-of-00012.safetensors",
+      "blobId": "3c1531cc9743bf1705a8e10a37c47c0971ce4293",
+      "size": 4919465224,
+      "lfs": {
+        "sha256": "60cf08760beac7129e9194ecba8ecf394e484b882987704e5b54a1170837f3ba",
+        "size": 4919465224,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00010-of-00012.safetensors",
+      "blobId": "174e67b1529bc68d65e636b665bb89e439bafe20",
+      "size": 4919594552,
+      "lfs": {
+        "sha256": "f63297e6ecbe7f67654b87f9a1abdd93f6b369c07c91fd8e2fc9df42bd01d6f2",
+        "size": 4919594552,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00011-of-00012.safetensors",
+      "blobId": "8d66aa8e84edbe8651089333e58088332e042dbe",
+      "size": 4919465224,
+      "lfs": {
+        "sha256": "11fdb612135d52ac770304261f5e1a846882b72a5e81be15970c051edf20b518",
+        "size": 4919465224,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model-00012-of-00012.safetensors",
+      "blobId": "daef3232842becfc6c796b75c1aa091c87e673c7",
+      "size": 3095607280,
+      "lfs": {
+        "sha256": "23dbf3244e8dd60ef4fb1867d75407f627c771e3d248e87fba57164b4cd91593",
+        "size": 3095607280,
+        "pointerSize": 135
+      }
+    },
+    {
+      "rfilename": "transformer_2/diffusion_pytorch_model.safetensors.index.json",
+      "blobId": "b29530a9c245dbd4efd4b75d65fd34111690151b",
+      "size": 97307
+    },
+    {
+      "rfilename": "vae/config.json",
+      "blobId": "c190b2929391232ec2f6e493dfe93542927e74ea",
+      "size": 724
+    },
+    {
+      "rfilename": "vae/diffusion_pytorch_model.safetensors",
+      "blobId": "af13d1f7b1bc28a9f1e9cd85cac5da951aead1b3",
+      "size": 507591892,
+      "lfs": {
+        "sha256": "d6e524b3fffede1787a74e81b30976dce5400c4439ba64222168e607ed19e793",
+        "size": 507591892,
+        "pointerSize": 134
+      }
+    }
+  ],
+  "spaces": [
+    "zerogpu-aoti/wan2-2-fp8da-aoti",
+    "Liratanak/kira-lab-wan-preview-nsfw-velcroft",
+    "cinderholm/wan-i2v",
+    "rahul7star/Wan2.2-T2V-A14B",
+    "KwabsHug/GameConfigIdea",
+    "marciowb/kira-lab-wan-preview-nsfw-velcroft",
+    "rahul7star/InstaVideo",
+    "ovi054/wan2-2-text-to-image",
+    "zerogpu-aoti/wan2-2-fp8da-aoti-image",
+    "rahul7star/wan2-2-T2V-EXP",
+    "aidealab/AnimeGen-T2V",
+    "rahul7star/wan2-2-FAST-T2v-14B",
+    "nazdridoy/inferoxy-hub",
+    "ghjjhv/wan-i2v-kira",
+    "Upsampler/wan-2-2-14b-text-to-video",
+    "ufrik/kira-lab-wan-preview-nsfw-velcroft",
+    "pormungtai/wan2-2-fp8da-aoti-preview",
+    "rahul7star/wan2-2-fast14B-T2V",
+    "Fghg355yyg/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "selectdev111/wan2-2-T2V-EXP",
+    "hasnaatanjum/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "mimot/Image-Edit-Full-Wan",
+    "runebloodstone/wan-i2v-kira",
+    "wana14/Wan2.2-T2V-A14B",
+    "coolito74100/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "webcircuit/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "loleso/videjko",
+    "rahul7star/wan2.2-14B-TI2V-ALL",
+    "rahul7star/Wan22-Light",
+    "abdalian5692/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Gags199019952021/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "vincent5121/wan2.2_fast_amd",
+    "Fergusmacleod/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Saskw2010/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "vivienfanghua/wan22_amd",
+    "mycholechawal/InstaVideo",
+    "Praneshkriz/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "snyderline/wan2-2-fp8da-aoti",
+    "fsfafas/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "zxcursedead666/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "snake11235/video-gen-demo",
+    "BhaveshPancholi/VideoGen",
+    "hurler98/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "rahul7star/wan2-2-fp8da-aoti",
+    "CarolAdel04/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "trung26042000/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "jackyfengzhangcai/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "kushal2006/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "kloudux/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Ghostriderfreakk23/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Franciscofelipemendoza/wan2-2-fp8da-aoti",
+    "creatorSSSS/video-adda",
+    "manuelay/Wan2.2-T2V-A14B",
+    "karanshergill/Wan2.2-T2V-14B",
+    "lanceeeee/Lanceauaa",
+    "LinXar/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "ZephyrZeink/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "ahanbose/WISE_Energy",
+    "vinesnt/wan2-2-fp8da-aoti-preview",
+    "dawgleg/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Bedlam666/wan2-2-fp8da-aoti",
+    "vinesnt/1111",
+    "TheGoogyDihh/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "s1s2multiset/1111",
+    "ahadaha/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Dorotheou/1111",
+    "sksnddje/wan2-2-fp8da-aoti-preview",
+    "leo8875/wan2-2-fp8da-aoti-preview-nsfw",
+    "liguoxian83/wan2-2-fp8da-aoti-preview-nsfw",
+    "Crazyfockkk/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Mrm97/InstaVideo",
+    "EAIRobot/wan2-2-fp8da-aoti-preview-nsfw",
+    "Trangiabao/wan-studio",
+    "rogrocks123/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Dippyuk/wan2-2-fp8da-aoti",
+    "Atdevindotcom/wan2-2-fp8da-aoti-preview-nsfw",
+    "mirefall/wan-i2v-kira",
+    "ashprow/wan-i2v-kira",
+    "Ftyhgf/wan-i2v-kira",
+    "cydyffufufu1/wan-i2v-kira",
+    "cydyffufufurty/wan-i2v-kira",
+    "Badjals/hehehe",
+    "tjdavies/video-gen-playground",
+    "nwary/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "mabsoutwassim/wan2.2",
+    "bmwcardriftyfy/Wan-AI-Wan2.2-T2V-A14B-Diffusers",
+    "Jds20001/PrideWAN",
+    "Jds20001/Kwanyieveryone",
+    "Frinch69/Wan2.2-T2V-A14B",
+    "Pato2026/wan-i2v-kira",
+    "mhdi-iq/new-11",
+    "mdsowkat/my-wan22-video",
+    "mastaP/wan22-remix-sfw-t2v",
+    "jimmie11/wan22-a14b-video",
+    "hvsghnvj/edolex_space",
+    "sanodin/wan2-2-fp8da-aoti",
+    "bann/wan-studio",
+    "cydyffufufuvvv/wan-i2v-kira"
+  ],
+  "createdAt": "2025-07-28T09:04:28.000Z",
+  "safetensors": {
+    "parameters": {
+      "F32": 14288491584
+    },
+    "total": 14288491584
+  },
+  "usedStorage": 126200437111
+}

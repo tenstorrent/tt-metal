@@ -1,0 +1,2694 @@
+[
+  {
+    "label": "pragma-long-D-v1",
+    "variant": "D",
+    "candidate": "O2",
+    "q_length": 2048,
+    "k_length": 262144,
+    "cores": 2,
+    "seed": 1239,
+    "distributions": "normal,changing_max",
+    "iters": 5,
+    "rounds": 2,
+    "current_distribution": "normal",
+    "current_candidate": "baseline",
+    "round_index": 0,
+    "full_output_sha256": "98a95d25777368e07ff981a2f30245724a1b8a580800e102d3c4fd79cffb0bc9",
+    "baseline_bitwise_equal": true,
+    "mismatches": 0,
+    "median_ms": 171.89611098729074,
+    "samples_ms": [
+      171.9101711641997,
+      171.94552207365632,
+      171.89101199619472,
+      171.89272097311914,
+      171.89611098729074
+    ],
+    "trace_equal": true,
+    "descriptors": [
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      }
+    ],
+    "source_sha256": {
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp": "08dc8d18ddeadf76a9d992537b2072cca7b812dbf7d488adc269c04faea91c07",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/fullchip_codegen.py": "bf8bc482b3d8e9d20977367be41e2b96598b4b043ec35656b223b66504efad14",
+      "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe"
+    }
+  },
+  {
+    "label": "pragma-long-D-v1",
+    "variant": "D",
+    "candidate": "O2",
+    "q_length": 2048,
+    "k_length": 262144,
+    "cores": 2,
+    "seed": 1239,
+    "distributions": "normal,changing_max",
+    "iters": 5,
+    "rounds": 2,
+    "current_distribution": "normal",
+    "current_candidate": "O2",
+    "round_index": 0,
+    "full_output_sha256": "98a95d25777368e07ff981a2f30245724a1b8a580800e102d3c4fd79cffb0bc9",
+    "baseline_bitwise_equal": true,
+    "mismatches": 0,
+    "median_ms": 167.56562190130353,
+    "samples_ms": [
+      167.56215202622116,
+      167.56020206958055,
+      167.57229203358293,
+      167.59351291693747,
+      167.56562190130353
+    ],
+    "trace_equal": true,
+    "descriptors": [
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      }
+    ],
+    "source_sha256": {
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp": "0ae277d13bb30a0be1cfa3a89c88178bb9ed06acded3b8fa54ad851d8b9f3b1e",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp": "08dc8d18ddeadf76a9d992537b2072cca7b812dbf7d488adc269c04faea91c07",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/fullchip_codegen.py": "bf8bc482b3d8e9d20977367be41e2b96598b4b043ec35656b223b66504efad14",
+      "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe"
+    }
+  },
+  {
+    "label": "pragma-long-D-v1",
+    "variant": "D",
+    "candidate": "O2",
+    "q_length": 2048,
+    "k_length": 262144,
+    "cores": 2,
+    "seed": 1239,
+    "distributions": "normal,changing_max",
+    "iters": 5,
+    "rounds": 2,
+    "current_distribution": "normal",
+    "current_candidate": "O2",
+    "round_index": 1,
+    "full_output_sha256": "98a95d25777368e07ff981a2f30245724a1b8a580800e102d3c4fd79cffb0bc9",
+    "baseline_bitwise_equal": true,
+    "mismatches": 0,
+    "median_ms": 167.57680219598114,
+    "samples_ms": [
+      167.6047930959612,
+      167.57680219598114,
+      167.58146206848323,
+      167.57596214301884,
+      167.575211962685
+    ],
+    "trace_equal": true,
+    "descriptors": [
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      }
+    ],
+    "source_sha256": {
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp": "0ae277d13bb30a0be1cfa3a89c88178bb9ed06acded3b8fa54ad851d8b9f3b1e",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp": "08dc8d18ddeadf76a9d992537b2072cca7b812dbf7d488adc269c04faea91c07",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/fullchip_codegen.py": "bf8bc482b3d8e9d20977367be41e2b96598b4b043ec35656b223b66504efad14",
+      "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe"
+    }
+  },
+  {
+    "label": "pragma-long-D-v1",
+    "variant": "D",
+    "candidate": "O2",
+    "q_length": 2048,
+    "k_length": 262144,
+    "cores": 2,
+    "seed": 1239,
+    "distributions": "normal,changing_max",
+    "iters": 5,
+    "rounds": 2,
+    "current_distribution": "normal",
+    "current_candidate": "baseline",
+    "round_index": 1,
+    "full_output_sha256": "98a95d25777368e07ff981a2f30245724a1b8a580800e102d3c4fd79cffb0bc9",
+    "baseline_bitwise_equal": true,
+    "mismatches": 0,
+    "median_ms": 171.898630913347,
+    "samples_ms": [
+      171.92237195558846,
+      171.88688088208437,
+      171.89937108196318,
+      171.898630913347,
+      171.86085996218026
+    ],
+    "trace_equal": true,
+    "descriptors": [
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      }
+    ],
+    "source_sha256": {
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp": "08dc8d18ddeadf76a9d992537b2072cca7b812dbf7d488adc269c04faea91c07",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/fullchip_codegen.py": "bf8bc482b3d8e9d20977367be41e2b96598b4b043ec35656b223b66504efad14",
+      "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe"
+    }
+  },
+  {
+    "label": "pragma-long-D-v1",
+    "variant": "D",
+    "candidate": "O2",
+    "q_length": 2048,
+    "k_length": 262144,
+    "cores": 2,
+    "seed": 1239,
+    "distributions": "normal,changing_max",
+    "iters": 5,
+    "rounds": 2,
+    "current_distribution": "changing_max",
+    "current_candidate": "baseline",
+    "round_index": 0,
+    "full_output_sha256": "627453b86fbff53623aa6c99e7ba4cb9f4fbbfbfb4dad858dd0af878d1bebb22",
+    "baseline_bitwise_equal": true,
+    "mismatches": 0,
+    "median_ms": 181.6284789238125,
+    "samples_ms": [
+      181.6328689455986,
+      181.62148911505938,
+      181.6284789238125,
+      181.61842902190983,
+      181.64472887292504
+    ],
+    "trace_equal": true,
+    "descriptors": [
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      }
+    ],
+    "source_sha256": {
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp": "08dc8d18ddeadf76a9d992537b2072cca7b812dbf7d488adc269c04faea91c07",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/fullchip_codegen.py": "bf8bc482b3d8e9d20977367be41e2b96598b4b043ec35656b223b66504efad14",
+      "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe"
+    }
+  },
+  {
+    "label": "pragma-long-D-v1",
+    "variant": "D",
+    "candidate": "O2",
+    "q_length": 2048,
+    "k_length": 262144,
+    "cores": 2,
+    "seed": 1239,
+    "distributions": "normal,changing_max",
+    "iters": 5,
+    "rounds": 2,
+    "current_distribution": "changing_max",
+    "current_candidate": "O2",
+    "round_index": 0,
+    "full_output_sha256": "627453b86fbff53623aa6c99e7ba4cb9f4fbbfbfb4dad858dd0af878d1bebb22",
+    "baseline_bitwise_equal": true,
+    "mismatches": 0,
+    "median_ms": 176.41880409792066,
+    "samples_ms": [
+      176.4257939066738,
+      176.38893309049308,
+      176.405583973974,
+      176.41880409792066,
+      176.42020410858095
+    ],
+    "trace_equal": true,
+    "descriptors": [
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      }
+    ],
+    "source_sha256": {
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp": "0ae277d13bb30a0be1cfa3a89c88178bb9ed06acded3b8fa54ad851d8b9f3b1e",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp": "08dc8d18ddeadf76a9d992537b2072cca7b812dbf7d488adc269c04faea91c07",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/fullchip_codegen.py": "bf8bc482b3d8e9d20977367be41e2b96598b4b043ec35656b223b66504efad14",
+      "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe"
+    }
+  },
+  {
+    "label": "pragma-long-D-v1",
+    "variant": "D",
+    "candidate": "O2",
+    "q_length": 2048,
+    "k_length": 262144,
+    "cores": 2,
+    "seed": 1239,
+    "distributions": "normal,changing_max",
+    "iters": 5,
+    "rounds": 2,
+    "current_distribution": "changing_max",
+    "current_candidate": "O2",
+    "round_index": 1,
+    "full_output_sha256": "627453b86fbff53623aa6c99e7ba4cb9f4fbbfbfb4dad858dd0af878d1bebb22",
+    "baseline_bitwise_equal": true,
+    "mismatches": 0,
+    "median_ms": 176.41027411445975,
+    "samples_ms": [
+      176.41027411445975,
+      176.41658382490277,
+      176.42421391792595,
+      176.39989289455116,
+      176.40516418032348
+    ],
+    "trace_equal": true,
+    "descriptors": [
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      }
+    ],
+    "source_sha256": {
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/compute.cpp": "0ae277d13bb30a0be1cfa3a89c88178bb9ed06acded3b8fa54ad851d8b9f3b1e",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp": "08dc8d18ddeadf76a9d992537b2072cca7b812dbf7d488adc269c04faea91c07",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/fullchip_codegen.py": "bf8bc482b3d8e9d20977367be41e2b96598b4b043ec35656b223b66504efad14",
+      "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe"
+    }
+  },
+  {
+    "label": "pragma-long-D-v1",
+    "variant": "D",
+    "candidate": "O2",
+    "q_length": 2048,
+    "k_length": 262144,
+    "cores": 2,
+    "seed": 1239,
+    "distributions": "normal,changing_max",
+    "iters": 5,
+    "rounds": 2,
+    "current_distribution": "changing_max",
+    "current_candidate": "baseline",
+    "round_index": 1,
+    "full_output_sha256": "627453b86fbff53623aa6c99e7ba4cb9f4fbbfbfb4dad858dd0af878d1bebb22",
+    "baseline_bitwise_equal": true,
+    "mismatches": 0,
+    "median_ms": 181.61727883853018,
+    "samples_ms": [
+      181.62161903455853,
+      181.59740790724754,
+      181.61169881932437,
+      181.61727883853018,
+      181.6181589383632
+    ],
+    "trace_equal": true,
+    "descriptors": [
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp",
+        "defines": [
+          [
+            "SDPA_READER_BARRIER_TILES",
+            "2"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          8,
+          2,
+          2048,
+          2,
+          2048,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp",
+        "defines": [],
+        "compile_time_args": [
+          8,
+          2,
+          2048
+        ]
+      },
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_K_CHUNK_TILES",
+            "16"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          512,
+          1035273459,
+          8
+        ]
+      }
+    ],
+    "source_sha256": {
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+      "experiments/sdpa-l2/compute-sprint-v1/fp32/compute.cpp": "08dc8d18ddeadf76a9d992537b2072cca7b812dbf7d488adc269c04faea91c07",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "4dda8467afdcb88a18ab83f7cf6f6685834a64045c66424ec79c397bebf141c9",
+      "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "5e4e6b2693c8defa2c9b782614c0be55e21f81975de020a3504e62ad7f938284",
+      "experiments/sdpa-l2/compute-sprint-v2/codegen/fullchip_codegen.py": "bf8bc482b3d8e9d20977367be41e2b96598b4b043ec35656b223b66504efad14",
+      "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe"
+    }
+  }
+]

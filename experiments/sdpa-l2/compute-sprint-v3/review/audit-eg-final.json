@@ -1,0 +1,49 @@
+{
+  "kind": "EG",
+  "files": 10,
+  "records": 60,
+  "checks_pass": true,
+  "source_mismatches": [],
+  "detail": [
+    {
+      "file": "e-valid-distinct-v1.json",
+      "records": 4
+    },
+    {
+      "file": "e-valid-long-v1.json",
+      "records": 10
+    },
+    {
+      "file": "e-valid-perf-v1.json",
+      "records": 2
+    },
+    {
+      "file": "e-valid-short-v1.json",
+      "records": 5
+    },
+    {
+      "file": "e-valid-stress-v1.json",
+      "records": 9
+    },
+    {
+      "file": "g-valid-distinct-v1.json",
+      "records": 4
+    },
+    {
+      "file": "g-valid-long-v1.json",
+      "records": 10
+    },
+    {
+      "file": "g-valid-perf-v1.json",
+      "records": 2
+    },
+    {
+      "file": "g-valid-short-v1.json",
+      "records": 5
+    },
+    {
+      "file": "g-valid-stress-v1.json",
+      "records": 9
+    }
+  ]
+}

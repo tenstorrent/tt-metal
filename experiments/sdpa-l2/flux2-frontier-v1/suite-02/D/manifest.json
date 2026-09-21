@@ -1,0 +1,1549 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "variant": "D",
+  "conditioning": "stock",
+  "model_repair": "main_fused",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "0ffc16e30fa306c8f148ba8aed01cb72f025823a3956126460a98398ad2236cd",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "451726d8aa456be4732ba1009d4ed1d8dc9f4d41841189ad3df7e9cb76e80747",
+    "experiments/sdpa-l2/flux2-frontier-v1/conditioning.py": "751456805a36bf1e8d166a44002b9eaba47e3d595f53d537ba8de8c914f703b7",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_fixes.py": "e79f6e1e5228a3df3b2035d0422a052cb13dd36ce552509f9732849f84605d64"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "/localdev/cglagovich/flux2-frontier-20260915/tt-metal/experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": true,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset",
+    "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+    "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors."
+  ],
+  "seeds": [
+    0,
+    42
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "local Q, prepared-format KV all-gather, rectangular attention",
+  "attention_recipe": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_FP32_FUSED_EXP": "1",
+    "SDPA_FP32_REUSE_EXP": "1",
+    "SDPA_FP32_EXTRA_CONST": "1",
+    "SDPA_FP32_PAIRED_UNPACK": "1",
+    "SDPA_FP32_PAIRED_PACK": "1",
+    "SDPA_FP32_L1_SUB": "1",
+    "SDPA_FP32_L1_MACRO": "1",
+    "SDPA_FP32_REFINE_MACRO": "1",
+    "SDPA_DIAG_EXP_MODE": "4",
+    "SDPA_FP32_SUB_BATCH": "2",
+    "SDPA_DENOM_PHASES": "2",
+    "SDPA_DIAG_SCORE_CB": "7"
+  },
+  "attention_qk_chunks": [
+    256,
+    512
+  ],
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "D-prompt0-seed0.png",
+      "image_sha256": "fce944b24bf0c339249029fad37251e571a96191568b979d8b5b290d8217998a",
+      "latents": "D-prompt0-seed0-latents.pt",
+      "latents_sha256": "1c05cc7b6ebc5191d3fe5e0d9430abebd48cf6eab50fff32558243cd619b0316",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.816108,
+        0.873241,
+        0.872492,
+        0.872683,
+        0.872551,
+        0.872408,
+        0.872388,
+        0.872462,
+        0.873286,
+        0.872654,
+        0.872679,
+        0.8727,
+        0.872286,
+        0.87266,
+        0.872549,
+        0.872804,
+        0.87252,
+        0.872206,
+        0.872474,
+        0.872393,
+        0.872434,
+        0.872551,
+        0.872343,
+        0.87218,
+        0.872565,
+        0.872248,
+        0.872389,
+        0.872342,
+        0.872381,
+        0.872575,
+        0.874253,
+        0.87217,
+        0.872329,
+        0.872579,
+        0.872347,
+        0.872417,
+        0.872455,
+        0.872208,
+        0.872446,
+        0.872037,
+        0.872362,
+        0.872465,
+        0.872893,
+        0.872127,
+        0.872246,
+        0.873974,
+        0.872155,
+        0.872188,
+        0.872364,
+        0.872213
+      ],
+      "host_seconds": {
+        "run": 44.366066,
+        "encoder": 0.026921,
+        "denoising": 43.581519,
+        "vae": 0.737313
+      }
+    },
+    {
+      "prompt_id": 0,
+      "seed": 42,
+      "image": "D-prompt0-seed42.png",
+      "image_sha256": "2b666d30407b3a41d26d35a6366c12bc63cd5ddf5f02ade9adac2dcdf82b34ed",
+      "latents": "D-prompt0-seed42-latents.pt",
+      "latents_sha256": "696514e352ac61d778421064411fcfbbd5c8ec0340fc5c91cd80a3c8dd1427a7",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.872256,
+        0.872117,
+        0.872166,
+        0.872446,
+        0.872305,
+        0.872247,
+        0.872027,
+        0.872252,
+        0.872341,
+        0.872353,
+        0.872382,
+        0.872584,
+        0.890589,
+        0.904236,
+        0.898913,
+        0.904194,
+        0.909997,
+        0.910329,
+        0.910253,
+        0.909847,
+        0.90178,
+        0.910005,
+        0.91031,
+        0.909925,
+        0.91011,
+        0.909822,
+        0.91026,
+        0.910029,
+        0.9101,
+        0.909718,
+        0.909785,
+        0.909705,
+        0.909883,
+        0.909868,
+        0.91001,
+        0.909969,
+        0.910149,
+        0.909941,
+        0.910254,
+        0.912703,
+        0.910207,
+        0.91002,
+        0.91031,
+        0.910064,
+        0.909889,
+        0.909918,
+        0.910055,
+        0.910167,
+        0.909913,
+        0.910259
+      ],
+      "host_seconds": {
+        "run": 45.785815,
+        "encoder": 0.024023,
+        "denoising": 45.012743,
+        "vae": 0.72912
+      }
+    },
+    {
+      "prompt_id": 1,
+      "seed": 0,
+      "image": "D-prompt1-seed0.png",
+      "image_sha256": "7e4b3ac1191b3d177c353f4d50d057d13f4d12377fdcc5d8349e6fb8bbea075c",
+      "latents": "D-prompt1-seed0-latents.pt",
+      "latents_sha256": "9918c2f68daafb7a36af26d35926307ebb515c445aec0bf8e898820c1577f1b2",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.909815,
+        0.909979,
+        0.910171,
+        0.91007,
+        0.910048,
+        0.910348,
+        0.91012,
+        0.910257,
+        0.910028,
+        0.910023,
+        0.909969,
+        0.913766,
+        0.909958,
+        0.91024,
+        0.910175,
+        0.909957,
+        0.909997,
+        0.910195,
+        0.91059,
+        0.910045,
+        0.910235,
+        0.909981,
+        0.909858,
+        0.909793,
+        0.910165,
+        0.910295,
+        0.910034,
+        0.910069,
+        0.910399,
+        0.909946,
+        0.910301,
+        0.910531,
+        0.910459,
+        0.910132,
+        0.910384,
+        0.91006,
+        0.909991,
+        0.909969,
+        0.910217,
+        0.909968,
+        0.909673,
+        0.910094,
+        0.909928,
+        0.910123,
+        0.910279,
+        0.910306,
+        0.910055,
+        0.910023,
+        0.90993,
+        0.90997
+      ],
+      "host_seconds": {
+        "run": 47.230443,
+        "encoder": 0.950789,
+        "denoising": 45.522125,
+        "vae": 0.738354
+      }
+    },
+    {
+      "prompt_id": 1,
+      "seed": 42,
+      "image": "D-prompt1-seed42.png",
+      "image_sha256": "01b6111964405c51e110a272f336017a3bc5369fbaff010b73de5a0e97582aba",
+      "latents": "D-prompt1-seed42-latents.pt",
+      "latents_sha256": "ccf5c885c506898050a5353be000bf8f013556cb880ffc50d293d07d0941100e",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.909717,
+        0.910237,
+        0.910319,
+        0.910208,
+        0.909857,
+        0.910061,
+        0.910087,
+        0.910207,
+        0.910081,
+        0.910152,
+        0.909787,
+        0.909975,
+        0.910148,
+        0.912173,
+        0.910829,
+        0.910779,
+        0.913318,
+        0.910676,
+        0.910283,
+        0.910206,
+        0.910238,
+        0.910402,
+        0.910182,
+        0.910078,
+        0.910553,
+        0.910105,
+        0.911309,
+        0.910429,
+        0.910328,
+        0.91031,
+        0.91014,
+        0.910195,
+        0.910249,
+        0.910404,
+        0.910231,
+        0.910299,
+        0.910548,
+        0.910223,
+        0.910195,
+        0.910011,
+        0.910061,
+        0.910416,
+        0.910125,
+        0.910338,
+        0.910784,
+        0.910493,
+        0.910399,
+        0.910055,
+        0.910745,
+        0.910421
+      ],
+      "host_seconds": {
+        "run": 46.308738,
+        "encoder": 0.02879,
+        "denoising": 45.531785,
+        "vae": 0.731082
+      }
+    },
+    {
+      "prompt_id": 2,
+      "seed": 0,
+      "image": "D-prompt2-seed0.png",
+      "image_sha256": "20086a8ae7158bcd161df5eeee7275d02d2fa6eb622bde27537b7158883c5b6a",
+      "latents": "D-prompt2-seed0-latents.pt",
+      "latents_sha256": "edc353dcf63fc28159b3b70d85e068b7b49b78d8bfded36eb82bf81e83e4e321",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.910012,
+        0.910334,
+        0.910357,
+        0.910079,
+        0.910112,
+        0.910455,
+        0.910217,
+        0.910432,
+        0.910205,
+        0.910416,
+        0.910731,
+        0.910314,
+        0.91012,
+        0.910333,
+        0.910171,
+        0.910403,
+        0.910328,
+        0.910615,
+        0.910377,
+        0.910313,
+        0.910287,
+        0.910141,
+        0.910315,
+        0.9099,
+        0.910185,
+        0.910518,
+        0.910538,
+        0.91005,
+        0.910332,
+        0.910034,
+        0.910375,
+        0.910286,
+        0.910049,
+        0.910825,
+        0.910443,
+        0.910198,
+        0.910332,
+        0.910771,
+        0.910743,
+        0.911524,
+        0.910591,
+        0.910168,
+        0.910407,
+        0.910254,
+        0.91024,
+        0.910285,
+        0.910192,
+        0.910696,
+        0.910414,
+        0.909899
+      ],
+      "host_seconds": {
+        "run": 46.59304,
+        "encoder": 0.313376,
+        "denoising": 45.529096,
+        "vae": 0.733951
+      }
+    },
+    {
+      "prompt_id": 2,
+      "seed": 42,
+      "image": "D-prompt2-seed42.png",
+      "image_sha256": "e708266fce998dd13c8cc70645be4d610b3f6222e60ba053bb1e0f11c9ce639e",
+      "latents": "D-prompt2-seed42-latents.pt",
+      "latents_sha256": "f1068870436f51761c3fef7e45ab79ce521877adcbe07d010fb25d0aceffcc23",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.909851,
+        0.910187,
+        0.910121,
+        0.910079,
+        0.910338,
+        0.910023,
+        0.910542,
+        0.910135,
+        0.911846,
+        0.910792,
+        0.910114,
+        0.910229,
+        0.910233,
+        0.910491,
+        0.910643,
+        0.910134,
+        0.910406,
+        0.910036,
+        0.910561,
+        0.910125,
+        0.910162,
+        0.910093,
+        0.910015,
+        0.910604,
+        0.910173,
+        0.9101,
+        0.910328,
+        0.910383,
+        0.910219,
+        0.910243,
+        0.910334,
+        0.910482,
+        0.910439,
+        0.910358,
+        0.910041,
+        0.910293,
+        0.910167,
+        0.910415,
+        0.910241,
+        0.910318,
+        0.910205,
+        0.910203,
+        0.910406,
+        0.910299,
+        0.910262,
+        0.909988,
+        0.910284,
+        0.910338,
+        0.910199,
+        0.910256
+      ],
+      "host_seconds": {
+        "run": 46.29306,
+        "encoder": 0.024298,
+        "denoising": 45.525435,
+        "vae": 0.727153
+      }
+    }
+  ],
+  "pipeline_setup_seconds": 384.13930375900236,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725",
+    "8d37170a179a4f84b9c63722a4b87329ec345786c3a12fdff37e0fd87d1acbbb": "6014bc3080f7ee0fed32709605adf0069fb66ceab56ee2fc7909ac16dd4110aa",
+    "50bf80e8ee300bdce8eba5ed77bdea45771f66c1680f94ba58cfa0c0ca341f36": "a758335a4766235612ceca195a0edf50c961b89127e93b6301acc0d1abfd7c73"
+  },
+  "real_input_captures": {
+    "dual.0": {
+      "file": "qkv-dual.0.pt",
+      "sha256": "69ef1a3b0ae8508f758dd9b73bceb9a9e5f114ccda1fc2a698333d93a209b62c",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.1666370630264282,
+        1.0763410329818726,
+        5.048369407653809
+      ],
+      "max_abs": [
+        9.6875,
+        9.625,
+        45.0
+      ]
+    },
+    "dual.7": {
+      "file": "qkv-dual.7.pt",
+      "sha256": "c731effa5c68e564451d58f4310561acb38fd14f9e9499cfbae5701310398f38",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.3433184623718262,
+        1.232271432876587,
+        4.857094764709473
+      ],
+      "max_abs": [
+        6.96875,
+        9.9375,
+        83.5
+      ]
+    },
+    "single.23": {
+      "file": "qkv-single.23.pt",
+      "sha256": "d78a08f2700251c5dcba5055a7eab2f206016c50091968e62f5bbade6bb292eb",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.4025893211364746,
+        1.394063115119934,
+        0.5539785623550415
+      ],
+      "max_abs": [
+        9.4375,
+        9.125,
+        12.875
+      ]
+    },
+    "single.47": {
+      "file": "qkv-single.47.pt",
+      "sha256": "1f04269fe90447c593ed8d92ec5ad861d4c9cb39e5cdc915b9f84e615f721bea",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.2335057258605957,
+        1.2620360851287842,
+        0.9791805148124695
+      ],
+      "max_abs": [
+        6.6875,
+        7.84375,
+        7.9375
+      ]
+    }
+  },
+  "block_bench": [
+    {
+      "block": "dual.0",
+      "warmup_replays": 250,
+      "median_ms": 10.145055500000002,
+      "min_ms": 9.871628,
+      "max_ms": 10.429555,
+      "replay_ms": [
+        10.104076,
+        10.005427,
+        9.967896,
+        9.941427,
+        9.922657,
+        9.881307,
+        9.871628,
+        9.875287,
+        9.874297,
+        9.894657,
+        9.888397,
+        9.980327,
+        9.962477,
+        9.960037,
+        9.944126,
+        10.021657,
+        10.028146,
+        10.024397,
+        10.033966,
+        10.074746,
+        10.098316,
+        10.053547,
+        10.096196,
+        10.148445,
+        10.141666,
+        10.132106,
+        10.148876,
+        10.206905,
+        10.206656,
+        10.201635,
+        10.206146,
+        10.277775,
+        10.292525,
+        10.291065,
+        10.289805,
+        10.298885,
+        10.309015,
+        10.337434,
+        10.341395,
+        10.360395,
+        10.358794,
+        10.365985,
+        10.418634,
+        10.429555,
+        10.421184,
+        10.411014,
+        10.397695,
+        10.410984,
+        10.413504,
+        10.418335
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.3",
+      "warmup_replays": 250,
+      "median_ms": 11.1294255,
+      "min_ms": 10.894742,
+      "max_ms": 11.390849,
+      "replay_ms": [
+        11.077521,
+        11.057801,
+        11.020591,
+        10.988192,
+        10.994482,
+        10.946401,
+        10.913682,
+        10.901972,
+        10.923061,
+        10.894742,
+        10.920042,
+        10.976511,
+        10.970461,
+        10.962682,
+        10.987571,
+        10.991261,
+        10.979922,
+        11.004771,
+        11.089321,
+        11.038091,
+        11.052901,
+        11.05918,
+        11.054571,
+        11.119731,
+        11.15819,
+        11.129931,
+        11.12892,
+        11.182851,
+        11.23381,
+        11.21214,
+        11.19163,
+        11.19626,
+        11.23997,
+        11.28071,
+        11.295469,
+        11.31333,
+        11.296609,
+        11.2879,
+        11.30928,
+        11.271669,
+        11.28782,
+        11.30471,
+        11.295299,
+        11.31974,
+        11.390849,
+        11.374239,
+        11.375939,
+        11.36548,
+        11.386049,
+        11.382179
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.7",
+      "warmup_replays": 250,
+      "median_ms": 12.007805999999999,
+      "min_ms": 11.795187,
+      "max_ms": 18.452302,
+      "replay_ms": [
+        12.017646,
+        11.922736,
+        11.893957,
+        11.835886,
+        11.812437,
+        11.798437,
+        11.821257,
+        11.844117,
+        11.807087,
+        11.796757,
+        11.802217,
+        11.815476,
+        11.795187,
+        11.865087,
+        11.876046,
+        11.899327,
+        11.894936,
+        11.880047,
+        11.891006,
+        11.902647,
+        11.936936,
+        11.974796,
+        11.997966,
+        11.964446,
+        11.986946,
+        11.967206,
+        12.101285,
+        12.076256,
+        12.081345,
+        12.061166,
+        12.056525,
+        12.093296,
+        12.164045,
+        12.210525,
+        12.809752,
+        12.186785,
+        12.168685,
+        12.203724,
+        12.149526,
+        12.151685,
+        12.172425,
+        12.160135,
+        12.209094,
+        12.187225,
+        12.180255,
+        12.153665,
+        12.166365,
+        12.161645,
+        17.153339,
+        18.452302
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.0",
+      "warmup_replays": 250,
+      "median_ms": 15.0763295,
+      "min_ms": 15.056119,
+      "max_ms": 15.091739,
+      "replay_ms": [
+        15.08971,
+        15.056119,
+        15.07693,
+        15.073369,
+        15.078779,
+        15.08363,
+        15.082609,
+        15.07288,
+        15.067149,
+        15.07858,
+        15.066709,
+        15.07378,
+        15.080049,
+        15.08003,
+        15.08085,
+        15.067359,
+        15.07286,
+        15.075729,
+        15.07035,
+        15.088229,
+        15.06685,
+        15.091739,
+        15.091639,
+        15.06875,
+        15.086389,
+        15.07517,
+        15.069509,
+        15.079739,
+        15.0778,
+        15.080419,
+        15.07844,
+        15.067559,
+        15.07528,
+        15.073509,
+        15.07544,
+        15.083809,
+        15.082859,
+        15.07347,
+        15.088399,
+        15.07344,
+        15.063859,
+        15.06646,
+        15.088539,
+        15.08453,
+        15.084869,
+        15.085029,
+        15.0823,
+        15.068699,
+        15.07011,
+        15.075709
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.23",
+      "warmup_replays": 250,
+      "median_ms": 15.081514,
+      "min_ms": 15.06658,
+      "max_ms": 15.108379,
+      "replay_ms": [
+        15.093769,
+        15.071879,
+        15.06658,
+        15.079389,
+        15.08866,
+        15.077769,
+        15.08577,
+        15.074349,
+        15.074909,
+        15.07634,
+        15.075489,
+        15.08776,
+        15.075809,
+        15.08252,
+        15.091079,
+        15.083529,
+        15.07528,
+        15.092579,
+        15.07569,
+        15.081199,
+        15.103929,
+        15.09198,
+        15.085829,
+        15.078239,
+        15.07979,
+        15.080219,
+        15.0796,
+        15.087649,
+        15.082279,
+        15.07855,
+        15.075659,
+        15.07351,
+        15.073159,
+        15.07594,
+        15.092589,
+        15.108379,
+        15.0852,
+        15.089789,
+        15.069579,
+        15.07508,
+        15.078269,
+        15.0969,
+        15.087159,
+        15.08837,
+        15.09218,
+        15.084979,
+        15.07421,
+        15.081829,
+        15.082949,
+        15.08711
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.47",
+      "warmup_replays": 250,
+      "median_ms": 15.053724500000001,
+      "min_ms": 15.03352,
+      "max_ms": 15.07102,
+      "replay_ms": [
+        15.059909,
+        15.04557,
+        15.03352,
+        15.044759,
+        15.05,
+        15.057869,
+        15.07102,
+        15.055339,
+        15.06352,
+        15.048949,
+        15.0573,
+        15.058379,
+        15.04383,
+        15.06202,
+        15.053779,
+        15.05627,
+        15.043449,
+        15.05608,
+        15.047709,
+        15.05565,
+        15.062459,
+        15.05367,
+        15.06254,
+        15.046119,
+        15.03936,
+        15.058969,
+        15.05501,
+        15.04227,
+        15.060719,
+        15.05678,
+        15.044489,
+        15.05184,
+        15.047589,
+        15.05083,
+        15.049899,
+        15.06324,
+        15.05877,
+        15.054529,
+        15.04318,
+        15.055319,
+        15.05526,
+        15.050759,
+        15.05121,
+        15.052229,
+        15.05273,
+        15.05639,
+        15.062709,
+        15.04563,
+        15.048709,
+        15.04626
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    }
+  ],
+  "discarded_capture_run_l2_vs_untraced_pct": 54.434990882873535,
+  "two_step_trace_latents_bitwise_equal": true,
+  "observed_attention_transport": {
+    "dual.0": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.1": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.2": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.3": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.4": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.5": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.6": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.7": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.0": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.1": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.2": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.3": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.4": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.5": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.6": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.7": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.8": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.9": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.10": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.11": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.12": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.13": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.14": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.15": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.16": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.17": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.18": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.19": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.20": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.21": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.22": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.23": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.24": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.25": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.26": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.27": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.28": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.29": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.30": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.31": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.32": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.33": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.34": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.35": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.36": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.37": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.38": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.39": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.40": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.41": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.42": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.43": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.44": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.45": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.46": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.47": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    }
+  }
+}

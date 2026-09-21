@@ -1,0 +1,67 @@
+{
+  "prompt": "A photo of a cat sitting on a windowsill at sunset",
+  "rows": [
+    {
+      "index": 0,
+      "mode": "untraced",
+      "image": "0-untraced.png",
+      "image_sha256": "86b88c1e527403b82818197c5d002bc025478b632ace315a2b9cc347d2a3d0e7",
+      "latents_sha256": "d833a0b6f4290d3564e742813604fa091ecc671b9a23b15239daf657f1119590",
+      "elapsed_seconds": 29.385903197995503,
+      "clip_cosine": 0.3593297600746155,
+      "latent_l2_vs_first_pct": 0.0
+    },
+    {
+      "index": 1,
+      "mode": "untraced",
+      "image": "1-untraced.png",
+      "image_sha256": "f9ec4ed297d1229f80b81cf45327a445a5ba83dd9d6fbc4c3f99da9cc4303c56",
+      "latents_sha256": "ba1f70a63cf321d18f141b843c02b77c32ef83b54c380b4a426167df46ca84a2",
+      "elapsed_seconds": 29.438018582004588,
+      "clip_cosine": 0.3572485148906708,
+      "latent_l2_vs_first_pct": 43.09681057929993
+    },
+    {
+      "index": 2,
+      "mode": "untraced",
+      "image": "2-untraced.png",
+      "image_sha256": "5d467ecab7039dfcbe88828504483df83e3481c6ad2bc2e1790ba973a6f8c94a",
+      "latents_sha256": "afc5e965cb00cecea5436ac38ab04eb0a958bf7d8e216988540ebc10cffd6562",
+      "elapsed_seconds": 29.685568396002054,
+      "clip_cosine": 0.3570202589035034,
+      "latent_l2_vs_first_pct": 37.672579288482666
+    },
+    {
+      "index": 4,
+      "mode": "traced",
+      "image": "4-traced.png",
+      "image_sha256": "6c63d82ec37448a0cb3c93a45ce0910e3b9f341c9133addfb20e5b61b53d83df",
+      "latents_sha256": "dfcdf6ce73a05de14662d3ee29f5576051832a2ab043244117697125626830da",
+      "elapsed_seconds": 29.641182907995244,
+      "clip_cosine": 0.3581428825855255,
+      "latent_l2_vs_first_pct": 47.213155031204224
+    },
+    {
+      "index": 5,
+      "mode": "traced",
+      "image": "5-traced.png",
+      "image_sha256": "6c63d82ec37448a0cb3c93a45ce0910e3b9f341c9133addfb20e5b61b53d83df",
+      "latents_sha256": "a33b4dea738b96a127b118ccb8b039d8ff22f0e7eae7ff5b904159d1e8dd0ccd",
+      "elapsed_seconds": 29.67627231500228,
+      "clip_cosine": 0.3581428825855255,
+      "latent_l2_vs_first_pct": 47.213155031204224
+    },
+    {
+      "index": 6,
+      "mode": "traced",
+      "image": "6-traced.png",
+      "image_sha256": "41f4d043861fff2b4fe23d8c685be0d6a1ea3d2cc99b05a9017b2f140104f822",
+      "latents_sha256": "a1781afde7d29990f3dbd9611d62e4b0e988c3dd7697fafc4b2caa45ebccc40e",
+      "elapsed_seconds": 29.78218775199639,
+      "clip_cosine": 0.3597933053970337,
+      "latent_l2_vs_first_pct": 57.5362503528595
+    }
+  ],
+  "mean": 0.35827960073947906,
+  "scope": "Same stock denoiser repeated; Diffusers CPU FP32 VAE, no tiling; identical decoder for all six repeats"
+}

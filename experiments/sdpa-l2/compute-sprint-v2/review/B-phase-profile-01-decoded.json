@@ -1,0 +1,985 @@
+{
+  "metadata": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 130",
+  "warning": "RISC issue timeline, not exact engine-retirement latency; markers perturb scheduling.",
+  "kernels": {
+    "1024": 449729,
+    "2048": 449816,
+    "3072": 452328
+  },
+  "summary": [
+    {
+      "risc": "TRISC_0",
+      "kind": "denominator",
+      "count": 2,
+      "median_cycles": {
+        "ENTRY_to_ACQUIRED": 22.5,
+        "ACQUIRED_to_COPY_INIT": 110,
+        "COPY_INIT_to_COPIED": 334,
+        "COPIED_to_BROADCAST": 142,
+        "BROADCAST_to_COMMITTED": 26,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 28,
+        "SFPU_to_PACKED": 26.5,
+        "PACKED_to_RELEASED": 24,
+        "total": 738
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "kind": "numerator",
+      "count": 8,
+      "median_cycles": {
+        "ENTRY_to_ACQUIRED": 25,
+        "ACQUIRED_to_COPY_INIT": 105,
+        "COPY_INIT_to_COPIED": 335.5,
+        "COPIED_to_BROADCAST": 114.5,
+        "BROADCAST_to_COMMITTED": 25.5,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 25.5,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 23.5,
+        "total": 706.5
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "kind": "denominator",
+      "count": 2,
+      "median_cycles": {
+        "ENTRY_to_ACQUIRED": 26,
+        "ACQUIRED_to_COPY_INIT": 99.5,
+        "COPY_INIT_to_COPIED": 119.5,
+        "COPIED_to_BROADCAST": 337,
+        "BROADCAST_to_COMMITTED": 53.5,
+        "COMMITTED_to_WAITED": 27,
+        "WAITED_to_SFPU": 21,
+        "SFPU_to_PACKED": 29,
+        "PACKED_to_RELEASED": 28,
+        "total": 740.5
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "kind": "numerator",
+      "count": 8,
+      "median_cycles": {
+        "ENTRY_to_ACQUIRED": 25.5,
+        "ACQUIRED_to_COPY_INIT": 86,
+        "COPY_INIT_to_COPIED": 152,
+        "COPIED_to_BROADCAST": 267.5,
+        "BROADCAST_to_COMMITTED": 48,
+        "COMMITTED_to_WAITED": 25.5,
+        "WAITED_to_SFPU": 25.5,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 26,
+        "total": 678
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "kind": "denominator",
+      "count": 2,
+      "median_cycles": {
+        "ENTRY_to_ACQUIRED": 23,
+        "ACQUIRED_to_COPY_INIT": 26.5,
+        "COPY_INIT_to_COPIED": 23,
+        "COPIED_to_BROADCAST": 22,
+        "BROADCAST_to_COMMITTED": 24,
+        "COMMITTED_to_WAITED": 31.5,
+        "WAITED_to_SFPU": 162.5,
+        "SFPU_to_PACKED": 403,
+        "PACKED_to_RELEASED": 65,
+        "total": 780.5
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "kind": "numerator",
+      "count": 8,
+      "median_cycles": {
+        "ENTRY_to_ACQUIRED": 23,
+        "ACQUIRED_to_COPY_INIT": 23,
+        "COPY_INIT_to_COPIED": 25,
+        "COPIED_to_BROADCAST": 23,
+        "BROADCAST_to_COMMITTED": 25,
+        "COMMITTED_to_WAITED": 28,
+        "WAITED_to_SFPU": 133,
+        "SFPU_to_PACKED": 262,
+        "PACKED_to_RELEASED": 98,
+        "total": 637
+      }
+    }
+  ],
+  "details": [
+    {
+      "risc": "TRISC_0",
+      "batch": 4,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146329685,
+        "ACQUIRED": 936146329720,
+        "COPY_INIT": 936146329857,
+        "COPIED": 936146330238,
+        "BROADCAST": 936146330352,
+        "COMMITTED": 936146330388,
+        "WAITED": 936146330430,
+        "SFPU": 936146330458,
+        "PACKED": 936146330495,
+        "RELEASED": 936146330519
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 35,
+        "ACQUIRED_to_COPY_INIT": 137,
+        "COPY_INIT_to_COPIED": 381,
+        "COPIED_to_BROADCAST": 114,
+        "BROADCAST_to_COMMITTED": 36,
+        "COMMITTED_to_WAITED": 42,
+        "WAITED_to_SFPU": 28,
+        "SFPU_to_PACKED": 37,
+        "PACKED_to_RELEASED": 24,
+        "total": 834
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 5,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146330572,
+        "ACQUIRED": 936146330597,
+        "COPY_INIT": 936146330699,
+        "COPIED": 936146331016,
+        "BROADCAST": 936146331122,
+        "COMMITTED": 936146331156,
+        "WAITED": 936146331180,
+        "SFPU": 936146331204,
+        "PACKED": 936146331229,
+        "RELEASED": 936146331256
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 25,
+        "ACQUIRED_to_COPY_INIT": 102,
+        "COPY_INIT_to_COPIED": 317,
+        "COPIED_to_BROADCAST": 106,
+        "BROADCAST_to_COMMITTED": 34,
+        "COMMITTED_to_WAITED": 24,
+        "WAITED_to_SFPU": 24,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 27,
+        "total": 684
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 6,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146331335,
+        "ACQUIRED": 936146331360,
+        "COPY_INIT": 936146331465,
+        "COPIED": 936146331772,
+        "BROADCAST": 936146331887,
+        "COMMITTED": 936146331912,
+        "WAITED": 936146331937,
+        "SFPU": 936146331964,
+        "PACKED": 936146331989,
+        "RELEASED": 936146332012
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 25,
+        "ACQUIRED_to_COPY_INIT": 105,
+        "COPY_INIT_to_COPIED": 307,
+        "COPIED_to_BROADCAST": 115,
+        "BROADCAST_to_COMMITTED": 25,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 27,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 23,
+        "total": 677
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 7,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146332065,
+        "ACQUIRED": 936146332088,
+        "COPY_INIT": 936146332193,
+        "COPIED": 936146332508,
+        "BROADCAST": 936146332619,
+        "COMMITTED": 936146332645,
+        "WAITED": 936146332669,
+        "SFPU": 936146332696,
+        "PACKED": 936146332719,
+        "RELEASED": 936146332744
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 23,
+        "ACQUIRED_to_COPY_INIT": 105,
+        "COPY_INIT_to_COPIED": 315,
+        "COPIED_to_BROADCAST": 111,
+        "BROADCAST_to_COMMITTED": 26,
+        "COMMITTED_to_WAITED": 24,
+        "WAITED_to_SFPU": 27,
+        "SFPU_to_PACKED": 23,
+        "PACKED_to_RELEASED": 25,
+        "total": 679
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 8,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146338442,
+        "ACQUIRED": 936146338466,
+        "COPY_INIT": 936146338573,
+        "COPIED": 936146338943,
+        "BROADCAST": 936146339071,
+        "COMMITTED": 936146339097,
+        "WAITED": 936146339122,
+        "SFPU": 936146339145,
+        "PACKED": 936146339170,
+        "RELEASED": 936146339193
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 24,
+        "ACQUIRED_to_COPY_INIT": 107,
+        "COPY_INIT_to_COPIED": 370,
+        "COPIED_to_BROADCAST": 128,
+        "BROADCAST_to_COMMITTED": 26,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 23,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 23,
+        "total": 751
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 9,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146339253,
+        "ACQUIRED": 936146339281,
+        "COPY_INIT": 936146339383,
+        "COPIED": 936146339737,
+        "BROADCAST": 936146339849,
+        "COMMITTED": 936146339874,
+        "WAITED": 936146339899,
+        "SFPU": 936146339927,
+        "PACKED": 936146339955,
+        "RELEASED": 936146339982
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 28,
+        "ACQUIRED_to_COPY_INIT": 102,
+        "COPY_INIT_to_COPIED": 354,
+        "COPIED_to_BROADCAST": 112,
+        "BROADCAST_to_COMMITTED": 25,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 28,
+        "SFPU_to_PACKED": 28,
+        "PACKED_to_RELEASED": 27,
+        "total": 729
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 10,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146340063,
+        "ACQUIRED": 936146340086,
+        "COPY_INIT": 936146340188,
+        "COPIED": 936146340711,
+        "BROADCAST": 936146340827,
+        "COMMITTED": 936146340852,
+        "WAITED": 936146340877,
+        "SFPU": 936146340901,
+        "PACKED": 936146340926,
+        "RELEASED": 936146340949
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 23,
+        "ACQUIRED_to_COPY_INIT": 102,
+        "COPY_INIT_to_COPIED": 523,
+        "COPIED_to_BROADCAST": 116,
+        "BROADCAST_to_COMMITTED": 25,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 24,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 23,
+        "total": 886
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 11,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146340997,
+        "ACQUIRED": 936146341022,
+        "COPY_INIT": 936146341130,
+        "COPIED": 936146341440,
+        "BROADCAST": 936146341557,
+        "COMMITTED": 936146341582,
+        "WAITED": 936146341607,
+        "SFPU": 936146341631,
+        "PACKED": 936146341656,
+        "RELEASED": 936146341679
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 25,
+        "ACQUIRED_to_COPY_INIT": 108,
+        "COPY_INIT_to_COPIED": 310,
+        "COPIED_to_BROADCAST": 117,
+        "BROADCAST_to_COMMITTED": 25,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 24,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 23,
+        "total": 682
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 101,
+      "kind": "denominator",
+      "events": {
+        "ENTRY": 936146332836,
+        "ACQUIRED": 936146332860,
+        "COPY_INIT": 936146332972,
+        "COPIED": 936146333304,
+        "BROADCAST": 936146333457,
+        "COMMITTED": 936146333483,
+        "WAITED": 936146333508,
+        "SFPU": 936146333536,
+        "PACKED": 936146333560,
+        "RELEASED": 936146333583
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 24,
+        "ACQUIRED_to_COPY_INIT": 112,
+        "COPY_INIT_to_COPIED": 332,
+        "COPIED_to_BROADCAST": 153,
+        "BROADCAST_to_COMMITTED": 26,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 28,
+        "SFPU_to_PACKED": 24,
+        "PACKED_to_RELEASED": 23,
+        "total": 747
+      }
+    },
+    {
+      "risc": "TRISC_0",
+      "batch": 102,
+      "kind": "denominator",
+      "events": {
+        "ENTRY": 936146341773,
+        "ACQUIRED": 936146341794,
+        "COPY_INIT": 936146341902,
+        "COPIED": 936146342238,
+        "BROADCAST": 936146342369,
+        "COMMITTED": 936146342395,
+        "WAITED": 936146342420,
+        "SFPU": 936146342448,
+        "PACKED": 936146342477,
+        "RELEASED": 936146342502
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 21,
+        "ACQUIRED_to_COPY_INIT": 108,
+        "COPY_INIT_to_COPIED": 336,
+        "COPIED_to_BROADCAST": 131,
+        "BROADCAST_to_COMMITTED": 26,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 28,
+        "SFPU_to_PACKED": 29,
+        "PACKED_to_RELEASED": 25,
+        "total": 729
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 4,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146329889,
+        "ACQUIRED": 936146329927,
+        "COPY_INIT": 936146330050,
+        "COPIED": 936146330223,
+        "BROADCAST": 936146330320,
+        "COMMITTED": 936146330378,
+        "WAITED": 936146330402,
+        "SFPU": 936146330431,
+        "PACKED": 936146330459,
+        "RELEASED": 936146330486
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 38,
+        "ACQUIRED_to_COPY_INIT": 123,
+        "COPY_INIT_to_COPIED": 173,
+        "COPIED_to_BROADCAST": 97,
+        "BROADCAST_to_COMMITTED": 58,
+        "COMMITTED_to_WAITED": 24,
+        "WAITED_to_SFPU": 29,
+        "SFPU_to_PACKED": 28,
+        "PACKED_to_RELEASED": 27,
+        "total": 597
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 5,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146330533,
+        "ACQUIRED": 936146330558,
+        "COPY_INIT": 936146330646,
+        "COPIED": 936146330801,
+        "BROADCAST": 936146331063,
+        "COMMITTED": 936146331110,
+        "WAITED": 936146331135,
+        "SFPU": 936146331157,
+        "PACKED": 936146331181,
+        "RELEASED": 936146331205
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 25,
+        "ACQUIRED_to_COPY_INIT": 88,
+        "COPY_INIT_to_COPIED": 155,
+        "COPIED_to_BROADCAST": 262,
+        "BROADCAST_to_COMMITTED": 47,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 22,
+        "SFPU_to_PACKED": 24,
+        "PACKED_to_RELEASED": 24,
+        "total": 672
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 6,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146331264,
+        "ACQUIRED": 936146331290,
+        "COPY_INIT": 936146331374,
+        "COPIED": 936146331526,
+        "BROADCAST": 936146331823,
+        "COMMITTED": 936146331874,
+        "WAITED": 936146331897,
+        "SFPU": 936146331928,
+        "PACKED": 936146331955,
+        "RELEASED": 936146331980
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 26,
+        "ACQUIRED_to_COPY_INIT": 84,
+        "COPY_INIT_to_COPIED": 152,
+        "COPIED_to_BROADCAST": 297,
+        "BROADCAST_to_COMMITTED": 51,
+        "COMMITTED_to_WAITED": 23,
+        "WAITED_to_SFPU": 31,
+        "SFPU_to_PACKED": 27,
+        "PACKED_to_RELEASED": 25,
+        "total": 716
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 7,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146332031,
+        "ACQUIRED": 936146332057,
+        "COPY_INIT": 936146332139,
+        "COPIED": 936146332291,
+        "BROADCAST": 936146332546,
+        "COMMITTED": 936146332595,
+        "WAITED": 936146332627,
+        "SFPU": 936146332654,
+        "PACKED": 936146332678,
+        "RELEASED": 936146332705
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 26,
+        "ACQUIRED_to_COPY_INIT": 82,
+        "COPY_INIT_to_COPIED": 152,
+        "COPIED_to_BROADCAST": 255,
+        "BROADCAST_to_COMMITTED": 49,
+        "COMMITTED_to_WAITED": 32,
+        "WAITED_to_SFPU": 27,
+        "SFPU_to_PACKED": 24,
+        "PACKED_to_RELEASED": 27,
+        "total": 674
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 8,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146338587,
+        "ACQUIRED": 936146338611,
+        "COPY_INIT": 936146338720,
+        "COPIED": 936146338872,
+        "BROADCAST": 936146338973,
+        "COMMITTED": 936146339019,
+        "WAITED": 936146339040,
+        "SFPU": 936146339063,
+        "PACKED": 936146339084,
+        "RELEASED": 936146339113
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 24,
+        "ACQUIRED_to_COPY_INIT": 109,
+        "COPY_INIT_to_COPIED": 152,
+        "COPIED_to_BROADCAST": 101,
+        "BROADCAST_to_COMMITTED": 46,
+        "COMMITTED_to_WAITED": 21,
+        "WAITED_to_SFPU": 23,
+        "SFPU_to_PACKED": 21,
+        "PACKED_to_RELEASED": 29,
+        "total": 526
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 9,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146339168,
+        "ACQUIRED": 936146339194,
+        "COPY_INIT": 936146339279,
+        "COPIED": 936146339431,
+        "BROADCAST": 936146339781,
+        "COMMITTED": 936146339831,
+        "WAITED": 936146339860,
+        "SFPU": 936146339890,
+        "PACKED": 936146339917,
+        "RELEASED": 936146339946
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 26,
+        "ACQUIRED_to_COPY_INIT": 85,
+        "COPY_INIT_to_COPIED": 152,
+        "COPIED_to_BROADCAST": 350,
+        "BROADCAST_to_COMMITTED": 50,
+        "COMMITTED_to_WAITED": 29,
+        "WAITED_to_SFPU": 30,
+        "SFPU_to_PACKED": 27,
+        "PACKED_to_RELEASED": 29,
+        "total": 778
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 10,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146340008,
+        "ACQUIRED": 936146340031,
+        "COPY_INIT": 936146340111,
+        "COPIED": 936146340262,
+        "BROADCAST": 936146340756,
+        "COMMITTED": 936146340802,
+        "WAITED": 936146340829,
+        "SFPU": 936146340853,
+        "PACKED": 936146340878,
+        "RELEASED": 936146340902
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 23,
+        "ACQUIRED_to_COPY_INIT": 80,
+        "COPY_INIT_to_COPIED": 151,
+        "COPIED_to_BROADCAST": 494,
+        "BROADCAST_to_COMMITTED": 46,
+        "COMMITTED_to_WAITED": 27,
+        "WAITED_to_SFPU": 24,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 24,
+        "total": 894
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 11,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146340950,
+        "ACQUIRED": 936146340974,
+        "COPY_INIT": 936146341061,
+        "COPIED": 936146341214,
+        "BROADCAST": 936146341487,
+        "COMMITTED": 936146341533,
+        "WAITED": 936146341559,
+        "SFPU": 936146341583,
+        "PACKED": 936146341608,
+        "RELEASED": 936146341632
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 24,
+        "ACQUIRED_to_COPY_INIT": 87,
+        "COPY_INIT_to_COPIED": 153,
+        "COPIED_to_BROADCAST": 273,
+        "BROADCAST_to_COMMITTED": 46,
+        "COMMITTED_to_WAITED": 26,
+        "WAITED_to_SFPU": 24,
+        "SFPU_to_PACKED": 25,
+        "PACKED_to_RELEASED": 24,
+        "total": 682
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 101,
+      "kind": "denominator",
+      "events": {
+        "ENTRY": 936146332787,
+        "ACQUIRED": 936146332813,
+        "COPY_INIT": 936146332929,
+        "COPIED": 936146333060,
+        "BROADCAST": 936146333358,
+        "COMMITTED": 936146333420,
+        "WAITED": 936146333449,
+        "SFPU": 936146333470,
+        "PACKED": 936146333499,
+        "RELEASED": 936146333527
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 26,
+        "ACQUIRED_to_COPY_INIT": 116,
+        "COPY_INIT_to_COPIED": 131,
+        "COPIED_to_BROADCAST": 298,
+        "BROADCAST_to_COMMITTED": 62,
+        "COMMITTED_to_WAITED": 29,
+        "WAITED_to_SFPU": 21,
+        "SFPU_to_PACKED": 29,
+        "PACKED_to_RELEASED": 28,
+        "total": 740
+      }
+    },
+    {
+      "risc": "TRISC_1",
+      "batch": 102,
+      "kind": "denominator",
+      "events": {
+        "ENTRY": 936146341698,
+        "ACQUIRED": 936146341724,
+        "COPY_INIT": 936146341807,
+        "COPIED": 936146341915,
+        "BROADCAST": 936146342291,
+        "COMMITTED": 936146342336,
+        "WAITED": 936146342361,
+        "SFPU": 936146342382,
+        "PACKED": 936146342411,
+        "RELEASED": 936146342439
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 26,
+        "ACQUIRED_to_COPY_INIT": 83,
+        "COPY_INIT_to_COPIED": 108,
+        "COPIED_to_BROADCAST": 376,
+        "BROADCAST_to_COMMITTED": 45,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 21,
+        "SFPU_to_PACKED": 29,
+        "PACKED_to_RELEASED": 28,
+        "total": 741
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 4,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146330310,
+        "ACQUIRED": 936146330338,
+        "COPY_INIT": 936146330368,
+        "COPIED": 936146330389,
+        "BROADCAST": 936146330422,
+        "COMMITTED": 936146330449,
+        "WAITED": 936146330484,
+        "SFPU": 936146330628,
+        "PACKED": 936146330875,
+        "RELEASED": 936146330976
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 28,
+        "ACQUIRED_to_COPY_INIT": 30,
+        "COPY_INIT_to_COPIED": 21,
+        "COPIED_to_BROADCAST": 33,
+        "BROADCAST_to_COMMITTED": 27,
+        "COMMITTED_to_WAITED": 35,
+        "WAITED_to_SFPU": 144,
+        "SFPU_to_PACKED": 247,
+        "PACKED_to_RELEASED": 101,
+        "total": 666
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 5,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146331024,
+        "ACQUIRED": 936146331049,
+        "COPY_INIT": 936146331072,
+        "COPIED": 936146331097,
+        "BROADCAST": 936146331120,
+        "COMMITTED": 936146331147,
+        "WAITED": 936146331172,
+        "SFPU": 936146331312,
+        "PACKED": 936146331559,
+        "RELEASED": 936146331660
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 25,
+        "ACQUIRED_to_COPY_INIT": 23,
+        "COPY_INIT_to_COPIED": 25,
+        "COPIED_to_BROADCAST": 23,
+        "BROADCAST_to_COMMITTED": 27,
+        "COMMITTED_to_WAITED": 25,
+        "WAITED_to_SFPU": 140,
+        "SFPU_to_PACKED": 247,
+        "PACKED_to_RELEASED": 101,
+        "total": 636
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 6,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146331724,
+        "ACQUIRED": 936146331748,
+        "COPY_INIT": 936146331769,
+        "COPIED": 936146331792,
+        "BROADCAST": 936146331815,
+        "COMMITTED": 936146331836,
+        "WAITED": 936146331865,
+        "SFPU": 936146331999,
+        "PACKED": 936146332261,
+        "RELEASED": 936146332361
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 24,
+        "ACQUIRED_to_COPY_INIT": 21,
+        "COPY_INIT_to_COPIED": 23,
+        "COPIED_to_BROADCAST": 23,
+        "BROADCAST_to_COMMITTED": 21,
+        "COMMITTED_to_WAITED": 29,
+        "WAITED_to_SFPU": 134,
+        "SFPU_to_PACKED": 262,
+        "PACKED_to_RELEASED": 100,
+        "total": 637
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 7,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146332406,
+        "ACQUIRED": 936146332429,
+        "COPY_INIT": 936146332452,
+        "COPIED": 936146332477,
+        "BROADCAST": 936146332500,
+        "COMMITTED": 936146332521,
+        "WAITED": 936146332554,
+        "SFPU": 936146332742,
+        "PACKED": 936146333012,
+        "RELEASED": 936146333096
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 23,
+        "ACQUIRED_to_COPY_INIT": 23,
+        "COPY_INIT_to_COPIED": 25,
+        "COPIED_to_BROADCAST": 23,
+        "BROADCAST_to_COMMITTED": 21,
+        "COMMITTED_to_WAITED": 33,
+        "WAITED_to_SFPU": 188,
+        "SFPU_to_PACKED": 270,
+        "PACKED_to_RELEASED": 84,
+        "total": 690
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 8,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146339840,
+        "ACQUIRED": 936146339862,
+        "COPY_INIT": 936146339891,
+        "COPIED": 936146339918,
+        "BROADCAST": 936146339947,
+        "COMMITTED": 936146339973,
+        "WAITED": 936146340000,
+        "SFPU": 936146340129,
+        "PACKED": 936146340401,
+        "RELEASED": 936146340489
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 22,
+        "ACQUIRED_to_COPY_INIT": 29,
+        "COPY_INIT_to_COPIED": 27,
+        "COPIED_to_BROADCAST": 29,
+        "BROADCAST_to_COMMITTED": 26,
+        "COMMITTED_to_WAITED": 27,
+        "WAITED_to_SFPU": 129,
+        "SFPU_to_PACKED": 272,
+        "PACKED_to_RELEASED": 88,
+        "total": 649
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 9,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146340537,
+        "ACQUIRED": 936146340559,
+        "COPY_INIT": 936146340582,
+        "COPIED": 936146340607,
+        "BROADCAST": 936146340630,
+        "COMMITTED": 936146340655,
+        "WAITED": 936146340679,
+        "SFPU": 936146340811,
+        "PACKED": 936146341070,
+        "RELEASED": 936146341168
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 22,
+        "ACQUIRED_to_COPY_INIT": 23,
+        "COPY_INIT_to_COPIED": 25,
+        "COPIED_to_BROADCAST": 23,
+        "BROADCAST_to_COMMITTED": 25,
+        "COMMITTED_to_WAITED": 24,
+        "WAITED_to_SFPU": 132,
+        "SFPU_to_PACKED": 259,
+        "PACKED_to_RELEASED": 98,
+        "total": 631
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 10,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146341233,
+        "ACQUIRED": 936146341256,
+        "COPY_INIT": 936146341281,
+        "COPIED": 936146341304,
+        "BROADCAST": 936146341329,
+        "COMMITTED": 936146341352,
+        "WAITED": 936146341382,
+        "SFPU": 936146341510,
+        "PACKED": 936146341772,
+        "RELEASED": 936146341870
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 23,
+        "ACQUIRED_to_COPY_INIT": 25,
+        "COPY_INIT_to_COPIED": 23,
+        "COPIED_to_BROADCAST": 25,
+        "BROADCAST_to_COMMITTED": 23,
+        "COMMITTED_to_WAITED": 30,
+        "WAITED_to_SFPU": 128,
+        "SFPU_to_PACKED": 262,
+        "PACKED_to_RELEASED": 98,
+        "total": 637
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 11,
+      "kind": "numerator",
+      "events": {
+        "ENTRY": 936146341914,
+        "ACQUIRED": 936146341937,
+        "COPY_INIT": 936146341960,
+        "COPIED": 936146341985,
+        "BROADCAST": 936146342008,
+        "COMMITTED": 936146342033,
+        "WAITED": 936146342057,
+        "SFPU": 936146342185,
+        "PACKED": 936146342462,
+        "RELEASED": 936146342545
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 23,
+        "ACQUIRED_to_COPY_INIT": 23,
+        "COPY_INIT_to_COPIED": 25,
+        "COPIED_to_BROADCAST": 23,
+        "BROADCAST_to_COMMITTED": 25,
+        "COMMITTED_to_WAITED": 24,
+        "WAITED_to_SFPU": 128,
+        "SFPU_to_PACKED": 277,
+        "PACKED_to_RELEASED": 83,
+        "total": 631
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 101,
+      "kind": "denominator",
+      "events": {
+        "ENTRY": 936146333258,
+        "ACQUIRED": 936146333280,
+        "COPY_INIT": 936146333312,
+        "COPIED": 936146333335,
+        "BROADCAST": 936146333356,
+        "COMMITTED": 936146333379,
+        "WAITED": 936146333410,
+        "SFPU": 936146333585,
+        "PACKED": 936146333995,
+        "RELEASED": 936146334067
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 22,
+        "ACQUIRED_to_COPY_INIT": 32,
+        "COPY_INIT_to_COPIED": 23,
+        "COPIED_to_BROADCAST": 21,
+        "BROADCAST_to_COMMITTED": 23,
+        "COMMITTED_to_WAITED": 31,
+        "WAITED_to_SFPU": 175,
+        "SFPU_to_PACKED": 410,
+        "PACKED_to_RELEASED": 72,
+        "total": 809
+      }
+    },
+    {
+      "risc": "TRISC_2",
+      "batch": 102,
+      "kind": "denominator",
+      "events": {
+        "ENTRY": 936146342699,
+        "ACQUIRED": 936146342723,
+        "COPY_INIT": 936146342744,
+        "COPIED": 936146342767,
+        "BROADCAST": 936146342790,
+        "COMMITTED": 936146342815,
+        "WAITED": 936146342847,
+        "SFPU": 936146342997,
+        "PACKED": 936146343393,
+        "RELEASED": 936146343451
+      },
+      "intervals": {
+        "ENTRY_to_ACQUIRED": 24,
+        "ACQUIRED_to_COPY_INIT": 21,
+        "COPY_INIT_to_COPIED": 23,
+        "COPIED_to_BROADCAST": 23,
+        "BROADCAST_to_COMMITTED": 25,
+        "COMMITTED_to_WAITED": 32,
+        "WAITED_to_SFPU": 150,
+        "SFPU_to_PACKED": 396,
+        "PACKED_to_RELEASED": 58,
+        "total": 752
+      }
+    }
+  ]
+}

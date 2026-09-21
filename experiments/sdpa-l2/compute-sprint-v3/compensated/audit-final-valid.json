@@ -1,0 +1,11 @@
+{
+  "records": 60,
+  "invariant_checks": "PASS",
+  "numerical_pass": 60,
+  "numerical_failures": [],
+  "maximum_worst_row_increase_pp": [
+    0.00020176224277168586,
+    "e-valid-long-v1.json:normal-512"
+  ],
+  "note": "Row changes require review; this script does not invent a row acceptance threshold."
+}

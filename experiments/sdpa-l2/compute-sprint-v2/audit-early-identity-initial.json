@@ -1,0 +1,30 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/e-identity-early-resident-v1.json",
+      "sha256": "501189fa3596c6786794720387ee655ea6c411dae97183221c20aea1431a16ba",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/e-identity-early-transition-smoke-v1.json",
+      "sha256": "9153f8d66ed81e155b4a5b6a4a29156c751411bb8f17ba1c6857d8da8fa6d43b",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/g-identity-early-transition-v1.json",
+      "sha256": "4987b5ab60b90fd189e9d95709d0ead1b21e88da04ae25a3ba18177aeae67793",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-transfer-01.json",
+      "sha256": "db42d2f90c1c6ce621c7dac8d408ae5227104042e5913a1dbf17203ebb8ccaf9",
+      "records_checked": 27,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

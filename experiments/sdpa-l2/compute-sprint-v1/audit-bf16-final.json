@@ -1,0 +1,24 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/A-final-steady-02.json",
+      "sha256": "13d89dfe4ec103d6bef1d5fdb07c29e68f92548e1001f40f79288983c256237c",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/A-expblock-fullchip-01.json",
+      "sha256": "c89672dd2d88e71c194cfb2cec3fd80656a267073a85d54860274b880238355d",
+      "records_checked": 18,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/B-final-heldout-01.json",
+      "sha256": "352c7ea8e28abefcc0e3d948dce2ea06982333301b5363f55af37164d6451a5d",
+      "records_checked": 24,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

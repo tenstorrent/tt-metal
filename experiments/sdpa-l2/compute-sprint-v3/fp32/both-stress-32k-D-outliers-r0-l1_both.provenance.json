@@ -1,0 +1,178 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/hybrid-mixed-v1/compute.cpp": "5f22db898226b368c32fc4558cbfd0a35dd7f297055f15cf655be08c3c2932fc",
+    "experiments/sdpa-l2/hybrid-mixed-v1/reader.cpp": "c41ea4a25292e873e589d11f8f7621de79642a814e8eaf63579fb1ba2d5bc5cc",
+    "experiments/sdpa-l2/hybrid-mixed-v1/state_compute.cpp": "2fb2f282863ff185ec3591f2003a27d7d891d68f05bac0b5f019d3354ec981f5",
+    "experiments/sdpa-l2/hybrid-mixed-v1/state_reader.cpp": "ac64afd7fe8e134be7497a44d5259a91781266cd8c9bb2508534eb1818786563",
+    "experiments/sdpa-l2/hybrid-mixed-v1/state_writer.cpp": "b9b6900c81c022951afd670871f3d24c15054169351085fb85b1e23e2d760249",
+    "experiments/sdpa-l2/hybrid-mixed-v1/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/hybrid-mixed-v1/reader_distinct.cpp": "e4bc5abd4e25a885d293ddfea4b272ef34f01570949e6fe1f4cfae933d708206",
+    "experiments/sdpa-l2/hybrid-mixed-v1/hybrid.hpp": "1835e01dc87736ba991799d53249794324239e8af666e61f5017f6b4be58a2d9",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b8668252145ff7ad2b151245cb9d3ddbe21a4573f459709b291be4ea353404c3",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "bf797dff103676fc55990681aad82b8e508938edd581e2b619822ab97b27531c",
+    "experiments/sdpa-l2/compute-sprint-v3/fp32/._compute.cpp": "19bfe2f1dad9767a61862c3b16a613ac5099c7534b1c7b69888d49d27892ba7f",
+    "experiments/sdpa-l2/compute-sprint-v3/fp32/compute.cpp": "0f9e2e3c334e4f9a01e6f9f55f00ebf67ba0353962cb1d4d9b61cc84c98ea5cf",
+    "experiments/sdpa-l2/compute-sprint-v3/fp32/._resident.cpp": "19bfe2f1dad9767a61862c3b16a613ac5099c7534b1c7b69888d49d27892ba7f",
+    "experiments/sdpa-l2/compute-sprint-v3/fp32/resident.cpp": "ba5cf3279ee82c428ec0ddcc0db704317aacb7c64e7fecf21f803bbc0268a865",
+    "experiments/sdpa-l2/compute-sprint-v3/fp32/compute_streaming.hpp": "e1fc7330af846d606a2460adca6ade49443be16c38a01f2a6d15e7986cc84acf",
+    "experiments/sdpa-l2/compute-sprint-v3/fp32/._compute_streaming.hpp": "19bfe2f1dad9767a61862c3b16a613ac5099c7534b1c7b69888d49d27892ba7f",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro.hpp": "28fff7c37b462d828e7bdf7fdfe2e91a67a1f422f89b7eb567d9556d8f87bda6",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut.hpp": "6fd5d654a4765bb66dcd0e4369d7589e537529256ec174309d19375bce1aea35",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_grid7.hpp": "9eec5de8483de8fdf93967fc1d86baefe4f2948bf689d84ac6ccce3042cd9239",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_refiner.hpp": "bfd75a1f702827ceefebc7255a47621b96d0438eefa5f79af60dbba62f791a00",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fast_correction.hpp": "1e6905b04d9afdea8498b4bbdbe43c0ae988896b5051dfa46137df1389d9f632",
+    "experiments/sdpa-l2/bfp4-lofi-v2/v_bias.hpp": "e6f3c02b81326001f0848c41168cbcdfa30d47514c484529184a328f1fb14bcb",
+    "experiments/sdpa-l2/bfp4-lofi-v2/round_p.hpp": "02559f0c4e110fb0d671fdd23f36983fd86205ee5822f72ee5c944c83a944559",
+    "experiments/sdpa-l2/bfp4-lofi-v2/safe_rescale.hpp": "38877b1ec8bb135aa0473e00e659f00cba79008cb35bf8584e30dd751565cc3b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/._exp_native.hpp": "19bfe2f1dad9767a61862c3b16a613ac5099c7534b1c7b69888d49d27892ba7f",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_native.hpp": "711b86bbef10cee71b69cd8eeeed498fe3ce36c8a0a2400362d4be89ca060940",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp": "f795e49f09b34e388fdb3149b40656905fcee0ae496abdf8f7d04e221afcaac9",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe",
+    "experiments/sdpa-l2/compute-sprint-v3/fp32/core.py": "d9e07463d5c26625372713d6cd6191015e7d08ba99a69c893e1205dc9f45496a",
+    "experiments/sdpa-l2/compute-sprint-v1/fp32/compute_streaming.hpp": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+    "experiments/sdpa-l2/compute-sprint-v1/fp32/resident.cpp": "b963eed8f978cba1714042d4800f42ece535bd64c6fb69b12d45a8fb039c8e5b",
+    "experiments/sdpa-l2/compute-sprint-v1/fp32/c_refine.hpp": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+    "experiments/sdpa-l2/compute-sprint-v2/codegen/resident.cpp": "386111d43a42717bd572f08ebc4b1b0ea6b3bc23053607adbabe929fc834fe7c"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_FP32_FUSED_EXP": "1",
+    "SDPA_FP32_REUSE_EXP": "1",
+    "SDPA_FP32_EXTRA_CONST": "1",
+    "SDPA_FP32_PAIRED_UNPACK": "1",
+    "SDPA_FP32_PAIRED_PACK": "1",
+    "SDPA_FP32_L1_SUB": "1",
+    "SDPA_FP32_L1_MACRO": "1",
+    "SDPA_FP32_REFINE_MACRO": "1",
+    "SDPA_DIAG_EXP_MODE": "4",
+    "SDPA_FP32_SUB_BATCH": "2",
+    "SDPA_DENOM_PHASES": "2",
+    "SDPA_DIAG_SCORE_CB": "7",
+    "SDPA_SPRINT_IDENTITY4": "1",
+    "SDPA_SPRINT_STATE_UNPACK_BATCH": "1",
+    "SDPA_SPRINT_LAZY_INIT": "1",
+    "SDPA_SPRINT_MAX_SCAN": "1",
+    "SDPA_V3_O2": "1",
+    "SDPA_V3_L1_INPLACE": "1",
+    "SDPA_V3_L1_BOTH": "1"
+  },
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      2,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "label": "both-stress-32k-D-outliers-r0-l1_both",
+    "variants": "D,C",
+    "algorithms": "baseline,l1_both",
+    "distributions": "normal,scaled_qk,outliers,common_q,common_k,common_v,uniform,constant_v,constant_325,zero_v,coherent,cancellation,tiny_update,transitions,changing_max",
+    "k_chunks": 64,
+    "q_repeats": 1,
+    "seed": 1240,
+    "distinct_kv": true,
+    "rounds": 1,
+    "warmup": 0,
+    "iters": 1,
+    "variant": "D",
+    "mode": "accurate",
+    "distribution": "outliers",
+    "algorithm": "l1_both",
+    "hybrid_block_pack": false
+  }
+}

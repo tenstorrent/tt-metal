@@ -1,0 +1,24 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-cache-transfer-01.json",
+      "sha256": "36e411fbecdc97e45f62beba9fa9d92405f37cd247e6d7115b00b4427d422c67",
+      "records_checked": 12,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/e-correction-cache-resident-v1.json",
+      "sha256": "d05e5e9d705661aa71fbf9f02c13f57b8ad8b411f71e3263090f9f5dcc80e829",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/fp32/screen-v1.json",
+      "sha256": "2e076194374eab20629877c2ae3479e52689616f9f7eb115ce0a21b33a92d1a8",
+      "records_checked": 10,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

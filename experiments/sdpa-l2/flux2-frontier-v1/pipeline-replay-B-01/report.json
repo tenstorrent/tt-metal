@@ -1,0 +1,139 @@
+{
+  "status": "completed",
+  "variant": "B",
+  "rows": [
+    {
+      "index": 0,
+      "mode": "untraced",
+      "exact_vs_first": true,
+      "l2_vs_first_pct": 0.0,
+      "max_abs": 0.0,
+      "unequal": 0
+    },
+    {
+      "index": 1,
+      "mode": "untraced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 2.9351109638810158,
+      "max_abs": 0.22265625,
+      "unequal": 451640
+    },
+    {
+      "index": 2,
+      "mode": "untraced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 3.476788103580475,
+      "max_abs": 0.3359375,
+      "unequal": 464413
+    },
+    {
+      "index": 3,
+      "mode": "capture",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 55.91592788696289,
+      "max_abs": 4.0390625,
+      "unequal": 521289
+    },
+    {
+      "index": 4,
+      "mode": "traced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 4.469909891486168,
+      "max_abs": 0.484375,
+      "unequal": 472827
+    },
+    {
+      "index": 5,
+      "mode": "traced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 4.188941419124603,
+      "max_abs": 0.376953125,
+      "unequal": 472684
+    },
+    {
+      "index": 6,
+      "mode": "traced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 4.188941419124603,
+      "max_abs": 0.376953125,
+      "unequal": 472684
+    }
+  ],
+  "comparisons": [
+    {
+      "a": 0,
+      "b": 1,
+      "exact": false
+    },
+    {
+      "a": 0,
+      "b": 2,
+      "exact": false
+    },
+    {
+      "a": 0,
+      "b": 4,
+      "exact": false
+    },
+    {
+      "a": 0,
+      "b": 5,
+      "exact": false
+    },
+    {
+      "a": 0,
+      "b": 6,
+      "exact": false
+    },
+    {
+      "a": 1,
+      "b": 2,
+      "exact": false
+    },
+    {
+      "a": 1,
+      "b": 4,
+      "exact": false
+    },
+    {
+      "a": 1,
+      "b": 5,
+      "exact": false
+    },
+    {
+      "a": 1,
+      "b": 6,
+      "exact": false
+    },
+    {
+      "a": 2,
+      "b": 4,
+      "exact": false
+    },
+    {
+      "a": 2,
+      "b": 5,
+      "exact": false
+    },
+    {
+      "a": 2,
+      "b": 6,
+      "exact": false
+    },
+    {
+      "a": 4,
+      "b": 5,
+      "exact": false
+    },
+    {
+      "a": 4,
+      "b": 6,
+      "exact": false
+    },
+    {
+      "a": 5,
+      "b": 6,
+      "exact": true
+    }
+  ]
+}

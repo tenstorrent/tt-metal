@@ -1,0 +1,114 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/e-final-resident-v1.json",
+      "sha256": "b50ae2a857117d9bc9811e318cfd2340391faa94136d7ce0fa386393232dd30f",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/g-final-resident-v1.json",
+      "sha256": "34745feb73d177d83f2e30e5104bc7cb185ceb9298486ecb305994f55f0cb2ba",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-e-v1/e-common_k.json",
+      "sha256": "86a9622f19f9ad7884a7595df0ceb8ce2ec535645ac26bc7203c2fa0ad539091",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-e-v1/e-common_q.json",
+      "sha256": "9d8d03671a0df7cfe05165ec64b9aad0b54504b59f4d6a2125aca1e3163139ab",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-e-v1/e-common_v.json",
+      "sha256": "3401f65f72dbba987903daff038e67937fbbb574d8918fc784958ba5a59ac0e9",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-e-v1/e-constant_v.json",
+      "sha256": "1e2abac7e4edac0fa88bb971b255515f970dd0467bec9511b208d869f72dee6e",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-e-v1/e-normal.json",
+      "sha256": "5f7f5c6eebb296f7b7e17afb6e8385e107a24155c368f75398943236db648bf0",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-e-v1/e-outliers.json",
+      "sha256": "024bc365f1fa92dba0d63e9f3692afceef59101bbea1444eac2b4a6898ee4acc",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-e-v1/e-uniform.json",
+      "sha256": "b2a0e1a2430735e916ee6566ec83d156fa821a55f5705f19675a5b6a6e360a37",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-g-v1/g-common_k.json",
+      "sha256": "00e4cbfee767682b060de0bbfb46787904c8f05a546e61404e3270304b44fb8e",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-g-v1/g-common_q.json",
+      "sha256": "dcb640fae692f28d90247597e521c828195a0aebffc1189bca22f8402b602786",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-g-v1/g-common_v.json",
+      "sha256": "c64974846b173d0af509009b9528e08ef3275c553f46508d9b6b65aa1a1099ab",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-g-v1/g-constant_v.json",
+      "sha256": "de645f35f71720694fd16ebe8005ed47e81c5210dd5a795fe5866461529bdaa1",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-g-v1/g-normal.json",
+      "sha256": "92cf620b4786205d8152f6f92873223c728233976d97caa4800c26800b58c9c8",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-g-v1/g-outliers.json",
+      "sha256": "24bef9af37cbd38fb880e3922f6290c2c41378a464f7fea57e52c9179ccbb77d",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/qualification-g-v1/g-uniform.json",
+      "sha256": "3357d87e8669a8548baf9d2a38c3c15801bf063db01fe40795d075e1c818f7d9",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/B-block-reuse-fence-steady-01.json",
+      "sha256": "a0e2ff4bd12d41e2a925ad4098f09aeba615f14dc8d122698f19da3b421a69ee",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/B-block-reuse-fence-fullchip-02.json",
+      "sha256": "6ff93c7b2e6bd246bbffae873e6c3b08673a52807c1463f9faf209b1b818cc21",
+      "records_checked": 18,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

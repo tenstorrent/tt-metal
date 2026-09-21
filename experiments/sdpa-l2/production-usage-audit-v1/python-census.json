@@ -1,0 +1,5093 @@
+{
+  "scope": "Tracked Python source, excluding experiments; non-decode operator names only",
+  "caveat": "References include function-valued dispatch; unresolved wrappers need companion manual audit. Counts are static sites, not runtime calls.",
+  "head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "family_counts": {
+    "ttnn": 234,
+    "torch_reference": 76,
+    "indirect_or_other": 38,
+    "ttml": 14
+  },
+  "records": [
+    {
+      "file": "models/common/modules/attention/attention_1d.py",
+      "line": 625,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q_heads_sdpa",
+        "input_tensor_k": "keys",
+        "input_tensor_v": "values",
+        "page_table_tensor": "page_table",
+        "chunk_start_idx": "chunk_start_idx",
+        "compute_kernel_config": "self.config.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx)"
+      }
+    },
+    {
+      "file": "models/common/modules/attention/attention_1d.py",
+      "line": 636,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q_heads_sdpa",
+        "input_tensor_k": "keys",
+        "input_tensor_v": "values",
+        "page_table_tensor": "page_table",
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "compute_kernel_config": "self.config.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "cfg.prefill_sdpa_prg_config(seq_len, block_size)"
+      }
+    },
+    {
+      "file": "models/common/modules/attention/attention_1d.py",
+      "line": 647,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "cfg.sliding_window",
+        "scale": "cfg.scale",
+        "compute_kernel_config": "self.config.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "cfg.prefill_sdpa_prg_config(sdpa_seq_len, None)"
+      }
+    },
+    {
+      "file": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "line": 334,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scaling",
+        "attn_mask": "attention_mask",
+        "is_causal": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "WHISPER_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "line": 372,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scaling",
+        "attn_mask": "None",
+        "is_causal": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py",
+      "line": 504,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scaling",
+        "attn_mask": "None",
+        "is_causal": "True",
+        "program_config": "sdpa_prefill_progcfg",
+        "compute_kernel_config": "sdpa_prefill_compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "models/demos/blackhole/qwen36/tt/attention/tp.py",
+      "line": 453,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "self.scale",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "program_config": "sdpa_cfg"
+      }
+    },
+    {
+      "file": "models/demos/blackhole/qwen36/tt/attention/tp.py",
+      "line": 776,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q8",
+        "input_tensor_k": "k_paged",
+        "input_tensor_v": "v_paged",
+        "page_table_tensor": "sdpa_page_table",
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "compute_kernel_config": "self.compute_cfg",
+        "program_config": "sdpa_cfg"
+      }
+    },
+    {
+      "file": "models/demos/blackhole/qwen36/tt/attention/tp.py",
+      "line": 786,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q8",
+        "input_tensor_k": "k_paged",
+        "input_tensor_v": "v_paged",
+        "page_table_tensor": "sdpa_page_table",
+        "chunk_start_idx": "chunk_start_idx",
+        "compute_kernel_config": "self.compute_cfg",
+        "program_config": "sdpa_cfg"
+      }
+    },
+    {
+      "file": "models/demos/blackhole/qwen36/tt/vision/vision_attention.py",
+      "line": 377,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None)"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_flash_mla_deepseek.py",
+      "line": 93,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3/tt/mla/mla1d.py",
+      "line": 1664,
+      "callee": "ttnn.transformer.flash_mla_prefill",
+      "resolved": "ttnn.transformer.flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "**": "cfg['flash_mla']"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3/tt/mla/mla1d.py",
+      "line": 1828,
+      "callee": "ttnn.transformer.chunked_flash_mla_prefill",
+      "resolved": "ttnn.transformer.chunked_flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "cfg['flash_mla']['scale']",
+        "program_config": "cfg['flash_mla']['program_config']",
+        "compute_kernel_config": "cfg['flash_mla']['compute_kernel_config']",
+        "memory_config": "cfg['flash_mla']['memory_config']"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4139,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4142,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4144,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4147,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4156,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4159,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4160,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4168,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4171,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/attention_block/op.py",
+      "line": 4172,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 475,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 478,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 480,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 483,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 492,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 495,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 496,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 504,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 507,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/decoder_block/op.py",
+      "line": 508,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1595,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1598,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1600,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1602,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1604,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1605,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1614,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1617,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1618,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1626,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1629,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_b1/fused_ops/post_sdpa/op.py",
+      "line": 1630,
+      "callee": "sdpa",
+      "resolved": "sdpa",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/reference/kimi_k3/modeling_kimi_k3_mla.py",
+      "line": 159,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_mask",
+        "dropout_p": "0.0 if not self.training else self.attention_dropout",
+        "is_causal": "attention_mask is None and self.is_causal",
+        "scale": "self.scaling"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/reference/mla_reference.py",
+      "line": 137,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "attn.softmax_scale"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/reference/mla_reference.py",
+      "line": 160,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "causal_mask",
+        "scale": "attn.softmax_scale"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py",
+      "line": 350,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "persistent_output_buffers[i][0]",
+        "persistent_output_buffer_v": "persistent_output_buffers[i][1]",
+        "joint_strategy": "'rear'",
+        "logical_n": "base_seq_len",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles[i]",
+        "num_links": "num_links",
+        "cluster_axis": "rp_axis",
+        "mesh_device": "submesh",
+        "topology": "all_gather_topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "ccl_core_grid_offset",
+        "use_column_major_ccl": "True",
+        "is_causal": "is_causal",
+        "is_balanced": "is_balanced"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py",
+      "line": 399,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "is_causal"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py",
+      "line": 802,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "persistent_output_buffers[iter_idx][0]",
+        "persistent_output_buffer_v": "persistent_output_buffers[iter_idx][1]",
+        "joint_strategy": "'rear'",
+        "logical_n": "base_seq_len",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles[iter_idx]",
+        "num_links": "num_links",
+        "cluster_axis": "rp_axis",
+        "mesh_device": "submesh",
+        "topology": "all_gather_topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "ccl_core_grid_offset",
+        "use_column_major_ccl": "True",
+        "is_causal": "is_causal",
+        "is_balanced": "is_balanced"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/tt/mla/heavily_compressed_attention.py",
+      "line": 436,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask",
+        "is_causal": "False",
+        "scale": "self.scaling",
+        "attention_sink": "self.sinks_sdpa",
+        "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False)"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/tt/mla/mla.py",
+      "line": 1005,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "self._chunked_kv_buf",
+        "head_dim_v": "self.kv_lora_rank",
+        "logical_n": "ring_logical_n",
+        "program_config": "self._get_sdpa_program_config(seq_len_local)",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.default_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.tt_ccl.ring_attention_ccl_semaphore_handles",
+        "num_links": "self.ccl_num_links",
+        "cluster_axis": "self.sp_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.sp_ccl_topology",
+        "ccl_core_grid_offset": "self.tt_ccl.ring_attention_ccl_core_grid_offset",
+        "use_column_major_ccl": "True",
+        "is_balanced": "self.is_balanced",
+        "**": "meta_slot_kwargs"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/tt/mla/mla.py",
+      "line": 1503,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.persistent_k_output_buffer",
+        "persistent_output_buffer_v": "self.persistent_v_output_buffer",
+        "joint_strategy": "'rear'",
+        "logical_n": "seq_len_local * self.sp_factor",
+        "program_config": "self._get_sdpa_program_config(seq_len_local)",
+        "compute_kernel_config": "self.default_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.tt_ccl.ring_attention_ccl_semaphore_handles",
+        "num_links": "self.ccl_num_links",
+        "cluster_axis": "self.sp_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.sp_ccl_topology",
+        "ccl_core_grid_offset": "self.tt_ccl.ring_attention_ccl_core_grid_offset",
+        "use_column_major_ccl": "True",
+        "is_causal": "True",
+        "scale": "self.scale",
+        "is_balanced": "self.is_balanced"
+      }
+    },
+    {
+      "file": "models/demos/deepseek_v3_d_p/tt/mla/mla.py",
+      "line": 1786,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "v_dim": "self.kv_lora_rank",
+        "kv_format": "kvpe.format.sparse_sdpa_format",
+        "scale": "self.scale",
+        "k_chunk_size": "k_chunk",
+        "block_cyclic_sp_axis": "self.sp_axis if block_cyclic_chunk_local is not None else None",
+        "block_cyclic_chunk_local": "block_cyclic_chunk_local",
+        "block_cyclic_cache_tp_sharded": "self.tp_shard_kv and block_cyclic_chunk_local is not None",
+        "cache_batch_idx": "cache_batch_idx"
+      }
+    },
+    {
+      "file": "models/demos/gemma4/tt/attention/operations.py",
+      "line": 385,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_t",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "paged_cache_geometry": "paged_cache_geometry"
+      }
+    },
+    {
+      "file": "models/demos/gemma4/tt/attention/operations.py",
+      "line": 399,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx": "base_offset + start",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "paged_cache_geometry": "paged_cache_geometry"
+      }
+    },
+    {
+      "file": "models/demos/gemma4/tt/attention/operations.py",
+      "line": 483,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "scale",
+        "sliding_window_size": "sliding_window",
+        "program_config": "prefill_sdpa_program_config(head_dim, slice_len, sliding_window=sliding_window)",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/demos/gemma4/tt/attention/prefill.py",
+      "line": 670,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "1.0",
+        "sliding_window_size": "sliding_window",
+        "program_config": "prefill_sdpa_program_config(config.head_dim, hist + seq_len, sliding_window=sliding_window)",
+        "compute_kernel_config": "sdpa_ckc"
+      }
+    },
+    {
+      "file": "models/demos/gemma4/tt/attention/prefill.py",
+      "line": 706,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "1.0",
+        "sliding_window_size": "sliding_window",
+        "program_config": "prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window)",
+        "compute_kernel_config": "sdpa_ckc"
+      }
+    },
+    {
+      "file": "models/demos/gemma4/tt/attention/prefill.py",
+      "line": 796,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "1.0",
+        "sliding_window_size": "sliding_window",
+        "program_config": "prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window)",
+        "compute_kernel_config": "sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/demos/gemma4/tt/attention/prefill.py",
+      "line": 1114,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "1.0",
+        "sliding_window_size": "sliding_window",
+        "program_config": "prefill_sdpa_program_config(config.head_dim, int(tt_q.shape[-2]), sliding_window=sliding_window)",
+        "compute_kernel_config": "sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/demos/gpt_oss/tt/attention/prefill.py",
+      "line": 147,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "config.sliding_window",
+        "program_config": "program_config.get_prefill_sdpa_config(mesh_device, seq_len)",
+        "compute_kernel_config": "program_config.get_compute_kernel_config()",
+        "attention_sink": "weights.sinks"
+      }
+    },
+    {
+      "file": "models/demos/gpt_oss_d_p/tt/attention/dense_sp.py",
+      "line": 106,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "ccl_manager.get_ring_gather_buffer(f'dense_k_{_bufseq}', n_kv, _bufseq, head_dim, ttnn.bfloat8_b)",
+        "persistent_output_buffer_v": "ccl_manager.get_ring_gather_buffer(f'dense_v_{_bufseq}', n_kv, _bufseq, head_dim, ttnn.bfloat8_b)",
+        "joint_strategy": "'rear'",
+        "logical_n": "logical_n",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_manager.ring_attention_ccl_semaphore_handles",
+        "num_links": "ccl_manager.num_links",
+        "cluster_axis": "cluster_axis",
+        "mesh_device": "mesh_device",
+        "topology": "ccl_manager.topology",
+        "ccl_core_grid_offset": "ccl_manager.ring_attention_ccl_core_grid_offset",
+        "use_column_major_ccl": "True",
+        "is_causal": "True",
+        "scale": "scale",
+        "is_balanced": "False",
+        "kv_cache_batch_idx": "slot_idx * num_layers + layer_idx",
+        "kv_actual_isl": "kv_actual",
+        "attention_sink": "attention_sink",
+        "sliding_window_size": "sliding_window_size"
+      }
+    },
+    {
+      "file": "models/demos/gpt_oss_d_p/tt/attention/prefill.py",
+      "line": 36,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "config.scaling",
+        "sliding_window_size": "config.sliding_window",
+        "attention_sink": "weights.sinks",
+        "program_config": "program_config.get_prefill_sdpa_config(mesh_device, seq_len)",
+        "compute_kernel_config": "program_config.get_compute_kernel_config()"
+      }
+    },
+    {
+      "file": "models/demos/informer/tt/attention.py",
+      "line": 445,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask_top_sdpa",
+        "is_causal": "False",
+        "scale": "scale",
+        "memory_config": "self.memory_config"
+      }
+    },
+    {
+      "file": "models/demos/informer/tt/attention.py",
+      "line": 622,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask",
+        "is_causal": "False",
+        "scale": "scale",
+        "memory_config": "self.memory_config"
+      }
+    },
+    {
+      "file": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+      "line": 1225,
+      "callee": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "ring_size": "4",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.model_config['SDPA_PROGCFG'](seq_len, chunk_start_idx=0)",
+        "page_table": "None",
+        "chunk_start_idx": "None"
+      }
+    },
+    {
+      "file": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+      "line": 1245,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q_heads_1QSD_8b",
+        "input_tensor_k": "keys_BKSD",
+        "input_tensor_v": "values_BKSD",
+        "page_table_tensor": "page_table",
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.model_config['SDPA_PROGCFG_FLEXIBLE_CHUNK'](seq_len, page_size)"
+      }
+    },
+    {
+      "file": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+      "line": 1275,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.model_config['SDPA_PROGCFG'](seq_len // batch_size if seq_len // batch_size == 128 else seq_len)"
+      }
+    },
+    {
+      "file": "models/demos/minimax_m3/tests/unit/test_msa_prefill_vs_ref.py",
+      "line": 76,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "HEAD_DIM ** (-0.5)",
+        "block_size": "BLOCK"
+      }
+    },
+    {
+      "file": "models/demos/minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py",
+      "line": 105,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "pbuf(NKV)",
+        "persistent_output_buffer_v": "pbuf(NKV)",
+        "joint_strategy": "'rear'",
+        "logical_n": "seq_len",
+        "program_config": "prog",
+        "compute_kernel_config": "kernel_cfg",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl.ring_attention_ccl_semaphore_handles",
+        "num_links": "ccl.num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "ttnn.Topology.Linear",
+        "ccl_core_grid_offset": "ccl.ring_attention_ccl_core_grid_offset",
+        "use_column_major_ccl": "True",
+        "is_causal": "True",
+        "scale": "HEAD_DIM ** (-0.5)",
+        "is_balanced": "False"
+      }
+    },
+    {
+      "file": "models/demos/minimax_m3/tt/attention/dense_sp.py",
+      "line": 78,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "ccl_manager.get_ring_gather_buffer('dense_k', n_kv, cache_global, head_dim, ttnn.bfloat8_b)",
+        "persistent_output_buffer_v": "ccl_manager.get_ring_gather_buffer('dense_v', n_kv, cache_global, head_dim, ttnn.bfloat8_b)",
+        "joint_strategy": "'rear'",
+        "logical_n": "logical_n",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_manager.ring_attention_ccl_semaphore_handles",
+        "num_links": "ccl_manager.num_links",
+        "cluster_axis": "cluster_axis",
+        "mesh_device": "mesh_device",
+        "topology": "ttnn.Topology.Linear",
+        "ccl_core_grid_offset": "ccl_manager.ring_attention_ccl_core_grid_offset",
+        "use_column_major_ccl": "True",
+        "is_causal": "True",
+        "scale": "scale",
+        "is_balanced": "False",
+        "kv_cache_batch_idx": "slot_idx * num_layers + layer_idx",
+        "kv_actual_isl": "kv_actual"
+      }
+    },
+    {
+      "file": "models/demos/minimax_m3/tt/attention/dense_sp.py",
+      "line": 145,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "ccl_manager.get_ring_gather_buffer('nocache_k', n_kv, logical_n, head_dim, ttnn.bfloat16)",
+        "persistent_output_buffer_v": "ccl_manager.get_ring_gather_buffer('nocache_v', n_kv, logical_n, head_dim, ttnn.bfloat16)",
+        "joint_strategy": "'rear'",
+        "logical_n": "logical_n",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_manager.ring_attention_ccl_semaphore_handles",
+        "num_links": "ccl_manager.num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "ttnn.Topology.Linear",
+        "ccl_core_grid_offset": "ccl_manager.ring_attention_ccl_core_grid_offset",
+        "use_column_major_ccl": "True",
+        "is_causal": "True",
+        "scale": "scale",
+        "is_balanced": "False"
+      }
+    },
+    {
+      "file": "models/demos/minimax_m3/tt/attention/msa.py",
+      "line": 153,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "block_size": "block_size",
+        "chunk_start_idx": "chunk_start_idx",
+        "cluster_axis": "cluster_axis",
+        "block_cyclic_sp_axis": "block_cyclic_sp_axis",
+        "block_cyclic_chunk_local": "block_cyclic_chunk_local"
+      }
+    },
+    {
+      "file": "models/demos/minimax_m3/tt/attention/prefill.py",
+      "line": 327,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config.get_prefill_sdpa_config(mesh_device, seq_len)",
+        "compute_kernel_config": "program_config.get_compute_kernel_config()"
+      }
+    },
+    {
+      "file": "models/demos/multimodal/gemma3/tt/gemma_image_attention.py",
+      "line": 263,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "attn_mask": "mask",
+        "program_config": "sdpa_cfg",
+        "compute_kernel_config": "self.compute_kernel_config_sdpa"
+      }
+    },
+    {
+      "file": "models/demos/multimodal/siglip/reference/model.py",
+      "line": 581,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_mask",
+        "dropout_p": "self.dropout if self.training else 0.0",
+        "is_causal": "is_causal"
+      }
+    },
+    {
+      "file": "models/demos/qwen25_vl/reference/functional.py",
+      "line": 97,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "dropout_p": "0.0"
+      }
+    },
+    {
+      "file": "models/demos/qwen25_vl/reference/functional_ttnn.py",
+      "line": 270,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "dropout_p": "0.0"
+      }
+    },
+    {
+      "file": "models/demos/qwen25_vl/reference/model.py",
+      "line": 334,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "dropout_p": "0.0"
+      }
+    },
+    {
+      "file": "models/demos/qwen25_vl/reference/model.py",
+      "line": 1020,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "causal_mask",
+        "dropout_p": "self.attention_dropout if self.training else 0.0",
+        "is_causal": "is_causal"
+      }
+    },
+    {
+      "file": "models/demos/qwen25_vl/tests/test_windowed_sdpa.py",
+      "line": 198,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_mask_tt",
+        "is_causal": "False",
+        "scale": "0.1",
+        "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True)",
+        "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=qk_chunk_size, k_chunk_size=qk_chunk_size)"
+      }
+    },
+    {
+      "file": "models/demos/qwen25_vl/tests/test_windowed_sdpa.py",
+      "line": 229,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "0.1",
+        "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True)",
+        "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=qk_chunk_size, k_chunk_size=qk_chunk_size)",
+        "cu_window_seqlens": "cu_window_seqlens_tt"
+      }
+    },
+    {
+      "file": "models/demos/qwen25_vl/tt/vision_attention.py",
+      "line": 472,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None)",
+        "cu_window_seqlens": "cu_seqlens"
+      }
+    },
+    {
+      "file": "models/demos/qwen3_vl/tt/attention.py",
+      "line": 766,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.model_config['SDPA_PROGCFG'](seq_len)"
+      }
+    },
+    {
+      "file": "models/demos/qwen3_vl/tt/attention.py",
+      "line": 777,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "self.causal_mask",
+        "attn_mask": "mask",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.model_config['SDPA_PROGCFG'](seq_len)"
+      }
+    },
+    {
+      "file": "models/demos/qwen3_vl/tt/vision_attention.py",
+      "line": 462,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None)"
+      }
+    },
+    {
+      "file": "models/demos/qwen3_vl/tt/vision_attention.py",
+      "line": 475,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None)"
+      }
+    },
+    {
+      "file": "models/demos/sentence_bert/reference/sentence_bert.py",
+      "line": 255,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_mask",
+        "dropout_p": "0.0",
+        "is_causal": "is_causal"
+      }
+    },
+    {
+      "file": "models/demos/stable_diffusion_xl_base/tt/tt_attention.py",
+      "line": 190,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "attention_mask",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "memory_config": "ttnn.L1_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "models/demos/stable_diffusion_xl_base/vae/tt/tt_attention.py",
+      "line": 143,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "None",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/demos/t3000/falcon40b/reference/hf_modeling_falcon.py",
+      "line": 412,
+      "callee": "TT_functional.scaled_dot_product_attention",
+      "resolved": "TT_functional.scaled_dot_product_attention",
+      "family": "indirect_or_other",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/demos/t3000/falcon40b/tt/falcon_attention.py",
+      "line": 350,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "self.scalar",
+        "program_config": "self.model_config['SDPA_PROGCFG']"
+      }
+    },
+    {
+      "file": "models/demos/vision/classification/vit/blackhole/tt/ttnn_optimized_sharded_vit_hiRes_bh.py",
+      "line": 321,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.L1_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "models/demos/vision/detection/rtdetr/tt/encoder.py",
+      "line": 599,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "None",
+        "is_causal": "False",
+        "scale": "self.scale"
+      }
+    },
+    {
+      "file": "models/demos/vision/generative/stable_diffusion/wormhole/tt/vae/ttnn_vae_attention.py",
+      "line": 151,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "None",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.compute_config"
+      }
+    },
+    {
+      "file": "models/demos/wormhole/bge_m3/tt/attention.py",
+      "line": 226,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "sdpa_mask",
+        "scale": "self.config.attention_scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "self.config.score_compute_kernel_cfg",
+        "memory_config": "self.config.score_memcfg"
+      }
+    },
+    {
+      "file": "models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/op.py",
+      "line": 672,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "None",
+        "scale": "config.scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "output_mem_config"
+      }
+    },
+    {
+      "file": "models/demos/wormhole/owl_vit/tt/ttnn_owl_vit.py",
+      "line": 385,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "attn_mask": "None",
+        "is_causal": "False",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "sdpa_compute_config",
+        "memory_config": "l1_config"
+      }
+    },
+    {
+      "file": "models/demos/wormhole/owl_vit/tt/ttnn_owl_vit.py",
+      "line": 652,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "attn_mask": "causal_mask",
+        "is_causal": "False",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "sdpa_compute_config",
+        "memory_config": "l1_config"
+      }
+    },
+    {
+      "file": "models/demos/z_image_turbo/tt/dit/model_ttnn.py",
+      "line": 291,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "None",
+        "is_causal": "False",
+        "scale": "ATTN_SCALE",
+        "sliding_window_size": "None",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "models/demos/z_image_turbo/tt/vae/model_ttnn.py",
+      "line": 439,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "None",
+        "is_causal": "False",
+        "scale": "self.ATTN_SCALE",
+        "sliding_window_size": "None",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "models/experimental/depth_anything_v2/tt/model_def.py",
+      "line": 751,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "1.0 / head_size ** 0.5",
+        "attn_mask": "attention_mask",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "compute_kernel_config": "pconfigs['compute_kernel_config']"
+      }
+    },
+    {
+      "file": "models/experimental/detr3d/ttnn/multihead_attention.py",
+      "line": 70,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "1.0 / math.sqrt(self.head_dim)",
+        "attn_mask": "attn_mask",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tests/test_attention.py",
+      "line": 264,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask",
+        "is_causal": "False",
+        "scale": "1.0"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tests/test_attention.py",
+      "line": 849,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tests/test_attention.py",
+      "line": 894,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "tt_mask",
+        "is_causal": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tests/test_attention.py",
+      "line": 1055,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "1.0"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tests/test_commit.py",
+      "line": 276,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "1.0",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "program_config": "program_config"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tests/test_commit.py",
+      "line": 302,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "1.0"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tt/chunked_prefill.py",
+      "line": 161,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "scale",
+        "sliding_window_size": "sliding_window",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tt/chunked_prefill.py",
+      "line": 422,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx": "ctx.chunk_start_idx",
+        "scale": "1.0",
+        "program_config": "_chunked_sdpa_program_config(head_dim)",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tt/commit_batched.py",
+      "line": 662,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx": "aligned_start",
+        "scale": "1.0",
+        "program_config": "_chunked_sdpa_program_config(head_dim)",
+        "compute_kernel_config": "ttnn.init_device_compute_kernel_config(tt_q.device().arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False)"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tt/commit_batched.py",
+      "line": 784,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "attn_mask",
+        "scale": "1.0",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "program_config": "program_config"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tt/diffusion_attention.py",
+      "line": 222,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "**": "kwargs"
+      }
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tt/prefill_moe.py",
+      "line": 70,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tt/prefill_moe.py",
+      "line": 395,
+      "callee": "transformer.scaled_dot_product_attention",
+      "resolved": "transformer.scaled_dot_product_attention",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/experimental/diffusion_gemma/tt/prefill_moe.py",
+      "line": 398,
+      "callee": "transformer.scaled_dot_product_attention",
+      "resolved": "transformer.scaled_dot_product_attention",
+      "family": "indirect_or_other",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/experimental/gated_attention_gated_deltanet/torch_functional/gated_attention.py",
+      "line": 180,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_mask",
+        "is_causal": "attention_mask is None",
+        "scale": "scaling"
+      }
+    },
+    {
+      "file": "models/experimental/gated_attention_gated_deltanet/tt/ttnn_gated_attention.py",
+      "line": 306,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "scale": "scaling",
+        "program_config": "_get_flexible_sdpa_program_config(device)",
+        "compute_kernel_config": "_get_sdpa_compute_kernel_config()"
+      }
+    },
+    {
+      "file": "models/experimental/gated_attention_gated_deltanet/tt/ttnn_gated_attention.py",
+      "line": 317,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scaling",
+        "program_config": "_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx)",
+        "compute_kernel_config": "_get_sdpa_compute_kernel_config()"
+      }
+    },
+    {
+      "file": "models/experimental/gated_attention_gated_deltanet/tt/ttnn_gated_attention.py",
+      "line": 538,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "_attn_mask",
+        "is_causal": "is_causal",
+        "scale": "scaling",
+        "program_config": "_get_sdpa_program_config(device, S_total, q_seq_len=T)",
+        "compute_kernel_config": "_get_sdpa_compute_kernel_config()"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/modules/attention/attention_1d.py",
+      "line": 553,
+      "callee": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q_heads_sdpa",
+        "input_tensor_k": "keys",
+        "input_tensor_v": "values",
+        "page_table_tensor": "page_table",
+        "chunk_start_idx": "chunk_start_idx",
+        "compute_kernel_config": "cfg.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx)"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/modules/attention/attention_1d.py",
+      "line": 566,
+      "callee": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "cfg.sliding_window",
+        "scale": "cfg.scale",
+        "compute_kernel_config": "cfg.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "cfg.prefill_sdpa_prg_config(per_user_seq_len, None)"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/graph_ops/test_scaled_dot_product_attention.py",
+      "line": 32,
+      "callee": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/ops/test_chunked_scaled_dot_product_attention.py",
+      "line": 48,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/ops/test_chunked_scaled_dot_product_attention.py",
+      "line": 89,
+      "callee": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q",
+        "input_tensor_k": "k",
+        "input_tensor_v": "v",
+        "page_table_tensor": "page_table_tt",
+        "chunk_start_idx": "0",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/ops/test_paged_scaled_dot_product_attention_decode.py",
+      "line": 57,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py",
+      "line": 40,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention.py",
+      "line": 72,
+      "callee": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/ops/test_scaled_dot_product_attention_decode.py",
+      "line": 49,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/prototype_ops/test_chunked_scaled_dot_product_attention.py",
+      "line": 48,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/prototype_ops/test_chunked_scaled_dot_product_attention.py",
+      "line": 89,
+      "callee": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.experimental.quasar.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q",
+        "input_tensor_k": "k",
+        "input_tensor_v": "v",
+        "page_table_tensor": "page_table_tt",
+        "chunk_start_idx": "0",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/prototype_ops/test_paged_scaled_dot_product_attention_decode.py",
+      "line": 57,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention.py",
+      "line": 40,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention.py",
+      "line": 72,
+      "callee": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/experimental/llama32_1b_quasar/tests/prototype_ops/test_scaled_dot_product_attention_decode.py",
+      "line": 49,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/experimental/mistral_24b/tt/vision_attention.py",
+      "line": 203,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "program_config": "sdpa_cfg",
+        "compute_kernel_config": "self.compute_kernel_config_sdpa"
+      }
+    },
+    {
+      "file": "models/experimental/nanogpt/reference/model.py",
+      "line": 85,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "None",
+        "dropout_p": "self.dropout if self.training else 0",
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "models/experimental/ops/quasar/gpt_oss/tt/attention/prefill.py",
+      "line": 147,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "config.sliding_window",
+        "program_config": "program_config.get_prefill_sdpa_config(mesh_device, seq_len)",
+        "compute_kernel_config": "program_config.get_compute_kernel_config()",
+        "attention_sink": "weights.sinks"
+      }
+    },
+    {
+      "file": "models/experimental/ops/quasar/qwen3_vl/tt/attention.py",
+      "line": 766,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.model_config['SDPA_PROGCFG'](seq_len)"
+      }
+    },
+    {
+      "file": "models/experimental/ops/quasar/qwen3_vl/tt/attention.py",
+      "line": 777,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "self.causal_mask",
+        "attn_mask": "mask",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.model_config['SDPA_PROGCFG'](seq_len)"
+      }
+    },
+    {
+      "file": "models/experimental/ops/quasar/qwen3_vl/tt/vision_attention.py",
+      "line": 462,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config_hifi4",
+        "program_config": "self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None)"
+      }
+    },
+    {
+      "file": "models/experimental/ops/quasar/qwen3_vl/tt/vision_attention.py",
+      "line": 475,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None)"
+      }
+    },
+    {
+      "file": "models/experimental/ops/quasar/tests/gpt_oss_ops/test_scaled_dot_product_attention.py",
+      "line": 32,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/experimental/ops/quasar/tests/qwen3_vl_ops/test_scaled_dot_product_attention.py",
+      "line": 32,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "models/experimental/pi0/tt/ttnn_gemma.py",
+      "line": 320,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_mask",
+        "is_causal": "False",
+        "scale": "self.scale"
+      }
+    },
+    {
+      "file": "models/experimental/pi0/tt/ttnn_siglip.py",
+      "line": 412,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "program_config": "sdpa_cfg",
+        "compute_kernel_config": "self.compute_kernel_config_sdpa"
+      }
+    },
+    {
+      "file": "models/experimental/transfuser/tt/self_attn.py",
+      "line": 52,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "None",
+        "program_config": "None",
+        "compute_kernel_config": "self.compute_kernel_config",
+        "memory_config": "self.memory_config"
+      }
+    },
+    {
+      "file": "models/experimental/tt_symbiote/core/dispatchers/default_dispatcher.py",
+      "line": 425,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask",
+        "is_causal": "is_causal",
+        "**": "ttnn_kwargs"
+      }
+    },
+    {
+      "file": "models/experimental/tt_symbiote/modules/attention.py",
+      "line": 84,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "scale": "scaling",
+        "program_config": "self.program_config",
+        "compute_kernel_config": "self.compute_kernel_config",
+        "memory_config": "self.memory_config"
+      }
+    },
+    {
+      "file": "models/experimental/tt_symbiote/modules/attention.py",
+      "line": 161,
+      "callee": "self.sdpa",
+      "resolved": "self.sdpa",
+      "family": "indirect_or_other",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "self.is_causal",
+        "scaling": "self.scaling",
+        "dropout": "0.0 if not self.training else self.dropout_prob"
+      }
+    },
+    {
+      "file": "models/experimental/tt_symbiote/modules/attention.py",
+      "line": 296,
+      "callee": "self.sdpa",
+      "resolved": "self.sdpa",
+      "family": "indirect_or_other",
+      "kind": "call",
+      "kwargs": {
+        "attention_mask": "head_mask",
+        "is_causal": "self.is_causal",
+        "scaling": "self.scaling",
+        "transpose_output": "False"
+      }
+    },
+    {
+      "file": "models/experimental/tt_symbiote/modules/attention.py",
+      "line": 513,
+      "callee": "self.sdpa",
+      "resolved": "self.sdpa",
+      "family": "indirect_or_other",
+      "kind": "call",
+      "kwargs": {
+        "dropout": "0.0",
+        "scaling": "1.0",
+        "is_causal": "self.is_causal and (not is_cross)",
+        "transpose_output": "True"
+      }
+    },
+    {
+      "file": "models/experimental/xtts_v2/tt/ttnn_xtts_gpt_decode.py",
+      "line": 278,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/blocks/attention.py",
+      "line": 275,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)",
+        "joint_strategy": "'rear'",
+        "logical_n": "spatial_sequence_length",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.sequence_parallel.mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.parallel_config.sequence_parallel.mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(0, self.sdpa_worker_grid[1])"
+      }
+    },
+    {
+      "file": "models/tt_dit/blocks/attention.py",
+      "line": 308,
+      "callee": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "joint_strategy": "'rear'",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/blocks/attention_opt.py",
+      "line": 621,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)",
+        "joint_strategy": "'rear'",
+        "logical_n": "sequence_1_length",
+        "logical_l": "sequence_2_length",
+        "program_config": "self.get_ring_sdpa_program_config(sequence_1_length)",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.sequence_parallel.mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.parallel_config.sequence_parallel.mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(0, self.ring_sdpa_worker_grid[1])",
+        "persistent_output_buffer_joint_k": "persistent_joint_k",
+        "persistent_output_buffer_joint_v": "persistent_joint_v"
+      }
+    },
+    {
+      "file": "models/tt_dit/blocks/attention_opt.py",
+      "line": 657,
+      "callee": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "joint_strategy": "'rear'",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/encoders/gemma/embeddings_connector.py",
+      "line": 201,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "sdpa_config",
+        "compute_kernel_config": "self.compute_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/encoders/gemma/model_gemma.py",
+      "line": 273,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "attn_mask is None",
+        "attn_mask": "attn_mask",
+        "scale": "1.0 / math.sqrt(self.head_dim)",
+        "program_config": "self.sdpa_config",
+        "compute_kernel_config": "self.compute_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/encoders/qwen25vl/model_qwen25vl.py",
+      "line": 364,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_bias",
+        "is_causal": "attention_bias is None",
+        "program_config": "self._sdpa_program_config(q.shape[2])",
+        "compute_kernel_config": "self._sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/encoders/qwen3vl/model_qwen3vl.py",
+      "line": 540,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_bias",
+        "is_causal": "attention_bias is None",
+        "program_config": "self._sdpa_program_config(q.shape[2])",
+        "compute_kernel_config": "self._sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/encoders/qwen3vl/vision_qwen3vl.py",
+      "line": 539,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "compute_kernel_config": "self._sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/encoders/qwen3vl/vision_qwen3vl.py",
+      "line": 553,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "compute_kernel_config": "self._sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/encoders/qwen3vl/vision_qwen3vl.py",
+      "line": 581,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "ccl.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, dtype=k.dtype)",
+        "persistent_output_buffer_v": "ccl.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, dtype=v.dtype)",
+        "joint_strategy": "'rear'",
+        "logical_n": "local_seq_len * self._p.sp_factor",
+        "program_config": "self._ring_program_config(local_seq_len)",
+        "compute_kernel_config": "self._sdpa_compute_kernel_config",
+        "dim": "2",
+        "scale": "self.scale",
+        "multi_device_global_semaphore": "ccl.get_ag_ping_pong_semaphore(sp_axis)",
+        "num_links": "ccl.num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "ccl.topology",
+        "subdevice_id": "ccl.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(self._sdpa_worker_grid[0], 0)",
+        "use_column_major_ccl": "True"
+      }
+    },
+    {
+      "file": "models/tt_dit/encoders/transformer.py",
+      "line": 596,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_bias",
+        "is_causal": "attn_bias is None",
+        "program_config": "self._sdpa_program_config(padded_q_seq_len, padded_q_seq_len)",
+        "compute_kernel_config": "self._sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/audio_vae/minimax_h3/encoder_minimax_h3_audio.py",
+      "line": 240,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/attention_mochi.py",
+      "line": 272,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)",
+        "joint_strategy": "'rear'",
+        "logical_n": "N",
+        "program_config": "self.ring_sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.sequence_parallel.mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.parallel_config.sequence_parallel.mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(0, self.sdpa_worker_grid[1])"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/attention_mochi.py",
+      "line": 301,
+      "callee": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "joint_strategy": "'rear'",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/attention_sd35.py",
+      "line": 219,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)",
+        "joint_strategy": "'rear'",
+        "logical_n": "N",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.sequence_parallel.mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.parallel_config.sequence_parallel.mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(0, self.sdpa_worker_grid[1])"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/attention_sd35.py",
+      "line": 248,
+      "callee": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "joint_strategy": "'rear'",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/ltx/attention_ltx.py",
+      "line": 739,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.get_dtype())",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.get_dtype())",
+        "joint_strategy": "'rear'",
+        "logical_n": "N",
+        "program_config": "self._ring_pc_by_n.get(N, self.ring_sdpa_program_config)",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.sequence_parallel.mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.parallel_config.sequence_parallel.mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(self.sdpa_worker_grid[0], 0)",
+        "use_column_major_ccl": "True"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/ltx/attention_ltx.py",
+      "line": 775,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask",
+        "is_causal": "False",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/ltx/attention_ltx.py",
+      "line": 785,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask",
+        "is_causal": "False",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/ltx/attention_ltx.py",
+      "line": 798,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, sp_mesh_axis, dtype=k_BHNE.get_dtype())",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, sp_mesh_axis, dtype=v_BHNE.get_dtype())",
+        "joint_strategy": "'rear'",
+        "logical_n": "kv_logical_n",
+        "is_cross": "True",
+        "program_config": "self.cross_ring_sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(sp_mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "sp_mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(self.sdpa_worker_grid[0], 0)",
+        "use_column_major_ccl": "True"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/ltx/attention_ltx.py",
+      "line": 828,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask",
+        "is_causal": "False",
+        "program_config": "self._sdpa_pc_by_shape.get((q_BHNE.shape[2], k_BHNE.shape[2]), self.sdpa_program_config)",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/minimax_h3/attention_minimax_h3.py",
+      "line": 520,
+      "callee": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype)",
+        "joint_strategy": "'rear'",
+        "logical_n": "N",
+        "program_config": "exp_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_exp_ring_ping_pong_semaphore(self.sp_mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.sp_mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "num_workers_per_link": "5",
+        "num_buffers_per_channel": "32"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/minimax_h3/attention_minimax_h3.py",
+      "line": 548,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype)",
+        "joint_strategy": "'rear'",
+        "logical_n": "N",
+        "program_config": "self._sdpa_program_config(q_BHNE.shape[2], ring=True)",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.sp_mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(self.sdpa_worker_grid[0], 0)",
+        "use_column_major_ccl": "True"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/minimax_h3/attention_minimax_h3.py",
+      "line": 576,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "self._sdpa_program_config(q_BHNE.shape[2], ring=False)",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/transformer_ideogram4.py",
+      "line": 576,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, self.sp_axis)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, self.sp_axis)",
+        "joint_strategy": "'rear'",
+        "logical_n": "spatial_sequence_length",
+        "program_config": "self._get_ring_sdpa_program_config(q.shape[2])",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.sp_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(0, self.sdpa_worker_grid[1])"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/transformer_ideogram4.py",
+      "line": 611,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask",
+        "is_causal": "False",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/wan2_2/attention_wan.py",
+      "line": 430,
+      "callee": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype)",
+        "joint_strategy": "'rear'",
+        "logical_n": "N",
+        "program_config": "self.exp_ring_sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_exp_ring_ping_pong_semaphore(self.parallel_config.sequence_parallel.mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.parallel_config.sequence_parallel.mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "num_workers_per_link": "5",
+        "num_buffers_per_channel": "32"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/wan2_2/attention_wan.py",
+      "line": 460,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype)",
+        "persistent_output_buffer_v": "self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype)",
+        "joint_strategy": "'rear'",
+        "logical_n": "N",
+        "program_config": "self.ring_sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.sequence_parallel.mesh_axis)",
+        "num_links": "self.ccl_manager.num_links",
+        "cluster_axis": "self.parallel_config.sequence_parallel.mesh_axis",
+        "mesh_device": "self.mesh_device",
+        "topology": "self.ccl_manager.topology",
+        "subdevice_id": "self.ccl_manager.ccl_sub_device_id",
+        "ccl_core_grid_offset": "(self.sdpa_worker_grid[0], 0)",
+        "use_column_major_ccl": "True"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/wan2_2/attention_wan.py",
+      "line": 490,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/transformers/wan2_2/attention_wan.py",
+      "line": 500,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "cross_attn_mask",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/vae/minimax_h3/decoder_minimax_h3.py",
+      "line": 184,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attention_mask",
+        "is_causal": "False",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/vae/vae.py",
+      "line": 574,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "self._sdpa_program_config",
+        "compute_kernel_config": "self._sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/vae/vae_sd35.py",
+      "line": 322,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/vae/vae_wan2_1.py",
+      "line": 238,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "self.sdpa_program_config",
+        "compute_kernel_config": "self.sdpa_compute_kernel_config"
+      }
+    },
+    {
+      "file": "models/tt_dit/models/vae/vae_wan2_1_encoder_host.py",
+      "line": 403,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "models/tt_dit/reference/ideogram4/modeling_ideogram4.py",
+      "line": 156,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask"
+      }
+    },
+    {
+      "file": "models/tt_dit/reference/motif/modeling_dit.py",
+      "line": 586,
+      "callee": "F.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "dropout_p": "0.0"
+      }
+    },
+    {
+      "file": "models/tt_dit/tests/models/sd35/test_vae_sd35.py",
+      "line": 253,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "models/tt_dit/tests/unit/test_exp_ring_joint_attention.py",
+      "line": 191,
+      "callee": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "persistent_output_buffers[i][0]",
+        "persistent_output_buffer_v": "persistent_output_buffers[i][1]",
+        "joint_strategy": "'rear'",
+        "logical_n": "base_seq_len",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles[i]",
+        "num_links": "num_links",
+        "cluster_axis": "rp_axis",
+        "mesh_device": "submesh",
+        "topology": "all_gather_topology",
+        "subdevice_id": "worker_sub_device_id",
+        "num_workers_per_link": "num_workers_per_link",
+        "num_buffers_per_channel": "num_buffers_per_channel"
+      }
+    },
+    {
+      "file": "models/tt_dit/tests/unit/test_exp_ring_joint_attention.py",
+      "line": 238,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/tt_dit/tests/unit/test_ring_joint_attention.py",
+      "line": 264,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "**": "sdpa_kwargs"
+      }
+    },
+    {
+      "file": "models/tt_dit/tests/unit/test_ring_joint_attention.py",
+      "line": 278,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/tt_dit/tests/unit/test_ring_joint_attention.py",
+      "line": 475,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "persistent_output_buffers[i][0]",
+        "persistent_output_buffer_v": "persistent_output_buffers[i][1]",
+        "joint_strategy": "'rear'",
+        "logical_n": "base_seq_len",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles[i]",
+        "num_links": "num_links",
+        "cluster_axis": "rp_axis",
+        "mesh_device": "submesh",
+        "topology": "all_gather_topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "ccl_core_grid_offset"
+      }
+    },
+    {
+      "file": "models/tt_dit/tests/unit/test_ring_joint_attention.py",
+      "line": 521,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/tt_dit/tests/unit/test_ring_joint_attention.py",
+      "line": 1369,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "models/tt_dit/tests/unit/test_ring_joint_attention.py",
+      "line": 1473,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "persistent_kv_bufs[0]",
+        "persistent_output_buffer_v": "persistent_kv_bufs[1]",
+        "joint_strategy": "'rear'",
+        "logical_n": "base_seq_len",
+        "logical_l": "logical_l",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "rp_axis",
+        "mesh_device": "submesh",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "ccl_core_grid_offset",
+        "persistent_output_buffer_joint_k": "persistent_joint_kv_bufs[0]",
+        "persistent_output_buffer_joint_v": "persistent_joint_kv_bufs[1]"
+      }
+    },
+    {
+      "file": "models/tt_transformers/tt/attention.py",
+      "line": 1226,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q_heads_1QSD_8b",
+        "input_tensor_k": "keys_BKSD",
+        "input_tensor_v": "values_BKSD",
+        "page_table_tensor": "page_table",
+        "chunk_start_idx": "None",
+        "chunk_start_idx_tensor": "chunk_start_idx",
+        "compute_kernel_config": "self.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None)"
+      }
+    },
+    {
+      "file": "models/tt_transformers/tt/attention.py",
+      "line": 1237,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "q_heads_1QSD_8b",
+        "input_tensor_k": "keys_BKSD",
+        "input_tensor_v": "values_BKSD",
+        "page_table_tensor": "page_table",
+        "chunk_start_idx": "chunk_start_idx",
+        "compute_kernel_config": "self.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None)"
+      }
+    },
+    {
+      "file": "models/tt_transformers/tt/attention.py",
+      "line": 1250,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "self.sliding_window",
+        "scale": "self.scale",
+        "compute_kernel_config": "self.sdpa_prefill_compute_kernel_cfg",
+        "program_config": "self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None)"
+      }
+    },
+    {
+      "file": "models/tt_transformers/tt/multimodal/llama_cross_attention.py",
+      "line": 356,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "xattn_mask",
+        "scale": "self.scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "self.compute_kernel_config_sdpa"
+      }
+    },
+    {
+      "file": "models/tt_transformers/tt/multimodal/llama_image_attention.py",
+      "line": 249,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "attn_mask": "mask",
+        "program_config": "sdpa_cfg",
+        "compute_kernel_config": "self.compute_kernel_config_sdpa"
+      }
+    },
+    {
+      "file": "models/tt_transformers/tt/multimodal/mistral_24b/vision_attention.py",
+      "line": 198,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "self.scale",
+        "program_config": "sdpa_cfg",
+        "compute_kernel_config": "self.compute_kernel_config_sdpa"
+      }
+    },
+    {
+      "file": "tests/didt/test_mla_sdpa.py",
+      "line": 25,
+      "callee": "ttnn.transformer.flash_mla_prefill",
+      "resolved": "ttnn.transformer.flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "self.scale",
+        "program_config": "self.program_config",
+        "compute_kernel_config": "self.compute_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "is_causal": "False",
+        "attn_mask": "None"
+      }
+    },
+    {
+      "file": "tests/didt/test_sdpa_op.py",
+      "line": 29,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "self.program_config",
+        "compute_kernel_config": "self.compute_config"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py",
+      "line": 426,
+      "callee": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "persistent_buffer_k[i]",
+        "persistent_output_buffer_v": "persistent_buffer_v[i]",
+        "joint_strategy": "'rear'",
+        "logical_n": "total_seq",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphores_list[i]",
+        "num_links": "num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "num_workers_per_link": "num_workers_per_link",
+        "num_buffers_per_channel": "num_buffers_per_channel"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py",
+      "line": 486,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py",
+      "line": 569,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 479,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "is_causal"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 499,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 503,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 839,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "p_buf_k",
+        "persistent_output_buffer_v": "p_buf_v",
+        "joint_strategy": "'rear'",
+        "logical_n": "logical_n",
+        "is_causal": "is_causal",
+        "is_balanced": "is_balanced",
+        "is_cross": "is_cross",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "scale": "scale",
+        "kv_cache_batch_idx": "kv_cache_batch_idx",
+        "kv_actual_isl": "kv_actual_isl",
+        "attention_sink": "attention_sink",
+        "sliding_window_size": "sliding_window_size",
+        "slot_id": "slot_id",
+        "kv_actual_isl_tensor": "kv_actual_isl_tensor",
+        "kv_cache_num_layers": "kv_cache_num_layers",
+        "kv_cache_layer_idx": "kv_cache_layer_idx"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 1571,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "sq",
+        "is_balanced": "is_balanced",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "kv_cache_batch_idx"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 2098,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_k",
+        "head_dim_v": "d_v",
+        "logical_n": "e",
+        "is_balanced": "is_balanced",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_actual_isl": "s if reuse_kv_buffer else None"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 3167,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "logical_n",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "None if full_mesh else sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "kv_cache_batch_idx",
+        "kv_actual_isl": "kv_actual_isl"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 3433,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "e",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "None if full_mesh else sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "kv_cache_batch_idx"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 3743,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "gathered_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "global_seq",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "None",
+        "mesh_device": "mesh_device",
+        "topology": "Topology.Ring",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "is_balanced": "is_balanced"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 3909,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_tensor",
+        "head_dim_v": "32",
+        "logical_n": "global_seq",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "None",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 4090,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "make_persistent_output_buffer_kv()",
+        "head_dim_v": "d_v",
+        "logical_n": "sq",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "None if full_mesh else sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "runtime.topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "kv_cache_batch_idx if pass_kv_idx else None",
+        "slot_id": "tt_slot_id if use_metadata else None",
+        "kv_actual_isl_tensor": "tt_kv_actual_isl if use_metadata else None"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 4227,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "make_persistent_output_buffer_kv()",
+        "head_dim_v": "d_v",
+        "logical_n": "logical_n",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "None if full_mesh else sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "runtime.topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "None if use_metadata else 0",
+        "kv_actual_isl": "None if use_metadata else kv_actual_isl",
+        "slot_id": "tt_slot_id if use_metadata else None",
+        "kv_actual_isl_tensor": "tt_kv_actual_isl if use_metadata else None"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 4444,
+      "callee": "ttnn.transformer.ring_mla",
+      "resolved": "ttnn.transformer.ring_mla",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "logical_n",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "runtime.topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "None if use_metadata else slot_id",
+        "kv_actual_isl": "None if use_metadata else kv_actual_isl",
+        "slot_id": "tt_slot_id if use_metadata else None",
+        "kv_actual_isl_tensor": "tt_kv_actual_isl if use_metadata else None"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 5869,
+      "callee": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "persistent_output_buffer_k": "p_buf_k",
+        "persistent_output_buffer_v": "p_buf_v",
+        "joint_strategy": "'rear'",
+        "logical_n": "sq",
+        "is_causal": "is_causal",
+        "is_balanced": "False",
+        "attention_sink": "tt_attention_sink",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "runtime.sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "runtime.topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py",
+      "line": 69,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py",
+      "line": 90,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py",
+      "line": 151,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_sparse_sdpa_multidevice.py",
+      "line": 80,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "ttnn.transformer.SparseKVFormat.BF16",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc",
+        "block_cyclic_sp_axis": "0",
+        "block_cyclic_chunk_local": "chunk_local"
+      }
+    },
+    {
+      "file": "tests/sweep_framework/sweeps/model_traced/chunked_scaled_dot_product_attention_model_traced.py",
+      "line": 340,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask.to(torch.float32)",
+        "dropout_p": "0.0",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/sweep_framework/sweeps/model_traced/chunked_scaled_dot_product_attention_model_traced.py",
+      "line": 400,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "**": "op_kwargs"
+      }
+    },
+    {
+      "file": "tests/sweep_framework/sweeps/model_traced/paged_scaled_dot_product_attention_decode_model_traced.py",
+      "line": 493,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask",
+        "scale": "_scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/sweep_framework/sweeps/model_traced/scaled_dot_product_attention_decode_model_traced.py",
+      "line": 162,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_mask_slice",
+        "scale": "compute_scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/sweep_framework/sweeps/model_traced/scaled_dot_product_attention_model_traced.py",
+      "line": 468,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "torch_attn_mask",
+        "dropout_p": "0.0",
+        "is_causal": "_golden_causal",
+        "scale": "_scale"
+      }
+    },
+    {
+      "file": "tests/sweep_framework/sweeps/model_traced/scaled_dot_product_attention_model_traced.py",
+      "line": 578,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "bool(is_causal)",
+        "**": "op_kwargs"
+      }
+    },
+    {
+      "file": "tests/ttnn/distributed/test_multidevice_TG.py",
+      "line": 987,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py",
+      "line": 105,
+      "callee": "ttnn.transformer.flash_mla_prefill",
+      "resolved": "ttnn.transformer.flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "head_dim_v": "kv_lora_rank",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "attn_mask": "None",
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py",
+      "line": 161,
+      "callee": "ttnn.transformer.chunked_flash_mla_prefill",
+      "resolved": "ttnn.transformer.chunked_flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx": "chunk_start",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 82,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 151,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 162,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 210,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 222,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 361,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 516,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 522,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "paged_cache_geometry": "ttnn.PagedCacheGeometryOverride(block_size=block_size, num_kv_heads=nkv_view)"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 578,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "paged_cache_geometry": "ttnn.PagedCacheGeometryOverride(block_size=32, num_kv_heads=1)"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py",
+      "line": 82,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py",
+      "line": 278,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py",
+      "line": 808,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_cache.py",
+      "line": 901,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py",
+      "line": 83,
+      "callee": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "joint_strategy": "'rear'",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py",
+      "line": 105,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 132,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 141,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 212,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "tt_mask",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 230,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "mask"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 624,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 693,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 704,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 752,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 764,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 971,
+      "callee": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "joint_strategy": "'rear'",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 993,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1346,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "causal",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1391,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "sliding_window_size": "sliding_window",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1411,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "sliding_window_mask",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1493,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask_a",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1494,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask_b",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1501,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "window_a",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1510,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "window_b",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1776,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "attention_sink": "tt_S"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1867,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "sliding_window",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "attention_sink": "tt_S"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 2007,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "sliding_window",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "attention_sink": "tt_S"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 2085,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 2096,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 2160,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 2170,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "is_causal"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py",
+      "line": 103,
+      "callee": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "ring_size": "ring_size",
+        "ring_id": "ring_id",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py",
+      "line": 125,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py",
+      "line": 238,
+      "callee": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "ring_size": "ring_size",
+        "ring_id": "ring_id",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "page_table": "page_table_tt",
+        "chunk_start_idx": "prefix_len"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py",
+      "line": 262,
+      "callee": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "input_tensor_q": "tt_Q",
+        "input_tensor_k": "tt_paged_K",
+        "input_tensor_v": "tt_paged_V",
+        "page_table_tensor": "page_table_tt",
+        "chunk_start_idx": "prefix_len",
+        "compute_kernel_config": "compute_kernel_config",
+        "program_config": "program_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 198,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "kv_format",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 244,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "ttnn.transformer.SparseKVFormat.SCALED_FP8",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 330,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "ttnn.transformer.SparseKVFormat.BF16",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cb"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 258,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 297,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 369,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "_D ** (-0.5)",
+        "block_size": "BLK_KV",
+        "**": "kw"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 566,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "d ** (-0.5)",
+        "block_size": "BLK_KV"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 635,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "block_size": "BLK_KV",
+        "chunk_start_idx": "0",
+        "cluster_axis": "0"
+      }
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_block_cyclic_multidevice.py",
+      "line": 90,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "**": "kw"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+      "line": 41,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+      "line": 88,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+      "line": 97,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+      "line": 101,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+      "line": 649,
+      "callee": "ttnn.transformer.chunked_flash_mla_prefill",
+      "resolved": "ttnn.transformer.chunked_flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "chunk_start_idx": "0",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+      "line": 661,
+      "callee": "ttnn.transformer.flash_mla_prefill",
+      "resolved": "ttnn.transformer.flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "head_dim_v": "kv_lora_rank",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "attn_mask": "None",
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
+      "line": 315,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "args.causal",
+        "program_config": "program",
+        "compute_kernel_config": "config",
+        "scale": "args.attention_scale_factor / (math.sqrt(args.dim) * args.q_prescale)"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
+      "line": 332,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "args.causal",
+        "program_config": "program",
+        "compute_kernel_config": "config",
+        "scale": "args.attention_scale_factor / (math.sqrt(args.dim) * args.q_prescale)"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py",
+      "line": 328,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py",
+      "line": 532,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py",
+      "line": 753,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py",
+      "line": 986,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py",
+      "line": 1055,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sparse_sdpa_msa_test_utils.py",
+      "line": 186,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "ttnn.transformer.SparseKVFormat.BF16",
+        "scale": "scale",
+        "k_chunk_size": "k_chunk_size"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sparse_sdpa_msa_test_utils.py",
+      "line": 231,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "block_size": "block_size",
+        "chunk_start_idx": "chunk_start_idx",
+        "cluster_axis": "cluster_axis",
+        "block_cyclic_sp_axis": "block_cyclic_sp_axis",
+        "block_cyclic_chunk_local": "block_cyclic_chunk_local"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sparse_sdpa_test_utils.py",
+      "line": 83,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "kv_format",
+        "scale": "scale",
+        "k_chunk_size": "k_chunk_size",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py",
+      "line": 123,
+      "callee": "ttnn.transformer.flash_mla_prefill",
+      "resolved": "ttnn.transformer.flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "head_dim_v": "kv_lora_rank",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "attn_mask": "None",
+        "is_causal": "is_causal"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py",
+      "line": 141,
+      "callee": "ttnn.transformer.flash_mla_prefill",
+      "resolved": "ttnn.transformer.flash_mla_prefill",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "scale",
+        "program_config": "sdpa_program_config_second",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "is_causal": "is_causal",
+        "attn_mask": "None"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 299,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 308,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "True"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 378,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "tt_mask",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 396,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "mask"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 436,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "sliding_window_size": "sliding_window",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 456,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "sliding_window_mask",
+        "is_causal": "False"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 507,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "attention_sink": "tt_S"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 640,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "tt_bias",
+        "is_causal": "False",
+        "scale": "scale",
+        "sliding_window_size": "None",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 652,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "attn_bias",
+        "dropout_p": "0.0",
+        "is_causal": "False",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 43,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 108,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc",
+        "**": "block_cyclic_args"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 142,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 165,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 185,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV",
+        "k_chunk_size": "TOPK"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 200,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 222,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "kv_format",
+        "k_chunk_size": "TOPK"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 242,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 309,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 337,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc",
+        "block_cyclic_sp_axis": "0",
+        "block_cyclic_chunk_local": "S"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 362,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc",
+        "block_cyclic_sp_axis": "0",
+        "block_cyclic_chunk_local": "S - 16"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 398,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cb"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 424,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cb"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 463,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cb"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 482,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cache_batch_idx"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 519,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 536,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "0"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 542,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "B"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 556,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "k_chunk_size": "kc"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 562,
+      "callee": "ttnn.transformer.sparse_sdpa",
+      "resolved": "ttnn.transformer.sparse_sdpa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "k_chunk_size": "kc"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 148,
+      "callee": "ttnn.transformer.sparse_sdpa_msa",
+      "resolved": "ttnn.transformer.sparse_sdpa_msa",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "scale": "_D ** (-0.5)",
+        "block_size": "BLK_KV"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 110,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "cu_window_seqlens": "cu_tt"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 123,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 194,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "cu_window_seqlens": "cu_tt",
+        "windowed_q_token_offset": "0 if offset_as_tensor else offset",
+        "windowed_q_token_offset_tensor": "ttnn.from_torch(torch.tensor([offset], dtype=torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32) if offset_as_tensor else None"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 225,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 306,
+      "callee": "ttnn.transformer.scaled_dot_product_attention",
+      "resolved": "ttnn.transformer.scaled_dot_product_attention",
+      "family": "ttnn",
+      "kind": "call",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "cu_window_seqlens": "cu_tt",
+        "windowed_q_token_offset_tensor": "offsets_tt"
+      }
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 320,
+      "callee": "torch.nn.functional.scaled_dot_product_attention",
+      "resolved": "torch.nn.functional.scaled_dot_product_attention",
+      "family": "torch_reference",
+      "kind": "call",
+      "kwargs": {
+        "attn_mask": "mask",
+        "scale": "scale"
+      }
+    },
+    {
+      "file": "tt-train/sources/examples/grpo/utils/llama_overrides.py",
+      "line": 27,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/examples/grpo/utils/llama_overrides.py",
+      "line": 71,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/examples/grpo_remote_rollout/utils/llama_overrides.py",
+      "line": 32,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/examples/grpo_remote_rollout/utils/llama_overrides.py",
+      "line": 76,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/examples/nano_gpt/nanogpt_primitives_example.py",
+      "line": 240,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/examples/qwen3/model_qwen3_distributed.py",
+      "line": 288,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention",
+      "family": "ttml",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/examples/qwen3/model_qwen3_distributed.py",
+      "line": 290,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "family": "ttml",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/ttml/ttml/models/deepseek/mla.py",
+      "line": 151,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/ttml/ttml/models/llama/gqattn.py",
+      "line": 120,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/ttml/ttml/models/llama/gqattn.py",
+      "line": 170,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/ttml/ttml/models/nanogpt/multi_head_attention.py",
+      "line": 63,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/ttml/ttml/models/qwen3/attention.py",
+      "line": 124,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention",
+      "family": "ttml",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/sources/ttml/ttml/models/qwen3/attention.py",
+      "line": 126,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "family": "ttml",
+      "kind": "reference",
+      "kwargs": {}
+    },
+    {
+      "file": "tt-train/tests/python/test_deepseek_mla_sdpa.py",
+      "line": 87,
+      "callee": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "resolved": "ttml.ops.attention.scaled_dot_product_attention_composite",
+      "family": "ttml",
+      "kind": "call",
+      "kwargs": {}
+    }
+  ],
+  "parse_failures": []
+}

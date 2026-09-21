@@ -1,0 +1,84 @@
+{
+  "cold": {
+    "pipeline_setup_seconds": 248.7725074698683,
+    "weight_loads": [
+      {
+        "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+        "subfolder": "vae",
+        "already_loaded": false,
+        "torch_state_dict_requested": true,
+        "seconds_including_cache_write": 0.3974926460068673
+      },
+      {
+        "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+        "subfolder": "transformer",
+        "already_loaded": false,
+        "torch_state_dict_requested": true,
+        "seconds_including_cache_write": 139.5733076268807
+      },
+      {
+        "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+        "subfolder": "text_encoder",
+        "already_loaded": false,
+        "torch_state_dict_requested": true,
+        "seconds_including_cache_write": 104.83464432996698
+      }
+    ],
+    "weight_load_seconds_including_cache_write": 244.80544460285455,
+    "validation_weight": {
+      "name": "time_guidance_embed.timestep_embedder.linear_2.weight",
+      "device_shard_sha256": [
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355"
+      ]
+    }
+  },
+  "warm": {
+    "pipeline_setup_seconds": 9.06811283994466,
+    "weight_loads": [
+      {
+        "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+        "subfolder": "vae",
+        "already_loaded": false,
+        "torch_state_dict_requested": false,
+        "seconds_including_cache_write": 0.01859376416541636
+      },
+      {
+        "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+        "subfolder": "transformer",
+        "already_loaded": false,
+        "torch_state_dict_requested": false,
+        "seconds_including_cache_write": 3.045211104908958
+      },
+      {
+        "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+        "subfolder": "text_encoder",
+        "already_loaded": false,
+        "torch_state_dict_requested": false,
+        "seconds_including_cache_write": 2.151380605995655
+      }
+    ],
+    "weight_load_seconds_including_cache_write": 5.2151854750700295,
+    "validation_weight": {
+      "name": "time_guidance_embed.timestep_embedder.linear_2.weight",
+      "device_shard_sha256": [
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+        "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355"
+      ]
+    }
+  },
+  "status": "completed",
+  "precision_scope": "All-shard exact hash of the original stall-site weight; synthetic probe covers sharded weights"
+}

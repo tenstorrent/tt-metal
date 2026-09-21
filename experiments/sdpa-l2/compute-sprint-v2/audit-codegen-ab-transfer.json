@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/codegen/A-O2-paired-01.json",
+      "sha256": "e48b99caace1a1482fccf174dad67b0cf25292063a8a03c3370e7835b5e92106",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/codegen/B-O2-paired-01.json",
+      "sha256": "f6f2ee0cf8399e69c862c14ed2db6c26ae7d42b7de3fe9c3f98516b6d7be575c",
+      "records_checked": 3,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

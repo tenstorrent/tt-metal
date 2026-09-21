@@ -1,0 +1,54 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-transfer-01.json",
+      "sha256": "db42d2f90c1c6ce621c7dac8d408ae5227104042e5913a1dbf17203ebb8ccaf9",
+      "records_checked": 27,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-odd-heldout-01.json",
+      "sha256": "5b4d6c9983d3798f88cae82f2d9e0c9b94ff7cc2d5d24082fbda0d7f047ba3be",
+      "records_checked": 12,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-short-heldout-01.json",
+      "sha256": "9ee9e87998f0aa75f36d859b37b244d685d66f6f43b4d80528db59fbaeb1f024",
+      "records_checked": 9,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-paired-final.json",
+      "sha256": "b5034c1f9567f9644ad5fb0bcce17717662c72c25c4874f249c143f972f8ef0e",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-distinct32k-normal-final.json",
+      "sha256": "c93cf6f2443582433c9d1a8c0dce6527be12b273afb9589b79425802a26604ac",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-distinct32k-grow-01.json",
+      "sha256": "c7466f34b739afd3c2ca2434a3cce8f4c6e23c235fdc58ab6eb0e4e5babbbc25",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-distinct8k-transition-01.json",
+      "sha256": "aa00a9e9c3c846b9883de857089d5c64e19620be903f9a6542254a008c3f8ed3",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-early-distinct256k-normal-01.json",
+      "sha256": "285dde2975122e7f755169f4d11463b5dbecb1399e40c308602b4a7da43ff357",
+      "records_checked": 3,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

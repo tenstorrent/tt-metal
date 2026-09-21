@@ -1,0 +1,1907 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "evaluation_mode": "exploratory_repeatability_not_required",
+  "variant": "C",
+  "conditioning": "stock",
+  "model_repair": "main_fused",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "converted_weight_cache": "/localdev/cglagovich/flux2-frontier-20260915/dit-cache-v2",
+  "pinned_memory_cache_limit_bytes": "0",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "175f86bdc088bd18762395cd248da6421bf85c8a929205bbdce3ae1eaa578129",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "ab1f0fe199905550f86c41269dcddf991b83fce14cb9cc710a277cffff76e3b9",
+    "experiments/sdpa-l2/flux2-frontier-v1/conditioning.py": "751456805a36bf1e8d166a44002b9eaba47e3d595f53d537ba8de8c914f703b7",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_fixes.py": "e79f6e1e5228a3df3b2035d0422a052cb13dd36ce552509f9732849f84605d64"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "/localdev/cglagovich/flux2-frontier-20260915/tt-metal/experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": true,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset",
+    "A lifelike portrait of a woman in her late 30s, golden-hour lighting, 85mm lens, shallow depth of field, sharp focus on the eyes, detailed skin texture.",
+    "An alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle view, cinematic lighting, vivid colors."
+  ],
+  "seeds": [
+    0,
+    42
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "local Q, prepared-format KV all-gather, rectangular attention",
+  "attention_recipe": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_QK4": "1"
+  },
+  "attention_qk_chunks": [
+    256,
+    512
+  ],
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "C-prompt0-seed0.png",
+      "image_sha256": "81e608c0d9481072e922de4384dbb7912045cf27dc328c08c1cf0def62ff227e",
+      "latents": "C-prompt0-seed0-latents.pt",
+      "latents_sha256": "837148592748bb8ff434b14e4f24f29ae2ce15695c952e628d0f1e2a4e64fc42",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.350398,
+        0.347233,
+        0.35991,
+        0.384526,
+        0.402566,
+        0.410174,
+        0.4126,
+        0.412558,
+        0.412907,
+        0.412754,
+        0.41081,
+        0.410507,
+        0.411917,
+        0.412798,
+        0.412899,
+        0.412958,
+        0.412938,
+        0.412648,
+        0.410923,
+        0.412959,
+        0.413644,
+        0.413299,
+        0.413354,
+        0.413513,
+        0.414965,
+        0.415143,
+        0.414853,
+        0.412465,
+        0.410424,
+        0.410557,
+        0.411865,
+        0.412949,
+        0.413785,
+        0.415471,
+        0.415414,
+        0.41593,
+        0.416928,
+        0.420805,
+        0.422488,
+        0.421001,
+        0.418761,
+        0.418472,
+        0.41729,
+        0.412503,
+        0.408877,
+        0.409006,
+        0.41089,
+        0.413874,
+        0.415614,
+        0.413529
+      ],
+      "host_seconds": {
+        "run": 21.012512,
+        "encoder": 0.021607,
+        "denoising": 20.477167,
+        "vae": 0.50409
+      }
+    },
+    {
+      "prompt_id": 0,
+      "seed": 42,
+      "image": "C-prompt0-seed42.png",
+      "image_sha256": "4f6e25550f4bab3f5884fe449ac9dd8356638adba3d30ebed7d6d96caef82f5a",
+      "latents": "C-prompt0-seed42-latents.pt",
+      "latents_sha256": "b26b3e7649493e1b79bfa7744876ae910eca5cd2d66b445ae9ee254cc9172f85",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.338658,
+        0.340268,
+        0.352159,
+        0.382691,
+        0.408113,
+        0.420801,
+        0.42354,
+        0.421992,
+        0.418785,
+        0.417377,
+        0.414272,
+        0.412242,
+        0.411786,
+        0.413481,
+        0.413467,
+        0.413379,
+        0.414457,
+        0.413626,
+        0.413759,
+        0.414262,
+        0.415764,
+        0.415748,
+        0.419093,
+        0.422476,
+        0.422687,
+        0.419388,
+        0.419469,
+        0.42085,
+        0.421696,
+        0.419253,
+        0.418172,
+        0.420564,
+        0.420538,
+        0.420607,
+        0.421772,
+        0.420505,
+        0.419883,
+        0.418514,
+        0.418147,
+        0.418224,
+        0.418268,
+        0.416845,
+        0.414068,
+        0.411694,
+        0.412577,
+        0.413718,
+        0.413529,
+        0.413831,
+        0.414347,
+        0.416408
+      ],
+      "host_seconds": {
+        "run": 21.161931,
+        "encoder": 0.021446,
+        "denoising": 20.61007,
+        "vae": 0.51979
+      }
+    },
+    {
+      "prompt_id": 1,
+      "seed": 0,
+      "image": "C-prompt1-seed0.png",
+      "image_sha256": "e4a05b9241ce1219855f765ad821df629475b452fe3e5e7c59c720953f5db4df",
+      "latents": "C-prompt1-seed0-latents.pt",
+      "latents_sha256": "f4b1a950bb1a1e8abfbd09978f4e4b92a9b9b40296d6934f1006fa4355f77d3d",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.338862,
+        0.34018,
+        0.352608,
+        0.38434,
+        0.412195,
+        0.421186,
+        0.419748,
+        0.417093,
+        0.414765,
+        0.413385,
+        0.412578,
+        0.412156,
+        0.411376,
+        0.411238,
+        0.41261,
+        0.414905,
+        0.417035,
+        0.41885,
+        0.419923,
+        0.418135,
+        0.418335,
+        0.417741,
+        0.41628,
+        0.420424,
+        0.423809,
+        0.421391,
+        0.418948,
+        0.42005,
+        0.422467,
+        0.422205,
+        0.422627,
+        0.419812,
+        0.419694,
+        0.419856,
+        0.418041,
+        0.417529,
+        0.41751,
+        0.417253,
+        0.41504,
+        0.416322,
+        0.420731,
+        0.422853,
+        0.422268,
+        0.422538,
+        0.422363,
+        0.422284,
+        0.422089,
+        0.420879,
+        0.419876,
+        0.419838
+      ],
+      "host_seconds": {
+        "run": 21.224271,
+        "encoder": 0.023738,
+        "denoising": 20.676811,
+        "vae": 0.512932
+      }
+    },
+    {
+      "prompt_id": 1,
+      "seed": 42,
+      "image": "C-prompt1-seed42.png",
+      "image_sha256": "316d29dce89fd3a6d13959a42b3fd3b97620f4b2e72d112973af2c2d0e6e03d2",
+      "latents": "C-prompt1-seed42-latents.pt",
+      "latents_sha256": "e3683c1bd26ca6998d767f4a2d523b69210aed077840e23309e8e0343f8c4712",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.339583,
+        0.340008,
+        0.351988,
+        0.381516,
+        0.407175,
+        0.418786,
+        0.417557,
+        0.41514,
+        0.416132,
+        0.418299,
+        0.422826,
+        0.422654,
+        0.419787,
+        0.417224,
+        0.414788,
+        0.414968,
+        0.416126,
+        0.417165,
+        0.419143,
+        0.418098,
+        0.418193,
+        0.417518,
+        0.416256,
+        0.419949,
+        0.430343,
+        0.43109,
+        0.426582,
+        0.422633,
+        0.419238,
+        0.415731,
+        0.413549,
+        0.414656,
+        0.418507,
+        0.421402,
+        0.420657,
+        0.419814,
+        0.419991,
+        0.419847,
+        0.417103,
+        0.413606,
+        0.414019,
+        0.415486,
+        0.417685,
+        0.421243,
+        0.424629,
+        0.422722,
+        0.41984,
+        0.418642,
+        0.41988,
+        0.420156
+      ],
+      "host_seconds": {
+        "run": 21.247957,
+        "encoder": 0.02355,
+        "denoising": 20.692679,
+        "vae": 0.514563
+      }
+    },
+    {
+      "prompt_id": 2,
+      "seed": 0,
+      "image": "C-prompt2-seed0.png",
+      "image_sha256": "902d774335fce3a581f8857082e1e893111b5ec457b9a190926230d9f9b05ba4",
+      "latents": "C-prompt2-seed0-latents.pt",
+      "latents_sha256": "cacf4220e0f4ee45ecc022eea75f708f0de4c71018b6abfece7d067e3aa1b4c8",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.338905,
+        0.340263,
+        0.352105,
+        0.381331,
+        0.405977,
+        0.418183,
+        0.421099,
+        0.420175,
+        0.419812,
+        0.419971,
+        0.416498,
+        0.412728,
+        0.410436,
+        0.410055,
+        0.412356,
+        0.414193,
+        0.41685,
+        0.420569,
+        0.422288,
+        0.42002,
+        0.418291,
+        0.419028,
+        0.419872,
+        0.419705,
+        0.420431,
+        0.419779,
+        0.41751,
+        0.41743,
+        0.417483,
+        0.417475,
+        0.415651,
+        0.416068,
+        0.41546,
+        0.416744,
+        0.419904,
+        0.422297,
+        0.422242,
+        0.420109,
+        0.420953,
+        0.421497,
+        0.419991,
+        0.419943,
+        0.418303,
+        0.416495,
+        0.412477,
+        0.409306,
+        0.410201,
+        0.413582,
+        0.416641,
+        0.419529
+      ],
+      "host_seconds": {
+        "run": 21.181396,
+        "encoder": 0.029912,
+        "denoising": 20.620606,
+        "vae": 0.52219
+      }
+    },
+    {
+      "prompt_id": 2,
+      "seed": 42,
+      "image": "C-prompt2-seed42.png",
+      "image_sha256": "968275dd874ee843b600b221951fbdfe051c23f43c3b532c89882f1dcabd01c1",
+      "latents": "C-prompt2-seed42-latents.pt",
+      "latents_sha256": "e9aba2d6ae98653a75694a75035f3b9c391b6a9df7ee9d9335c890ea0981eb79",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.34609,
+        0.340102,
+        0.352651,
+        0.381268,
+        0.403557,
+        0.412704,
+        0.416082,
+        0.419724,
+        0.422298,
+        0.42057,
+        0.42083,
+        0.42214,
+        0.42217,
+        0.418292,
+        0.415868,
+        0.414705,
+        0.414884,
+        0.415245,
+        0.415338,
+        0.414221,
+        0.417289,
+        0.421626,
+        0.423922,
+        0.42385,
+        0.421237,
+        0.419605,
+        0.418734,
+        0.419884,
+        0.419943,
+        0.419024,
+        0.419867,
+        0.419734,
+        0.419438,
+        0.417674,
+        0.417987,
+        0.416413,
+        0.413953,
+        0.411535,
+        0.41328,
+        0.416131,
+        0.417427,
+        0.420159,
+        0.422277,
+        0.421335,
+        0.419558,
+        0.416907,
+        0.415443,
+        0.414405,
+        0.414793,
+        0.419935
+      ],
+      "host_seconds": {
+        "run": 21.20242,
+        "encoder": 0.021569,
+        "denoising": 20.654773,
+        "vae": 0.517358
+      }
+    }
+  ],
+  "weight_loads": [
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": false,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 0.016349364072084427
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": false,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.01946706417948
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": false,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.1356287330854684
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.149958163499832e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.020046278834343e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.499902620911598e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.069864422082901e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.4798791855573654e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 1.7399434000253677e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.4100299924612045e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.2600870579481125e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.1399464458227158e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.9299408197402954e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.349959686398506e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.1799933165311813e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.4300534278154373e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.1900050342082977e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 1.9900035113096237e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 1.969980075955391e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.039829269051552e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.1799933165311813e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.250075340270996e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.45007686316967e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.200016751885414e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.369983121752739e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.5299377739429474e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.089887857437134e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.4300534278154373e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.400018274784088e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 1.949956640601158e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.2600870579481125e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.369983121752739e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.0100269466638565e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.369983121752739e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.1401792764663696e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.1099112927913666e-06
+    }
+  ],
+  "pipeline_setup_seconds": 9.11858152714558,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725",
+    "8d37170a179a4f84b9c63722a4b87329ec345786c3a12fdff37e0fd87d1acbbb": "6014bc3080f7ee0fed32709605adf0069fb66ceab56ee2fc7909ac16dd4110aa",
+    "50bf80e8ee300bdce8eba5ed77bdea45771f66c1680f94ba58cfa0c0ca341f36": "a758335a4766235612ceca195a0edf50c961b89127e93b6301acc0d1abfd7c73"
+  },
+  "real_input_captures": {
+    "dual.0": {
+      "file": "qkv-dual.0.pt",
+      "sha256": "69ef1a3b0ae8508f758dd9b73bceb9a9e5f114ccda1fc2a698333d93a209b62c",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.1666370630264282,
+        1.0763410329818726,
+        5.048369407653809
+      ],
+      "max_abs": [
+        9.6875,
+        9.625,
+        45.0
+      ]
+    },
+    "dual.7": {
+      "file": "qkv-dual.7.pt",
+      "sha256": "e76e3f1442fdb385c9881ca5dfba069fb7511f800c8b68f96007d4bf90e95916",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.3432977199554443,
+        1.232269287109375,
+        4.85792350769043
+      ],
+      "max_abs": [
+        6.96875,
+        9.9375,
+        83.5
+      ]
+    },
+    "single.23": {
+      "file": "qkv-single.23.pt",
+      "sha256": "2d8762beea34704fafff7179f56c2379deb6686b07e14dad7e75f64788c00f3c",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.4025850296020508,
+        1.3940677642822266,
+        0.5536307096481323
+      ],
+      "max_abs": [
+        9.4375,
+        9.1875,
+        12.875
+      ]
+    },
+    "single.47": {
+      "file": "qkv-single.47.pt",
+      "sha256": "e86d79d4fdc90e10c731c07d494d58401f23185860de5daa2b82055ce02643ad",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.2335458993911743,
+        1.2620378732681274,
+        0.9790759086608887
+      ],
+      "max_abs": [
+        6.6875,
+        7.84375,
+        7.96875
+      ]
+    }
+  },
+  "block_bench": [
+    {
+      "block": "dual.0",
+      "warmup_replays": 250,
+      "median_ms": 9.0081095,
+      "min_ms": 8.951533,
+      "max_ms": 9.040575,
+      "replay_ms": [
+        8.999114,
+        8.991944,
+        9.040575,
+        8.992524,
+        9.005795,
+        9.018304,
+        9.037775,
+        9.009904,
+        9.008665,
+        9.002394,
+        8.994364,
+        9.030035,
+        9.004524,
+        9.004615,
+        9.026504,
+        9.007205,
+        9.021784,
+        9.010145,
+        9.016964,
+        9.011095,
+        9.022894,
+        9.003544,
+        9.015395,
+        8.993044,
+        9.013134,
+        9.011885,
+        9.022535,
+        8.990834,
+        9.014124,
+        9.023805,
+        9.009834,
+        9.021895,
+        9.016574,
+        9.013845,
+        9.010034,
+        9.019625,
+        9.001504,
+        9.003494,
+        9.007554,
+        9.009445,
+        8.966664,
+        8.951533,
+        8.963773,
+        8.974464,
+        8.967564,
+        8.971673,
+        8.969174,
+        8.975314,
+        8.978574,
+        8.973813
+      ],
+      "first_device_output_bitwise_equal": true,
+      "replay_checks": [
+        {
+          "phase": "before_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "before_timing",
+          "part": 1,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 1,
+          "exact": true
+        }
+      ],
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.3",
+      "warmup_replays": 250,
+      "median_ms": 8.903522500000001,
+      "min_ms": 8.872862,
+      "max_ms": 8.944193,
+      "replay_ms": [
+        8.906492,
+        8.922793,
+        8.881942,
+        8.893722,
+        8.893053,
+        8.902892,
+        8.902853,
+        8.892402,
+        8.898162,
+        8.908523,
+        8.897832,
+        8.897512,
+        8.895283,
+        8.925453,
+        8.908742,
+        8.918953,
+        8.933493,
+        8.890542,
+        8.884952,
+        8.904153,
+        8.926002,
+        8.923243,
+        8.891713,
+        8.897932,
+        8.893842,
+        8.900873,
+        8.888792,
+        8.872862,
+        8.876462,
+        8.873962,
+        8.898442,
+        8.944193,
+        8.923313,
+        8.901982,
+        8.915192,
+        8.897042,
+        8.917032,
+        8.908203,
+        8.918483,
+        8.897042,
+        8.908982,
+        8.911493,
+        8.924273,
+        8.902702,
+        8.908143,
+        8.907143,
+        8.911772,
+        8.909893,
+        8.909022,
+        8.924343
+      ],
+      "first_device_output_bitwise_equal": true,
+      "replay_checks": [
+        {
+          "phase": "before_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "before_timing",
+          "part": 1,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 1,
+          "exact": true
+        }
+      ],
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.7",
+      "warmup_replays": 250,
+      "median_ms": 8.9573435,
+      "min_ms": 8.924233,
+      "max_ms": 9.004034,
+      "replay_ms": [
+        8.947103,
+        8.937433,
+        8.949334,
+        8.947703,
+        8.940993,
+        8.938193,
+        8.953383,
+        8.959754,
+        8.959723,
+        8.977344,
+        8.948773,
+        8.942354,
+        8.953523,
+        8.934953,
+        8.930983,
+        8.924233,
+        8.954643,
+        8.944973,
+        8.948714,
+        8.954923,
+        8.951653,
+        8.945294,
+        8.947233,
+        8.944673,
+        8.956033,
+        8.932782,
+        8.958164,
+        8.999834,
+        8.973254,
+        8.981524,
+        8.969183,
+        8.980574,
+        8.956154,
+        8.956523,
+        8.975924,
+        8.969044,
+        8.979023,
+        8.985354,
+        8.993804,
+        8.989654,
+        8.961394,
+        8.982844,
+        8.970613,
+        8.987533,
+        8.975124,
+        8.987134,
+        8.985804,
+        9.004034,
+        9.000805,
+        8.969933
+      ],
+      "first_device_output_bitwise_equal": true,
+      "replay_checks": [
+        {
+          "phase": "before_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "before_timing",
+          "part": 1,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 1,
+          "exact": true
+        }
+      ],
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.0",
+      "warmup_replays": 250,
+      "median_ms": 6.83514,
+      "min_ms": 6.796094,
+      "max_ms": 6.882195,
+      "replay_ms": [
+        6.824834,
+        6.833545,
+        6.831055,
+        6.821154,
+        6.809084,
+        6.824295,
+        6.839355,
+        6.817774,
+        6.827525,
+        6.825654,
+        6.809405,
+        6.801024,
+        6.827554,
+        6.827115,
+        6.813214,
+        6.838245,
+        6.817944,
+        6.800494,
+        6.812755,
+        6.821274,
+        6.843935,
+        6.819984,
+        6.796094,
+        6.810325,
+        6.827544,
+        6.851175,
+        6.847995,
+        6.852875,
+        6.836735,
+        6.832045,
+        6.849255,
+        6.863025,
+        6.850555,
+        6.850395,
+        6.882195,
+        6.867386,
+        6.849895,
+        6.850135,
+        6.854685,
+        6.852915,
+        6.856525,
+        6.862355,
+        6.875376,
+        6.861315,
+        6.861985,
+        6.869915,
+        6.875696,
+        6.844615,
+        6.828704,
+        6.831435
+      ],
+      "first_device_output_bitwise_equal": true,
+      "replay_checks": [
+        {
+          "phase": "before_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 0,
+          "exact": true
+        }
+      ],
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.23",
+      "warmup_replays": 250,
+      "median_ms": 6.9670925,
+      "min_ms": 6.940236,
+      "max_ms": 7.022418,
+      "replay_ms": [
+        6.975257,
+        6.978928,
+        6.954137,
+        6.940236,
+        6.970047,
+        6.966798,
+        6.959387,
+        6.956347,
+        6.955166,
+        6.974588,
+        6.979917,
+        6.959957,
+        6.973817,
+        6.975958,
+        6.974067,
+        6.944876,
+        6.970878,
+        6.973687,
+        6.953557,
+        6.981747,
+        6.967977,
+        6.973478,
+        6.960077,
+        6.943266,
+        6.983308,
+        6.989227,
+        6.963697,
+        6.946587,
+        6.965437,
+        6.967387,
+        6.975897,
+        6.986098,
+        6.966517,
+        6.960867,
+        7.022418,
+        6.952627,
+        6.972367,
+        6.951357,
+        6.992358,
+        6.947926,
+        6.943837,
+        6.992958,
+        6.968287,
+        6.983467,
+        6.964297,
+        6.960757,
+        6.971588,
+        6.966087,
+        6.956487,
+        6.957597
+      ],
+      "first_device_output_bitwise_equal": true,
+      "replay_checks": [
+        {
+          "phase": "before_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 0,
+          "exact": true
+        }
+      ],
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.47",
+      "warmup_replays": 250,
+      "median_ms": 6.882925999999999,
+      "min_ms": 6.841365,
+      "max_ms": 6.932816,
+      "replay_ms": [
+        6.861115,
+        6.870216,
+        6.868985,
+        6.847435,
+        6.869745,
+        6.850495,
+        6.860635,
+        6.879286,
+        6.868985,
+        6.891316,
+        6.892986,
+        6.873495,
+        6.883306,
+        6.862635,
+        6.844665,
+        6.841365,
+        6.875515,
+        6.873115,
+        6.856086,
+        6.859905,
+        6.881785,
+        6.876346,
+        6.890455,
+        6.896816,
+        6.888926,
+        6.875815,
+        6.862795,
+        6.896916,
+        6.921536,
+        6.906176,
+        6.902286,
+        6.862945,
+        6.894726,
+        6.888575,
+        6.881076,
+        6.868325,
+        6.895856,
+        6.891616,
+        6.932816,
+        6.894115,
+        6.882546,
+        6.903986,
+        6.896116,
+        6.888795,
+        6.911016,
+        6.906196,
+        6.913877,
+        6.916956,
+        6.897216,
+        6.900446
+      ],
+      "first_device_output_bitwise_equal": true,
+      "replay_checks": [
+        {
+          "phase": "before_timing",
+          "part": 0,
+          "exact": true
+        },
+        {
+          "phase": "after_timing",
+          "part": 0,
+          "exact": true
+        }
+      ],
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    }
+  ],
+  "discarded_capture_run_l2_vs_untraced_pct": 54.63061332702637,
+  "two_step_trace_checks": [
+    {
+      "exact": true,
+      "l2_pct": 0.0
+    },
+    {
+      "exact": true,
+      "l2_pct": 0.0
+    }
+  ],
+  "two_step_trace_latents_bitwise_equal": true,
+  "observed_attention_transport": {
+    "dual.0": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.1": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.2": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.3": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.4": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.5": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.6": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "dual.7": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.0": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.1": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.2": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.3": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.4": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.5": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.6": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.7": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.8": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.9": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.10": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.11": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.12": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.13": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.14": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.15": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.16": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.17": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.18": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.19": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.20": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.21": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.22": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.23": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.24": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.25": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.26": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.27": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.28": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.29": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.30": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.31": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.32": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.33": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.34": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.35": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.36": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.37": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.38": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.39": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.40": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.41": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.42": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.43": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.44": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.45": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.46": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    },
+    "single.47": {
+      "k_dtype": "DataType.BFLOAT16",
+      "v_dtype": "DataType.BFLOAT16",
+      "kv_shape": [
+        1,
+        12,
+        4608,
+        128
+      ]
+    }
+  }
+}

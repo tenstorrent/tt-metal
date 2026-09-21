@@ -1,0 +1,117 @@
+{
+  "kind": "B",
+  "files": 27,
+  "records": 396,
+  "checks_pass": true,
+  "source_mismatches": [],
+  "detail": [
+    {
+      "file": "B-direct-k3-01.json",
+      "records": 21
+    },
+    {
+      "file": "B-direct-perf-screen-01.json",
+      "records": 3
+    },
+    {
+      "file": "B-group2-256k-01.json",
+      "records": 18
+    },
+    {
+      "file": "B-group2-32k-01.json",
+      "records": 36
+    },
+    {
+      "file": "B-group2-k1-01.json",
+      "records": 9
+    },
+    {
+      "file": "B-group2-k2-01.json",
+      "records": 15
+    },
+    {
+      "file": "B-group2-k3-01.json",
+      "records": 21
+    },
+    {
+      "file": "B-group2-k8-01.json",
+      "records": 30
+    },
+    {
+      "file": "B-group2-perf-screen-01.json",
+      "records": 3
+    },
+    {
+      "file": "B-replay-distinct256k-normal-01.json",
+      "records": 3
+    },
+    {
+      "file": "B-replay-distinct32k-grow-01.json",
+      "records": 3
+    },
+    {
+      "file": "B-replay-distinct32k-normal-01.json",
+      "records": 3
+    },
+    {
+      "file": "B-replay-k1-01.json",
+      "records": 9
+    },
+    {
+      "file": "B-replay-k3-01.json",
+      "records": 21
+    },
+    {
+      "file": "B-replay-perf-screen-01.json",
+      "records": 3
+    },
+    {
+      "file": "B-valid-distinct256k-normal-final.json",
+      "records": 3
+    },
+    {
+      "file": "B-valid-distinct32k-grow-final.json",
+      "records": 3
+    },
+    {
+      "file": "B-valid-distinct32k-normal-final.json",
+      "records": 3
+    },
+    {
+      "file": "B-valid-final-256k.json",
+      "records": 18
+    },
+    {
+      "file": "B-valid-final-32k.json",
+      "records": 36
+    },
+    {
+      "file": "B-valid-final-heldout32k.json",
+      "records": 18
+    },
+    {
+      "file": "B-valid-final-heldout8k.json",
+      "records": 39
+    },
+    {
+      "file": "B-valid-final-k1.json",
+      "records": 9
+    },
+    {
+      "file": "B-valid-final-k2.json",
+      "records": 15
+    },
+    {
+      "file": "B-valid-final-k8.json",
+      "records": 30
+    },
+    {
+      "file": "B-valid-k3-02.json",
+      "records": 21
+    },
+    {
+      "file": "B-valid-perf-final.json",
+      "records": 3
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "variant": "stock",
+  "conditioning": "corrected",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "ba95ed3dfdfb4a3622707544f286322aa697b10d83bd7e0fdc74922ad01667f2",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "451726d8aa456be4732ba1009d4ed1d8dc9f4d41841189ad3df7e9cb76e80747",
+    "experiments/sdpa-l2/flux2-frontier-v1/conditioning.py": "751456805a36bf1e8d166a44002b9eaba47e3d595f53d537ba8de8c914f703b7"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": false,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset"
+  ],
+  "seeds": [
+    0
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "stock ring",
+  "attention_recipe": null,
+  "attention_qk_chunks": null,
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "stock-prompt0-seed0.png",
+      "image_sha256": "5972a97a81d160aa4200a4644cc1e67d2f846bf38aec36744dc878b00002da66",
+      "latents": "stock-prompt0-seed0-latents.pt",
+      "latents_sha256": "6c48cf8510711a39e6c12c38e00747e081b251435d9eda51a6bff3e58f52db34",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.149714,
+        0.147063,
+        0.15449,
+        0.44759,
+        0.446969,
+        0.455426,
+        0.462335,
+        0.468489,
+        0.551654,
+        0.823909,
+        0.826086,
+        0.830032,
+        0.830274,
+        0.831568,
+        0.831112,
+        0.831246,
+        0.83027,
+        0.831163,
+        0.831556,
+        0.831076,
+        0.831344,
+        0.830356,
+        0.831742,
+        0.831157,
+        0.831155,
+        0.830217,
+        0.831239,
+        0.831867,
+        0.831028,
+        0.831215,
+        0.830338,
+        0.831984,
+        0.830943,
+        0.831271,
+        0.83109,
+        0.830236,
+        0.831738,
+        0.831127,
+        0.831313,
+        0.830318,
+        0.831218,
+        0.831634,
+        0.831399,
+        0.831039,
+        0.830404,
+        0.831751,
+        0.831166,
+        0.831238,
+        0.83026,
+        0.831133
+      ],
+      "host_seconds": {
+        "run": 39.61175,
+        "encoder": 0.031156,
+        "denoising": 37.358227,
+        "vae": 2.199393
+      }
+    }
+  ],
+  "pipeline_setup_seconds": 376.3252617239996,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725"
+  }
+}

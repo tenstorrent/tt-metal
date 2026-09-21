@@ -1,0 +1,366 @@
+{
+  "arguments": {
+    "variant": "B",
+    "candidate": "block",
+    "label": "B-block-steady-01",
+    "distinct_kv": false,
+    "q_repeats": 16,
+    "k_chunks": 512,
+    "warmup": 12,
+    "iters": 10,
+    "seed": 1236,
+    "distribution": "normal",
+    "device_id": 0
+  },
+  "shape": {
+    "q": 256,
+    "k": 512,
+    "d": 128,
+    "cores": 1
+  },
+  "useful_flops": 549755813888,
+  "sampled_query_max_changes_after_first_chunk": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "warning": "Resident repeated KV, no recurring input DM",
+  "results": {
+    "canonical": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "SDPA_STREAMING_ACCURACY": "1",
+        "SDPA_STREAMING_NUMERATOR_COMPENSATION": "1",
+        "SDPA_OUT_A_CB": "8",
+        "SDPA_OUT_B_CB": "9",
+        "SDPA_LOFI_FIX_CORRECTION": "1"
+      },
+      "implementation_defines": {},
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          64
+        ],
+        [
+          9,
+          64
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          16
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "6798658d821fe19ba4b9bbc7ff3e1781a4baf65a9395997df6b79992ccf8a648",
+      "l2_pct": 2.545678256862242,
+      "pcc": 0.9996727016193542,
+      "times_ms": [
+        345.6905628554523,
+        345.64800187945366,
+        345.6448018550873,
+        345.6480819731951,
+        345.65109200775623,
+        345.635092118755,
+        345.636242069304,
+        345.6366010941565,
+        345.63574101775885,
+        345.63858178444207
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "median_ms": 345.6416918197647,
+      "tflops_per_core": 1.5905367520729268
+    },
+    "disabled": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "SDPA_STREAMING_ACCURACY": "1",
+        "SDPA_STREAMING_NUMERATOR_COMPENSATION": "1",
+        "SDPA_OUT_A_CB": "8",
+        "SDPA_OUT_B_CB": "9",
+        "SDPA_LOFI_FIX_CORRECTION": "1"
+      },
+      "implementation_defines": {},
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          64
+        ],
+        [
+          9,
+          64
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          16
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "6798658d821fe19ba4b9bbc7ff3e1781a4baf65a9395997df6b79992ccf8a648",
+      "l2_pct": 2.545678256862242,
+      "pcc": 0.9996727016193542,
+      "times_ms": [
+        345.6577220931649,
+        345.63266206532717,
+        345.64810199663043,
+        345.63722205348313,
+        345.655812183395,
+        345.63166089355946,
+        345.6360320560634,
+        345.65371205098927,
+        345.6215411424637,
+        345.6298920791596
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "median_ms": 345.63662705477327,
+      "tflops_per_core": 1.5905600589050994
+    },
+    "block": {
+      "numeric_defines": {
+        "EXP_APPROX_MODE": "1",
+        "STATS_GRANULARITY": "8",
+        "SUB_EXP_GRANULARITY": "8",
+        "MUL_BCAST_GRANULARITY": "8",
+        "DHT_GRANULARITY": "4",
+        "REDUCE_GRANULARITY": "4",
+        "SDPA_STREAMING_ACCURACY": "1",
+        "SDPA_STREAMING_NUMERATOR_COMPENSATION": "1",
+        "SDPA_OUT_A_CB": "8",
+        "SDPA_OUT_B_CB": "9",
+        "SDPA_LOFI_FIX_CORRECTION": "1"
+      },
+      "implementation_defines": {
+        "SDPA_BF16_BLOCK_STATE": "1"
+      },
+      "cb_counts": [
+        [
+          0,
+          64
+        ],
+        [
+          1,
+          128
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          128
+        ],
+        [
+          8,
+          64
+        ],
+        [
+          9,
+          64
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          11,
+          8
+        ],
+        [
+          12,
+          16
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          14,
+          8
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "kv_slots": 2,
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": false,
+      "math_approx_mode": true,
+      "dst_full_sync_en": false,
+      "output_sha256": "6798658d821fe19ba4b9bbc7ff3e1781a4baf65a9395997df6b79992ccf8a648",
+      "l2_pct": 2.545678256862242,
+      "pcc": 0.9996727016193542,
+      "times_ms": [
+        344.476300990209,
+        344.36227893456817,
+        344.39158882014453,
+        344.3607878871262,
+        344.37501803040504,
+        344.36429804190993,
+        344.47304997593164,
+        344.36850901693106,
+        344.3697791080922,
+        344.3678990006447
+      ],
+      "bitwise_equal_canonical": true,
+      "unequal_elements": 0,
+      "max_abs_change": 0.0,
+      "median_ms": 344.3691440625116,
+      "tflops_per_core": 1.5964142646537622
+    }
+  },
+  "source_sha256": {
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/bench.py": "8aaa04c568afd907b956e606d80c5bc6876e6ac9f269f3a9b5f3b230bcfe7488",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compute.cpp": "d6d444558df138b8d3120b3a1f0bb8f447e9535701c8a5a166a263e019d37470",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_A.hpp": "eb023f06a67d2e5e872bd50aa604e83e754ae2d919b1c5d2238cb27718a32154",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/streaming_B.hpp": "7924764ed1dc2a331f7b94b25e3833b961b57f1dfa8b232c8b02854e26c29af2",
+    "experiments/sdpa-l2/compute-sprint-v1/bf16/compensated_block.hpp": "875923d51d836ff3b855c6c572d789eb09daeac82646576a672f2ba21e40b224",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/compute.cpp": "7a235145fcbe6e05a6ea74fec1930a1b0938bf1c5c0be88a2c34cb9292eccd10",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/hybrid-mixed-v1/reader_distinct.cpp": "e4bc5abd4e25a885d293ddfea4b272ef34f01570949e6fe1f4cfae933d708206",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fast_correction.hpp": "1e6905b04d9afdea8498b4bbdbe43c0ae988896b5051dfa46137df1389d9f632",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_refiner.hpp": "bfd75a1f702827ceefebc7255a47621b96d0438eefa5f79af60dbba62f791a00",
+    "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "221331267dcdd1cc8acd4967b47779db7c671e03aa0506f67f0ea63237d5b48e",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "e216a923296e053f86c3aaa6bce3a097f79e323197023bc1a773e6ceef521a6d",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "e531a51efc6c47c4e4634b088f3d0256354c2096419379b1861b6f565a085ef6",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "54c51c56aa457134aed0181202c6fd3cad66df0a507659f364857c77dca9bb42",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b471e527b61f55f2c9f30573ee4cdd82f5cbad7d0b02e1c654814835d3d0916b"
+  }
+}

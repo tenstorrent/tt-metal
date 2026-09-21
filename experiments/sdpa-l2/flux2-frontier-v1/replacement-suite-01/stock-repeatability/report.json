@@ -1,0 +1,148 @@
+{
+  "status": "completed",
+  "variant": "stock",
+  "steps": 50,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "seed": 0,
+  "model_repair": "main_fused",
+  "conditioning": "stock",
+  "converted_weight_cache": "/localdev/cglagovich/flux2-frontier-20260915/dit-cache-v2",
+  "pinned_memory_cache_limit_bytes": "0",
+  "hostname": "bh-lb-08-special-cglagovich-for-reservation-221619",
+  "source_sha256": "2dfafeadd2ea59924e7f5c057195f4732a4da043d6ecbbb2f8232a219d5e4c14",
+  "rows": [
+    {
+      "index": 0,
+      "mode": "untraced",
+      "exact_vs_first": true,
+      "l2_vs_first_pct": 0.0,
+      "max_abs": 0.0,
+      "unequal": 0
+    },
+    {
+      "index": 1,
+      "mode": "untraced",
+      "exact_vs_first": true,
+      "l2_vs_first_pct": 0.0,
+      "max_abs": 0.0,
+      "unequal": 0
+    },
+    {
+      "index": 2,
+      "mode": "untraced",
+      "exact_vs_first": true,
+      "l2_vs_first_pct": 0.0,
+      "max_abs": 0.0,
+      "unequal": 0
+    },
+    {
+      "index": 3,
+      "mode": "capture",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 53.68783473968506,
+      "max_abs": 5.546875,
+      "unequal": 519381
+    },
+    {
+      "index": 4,
+      "mode": "traced",
+      "exact_vs_first": true,
+      "l2_vs_first_pct": 0.0,
+      "max_abs": 0.0,
+      "unequal": 0
+    },
+    {
+      "index": 5,
+      "mode": "traced",
+      "exact_vs_first": true,
+      "l2_vs_first_pct": 0.0,
+      "max_abs": 0.0,
+      "unequal": 0
+    },
+    {
+      "index": 6,
+      "mode": "traced",
+      "exact_vs_first": true,
+      "l2_vs_first_pct": 0.0,
+      "max_abs": 0.0,
+      "unequal": 0
+    }
+  ],
+  "comparisons": [
+    {
+      "a": 0,
+      "b": 1,
+      "exact": true
+    },
+    {
+      "a": 0,
+      "b": 2,
+      "exact": true
+    },
+    {
+      "a": 0,
+      "b": 4,
+      "exact": true
+    },
+    {
+      "a": 0,
+      "b": 5,
+      "exact": true
+    },
+    {
+      "a": 0,
+      "b": 6,
+      "exact": true
+    },
+    {
+      "a": 1,
+      "b": 2,
+      "exact": true
+    },
+    {
+      "a": 1,
+      "b": 4,
+      "exact": true
+    },
+    {
+      "a": 1,
+      "b": 5,
+      "exact": true
+    },
+    {
+      "a": 1,
+      "b": 6,
+      "exact": true
+    },
+    {
+      "a": 2,
+      "b": 4,
+      "exact": true
+    },
+    {
+      "a": 2,
+      "b": 5,
+      "exact": true
+    },
+    {
+      "a": 2,
+      "b": 6,
+      "exact": true
+    },
+    {
+      "a": 4,
+      "b": 5,
+      "exact": true
+    },
+    {
+      "a": 4,
+      "b": 6,
+      "exact": true
+    },
+    {
+      "a": 5,
+      "b": 6,
+      "exact": true
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "selected_variant": "B",
+  "baseline": "frozen v1 B winner",
+  "candidate": "identity_early",
+  "numerical_defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "8",
+    "SUB_EXP_GRANULARITY": "8",
+    "MUL_BCAST_GRANULARITY": "8",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "4",
+    "SDPA_STREAMING_ACCURACY": "1",
+    "SDPA_STREAMING_NUMERATOR_COMPENSATION": "1",
+    "SDPA_OUT_A_CB": "8",
+    "SDPA_OUT_B_CB": "9",
+    "SDPA_LOFI_FIX_CORRECTION": "1"
+  },
+  "implementation_defines": {
+    "SDPA_BF16_BLOCK_STATE": "1",
+    "SDPA_BF16_CORRECTION_REUSE": "1",
+    "SDPA_BF16_CORRECTION_FENCE": "1",
+    "SDPA_REVIEW_IDENTITY_EARLY": "1"
+  },
+  "fixed_shape": {
+    "q": 256,
+    "k": 512,
+    "d": 128,
+    "cores": 1
+  },
+  "kv_slots": 2,
+  "selected_source_sha256": {
+    "experiments/sdpa-l2/compute-sprint-v2/review/bench.py": "99de48619402d9f24adbcc84d65410c239b089445082190eb326280596737b98",
+    "experiments/sdpa-l2/compute-sprint-v2/review/resident.cpp": "fef650fec206d51527fd7e231f883c98a6e71af286c998a8e0dbc846d74f8874",
+    "experiments/sdpa-l2/compute-sprint-v2/review/profile_streaming.hpp": "35989836180c2371b0f81ed7bf554c719976b1ab5d22eb49dea67f85b0571401",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe",
+    "experiments/sdpa-l2/compute-sprint-v2/compensated/identity/compute_streaming.hpp": "ae3e07cfeff14496a4a68873b9cf0fc63c5c20223007217b2a6771c5850b1aa6",
+    "experiments/sdpa-l2/compute-sprint-v2/compensated/identity/identity.hpp": "5f0dec905d2bb86f4cbcf05becda277914c66f177a61abc183e2ae631cff004f",
+    "experiments/sdpa-l2/compute-sprint-v2/compensated/identity_early/compute_streaming.hpp": "bc8c1b13e455225e230146ef151ee1e840527cc2ba34db5fb92ae9789f59e435"
+  },
+  "primary_timing_record": "B-early-paired-final.json",
+  "qualification_audit": "audit_evidence.py",
+  "recommendation": "conditional research candidate, not unconditional default",
+  "scope": "Selected source pins, not full compiler or firmware closure."
+}

@@ -1,0 +1,16 @@
+{
+  "trials": 9216,
+  "modeled_differences": 0,
+  "max_abs_delta": 0.0,
+  "paths": {
+    "retain": 152867,
+    "empty": 314810,
+    "identity_fold": 114574,
+    "changed_fold": 38293
+  },
+  "stale_local_negative_control": {
+    "correct": 5.5,
+    "incorrect_even_identity": 7.5
+  },
+  "note": "State-machine simulation, not device precision qualification."
+}

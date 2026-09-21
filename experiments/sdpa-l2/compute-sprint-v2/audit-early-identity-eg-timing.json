@@ -1,0 +1,60 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-distinct-timings/e-growing.json",
+      "sha256": "8bf2e8606e05800fb8584f7f58ffeeb3361f3636e8e2cd8648316d458ab27268",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-distinct-timings/e-normal256k.json",
+      "sha256": "e45bc3da2944f4a49f45048890bed17d526f7366a114649cd21ec403c4505a7e",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-distinct-timings/e-normal32k.json",
+      "sha256": "c4d4509b724cedcff3522efa205f3f4852409ee62f6d4795fedb886964088ffc",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-distinct-timings/e-transitions.json",
+      "sha256": "1dae462fa737160af8ad99b5018c4b8144194f861d6bdbc8d2048b1f6b039c11",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-distinct-timings/g-growing.json",
+      "sha256": "4473b1c83594957d43f7122f8971448b90dede1d88b26063b488cbe33ab2767f",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-distinct-timings/g-normal256k.json",
+      "sha256": "d9faac8e856d45f153d72103d55b48642fa5a413fe744c7dd919a49341c089de",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-distinct-timings/g-normal32k.json",
+      "sha256": "7242098311a4db5c3fc9e633e686ad489d6ddacb9eddc66eca3380c2e534b884",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/identity-early-distinct-timings/g-transitions.json",
+      "sha256": "9ecac7ba36a06ff3767c0bdf00292f8299cbd4a645ffb4928a8f36c00c02238a",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/g-identity-early-resident-v1.json",
+      "sha256": "b14c049f9c4fbc948be0eaf4173620fd18277774f2f8a799ef66805dca11cad1",
+      "records_checked": 1,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

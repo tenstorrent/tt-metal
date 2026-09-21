@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/codegen/pragma-screen-E-v1.json",
+      "sha256": "1a62a47c68b438bae093433b58a4b322fb3d5e08bc4c2a679e7132abeac36d62",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/codegen/pragma-screen-G-v1.json",
+      "sha256": "ba15bcb5a875a1bdffaf05e96955f4c11c0b13bf725be6550f1e236aad402983",
+      "records_checked": 1,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

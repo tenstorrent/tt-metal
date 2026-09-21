@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/e-identity-transition-smoke-v1.json",
+      "sha256": "7ebd245d42a9060b88516f9eb816866f5629b991e8fd137dfc64ef5ddef4d70d",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/g-identity-transition-v1.json",
+      "sha256": "83fc54b66bcb517179085185b0fa25baf71c0b66d538b61f1ac6ea27c116111d",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/e-identity-resident-v1.json",
+      "sha256": "26058a71f2dd2ffea72a02165fed7580fe4e71c706a7ef8881f70fc5a5f45c9e",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-identity-transfer-01.json",
+      "sha256": "5fa1efcb31c4232d895008c1384d1257a2b7837c4b49bea7ce0bf37dbc65eeca",
+      "records_checked": 15,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/review/B-identity-paired-01.json",
+      "sha256": "38542b15f7e943ec66919a827bbb1f0f74ebd24f1be8fce71dfe4ccd25546a4a",
+      "records_checked": 3,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

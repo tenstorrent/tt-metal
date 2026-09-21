@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #include "api/compute/compute_kernel_hw_startup.h"
+#ifndef SDPA_K_CHUNK_TILES
+#define SDPA_K_CHUNK_TILES 16
+#endif
 #ifdef SDPA_LOFI_SAFE_RESCALE
 #include "../safe_rescale.hpp"
 #endif
@@ -33,8 +36,8 @@ void kernel_main() {
         DeviceZoneScopedN("SDPA_FULLCHIP_LOFI");
         sdpa_standard_v2<
             q_tiles,
-            16,
-            16 * k_chunks,
+            SDPA_K_CHUNK_TILES,
+            SDPA_K_CHUNK_TILES * k_chunks,
             4,
             4,
             scale,

@@ -1,0 +1,145 @@
+{
+  "status": "completed",
+  "variant": "stock",
+  "steps": 50,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "seed": 0,
+  "model_repair": "main_fused",
+  "conditioning": "stock",
+  "source_sha256": "2b2210fbea6693d79b563811dc75507a63541b24b38d5f87d75120b5cd4c5f3c",
+  "rows": [
+    {
+      "index": 0,
+      "mode": "untraced",
+      "exact_vs_first": true,
+      "l2_vs_first_pct": 0.0,
+      "max_abs": 0.0,
+      "unequal": 0
+    },
+    {
+      "index": 1,
+      "mode": "untraced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 43.09681057929993,
+      "max_abs": 4.8359375,
+      "unequal": 516644
+    },
+    {
+      "index": 2,
+      "mode": "untraced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 37.672579288482666,
+      "max_abs": 4.63671875,
+      "unequal": 516386
+    },
+    {
+      "index": 3,
+      "mode": "capture",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 43.31517219543457,
+      "max_abs": 5.125,
+      "unequal": 517047
+    },
+    {
+      "index": 4,
+      "mode": "traced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 47.213155031204224,
+      "max_abs": 4.705078125,
+      "unequal": 518241
+    },
+    {
+      "index": 5,
+      "mode": "traced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 47.213155031204224,
+      "max_abs": 4.705078125,
+      "unequal": 518241
+    },
+    {
+      "index": 6,
+      "mode": "traced",
+      "exact_vs_first": false,
+      "l2_vs_first_pct": 57.5362503528595,
+      "max_abs": 5.85546875,
+      "unequal": 520754
+    }
+  ],
+  "comparisons": [
+    {
+      "a": 0,
+      "b": 1,
+      "exact": false
+    },
+    {
+      "a": 0,
+      "b": 2,
+      "exact": false
+    },
+    {
+      "a": 0,
+      "b": 4,
+      "exact": false
+    },
+    {
+      "a": 0,
+      "b": 5,
+      "exact": false
+    },
+    {
+      "a": 0,
+      "b": 6,
+      "exact": false
+    },
+    {
+      "a": 1,
+      "b": 2,
+      "exact": false
+    },
+    {
+      "a": 1,
+      "b": 4,
+      "exact": false
+    },
+    {
+      "a": 1,
+      "b": 5,
+      "exact": false
+    },
+    {
+      "a": 1,
+      "b": 6,
+      "exact": false
+    },
+    {
+      "a": 2,
+      "b": 4,
+      "exact": false
+    },
+    {
+      "a": 2,
+      "b": 5,
+      "exact": false
+    },
+    {
+      "a": 2,
+      "b": 6,
+      "exact": false
+    },
+    {
+      "a": 4,
+      "b": 5,
+      "exact": true
+    },
+    {
+      "a": 4,
+      "b": 6,
+      "exact": false
+    },
+    {
+      "a": 5,
+      "b": 6,
+      "exact": false
+    }
+  ]
+}

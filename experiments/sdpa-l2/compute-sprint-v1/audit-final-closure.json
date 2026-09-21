@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/A-final-heldout-01.json",
+      "sha256": "375fe61b55d463f1bdf9b76f23699a6a4fba00546840d1e748ad28e3e6fce9a1",
+      "records_checked": 24,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/A-final-profile-02.json",
+      "sha256": "8f945e021268d3c49902ea2a49b9c3781a77fef05bb78fc1febaf2645f10b06f",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/bf16/B-final-profile-01.json",
+      "sha256": "33e09181725f1ccdc36943c912582385e673fcafefc88e54bd2ea0b537e7c190",
+      "records_checked": 3,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/e-final-profile-v1.json",
+      "sha256": "aa18582d69df455b17d65283a4f95646ca855366141b478c26f1a777f5ecd754",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v1/lowp/g-final-profile-v1.json",
+      "sha256": "cfd1f40b2cb4cd426f0900f73ada12e807d1751b4643eedec82d902efe94e676",
+      "records_checked": 1,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

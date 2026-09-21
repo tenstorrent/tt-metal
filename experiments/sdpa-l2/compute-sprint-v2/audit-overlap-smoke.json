@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/e-pack-overlap-smoke-v1.json",
+      "sha256": "1c44c0609767ba67f1a83c23b307248081a7d9e09e0aaf3fe6f18e9eba3070d5",
+      "records_checked": 1,
+      "pass": true
+    },
+    {
+      "file": "experiments/sdpa-l2/compute-sprint-v2/compensated/g-pack-overlap-distinct-v1.json",
+      "sha256": "a366aae97410a09ad334134468f96367c1f0fe37c576a790f636072c246bd934",
+      "records_checked": 1,
+      "pass": true
+    }
+  ],
+  "all_pass": true,
+  "scope": "Saved output equality, preparation gates and useful-throughput arithmetic only"
+}

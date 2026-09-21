@@ -1,0 +1,1724 @@
+{
+  "scope": [
+    "ttnn",
+    "tests",
+    "tt_metal"
+  ],
+  "method": "Static Python AST direct attribute calls and simple imported/assignment aliases; excludes torch/F references and decode function names; no execution/parametric expansion. Includes pre-existing SDPA repro files under tests, classified research-only in report.",
+  "python_calls": [
+    {
+      "file": "tests/didt/test_mla_sdpa.py",
+      "line": 25,
+      "function": "ttnn.transformer.flash_mla_prefill",
+      "kwargs": {
+        "scale": "self.scale",
+        "program_config": "self.program_config",
+        "compute_kernel_config": "self.compute_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "is_causal": "False",
+        "attn_mask": "None"
+      },
+      "args": [
+        "self.activations",
+        "self.inputs[0]",
+        "self.inputs[1]"
+      ]
+    },
+    {
+      "file": "tests/didt/test_sdpa_op.py",
+      "line": 29,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "self.program_config",
+        "compute_kernel_config": "self.compute_config"
+      },
+      "args": [
+        "self.activations",
+        "self.inputs[0]",
+        "self.inputs[1]"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py",
+      "line": 426,
+      "function": "ttnn.transformer.exp_ring_joint_scaled_dot_product_attention",
+      "kwargs": {
+        "persistent_output_buffer_k": "persistent_buffer_k[i]",
+        "persistent_output_buffer_v": "persistent_buffer_v[i]",
+        "joint_strategy": "'rear'",
+        "logical_n": "total_seq",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphores_list[i]",
+        "num_links": "num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "num_workers_per_link": "num_workers_per_link",
+        "num_buffers_per_channel": "num_buffers_per_channel"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V",
+        "tt_joint_Q",
+        "tt_joint_K",
+        "tt_joint_V"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 839,
+      "function": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "kwargs": {
+        "persistent_output_buffer_k": "p_buf_k",
+        "persistent_output_buffer_v": "p_buf_v",
+        "joint_strategy": "'rear'",
+        "logical_n": "logical_n",
+        "is_causal": "is_causal",
+        "is_balanced": "is_balanced",
+        "is_cross": "is_cross",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "scale": "scale",
+        "kv_cache_batch_idx": "kv_cache_batch_idx",
+        "kv_actual_isl": "kv_actual_isl",
+        "attention_sink": "attention_sink",
+        "sliding_window_size": "sliding_window_size",
+        "slot_id": "slot_id",
+        "kv_actual_isl_tensor": "kv_actual_isl_tensor",
+        "kv_cache_num_layers": "kv_cache_num_layers",
+        "kv_cache_layer_idx": "kv_cache_layer_idx"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v",
+        "None",
+        "None",
+        "None"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 1571,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "sq",
+        "is_balanced": "is_balanced",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "kv_cache_batch_idx"
+      },
+      "args": [
+        "tt_Q",
+        "tt_KV"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 2098,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_k",
+        "head_dim_v": "d_v",
+        "logical_n": "e",
+        "is_balanced": "is_balanced",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_actual_isl": "s if reuse_kv_buffer else None"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 3167,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "logical_n",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "None if full_mesh else sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "kv_cache_batch_idx",
+        "kv_actual_isl": "kv_actual_isl"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 3433,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "e",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "ccl_semaphore_handles",
+        "num_links": "num_links",
+        "cluster_axis": "None if full_mesh else sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "worker_sub_device_id",
+        "ccl_core_grid_offset": "(ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "kv_cache_batch_idx"
+      },
+      "args": [
+        "tt_Q",
+        "tt_KV"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 3743,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "gathered_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "global_seq",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "None",
+        "mesh_device": "mesh_device",
+        "topology": "Topology.Ring",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "is_balanced": "is_balanced"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 3909,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_tensor",
+        "head_dim_v": "32",
+        "logical_n": "global_seq",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "None",
+        "mesh_device": "mesh_device",
+        "topology": "topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True"
+      },
+      "args": [
+        "q_tensor",
+        "kv_tensor"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 4090,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "make_persistent_output_buffer_kv()",
+        "head_dim_v": "d_v",
+        "logical_n": "sq",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "None if full_mesh else sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "runtime.topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "kv_cache_batch_idx if pass_kv_idx else None",
+        "slot_id": "tt_slot_id if use_metadata else None",
+        "kv_actual_isl_tensor": "tt_kv_actual_isl if use_metadata else None"
+      },
+      "args": [
+        "tt_Q",
+        "tt_KV"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 4227,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "make_persistent_output_buffer_kv()",
+        "head_dim_v": "d_v",
+        "logical_n": "logical_n",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "None if full_mesh else sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "runtime.topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "None if use_metadata else 0",
+        "kv_actual_isl": "None if use_metadata else kv_actual_isl",
+        "slot_id": "tt_slot_id if use_metadata else None",
+        "kv_actual_isl_tensor": "tt_kv_actual_isl if use_metadata else None"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 4444,
+      "function": "ttnn.transformer.ring_mla",
+      "kwargs": {
+        "persistent_output_buffer_kv": "persistent_output_buffer_kv",
+        "head_dim_v": "d_v",
+        "logical_n": "logical_n",
+        "is_balanced": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "runtime.topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True",
+        "kv_cache_batch_idx": "None if use_metadata else slot_id",
+        "kv_actual_isl": "None if use_metadata else kv_actual_isl",
+        "slot_id": "tt_slot_id if use_metadata else None",
+        "kv_actual_isl_tensor": "tt_kv_actual_isl if use_metadata else None"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py",
+      "line": 5869,
+      "function": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "kwargs": {
+        "persistent_output_buffer_k": "p_buf_k",
+        "persistent_output_buffer_v": "p_buf_v",
+        "joint_strategy": "'rear'",
+        "logical_n": "sq",
+        "is_causal": "is_causal",
+        "is_balanced": "False",
+        "attention_sink": "tt_attention_sink",
+        "program_config": "program_config",
+        "compute_kernel_config": "runtime.compute_kernel_config",
+        "dim": "2",
+        "multi_device_global_semaphore": "runtime.ccl_semaphore_handles",
+        "num_links": "runtime.num_links",
+        "cluster_axis": "runtime.sp_axis",
+        "mesh_device": "mesh_device",
+        "topology": "runtime.topology",
+        "subdevice_id": "runtime.worker_sub_device_id",
+        "ccl_core_grid_offset": "(runtime.ccl_column, 0)",
+        "use_column_major_ccl": "True"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v",
+        "joint_q",
+        "joint_k",
+        "joint_v"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py",
+      "line": 69,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py",
+      "line": 151,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/nightly/blackhole/sdpa/test_sparse_sdpa_multidevice.py",
+      "line": 80,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "ttnn.transformer.SparseKVFormat.BF16",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc",
+        "block_cyclic_sp_axis": "0",
+        "block_cyclic_chunk_local": "chunk_local"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/sweep_framework/sweeps/model_traced/chunked_scaled_dot_product_attention_model_traced.py",
+      "line": 400,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "**": "op_kwargs"
+      },
+      "args": [
+        "q_tensor",
+        "k_tensor",
+        "v_tensor",
+        "page_table_tensor",
+        "chunk_start_idx"
+      ]
+    },
+    {
+      "file": "tests/sweep_framework/sweeps/model_traced/scaled_dot_product_attention_model_traced.py",
+      "line": 578,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "bool(is_causal)",
+        "**": "op_kwargs"
+      },
+      "args": [
+        "q_tensor",
+        "k_tensor",
+        "v_tensor"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py",
+      "line": 105,
+      "function": "ttnn.transformer.flash_mla_prefill",
+      "kwargs": {
+        "head_dim_v": "kv_lora_rank",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "attn_mask": "None",
+        "is_causal": "True"
+      },
+      "args": [
+        "tt_q",
+        "tt_k"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py",
+      "line": 161,
+      "function": "ttnn.transformer.chunked_flash_mla_prefill",
+      "kwargs": {
+        "chunk_start_idx": "chunk_start",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      },
+      "args": [
+        "tt_q_chunk",
+        "kvpe_cache",
+        "kv_lora_rank",
+        "tt_page_table"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 151,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q_chunk",
+        "tt_paged_K",
+        "tt_paged_V",
+        "page_table_tt"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 162,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q_chunk",
+        "tt_paged_K",
+        "tt_paged_V",
+        "page_table_tt"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 210,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q_chunk",
+        "tt_paged_K",
+        "tt_paged_V",
+        "page_table_tt"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 222,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q_chunk",
+        "tt_paged_K",
+        "tt_paged_V",
+        "page_table_tt",
+        "chunk_start_idx"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 361,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v",
+        "page_table",
+        "chunk_start_idx"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 522,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "paged_cache_geometry": "ttnn.PagedCacheGeometryOverride(block_size=block_size, num_kv_heads=nkv_view)"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v",
+        "page_table_tt",
+        "start"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py",
+      "line": 578,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "paged_cache_geometry": "ttnn.PagedCacheGeometryOverride(block_size=32, num_kv_heads=1)"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v",
+        "page_table",
+        "0"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_joint.py",
+      "line": 83,
+      "function": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "kwargs": {
+        "joint_strategy": "'rear'",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V",
+        "tt_joint_Q",
+        "tt_joint_K",
+        "tt_joint_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 132,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 212,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "tt_mask",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 693,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q_chunk",
+        "tt_paged_K",
+        "tt_paged_V",
+        "page_table_tt"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 704,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q_chunk",
+        "tt_paged_K",
+        "tt_paged_V",
+        "page_table_tt"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 752,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "chunk_start_idx_tensor": "chunk_start_idx_tensor",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q_chunk",
+        "tt_paged_K",
+        "tt_paged_V",
+        "page_table_tt"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 764,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q_chunk",
+        "tt_paged_K",
+        "tt_paged_V",
+        "page_table_tt",
+        "chunk_start_idx"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 971,
+      "function": "ttnn.transformer.joint_scaled_dot_product_attention",
+      "kwargs": {
+        "joint_strategy": "'rear'",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V",
+        "tt_joint_Q",
+        "tt_joint_K",
+        "tt_joint_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1346,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "causal",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1391,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "sliding_window_size": "sliding_window",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1501,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "window_a",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1510,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "window_b",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1776,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "attention_sink": "tt_S"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 1867,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "sliding_window",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "attention_sink": "tt_S"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 2007,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "True",
+        "sliding_window_size": "sliding_window",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "attention_sink": "tt_S"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 2085,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 2160,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py",
+      "line": 103,
+      "function": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "kwargs": {
+        "ring_size": "ring_size",
+        "ring_id": "ring_id",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py",
+      "line": 125,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py",
+      "line": 238,
+      "function": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "kwargs": {
+        "ring_size": "ring_size",
+        "ring_id": "ring_id",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "page_table": "page_table_tt",
+        "chunk_start_idx": "prefix_len"
+      },
+      "args": [
+        "tt_Q",
+        "tt_paged_K",
+        "tt_paged_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_ring_distributed.py",
+      "line": 262,
+      "function": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "kwargs": {
+        "input_tensor_q": "tt_Q",
+        "input_tensor_k": "tt_paged_K",
+        "input_tensor_v": "tt_paged_V",
+        "page_table_tensor": "page_table_tt",
+        "chunk_start_idx": "prefix_len",
+        "compute_kernel_config": "compute_kernel_config",
+        "program_config": "program_config"
+      },
+      "args": []
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 198,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "kv_format",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 244,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "ttnn.transformer.SparseKVFormat.SCALED_FP8",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc"
+      },
+      "args": [
+        "tt_q",
+        "tt_packed",
+        "tt_indices",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 330,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "ttnn.transformer.SparseKVFormat.BF16",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cb"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 258,
+      "function": "ttnn.transformer.sparse_sdpa_msa",
+      "kwargs": {
+        "scale": "scale"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v",
+        "tt_i"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 297,
+      "function": "ttnn.transformer.sparse_sdpa_msa",
+      "kwargs": {
+        "scale": "scale"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v",
+        "tt_i"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 369,
+      "function": "ttnn.transformer.sparse_sdpa_msa",
+      "kwargs": {
+        "scale": "_D ** (-0.5)",
+        "block_size": "BLK_KV",
+        "**": "kw"
+      },
+      "args": [
+        "_rm(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "k_tt",
+        "v_tt",
+        "_rm(indices.to(torch.int32), device, ttnn.uint32)"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 566,
+      "function": "ttnn.transformer.sparse_sdpa_msa",
+      "kwargs": {
+        "scale": "d ** (-0.5)",
+        "block_size": "BLK_KV"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v",
+        "tt_idx"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 635,
+      "function": "ttnn.transformer.sparse_sdpa_msa",
+      "kwargs": {
+        "scale": "scale",
+        "block_size": "BLK_KV",
+        "chunk_start_idx": "0",
+        "cluster_axis": "0"
+      },
+      "args": [
+        "shard_seq_rm(q.to(torch.float32), ttnn.bfloat16)",
+        "repl_tile(k, ttnn.bfloat16)",
+        "repl_tile(v, ttnn.bfloat16)",
+        "shard_seq_rm(indices.to(torch.int32), ttnn.uint32)"
+      ]
+    },
+    {
+      "file": "tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_block_cyclic_multidevice.py",
+      "line": 90,
+      "function": "ttnn.transformer.sparse_sdpa_msa",
+      "kwargs": {
+        "**": "kw"
+      },
+      "args": [
+        "dev_rm(q.to(torch.float32), ttnn.bfloat16)",
+        "dev_tile(k_in)",
+        "dev_tile(v_in)",
+        "dev_rm(indices.to(torch.int32), ttnn.uint32)"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+      "line": 649,
+      "function": "ttnn.transformer.chunked_flash_mla_prefill",
+      "kwargs": {
+        "chunk_start_idx": "0",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "kv_lora_rank",
+        "tt_page_table"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+      "line": 661,
+      "function": "ttnn.transformer.flash_mla_prefill",
+      "kwargs": {
+        "head_dim_v": "kv_lora_rank",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "attn_mask": "None",
+        "is_causal": "True"
+      },
+      "args": [
+        "tt_q",
+        "tt_k"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
+      "line": 315,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "args.causal",
+        "program_config": "program",
+        "compute_kernel_config": "config",
+        "scale": "args.attention_scale_factor / (math.sqrt(args.dim) * args.q_prescale)"
+      },
+      "args": [
+        "tq",
+        "tk",
+        "tv"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
+      "line": 332,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "args.causal",
+        "program_config": "program",
+        "compute_kernel_config": "config",
+        "scale": "args.attention_scale_factor / (math.sqrt(args.dim) * args.q_prescale)"
+      },
+      "args": [
+        "tq",
+        "tk",
+        "tv"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sparse_sdpa_msa_test_utils.py",
+      "line": 186,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "ttnn.transformer.SparseKVFormat.BF16",
+        "scale": "scale",
+        "k_chunk_size": "k_chunk_size"
+      },
+      "args": [
+        "dev(qz.to(torch.bfloat16), ttnn.bfloat16)",
+        "dev(kv_packed.to(torch.bfloat16), ttnn.bfloat16)",
+        "dev(exp.to(torch.int32), ttnn.uint32)",
+        "v_dim"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sparse_sdpa_msa_test_utils.py",
+      "line": 231,
+      "function": "ttnn.transformer.sparse_sdpa_msa",
+      "kwargs": {
+        "scale": "scale",
+        "block_size": "block_size",
+        "chunk_start_idx": "chunk_start_idx",
+        "cluster_axis": "cluster_axis",
+        "block_cyclic_sp_axis": "block_cyclic_sp_axis",
+        "block_cyclic_chunk_local": "block_cyclic_chunk_local"
+      },
+      "args": [
+        "dev_rm(q.to(torch.float32), q_dtype)",
+        "dev_tile(k, kv_dtype)",
+        "dev_tile(v, kv_dtype)",
+        "dev_rm(indices.to(torch.int32), ttnn.uint32)"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/sparse_sdpa_test_utils.py",
+      "line": 83,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "kv_format",
+        "scale": "scale",
+        "k_chunk_size": "k_chunk_size",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "v_dim"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py",
+      "line": 123,
+      "function": "ttnn.transformer.flash_mla_prefill",
+      "kwargs": {
+        "head_dim_v": "kv_lora_rank",
+        "scale": "scale",
+        "program_config": "sdpa_program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "attn_mask": "None",
+        "is_causal": "is_causal"
+      },
+      "args": [
+        "tt_q",
+        "tt_k"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py",
+      "line": 141,
+      "function": "ttnn.transformer.flash_mla_prefill",
+      "kwargs": {
+        "scale": "scale",
+        "program_config": "sdpa_program_config_second",
+        "compute_kernel_config": "compute_kernel_config",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+        "is_causal": "is_causal",
+        "attn_mask": "None"
+      },
+      "args": [
+        "tt_q",
+        "tt_k",
+        "tt_v_embedding"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 299,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "True",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 378,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "attn_mask": "tt_mask",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 436,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "sliding_window_size": "sliding_window",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 507,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "is_causal",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "attention_sink": "tt_S"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py",
+      "line": 640,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "attn_mask": "tt_bias",
+        "is_causal": "False",
+        "scale": "scale",
+        "sliding_window_size": "None",
+        "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+      },
+      "args": [
+        "tt_Q",
+        "tt_K",
+        "tt_V"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 43,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {},
+      "args": [
+        "None",
+        "None",
+        "None",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 108,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc",
+        "**": "block_cyclic_args"
+      },
+      "args": [
+        "tt_q",
+        "tt_packed",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 142,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc"
+      },
+      "args": [
+        "to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "tt_packed",
+        "to_dev(indices.to(torch.int32), device, ttnn.uint32)",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 165,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV"
+      },
+      "args": [
+        "to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "malformed",
+        "to_dev(indices.to(torch.int32), device, ttnn.uint32)",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 185,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV",
+        "k_chunk_size": "TOPK"
+      },
+      "args": [
+        "to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "packed",
+        "to_dev(indices.to(torch.int32), device, ttnn.uint32)",
+        "v_dim"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 200,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV"
+      },
+      "args": [
+        "to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "to_dev(indices.to(torch.int32), device, ttnn.uint32)",
+        "K_DIM + 32"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 222,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "kv_format",
+        "k_chunk_size": "TOPK"
+      },
+      "args": [
+        "to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "to_dev(kv_host, device, kv_dtype)",
+        "to_dev(indices.to(torch.int32), device, ttnn.uint32)",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 242,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 309,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 337,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc",
+        "block_cyclic_sp_axis": "0",
+        "block_cyclic_chunk_local": "S"
+      },
+      "args": [
+        "to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "to_dev(indices.to(torch.int32), device, ttnn.uint32)",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 362,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "K_DIM ** (-0.5)",
+        "k_chunk_size": "kc",
+        "block_cyclic_sp_axis": "0",
+        "block_cyclic_chunk_local": "S - 16"
+      },
+      "args": [
+        "to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "to_dev(kv_nat.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "to_dev(indices.to(torch.int32), device, ttnn.uint32)",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 398,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cb"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 424,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cb"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 463,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cb"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 482,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "SCALED_FP8_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "cache_batch_idx"
+      },
+      "args": [
+        "tt_q",
+        "tt_packed",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 519,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "scale": "scale",
+        "k_chunk_size": "kc"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 536,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "0"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 542,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "k_chunk_size": "kc",
+        "cache_batch_idx": "B"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 556,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "k_chunk_size": "kc"
+      },
+      "args": [
+        "tt_q",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py",
+      "line": 562,
+      "function": "ttnn.transformer.sparse_sdpa",
+      "kwargs": {
+        "kv_format": "BF16_KV",
+        "k_chunk_size": "kc"
+      },
+      "args": [
+        "tt_q_tile",
+        "tt_kv",
+        "tt_idx",
+        "V_DIM"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py",
+      "line": 148,
+      "function": "ttnn.transformer.sparse_sdpa_msa",
+      "kwargs": {
+        "scale": "_D ** (-0.5)",
+        "block_size": "BLK_KV"
+      },
+      "args": [
+        "_rm(q.to(torch.bfloat16), device, ttnn.bfloat16)",
+        "k_tt",
+        "v_tt",
+        "_rm(indices.to(torch.int32), device, ttnn.uint32)"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 110,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "cu_window_seqlens": "cu_tt"
+      },
+      "args": [
+        "q_tt",
+        "k_tt",
+        "v_tt"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 194,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "cu_window_seqlens": "cu_tt",
+        "windowed_q_token_offset": "0 if offset_as_tensor else offset",
+        "windowed_q_token_offset_tensor": "ttnn.from_torch(torch.tensor([offset], dtype=torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32) if offset_as_tensor else None"
+      },
+      "args": [
+        "ttnn.from_torch(q_shard, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)",
+        "k_tt",
+        "v_tt"
+      ]
+    },
+    {
+      "file": "tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py",
+      "line": 306,
+      "function": "ttnn.transformer.scaled_dot_product_attention",
+      "kwargs": {
+        "is_causal": "False",
+        "scale": "scale",
+        "program_config": "program_config",
+        "compute_kernel_config": "compute_kernel_config",
+        "cu_window_seqlens": "cu_tt",
+        "windowed_q_token_offset_tensor": "offsets_tt"
+      },
+      "args": [
+        "q_tt",
+        "k_tt",
+        "v_tt"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,972 @@
+[
+  {
+    "label": "pragma-sustained-D-v1-D-normal-r0-original",
+    "variant": "D",
+    "candidate": "state_lazy_scan",
+    "mode": "accurate",
+    "distribution": "normal",
+    "seed": 1236,
+    "distinct_kv": false,
+    "q_repeats": 8,
+    "k_chunks": 512,
+    "warmup": 8,
+    "iters": 8,
+    "hybrid_block_pack": false,
+    "codegen_level": "original",
+    "cores": 1,
+    "q_chunk": 256,
+    "k_chunk": 512,
+    "dim": 128,
+    "kv_slots": 1,
+    "cb_bytes": 1335296,
+    "useful_flops": 274877906944,
+    "median_ms": 335.58434701990336,
+    "trace_replay_ms": [
+      335.594821954146,
+      335.6005831155926,
+      335.58477205224335,
+      335.5727221351117,
+      335.5839219875634,
+      335.5777128599584,
+      335.6087820138782,
+      335.58101300150156
+    ],
+    "tflops_per_core": 0.8191022894393137,
+    "l2_pct": 0.1776171367017995,
+    "pcc": 0.9999984185446898,
+    "full_output_sha256": "f3b8d22409413d424f5f48bee78e5590951269543213d45d03bc541cfc35f137",
+    "trace_equal": true,
+    "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput",
+    "round_index": 0,
+    "actual_descriptors": [
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/resident.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          1035273459
+        ]
+      }
+    ],
+    "raw_bits_equal": true,
+    "mismatch_count": 0,
+    "private_source_sha256": {
+      "resident.cpp": "386111d43a42717bd572f08ebc4b1b0ea6b3bc23053607adbabe929fc834fe7c",
+      "bench_codegen.py": "56668a9e4736d57a8151d84640bceebabf18be4b6e2fb2fbb8ba315ad12bf724"
+    },
+    "raw_trace_equal": true
+  },
+  {
+    "label": "pragma-sustained-D-v1-D-normal-r0-O3",
+    "variant": "D",
+    "candidate": "state_lazy_scan",
+    "mode": "accurate",
+    "distribution": "normal",
+    "seed": 1236,
+    "distinct_kv": false,
+    "q_repeats": 8,
+    "k_chunks": 512,
+    "warmup": 8,
+    "iters": 8,
+    "hybrid_block_pack": false,
+    "codegen_level": "O3",
+    "cores": 1,
+    "q_chunk": 256,
+    "k_chunk": 512,
+    "dim": 128,
+    "kv_slots": 1,
+    "cb_bytes": 1335296,
+    "useful_flops": 274877906944,
+    "median_ms": 335.5858725262806,
+    "trace_replay_ms": [
+      335.5840630829334,
+      335.58878186158836,
+      335.58266307227314,
+      335.57943208143115,
+      335.5898819863796,
+      335.6088218279183,
+      335.58381302282214,
+      335.58768196962774
+    ],
+    "tflops_per_core": 0.8190985659638387,
+    "l2_pct": 0.1776171367017995,
+    "pcc": 0.9999984185446898,
+    "full_output_sha256": "f3b8d22409413d424f5f48bee78e5590951269543213d45d03bc541cfc35f137",
+    "trace_equal": true,
+    "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput",
+    "round_index": 0,
+    "actual_descriptors": [
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/resident.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "3"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          1035273459
+        ]
+      }
+    ],
+    "raw_bits_equal": true,
+    "mismatch_count": 0,
+    "private_source_sha256": {
+      "resident.cpp": "386111d43a42717bd572f08ebc4b1b0ea6b3bc23053607adbabe929fc834fe7c",
+      "bench_codegen.py": "56668a9e4736d57a8151d84640bceebabf18be4b6e2fb2fbb8ba315ad12bf724"
+    },
+    "raw_trace_equal": true
+  },
+  {
+    "label": "pragma-sustained-D-v1-D-normal-r0-O2",
+    "variant": "D",
+    "candidate": "state_lazy_scan",
+    "mode": "accurate",
+    "distribution": "normal",
+    "seed": 1236,
+    "distinct_kv": false,
+    "q_repeats": 8,
+    "k_chunks": 512,
+    "warmup": 8,
+    "iters": 8,
+    "hybrid_block_pack": false,
+    "codegen_level": "O2",
+    "cores": 1,
+    "q_chunk": 256,
+    "k_chunk": 512,
+    "dim": 128,
+    "kv_slots": 1,
+    "cb_bytes": 1335296,
+    "useful_flops": 274877906944,
+    "median_ms": 327.6554470648989,
+    "trace_replay_ms": [
+      327.66012800857425,
+      327.65665696933866,
+      327.63983705081046,
+      327.6488978881389,
+      327.6587571017444,
+      327.6618770323694,
+      327.6467979885638,
+      327.65423716045916
+    ],
+    "tflops_per_core": 0.8389236602239509,
+    "l2_pct": 0.1776171367017995,
+    "pcc": 0.9999984185446898,
+    "full_output_sha256": "f3b8d22409413d424f5f48bee78e5590951269543213d45d03bc541cfc35f137",
+    "trace_equal": true,
+    "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput",
+    "round_index": 0,
+    "actual_descriptors": [
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/resident.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          1035273459
+        ]
+      }
+    ],
+    "raw_bits_equal": true,
+    "mismatch_count": 0,
+    "private_source_sha256": {
+      "resident.cpp": "386111d43a42717bd572f08ebc4b1b0ea6b3bc23053607adbabe929fc834fe7c",
+      "bench_codegen.py": "56668a9e4736d57a8151d84640bceebabf18be4b6e2fb2fbb8ba315ad12bf724"
+    },
+    "raw_trace_equal": true
+  },
+  {
+    "label": "pragma-sustained-D-v1-D-normal-r1-O2",
+    "variant": "D",
+    "candidate": "state_lazy_scan",
+    "mode": "accurate",
+    "distribution": "normal",
+    "seed": 1236,
+    "distinct_kv": false,
+    "q_repeats": 8,
+    "k_chunks": 512,
+    "warmup": 8,
+    "iters": 8,
+    "hybrid_block_pack": false,
+    "codegen_level": "O2",
+    "cores": 1,
+    "q_chunk": 256,
+    "k_chunk": 512,
+    "dim": 128,
+    "kv_slots": 1,
+    "cb_bytes": 1335296,
+    "useful_flops": 274877906944,
+    "median_ms": 327.6485875248909,
+    "trace_replay_ms": [
+      327.686068136245,
+      327.6571170426905,
+      327.65443809330463,
+      327.687757788226,
+      327.6326172053814,
+      327.63803703710437,
+      327.64273695647717,
+      327.6370670646429
+    ],
+    "tflops_per_core": 0.8389412236459528,
+    "l2_pct": 0.1776171367017995,
+    "pcc": 0.9999984185446898,
+    "full_output_sha256": "f3b8d22409413d424f5f48bee78e5590951269543213d45d03bc541cfc35f137",
+    "trace_equal": true,
+    "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput",
+    "round_index": 1,
+    "actual_descriptors": [
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/resident.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "2"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          1035273459
+        ]
+      }
+    ],
+    "raw_bits_equal": true,
+    "mismatch_count": 0,
+    "private_source_sha256": {
+      "resident.cpp": "386111d43a42717bd572f08ebc4b1b0ea6b3bc23053607adbabe929fc834fe7c",
+      "bench_codegen.py": "56668a9e4736d57a8151d84640bceebabf18be4b6e2fb2fbb8ba315ad12bf724"
+    },
+    "raw_trace_equal": true
+  },
+  {
+    "label": "pragma-sustained-D-v1-D-normal-r1-O3",
+    "variant": "D",
+    "candidate": "state_lazy_scan",
+    "mode": "accurate",
+    "distribution": "normal",
+    "seed": 1236,
+    "distinct_kv": false,
+    "q_repeats": 8,
+    "k_chunks": 512,
+    "warmup": 8,
+    "iters": 8,
+    "hybrid_block_pack": false,
+    "codegen_level": "O3",
+    "cores": 1,
+    "q_chunk": 256,
+    "k_chunk": 512,
+    "dim": 128,
+    "kv_slots": 1,
+    "cb_bytes": 1335296,
+    "useful_flops": 274877906944,
+    "median_ms": 335.56499192491174,
+    "trace_replay_ms": [
+      335.56614187546074,
+      335.58086305856705,
+      335.55575204081833,
+      335.5687418952584,
+      335.56288201361895,
+      335.5768818873912,
+      335.5581220239401,
+      335.56384197436273
+    ],
+    "tflops_per_core": 0.8191495345423533,
+    "l2_pct": 0.1776171367017995,
+    "pcc": 0.9999984185446898,
+    "full_output_sha256": "f3b8d22409413d424f5f48bee78e5590951269543213d45d03bc541cfc35f137",
+    "trace_equal": true,
+    "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput",
+    "round_index": 1,
+    "actual_descriptors": [
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v2/codegen/resident.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ],
+          [
+            "SDPA_CODEGEN_OPT",
+            "3"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          1035273459
+        ]
+      }
+    ],
+    "raw_bits_equal": true,
+    "mismatch_count": 0,
+    "private_source_sha256": {
+      "resident.cpp": "386111d43a42717bd572f08ebc4b1b0ea6b3bc23053607adbabe929fc834fe7c",
+      "bench_codegen.py": "56668a9e4736d57a8151d84640bceebabf18be4b6e2fb2fbb8ba315ad12bf724"
+    },
+    "raw_trace_equal": true
+  },
+  {
+    "label": "pragma-sustained-D-v1-D-normal-r1-original",
+    "variant": "D",
+    "candidate": "state_lazy_scan",
+    "mode": "accurate",
+    "distribution": "normal",
+    "seed": 1236,
+    "distinct_kv": false,
+    "q_repeats": 8,
+    "k_chunks": 512,
+    "warmup": 8,
+    "iters": 8,
+    "hybrid_block_pack": false,
+    "codegen_level": "original",
+    "cores": 1,
+    "q_chunk": 256,
+    "k_chunk": 512,
+    "dim": 128,
+    "kv_slots": 1,
+    "cb_bytes": 1335296,
+    "useful_flops": 274877906944,
+    "median_ms": 335.5757870012894,
+    "trace_replay_ms": [
+      335.5839429423213,
+      335.58779186569154,
+      335.6029430869967,
+      335.5612519662827,
+      335.57484205812216,
+      335.5620428919792,
+      335.5767319444567,
+      335.5711321346462
+    ],
+    "tflops_per_core": 0.8191231834701584,
+    "l2_pct": 0.1776171367017995,
+    "pcc": 0.9999984185446898,
+    "full_output_sha256": "f3b8d22409413d424f5f48bee78e5590951269543213d45d03bc541cfc35f137",
+    "trace_equal": true,
+    "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput",
+    "round_index": 1,
+    "actual_descriptors": [
+      {
+        "source": "experiments/sdpa-l2/compute-sprint-v1/fp32/resident.cpp",
+        "defines": [
+          [
+            "EXP_APPROX_MODE",
+            "1"
+          ],
+          [
+            "STATS_GRANULARITY",
+            "4"
+          ],
+          [
+            "SUB_EXP_GRANULARITY",
+            "4"
+          ],
+          [
+            "MUL_BCAST_GRANULARITY",
+            "4"
+          ],
+          [
+            "DHT_GRANULARITY",
+            "4"
+          ],
+          [
+            "REDUCE_GRANULARITY",
+            "2"
+          ],
+          [
+            "SDPA_FP32_STREAMING",
+            "1"
+          ],
+          [
+            "SDPA_FP32_STATE",
+            "1"
+          ],
+          [
+            "SDPA_HIFI2_ROUND",
+            "1"
+          ],
+          [
+            "SDPA_FP32_FUSED_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REUSE_EXP",
+            "1"
+          ],
+          [
+            "SDPA_FP32_EXTRA_CONST",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_UNPACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_PAIRED_PACK",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_SUB",
+            "1"
+          ],
+          [
+            "SDPA_FP32_L1_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_FP32_REFINE_MACRO",
+            "1"
+          ],
+          [
+            "SDPA_DIAG_EXP_MODE",
+            "4"
+          ],
+          [
+            "SDPA_FP32_SUB_BATCH",
+            "2"
+          ],
+          [
+            "SDPA_DENOM_PHASES",
+            "2"
+          ],
+          [
+            "SDPA_DIAG_SCORE_CB",
+            "7"
+          ],
+          [
+            "SDPA_SPRINT_IDENTITY4",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_STATE_UNPACK_BATCH",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_LAZY_INIT",
+            "1"
+          ],
+          [
+            "SDPA_SPRINT_MAX_SCAN",
+            "1"
+          ]
+        ],
+        "compile_time_args": [
+          8,
+          512,
+          1035273459
+        ]
+      }
+    ],
+    "raw_bits_equal": true,
+    "mismatch_count": 0,
+    "private_source_sha256": {
+      "resident.cpp": "386111d43a42717bd572f08ebc4b1b0ea6b3bc23053607adbabe929fc834fe7c",
+      "bench_codegen.py": "56668a9e4736d57a8151d84640bceebabf18be4b6e2fb2fbb8ba315ad12bf724"
+    },
+    "raw_trace_equal": true
+  }
+]

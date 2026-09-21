@@ -1,0 +1,260 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "evaluation_mode": "exploratory_repeatability_not_required",
+  "variant": "stock",
+  "conditioning": "stock",
+  "model_repair": "main_fused",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "converted_weight_cache": "/localdev/cglagovich/flux2-frontier-20260915/dit-cache-v2",
+  "pinned_memory_cache_limit_bytes": "0",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "175f86bdc088bd18762395cd248da6421bf85c8a929205bbdce3ae1eaa578129",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "ab1f0fe199905550f86c41269dcddf991b83fce14cb9cc710a277cffff76e3b9",
+    "experiments/sdpa-l2/flux2-frontier-v1/conditioning.py": "751456805a36bf1e8d166a44002b9eaba47e3d595f53d537ba8de8c914f703b7",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_fixes.py": "e79f6e1e5228a3df3b2035d0422a052cb13dd36ce552509f9732849f84605d64"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "/localdev/cglagovich/flux2-frontier-20260915/tt-metal/experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 2,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": true,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset"
+  ],
+  "seeds": [
+    0
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "stock ring",
+  "attention_recipe": null,
+  "attention_qk_chunks": null,
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "stock-prompt0-seed0.png",
+      "image_sha256": "3cc463d857acb0703b8617f97e2f9efcd744b05228f6c76a677ff40e6c70be4f",
+      "latents": "stock-prompt0-seed0-latents.pt",
+      "latents_sha256": "ae48684393c8c71805326db8b756bdf04e8693dbbf9e399a79861f947d95ea5b",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.324308,
+        0.327918
+      ],
+      "host_seconds": {
+        "run": 1.143639,
+        "encoder": 0.026151,
+        "denoising": 0.653299,
+        "vae": 0.452438
+      }
+    }
+  ],
+  "weight_loads": [
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": false,
+      "torch_state_dict_requested": true,
+      "seconds_including_cache_write": 0.3974926460068673
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": false,
+      "torch_state_dict_requested": true,
+      "seconds_including_cache_write": 139.5733076268807
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": false,
+      "torch_state_dict_requested": true,
+      "seconds_including_cache_write": 104.83464432996698
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.269873559474945e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.00002284348011e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 2.9799994081258774e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.8000289350748062e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.33995558321476e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.070104867219925e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 4.019821062684059e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.119930624961853e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.600027412176132e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 5.120178684592247e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.4098047763109207e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.400025889277458e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.4400727599859238e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.8100406527519226e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.6600977182388306e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "text_encoder",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.4498516470193863e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "transformer",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.5299453884363174e-06
+    },
+    {
+      "model_name": "26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+      "subfolder": "vae",
+      "already_loaded": true,
+      "torch_state_dict_requested": false,
+      "seconds_including_cache_write": 3.840075805783272e-06
+    }
+  ],
+  "pipeline_setup_seconds": 248.7725074698683,
+  "cache_validation_weight": {
+    "name": "time_guidance_embed.timestep_embedder.linear_2.weight",
+    "device_shard_sha256": [
+      "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+      "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+      "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+      "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+      "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+      "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+      "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355",
+      "2565855da30054a88db4ae1b0bdc9b44443b4a337a420c6389426c2f60ae5355"
+    ]
+  },
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725"
+  },
+  "real_input_captures": {},
+  "discarded_capture_run_l2_vs_untraced_pct": 52.77405381202698,
+  "two_step_trace_checks": [
+    {
+      "exact": true,
+      "l2_pct": 0.0
+    },
+    {
+      "exact": true,
+      "l2_pct": 0.0
+    }
+  ],
+  "two_step_trace_latents_bitwise_equal": true
+}

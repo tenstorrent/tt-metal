@@ -1,0 +1,28 @@
+{
+  "canonical_recipe": "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py:recipe",
+  "recipe_sha256": "ec477bb574bd1503320802a400ccfde938eaf8e0cf054c6da39541fd2d779afe",
+  "fixed_shape": {"q_chunk": 256, "k_chunk": 512, "head_dim": 128, "kv_slots": 1},
+  "private_header_sha256": "fef42cc8a8bfb272e4bdd401902c51ca7c880fc2b4f84f25fc930da69e76462c",
+  "C_refiner_sha256": "cf38a29ddb6df1c8e349301012b721ab25c8be47e01ecf1bc10e88b9770b3ee3",
+  "D": {
+    "candidate": "state_lazy_scan",
+    "additional_defines": {
+      "SDPA_SPRINT_IDENTITY4": "1",
+      "SDPA_SPRINT_STATE_UNPACK_BATCH": "1",
+      "SDPA_SPRINT_LAZY_INIT": "1",
+      "SDPA_SPRINT_MAX_SCAN": "1"
+    }
+  },
+  "C": {
+    "candidate": "c_refine_hoist_state_lazy_scan",
+    "additional_defines": {
+      "SDPA_SPRINT_IDENTITY4": "1",
+      "SDPA_SPRINT_STATE_UNPACK_BATCH": "1",
+      "SDPA_SPRINT_LAZY_INIT": "1",
+      "SDPA_SPRINT_MAX_SCAN": "1",
+      "SDPA_SPRINT_C_REFINE": "1",
+      "SDPA_SPRINT_C_REFINE_HOIST": "1"
+    }
+  },
+  "integration": "retained.patch is an unapplied narrow patch against the canonical header. It excludes helper-include relocation and the rejected denominator-pack experiment; c_refine.hpp is the referenced new helper. Preserve canonical defines and add only the listed winner flags. Patch passes git apply --check. It is not a production-ready API proposal."
+}

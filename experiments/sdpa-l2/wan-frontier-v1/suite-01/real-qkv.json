@@ -1,0 +1,198 @@
+{
+  "status": "completed",
+  "source": "/localdev/cglagovich/flux2-frontier-20260915/wan-frontier-01/suite-01/D/manifest.json",
+  "rows": [
+    {
+      "block": "expert0.block0",
+      "variant": "D",
+      "l2_pct": 0.1990811704394007,
+      "pcc": 0.9999980193898531,
+      "max_abs": 0.010288819968518048,
+      "max_relative_rms_floor_1e_minus3": 5.434166399902013
+    },
+    {
+      "block": "expert0.block0",
+      "variant": "C",
+      "l2_pct": 0.40990386792237476,
+      "pcc": 0.9999916282007809,
+      "max_abs": 0.021730043812057342,
+      "max_relative_rms_floor_1e_minus3": 23.374347982748915
+    },
+    {
+      "block": "expert0.block0",
+      "variant": "B",
+      "l2_pct": 5.0224209690455766,
+      "pcc": 0.9987694226550022,
+      "max_abs": 0.22179763557839471,
+      "max_relative_rms_floor_1e_minus3": 208.19012810782485
+    },
+    {
+      "block": "expert0.block0",
+      "variant": "E",
+      "l2_pct": 6.083241617953102,
+      "pcc": 0.9981515373413818,
+      "max_abs": 0.3498367067358834,
+      "max_relative_rms_floor_1e_minus3": 267.37236913398715
+    },
+    {
+      "block": "expert0.block0",
+      "variant": "F",
+      "l2_pct": 4.704332032450438,
+      "pcc": 0.9989021556024448,
+      "max_abs": 0.2361488266397711,
+      "max_relative_rms_floor_1e_minus3": 226.05646502138327
+    },
+    {
+      "block": "expert0.block0",
+      "variant": "G",
+      "l2_pct": 23.69153133299649,
+      "pcc": 0.9716794528277729,
+      "max_abs": 1.322916811274309,
+      "max_relative_rms_floor_1e_minus3": 862.6734406485838
+    },
+    {
+      "block": "expert0.block20",
+      "variant": "D",
+      "l2_pct": 0.16665021548043457,
+      "pcc": 0.9999986109461481,
+      "max_abs": 0.008157014584277533,
+      "max_relative_rms_floor_1e_minus3": 0.7231752903442742
+    },
+    {
+      "block": "expert0.block20",
+      "variant": "C",
+      "l2_pct": 0.19947414542592673,
+      "pcc": 0.9999980968661036,
+      "max_abs": 0.010958358029856896,
+      "max_relative_rms_floor_1e_minus3": 5.862194251747284
+    },
+    {
+      "block": "expert0.block20",
+      "variant": "B",
+      "l2_pct": 1.366578075963356,
+      "pcc": 0.999912122592371,
+      "max_abs": 0.07885694187193537,
+      "max_relative_rms_floor_1e_minus3": 41.48091951558572
+    },
+    {
+      "block": "expert0.block20",
+      "variant": "E",
+      "l2_pct": 1.3472719348283198,
+      "pcc": 0.9999097782525179,
+      "max_abs": 0.08966195119997206,
+      "max_relative_rms_floor_1e_minus3": 62.66831945009521
+    },
+    {
+      "block": "expert0.block20",
+      "variant": "F",
+      "l2_pct": 1.017052855797909,
+      "pcc": 0.9999493353402787,
+      "max_abs": 0.07648003486856958,
+      "max_relative_rms_floor_1e_minus3": 34.56115271445884
+    },
+    {
+      "block": "expert0.block20",
+      "variant": "G",
+      "l2_pct": 6.092624930516885,
+      "pcc": 0.9981498122520271,
+      "max_abs": 0.4097488945602565,
+      "max_relative_rms_floor_1e_minus3": 210.73570212862361
+    },
+    {
+      "block": "expert1.block0",
+      "variant": "D",
+      "l2_pct": 0.18933511616491552,
+      "pcc": 0.999998211129855,
+      "max_abs": 0.01320830091183467,
+      "max_relative_rms_floor_1e_minus3": 3.3477620607094827
+    },
+    {
+      "block": "expert1.block0",
+      "variant": "C",
+      "l2_pct": 0.4928026888612696,
+      "pcc": 0.9999883845912406,
+      "max_abs": 0.047522179155265576,
+      "max_relative_rms_floor_1e_minus3": 12.433851635932495
+    },
+    {
+      "block": "expert1.block0",
+      "variant": "B",
+      "l2_pct": 4.963462638075861,
+      "pcc": 0.9988328999756984,
+      "max_abs": 0.46676111181892477,
+      "max_relative_rms_floor_1e_minus3": 240.24636736244693
+    },
+    {
+      "block": "expert1.block0",
+      "variant": "E",
+      "l2_pct": 5.508479896915608,
+      "pcc": 0.9984832826203255,
+      "max_abs": 0.4302475041682452,
+      "max_relative_rms_floor_1e_minus3": 192.27732592953623
+    },
+    {
+      "block": "expert1.block0",
+      "variant": "F",
+      "l2_pct": 4.105874831113077,
+      "pcc": 0.9991575192618813,
+      "max_abs": 0.3467274800010641,
+      "max_relative_rms_floor_1e_minus3": 144.27619381107453
+    },
+    {
+      "block": "expert1.block0",
+      "variant": "G",
+      "l2_pct": 18.15112182934658,
+      "pcc": 0.9833827450204464,
+      "max_abs": 1.2538760569860767,
+      "max_relative_rms_floor_1e_minus3": 501.1152161115252
+    },
+    {
+      "block": "expert1.block20",
+      "variant": "D",
+      "l2_pct": 0.16862257754823437,
+      "pcc": 0.9999985747498662,
+      "max_abs": 0.008354457321002595,
+      "max_relative_rms_floor_1e_minus3": 0.7118300442484379
+    },
+    {
+      "block": "expert1.block20",
+      "variant": "C",
+      "l2_pct": 0.19291558183846966,
+      "pcc": 0.9999981912994949,
+      "max_abs": 0.01115442557110935,
+      "max_relative_rms_floor_1e_minus3": 6.66297503962128
+    },
+    {
+      "block": "expert1.block20",
+      "variant": "B",
+      "l2_pct": 1.5190039316122566,
+      "pcc": 0.999899640121932,
+      "max_abs": 0.09889805358203596,
+      "max_relative_rms_floor_1e_minus3": 55.13972789486794
+    },
+    {
+      "block": "expert1.block20",
+      "variant": "E",
+      "l2_pct": 1.5158843181472716,
+      "pcc": 0.9998848112117426,
+      "max_abs": 0.1520618828265139,
+      "max_relative_rms_floor_1e_minus3": 44.18895311926571
+    },
+    {
+      "block": "expert1.block20",
+      "variant": "F",
+      "l2_pct": 1.2308736998019378,
+      "pcc": 0.9999246621795439,
+      "max_abs": 0.11950910706131013,
+      "max_relative_rms_floor_1e_minus3": 25.708826316470578
+    },
+    {
+      "block": "expert1.block20",
+      "variant": "G",
+      "l2_pct": 7.253970981041524,
+      "pcc": 0.9973592947667864,
+      "max_abs": 0.688417886343042,
+      "max_relative_rms_floor_1e_minus3": 223.94117825794152
+    }
+  ]
+}

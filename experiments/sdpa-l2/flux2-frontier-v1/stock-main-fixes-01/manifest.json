@@ -1,0 +1,130 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "completed",
+  "variant": "stock",
+  "conditioning": "stock",
+  "model_repair": "main_fused",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "7a06a2f916b5f3c175b00cd992f774da98d4b792549386ae1fc2903e5da947ce",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "451726d8aa456be4732ba1009d4ed1d8dc9f4d41841189ad3df7e9cb76e80747",
+    "experiments/sdpa-l2/flux2-frontier-v1/conditioning.py": "751456805a36bf1e8d166a44002b9eaba47e3d595f53d537ba8de8c914f703b7",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_fixes.py": "cb602d92e2d26fb520898a0820e2b030ce0f956b02057c72bf28c6045cc3c737"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": false,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset"
+  ],
+  "seeds": [
+    0
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "stock ring",
+  "attention_recipe": null,
+  "attention_qk_chunks": null,
+  "results": [
+    {
+      "prompt_id": 0,
+      "seed": 0,
+      "image": "stock-prompt0-seed0.png",
+      "image_sha256": "293dc3b8dc79f9898262b6c5f4a7465130c986c1e1ced9a4f33a56240a760d67",
+      "latents": "stock-prompt0-seed0-latents.pt",
+      "latents_sha256": "2d308b50c7e0762cd49d6f9b35e51e7330467954663f46ffd2296aba3189bc7f",
+      "latents_finite": true,
+      "denoising_step_seconds": [
+        0.153547,
+        0.152559,
+        0.325274,
+        0.831373,
+        0.827816,
+        0.831842,
+        0.834873,
+        0.831359,
+        0.827677,
+        0.831928,
+        0.83464,
+        0.831427,
+        0.827683,
+        0.83185,
+        0.834732,
+        0.831355,
+        0.827657,
+        0.831956,
+        0.834696,
+        0.831531,
+        0.827511,
+        0.832461,
+        0.834509,
+        0.831501,
+        0.827378,
+        0.832297,
+        0.834553,
+        0.831459,
+        0.828217,
+        0.831619,
+        0.834416,
+        0.831524,
+        0.82827,
+        0.831678,
+        0.83428,
+        0.831475,
+        0.827851,
+        0.832351,
+        0.834331,
+        0.83155,
+        0.827844,
+        0.832441,
+        0.834163,
+        0.831493,
+        0.827806,
+        0.832426,
+        0.834165,
+        0.83147,
+        0.827767,
+        0.832674
+      ],
+      "host_seconds": {
+        "run": 41.974528,
+        "encoder": 0.027026,
+        "denoising": 39.719204,
+        "vae": 2.211445
+      }
+    }
+  ],
+  "pipeline_setup_seconds": 378.66003138799715,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725"
+  }
+}

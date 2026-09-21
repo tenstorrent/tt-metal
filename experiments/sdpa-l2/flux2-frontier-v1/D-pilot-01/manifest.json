@@ -1,0 +1,388 @@
+{
+  "schema": "flux2-frontier-eval-v1",
+  "status": "failed",
+  "variant": "D",
+  "vae_sdpa_chunks": [
+    64,
+    64
+  ],
+  "trace_region_bytes": 268435456,
+  "checkpoint": "/localdev/cglagovich/flux2-frontier-20260915/hf-cache/models--black-forest-labs--FLUX.2-dev/snapshots/26afe3a78bb242c0a8bb181dcc8937bb16e5c66c",
+  "git_head": "2daa9201e244957b95774d2a0bbe8d1db7c659e4",
+  "git_status": " M models/tt_dit/blocks/attention_opt.py\n M models/tt_dit/pipelines/flux2/pipeline_flux2.py\n?? experiments/sdpa-l2/flux2-frontier-v1/\n",
+  "entry_source_sha256": {
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py": "806f3983a8dcce74979847eb958dffd917246f43a2ef5fffdc14a345405126a3",
+    "models/tt_dit/pipelines/flux2/pipeline_flux2.py": "951e5a9d5994369d120eee242f0066df60dd729e864c75f68599d94dedf2e2d3",
+    "models/tt_dit/models/transformers/transformer_flux2.py": "460ed900ce32bfddf80864588fc4488e16f3e5431215af1c40caaef7713da60a",
+    "models/tt_dit/blocks/attention_opt.py": "436f8aa8cdb7141c036479203127ea4c87feb2097652b2b0bb3e87cd4c579c5c",
+    "experiments/sdpa-l2/flux2-frontier-v1/device_attention.py": "c9bb87f7a49d5233884a5e5baac4f19070e64cc1cb9c1c90616aea880f91991a",
+    "experiments/sdpa-l2/flux2-frontier-v1/model_attention.py": "a097cb5fa6a182f5fb8bd48019a37fd4b36f17cf97be88e6cf02ae7d966a53d6",
+    "experiments/sdpa-l2/flux2-frontier-v1/block_bench.py": "392b52cc16bf3e0312207e671efc95f5f1a58ecc5bc65e92c4834eba67df15be"
+  },
+  "versions": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1",
+    "diffusers": "0.38.0"
+  },
+  "command": [
+    "/opt/venv/lib/python3.10/site-packages/pytest/__main__.py",
+    "-s",
+    "-q",
+    "experiments/sdpa-l2/flux2-frontier-v1/test_pipeline.py"
+  ],
+  "mesh": [
+    2,
+    4
+  ],
+  "width": 1024,
+  "height": 1024,
+  "steps": 2,
+  "guidance": 4.0,
+  "prompt_upsampling": false,
+  "traced": true,
+  "prompts": [
+    "A photo of a cat sitting on a windowsill at sunset"
+  ],
+  "seeds": [
+    0
+  ],
+  "timing_scope": "Host stage durations only; not device/block performance",
+  "attention_schedule": "local Q, prepared-format KV all-gather, rectangular attention",
+  "attention_recipe": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_FP32_FUSED_EXP": "1",
+    "SDPA_FP32_REUSE_EXP": "1",
+    "SDPA_FP32_EXTRA_CONST": "1",
+    "SDPA_FP32_PAIRED_UNPACK": "1",
+    "SDPA_FP32_PAIRED_PACK": "1",
+    "SDPA_FP32_L1_SUB": "1",
+    "SDPA_FP32_L1_MACRO": "1",
+    "SDPA_FP32_REFINE_MACRO": "1",
+    "SDPA_DIAG_EXP_MODE": "4",
+    "SDPA_FP32_SUB_BATCH": "2",
+    "SDPA_DENOM_PHASES": "2",
+    "SDPA_DIAG_SCORE_CB": "7"
+  },
+  "attention_qk_chunks": [
+    256,
+    512
+  ],
+  "results": [],
+  "pipeline_setup_seconds": 377.9294727439992,
+  "embedding_cache": {
+    "6d76fa483a40231bd8a1f70f895a5e2f02ca38027a828e8457e79fe33220c028": "cfaaef4c654565afb5f2585345cbfb1110025c3f30541f5f4535039b5b2ab725"
+  },
+  "real_input_captures": {
+    "dual.0": {
+      "file": "qkv-dual.0.pt",
+      "sha256": "5d1f4012e4525e03b4ed2ce182eb298b4fa6de476a83b6d570575c29a332c260",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.1420501470565796,
+        1.0600236654281616,
+        5.048369407653809
+      ],
+      "max_abs": [
+        7.65625,
+        8.5,
+        45.0
+      ]
+    },
+    "dual.7": {
+      "file": "qkv-dual.7.pt",
+      "sha256": "d81328358c24d4385933b7c1cb008f27fe91ff2fd817086a3171222f6bf38a9f",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.381414532661438,
+        1.2723093032836914,
+        4.5050458908081055
+      ],
+      "max_abs": [
+        5.0,
+        5.46875,
+        17.125
+      ]
+    },
+    "single.23": {
+      "file": "qkv-single.23.pt",
+      "sha256": "790c5b52a0d1f6eb204e42f14a10f928ecdac4c89a8ecce64f9cd4888914bb9f",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.4091705083847046,
+        1.3949129581451416,
+        0.6862262487411499
+      ],
+      "max_abs": [
+        7.625,
+        7.21875,
+        4.875
+      ]
+    },
+    "single.47": {
+      "file": "qkv-single.47.pt",
+      "sha256": "d656eeb1838ac3994a3f26c32d05333ffe131eff3ff45438731d95efaf05928d",
+      "local_head_indices": [
+        0
+      ],
+      "tp_ranks": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        1,
+        4,
+        4608,
+        128
+      ],
+      "source": "first denoising step of two-step prompt0 seed0 qualification",
+      "rms": [
+        1.2532025575637817,
+        1.2745310068130493,
+        1.061901569366455
+      ],
+      "max_abs": [
+        6.09375,
+        6.15625,
+        6.875
+      ]
+    }
+  },
+  "block_bench": [
+    {
+      "block": "dual.0",
+      "median_ms": 8.580156,
+      "min_ms": 7.974529,
+      "max_ms": 9.706901,
+      "replay_ms": [
+        7.974529,
+        7.996719,
+        8.037949,
+        8.094309,
+        8.156398,
+        8.216968,
+        8.288828,
+        8.381007,
+        8.444867,
+        8.537546,
+        8.622766,
+        8.718796,
+        8.808565,
+        8.919334,
+        9.053094,
+        9.191223,
+        9.321513,
+        9.441341,
+        9.574841,
+        9.706901
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.3",
+      "median_ms": 10.0552135,
+      "min_ms": 9.732361,
+      "max_ms": 10.535977,
+      "replay_ms": [
+        9.74962,
+        9.732361,
+        9.7446,
+        9.78921,
+        9.82125,
+        9.850789,
+        9.8995,
+        9.955369,
+        9.981779,
+        10.033029,
+        10.077398,
+        10.126519,
+        10.164868,
+        10.241027,
+        10.286508,
+        10.309477,
+        10.354487,
+        10.445807,
+        10.494086,
+        10.535977
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "dual.7",
+      "median_ms": 9.787320000000001,
+      "min_ms": 9.672371,
+      "max_ms": 10.160179,
+      "replay_ms": [
+        9.76507,
+        9.68008,
+        9.678661,
+        9.69255,
+        9.678441,
+        9.68401,
+        9.672371,
+        9.72347,
+        9.758861,
+        9.74564,
+        9.80957,
+        9.82702,
+        9.848629,
+        9.91395,
+        9.960749,
+        9.972369,
+        10.023669,
+        10.074088,
+        10.117248,
+        10.160179
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.0",
+      "median_ms": 7.407157,
+      "min_ms": 7.155854,
+      "max_ms": 7.84384,
+      "replay_ms": [
+        7.183994,
+        7.165663,
+        7.155854,
+        7.180583,
+        7.198463,
+        7.236723,
+        7.265003,
+        7.283953,
+        7.316813,
+        7.387282,
+        7.427032,
+        7.473372,
+        7.511301,
+        7.538482,
+        7.601111,
+        7.655801,
+        7.692751,
+        7.76706,
+        7.80134,
+        7.84384
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.23",
+      "median_ms": 8.070994,
+      "min_ms": 7.754151,
+      "max_ms": 8.576756,
+      "replay_ms": [
+        7.80173,
+        7.754151,
+        7.77261,
+        7.82722,
+        7.80616,
+        7.86012,
+        7.90681,
+        7.958139,
+        7.998399,
+        8.037959,
+        8.104029,
+        8.129188,
+        8.207138,
+        8.251808,
+        8.298398,
+        8.318257,
+        8.403377,
+        8.445377,
+        8.520957,
+        8.576756
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    },
+    {
+      "block": "single.47",
+      "median_ms": 8.3387675,
+      "min_ms": 8.156278,
+      "max_ms": 8.664105,
+      "replay_ms": [
+        8.262358,
+        8.179318,
+        8.156278,
+        8.257548,
+        8.250038,
+        8.239448,
+        8.262538,
+        8.269807,
+        8.294768,
+        8.339657,
+        8.337878,
+        8.432057,
+        8.392937,
+        8.483957,
+        8.482457,
+        8.524737,
+        8.638525,
+        8.620167,
+        8.664105,
+        8.648276
+      ],
+      "first_device_output_bitwise_equal": true,
+      "scope": "Isolated full block, blocking mesh trace replay; includes attention preprocessing and CCL; excludes input capture and compilation"
+    }
+  ],
+  "error": "AssertionError: Model trace differs from untraced two-step latents\nassert False\n +  where False = <built-in method equal of type object at 0x74dccf582c00>(tensor([[[-3.8281, -4.4375, -4.4375,  ...,  2.0625,  2.2812, -0.1641],\\n         [-0.7500, -0.8828, -2.4219,  ...,  0.4043,  1.9219,  0.8047],\\n         [ 1.1875,  1.5547,  0.1504,  ..., -0.6953,  0.0352, -1.5000],\\n         ...,\\n         [ 3.1562, -0.3750, -1.1562,  ..., -1.8438,  0.3750,  1.6953],\\n         [-1.6641,  0.0742, -1.4844,  ..., -1.8750,  1.7109, -0.6523],\\n         [-0.4961,  0.1260, -1.8047,  ..., -1.6875,  0.6133, -1.3828]]],\\n       dtype=torch.bfloat16), tensor([[[-2.8594, -2.4844, -3.7031,  ...,  1.2969,  1.7031, -0.3223],\\n         [-0.2480, -0.3086, -2.0000,  ...,  0.8750,  1.8594,  1.2188],\\n         [ 1.1172,  1.5000, -0.0820,  ..., -0.0312, -0.1113, -1.2656],\\n         ...,\\n         [ 3.0938, -0.7461, -1.6016,  ..., -1.2734, -0.5117,  1.4531],\\n         [-1.7344, -0.2324, -1.8672,  ..., -1.2500,  0.8008, -0.9062],\\n         [-0.6016, -0.2256, -2.2031,  ..., -1.0156, -0.2598, -1.5859]]],\\n       dtype=torch.bfloat16))\n +    where <built-in method equal of type object at 0x74dccf582c00> = <module 'torch' from '/opt/venv/lib/python3.10/site-packages/torch/__init__.py'>.equal\n +    and   tensor([[[-3.8281, -4.4375, -4.4375,  ...,  2.0625,  2.2812, -0.1641],\\n         [-0.7500, -0.8828, -2.4219,  ...,  0.4043,  1.9219,  0.8047],\\n         [ 1.1875,  1.5547,  0.1504,  ..., -0.6953,  0.0352, -1.5000],\\n         ...,\\n         [ 3.1562, -0.3750, -1.1562,  ..., -1.8438,  0.3750,  1.6953],\\n         [-1.6641,  0.0742, -1.4844,  ..., -1.8750,  1.7109, -0.6523],\\n         [-0.4961,  0.1260, -1.8047,  ..., -1.6875,  0.6133, -1.3828]]],\\n       dtype=torch.bfloat16) = <function test_stock_pipeline.<locals>.latents at 0x7497edbf1ea0>()"
+}

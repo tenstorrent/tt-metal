@@ -1,0 +1,150 @@
+{
+  "metadata": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 130",
+  "warning": "Sparse RISC issue endpoints; neither unit-retirement nor exclusive costs.",
+  "records": [
+    {
+      "run": "3072",
+      "risc": "TRISC_0",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 31,
+        "QK_ENTRY_to_QK_EXIT": 59555,
+        "QK_EXIT_to_DENOM_ENTRY": 7344,
+        "DENOM_ENTRY_to_DENOM_EXIT": 5083,
+        "DENOM_EXIT_to_CHUNK_EXIT": 39085
+      },
+      "total_cycles": 111098
+    },
+    {
+      "run": "4096",
+      "risc": "TRISC_0",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 31,
+        "QK_ENTRY_to_QK_EXIT": 59375,
+        "QK_EXIT_to_DENOM_ENTRY": 7207,
+        "DENOM_ENTRY_to_DENOM_EXIT": 5122,
+        "DENOM_EXIT_to_CHUNK_EXIT": 37119
+      },
+      "total_cycles": 108854
+    },
+    {
+      "run": "7168",
+      "risc": "TRISC_0",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 46,
+        "QK_ENTRY_to_QK_EXIT": 46012,
+        "QK_EXIT_to_DENOM_ENTRY": 4939,
+        "DENOM_ENTRY_to_DENOM_EXIT": 4918,
+        "DENOM_EXIT_to_CHUNK_EXIT": 24632
+      },
+      "total_cycles": 80547
+    },
+    {
+      "run": "8192",
+      "risc": "TRISC_0",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 30,
+        "QK_ENTRY_to_QK_EXIT": 46113,
+        "QK_EXIT_to_DENOM_ENTRY": 4936,
+        "DENOM_ENTRY_to_DENOM_EXIT": 4931,
+        "DENOM_EXIT_to_CHUNK_EXIT": 22835
+      },
+      "total_cycles": 78845
+    },
+    {
+      "run": "3072",
+      "risc": "TRISC_1",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 29,
+        "QK_ENTRY_to_QK_EXIT": 59866,
+        "QK_EXIT_to_DENOM_ENTRY": 7943,
+        "DENOM_ENTRY_to_DENOM_EXIT": 4933,
+        "DENOM_EXIT_to_CHUNK_EXIT": 38467
+      },
+      "total_cycles": 111238
+    },
+    {
+      "run": "4096",
+      "risc": "TRISC_1",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 31,
+        "QK_ENTRY_to_QK_EXIT": 59852,
+        "QK_EXIT_to_DENOM_ENTRY": 7805,
+        "DENOM_ENTRY_to_DENOM_EXIT": 4976,
+        "DENOM_EXIT_to_CHUNK_EXIT": 36341
+      },
+      "total_cycles": 109005
+    },
+    {
+      "run": "7168",
+      "risc": "TRISC_1",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 29,
+        "QK_ENTRY_to_QK_EXIT": 46312,
+        "QK_EXIT_to_DENOM_ENTRY": 5111,
+        "DENOM_ENTRY_to_DENOM_EXIT": 5153,
+        "DENOM_EXIT_to_CHUNK_EXIT": 24049
+      },
+      "total_cycles": 80654
+    },
+    {
+      "run": "8192",
+      "risc": "TRISC_1",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 31,
+        "QK_ENTRY_to_QK_EXIT": 46559,
+        "QK_EXIT_to_DENOM_ENTRY": 5112,
+        "DENOM_ENTRY_to_DENOM_EXIT": 5164,
+        "DENOM_EXIT_to_CHUNK_EXIT": 22108
+      },
+      "total_cycles": 78974
+    },
+    {
+      "run": "3072",
+      "risc": "TRISC_2",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 195,
+        "QK_ENTRY_to_QK_EXIT": 59899,
+        "QK_EXIT_to_DENOM_ENTRY": 7748,
+        "DENOM_ENTRY_to_DENOM_EXIT": 4918,
+        "DENOM_EXIT_to_CHUNK_EXIT": 38517
+      },
+      "total_cycles": 111277
+    },
+    {
+      "run": "4096",
+      "risc": "TRISC_2",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 487,
+        "QK_ENTRY_to_QK_EXIT": 59638,
+        "QK_EXIT_to_DENOM_ENTRY": 7671,
+        "DENOM_ENTRY_to_DENOM_EXIT": 4914,
+        "DENOM_EXIT_to_CHUNK_EXIT": 36306
+      },
+      "total_cycles": 109016
+    },
+    {
+      "run": "7168",
+      "risc": "TRISC_2",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 186,
+        "QK_ENTRY_to_QK_EXIT": 46391,
+        "QK_EXIT_to_DENOM_ENTRY": 5556,
+        "DENOM_ENTRY_to_DENOM_EXIT": 4448,
+        "DENOM_EXIT_to_CHUNK_EXIT": 24121
+      },
+      "total_cycles": 80702
+    },
+    {
+      "run": "8192",
+      "risc": "TRISC_2",
+      "cycles": {
+        "CHUNK_ENTRY_to_QK_ENTRY": 548,
+        "QK_ENTRY_to_QK_EXIT": 46378,
+        "QK_EXIT_to_DENOM_ENTRY": 5540,
+        "DENOM_ENTRY_to_DENOM_EXIT": 4472,
+        "DENOM_EXIT_to_CHUNK_EXIT": 22036
+      },
+      "total_cycles": 78974
+    }
+  ]
+}

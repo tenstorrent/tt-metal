@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1440" viewBox="0 0 1440 1440" role="img">
+<title>SDPA accuracy versus full-chip throughput, including compressed KV choices</title>
+<desc>Two panels show 32K and 256K normal-input measurements. Lower L2 and higher throughput are better. Letters identify eleven discrete choices; dashed lines join the measured normal-input frontiers, not qualified operating ranges.</desc>
+<rect width="1440" height="1440" fill="white"/>
+<style>text {font-family:Arial,Helvetica,sans-serif;fill:#18283c;font-size:17px}.title{font-size:27px;font-weight:bold}.small{font-size:15px}.grid{stroke:#e2e7ee;stroke-width:1}</style>
+<text x="44.00" y="43.00" class="title" text-anchor="start">SDPA: accuracy, chip throughput, and K/V payload</text>
+<text x="44.00" y="72.00" class="" text-anchor="start">H10 / D128 / Q256 / K512 · normal BF16 inputs · device preprocessing included</text>
+<text x="385.00" y="110.00" class="" text-anchor="middle">32,768 tokens</text>
+<line x1="90" y1="472.4390243902439" x2="680" y2="472.4390243902439" class="grid"/>
+<text x="78.00" y="477.44" class="small" text-anchor="end">75</text>
+<line x1="90" y1="424.8780487804878" x2="680" y2="424.8780487804878" class="grid"/>
+<text x="78.00" y="429.88" class="small" text-anchor="end">100</text>
+<line x1="90" y1="377.3170731707317" x2="680" y2="377.3170731707317" class="grid"/>
+<text x="78.00" y="382.32" class="small" text-anchor="end">125</text>
+<line x1="90" y1="329.7560975609756" x2="680" y2="329.7560975609756" class="grid"/>
+<text x="78.00" y="334.76" class="small" text-anchor="end">150</text>
+<line x1="90" y1="282.1951219512195" x2="680" y2="282.1951219512195" class="grid"/>
+<text x="78.00" y="287.20" class="small" text-anchor="end">175</text>
+<line x1="90" y1="234.6341463414634" x2="680" y2="234.6341463414634" class="grid"/>
+<text x="78.00" y="239.63" class="small" text-anchor="end">200</text>
+<line x1="90" y1="187.0731707317073" x2="680" y2="187.0731707317073" class="grid"/>
+<text x="78.00" y="192.07" class="small" text-anchor="end">225</text>
+<line x1="90" y1="139.5121951219512" x2="680" y2="139.5121951219512" class="grid"/>
+<text x="78.00" y="144.51" class="small" text-anchor="end">250</text>
+<line x1="134.34944759914373" y1="130" x2="134.34944759914373" y2="520" class="grid"/>
+<text x="134.35" y="545.00" class="small" text-anchor="middle">0.2</text>
+<line x1="233.49054111451773" y1="130" x2="233.49054111451773" y2="520" class="grid"/>
+<text x="233.49" y="545.00" class="small" text-anchor="middle">0.5</text>
+<line x1="308.48788317783294" y1="130" x2="308.48788317783294" y2="520" class="grid"/>
+<text x="308.49" y="545.00" class="small" text-anchor="middle">1</text>
+<line x1="383.48522524114804" y1="130" x2="383.48522524114804" y2="520" class="grid"/>
+<text x="383.49" y="545.00" class="small" text-anchor="middle">2</text>
+<line x1="482.6263187565221" y1="130" x2="482.6263187565221" y2="520" class="grid"/>
+<text x="482.63" y="545.00" class="small" text-anchor="middle">5</text>
+<line x1="557.6236608198371" y1="130" x2="557.6236608198371" y2="520" class="grid"/>
+<text x="557.62" y="545.00" class="small" text-anchor="middle">10</text>
+<line x1="632.6210028831524" y1="130" x2="632.6210028831524" y2="520" class="grid"/>
+<text x="632.62" y="545.00" class="small" text-anchor="middle">20</text>
+<rect x="90" y="130" width="590" height="390" fill="none" stroke="#9caabc"/>
+<line x1="233.49054111451773" y1="130" x2="233.49054111451773" y2="520" stroke="#929ba8" stroke-dasharray="3 5"/>
+<text x="240.49" y="149.00" class="small" text-anchor="start">0.5%</text>
+<polyline points="122.60,464.34 206.48,430.47 412.45,295.30 419.31,286.04 432.67,253.46 608.62,203.53" fill="none" stroke="#a0a9b5" stroke-width="2" stroke-dasharray="6 5"/>
+<g><title>Main BF16: L2 2.7850%, 172.98 TFLOP/s, KV payload 100.000% of BF16</title>
+<rect x="414.3105059192235" y="281.0383819175525" width="10" height="10" fill="#234c88"/>
+<text x="430.31" y="277.04" class="" text-anchor="start">A</text>
+</g>
+<g><title>FAST BF16 + Q256 reset: L2 2.6139%, 168.11 TFLOP/s, KV payload 100.000% of BF16</title>
+<rect x="407.4512436013621" y="290.2973408316355" width="10" height="10" fill="#234c88"/>
+<text x="399.45" y="318.30" class="" text-anchor="end">B</text>
+</g>
+<g><title>Balanced FP32 QK4/PV2: L2 0.3895%, 97.06 TFLOP/s, KV payload 100.000% of BF16</title>
+<rect x="201.47538403435254" y="425.46605668553985" width="10" height="10" fill="#234c88"/>
+<text x="217.48" y="420.47" class="" text-anchor="start">C</text>
+</g>
+<g><title>ACCURATE FP32 QK4/PV4: L2 0.1794%, 79.26 TFLOP/s, KV payload 100.000% of BF16</title>
+<rect x="117.60366373294802" y="459.3392675734403" width="10" height="10" fill="#234c88"/>
+<text x="113.60" y="489.34" class="" text-anchor="end">D</text>
+</g>
+<g><title>LoFi B8 / compensated BF16: L2 3.1511%, 190.10 TFLOP/s, KV payload 53.125% of BF16</title>
+<circle cx="432.67113217882076" cy="253.46325437026996" r="6" fill="#097d70"/>
+<text x="444.67" y="241.46" class="" text-anchor="start">E</text>
+</g>
+<g><title>LoFi B8 / FP32 / native exp: L2 2.8244%, 153.83 TFLOP/s, KV payload 53.125% of BF16</title>
+<circle cx="420.8315682987" cy="322.4768276378875" r="6" fill="#097d70"/>
+<text x="432.83" y="344.48" class="" text-anchor="start">F</text>
+</g>
+<g><title>LoFi B4 / compensated BF16: L2 16.9378%, 191.28 TFLOP/s, KV payload 28.125% of BF16</title>
+<path d="M614.6400505899177,244.22973693932556 L621.6400505899177,257.22973693932556 L607.6400505899177,257.22973693932556 Z" fill="#bc5f12"/>
+<text x="601.64" y="240.23" class="" text-anchor="end">G</text>
+</g>
+<g><title>LoFi B4 / FP32 / native exp: L2 16.8573%, 155.04 TFLOP/s, KV payload 28.125% of BF16</title>
+<path d="M614.1245591316882,313.1732088077175 L621.1245591316882,326.1732088077175 L607.1245591316882,326.1732088077175 Z" fill="#bc5f12"/>
+<text x="600.12" y="344.17" class="" text-anchor="end">H</text>
+</g>
+<g><title>Adaptive B4 / denom-only BF16: L2 16.0211%, 216.35 TFLOP/s, KV payload 28.125% of BF16</title>
+<path d="M608.6198576552812,196.53395496442033 L615.6198576552812,209.53395496442033 L601.6198576552812,209.53395496442033 Z" fill="#bc5f12"/>
+<text x="595.62" y="190.53" class="" text-anchor="end">I</text>
+</g>
+<g><title>2 x B4 residual / FP32: L2 1.5131%, 69.65 TFLOP/s, KV payload 56.250% of BF16</title>
+<path d="M353.29867558200493,475.62439233296215 L360.29867558200493,482.62439233296215 L353.29867558200493,489.62439233296215 L346.29867558200493,482.62439233296215 Z" fill="#8253a0"/>
+<text x="363.30" y="473.62" class="" text-anchor="start">J</text>
+</g>
+<g><title>B4 + B8 residual / FP32: L2 0.5176%, 67.51 TFLOP/s, KV payload 81.250% of BF16</title>
+<path d="M237.2322934777833,479.68822387407323 L244.2322934777833,486.68822387407323 L237.2322934777833,493.68822387407323 L230.2322934777833,486.68822387407323 Z" fill="#8253a0"/>
+<text x="247.23" y="509.69" class="" text-anchor="start">K</text>
+</g>
+<text x="385.00" y="570.00" class="" text-anchor="middle">Relative L2 error (%) · log scale · lower is better</text>
+<text transform="translate(31,325.0) rotate(-90)" text-anchor="middle">Combined chip TFLOP/s · higher is better</text>
+<text x="1093.00" y="110.00" class="" text-anchor="middle">262,144 tokens</text>
+<line x1="798" y1="472.4390243902439" x2="1388" y2="472.4390243902439" class="grid"/>
+<text x="786.00" y="477.44" class="small" text-anchor="end">75</text>
+<line x1="798" y1="424.8780487804878" x2="1388" y2="424.8780487804878" class="grid"/>
+<text x="786.00" y="429.88" class="small" text-anchor="end">100</text>
+<line x1="798" y1="377.3170731707317" x2="1388" y2="377.3170731707317" class="grid"/>
+<text x="786.00" y="382.32" class="small" text-anchor="end">125</text>
+<line x1="798" y1="329.7560975609756" x2="1388" y2="329.7560975609756" class="grid"/>
+<text x="786.00" y="334.76" class="small" text-anchor="end">150</text>
+<line x1="798" y1="282.1951219512195" x2="1388" y2="282.1951219512195" class="grid"/>
+<text x="786.00" y="287.20" class="small" text-anchor="end">175</text>
+<line x1="798" y1="234.6341463414634" x2="1388" y2="234.6341463414634" class="grid"/>
+<text x="786.00" y="239.63" class="small" text-anchor="end">200</text>
+<line x1="798" y1="187.0731707317073" x2="1388" y2="187.0731707317073" class="grid"/>
+<text x="786.00" y="192.07" class="small" text-anchor="end">225</text>
+<line x1="798" y1="139.5121951219512" x2="1388" y2="139.5121951219512" class="grid"/>
+<text x="786.00" y="144.51" class="small" text-anchor="end">250</text>
+<line x1="842.3494475991438" y1="130" x2="842.3494475991438" y2="520" class="grid"/>
+<text x="842.35" y="545.00" class="small" text-anchor="middle">0.2</text>
+<line x1="941.4905411145178" y1="130" x2="941.4905411145178" y2="520" class="grid"/>
+<text x="941.49" y="545.00" class="small" text-anchor="middle">0.5</text>
+<line x1="1016.4878831778329" y1="130" x2="1016.4878831778329" y2="520" class="grid"/>
+<text x="1016.49" y="545.00" class="small" text-anchor="middle">1</text>
+<line x1="1091.485225241148" y1="130" x2="1091.485225241148" y2="520" class="grid"/>
+<text x="1091.49" y="545.00" class="small" text-anchor="middle">2</text>
+<line x1="1190.626318756522" y1="130" x2="1190.626318756522" y2="520" class="grid"/>
+<text x="1190.63" y="545.00" class="small" text-anchor="middle">5</text>
+<line x1="1265.6236608198371" y1="130" x2="1265.6236608198371" y2="520" class="grid"/>
+<text x="1265.62" y="545.00" class="small" text-anchor="middle">10</text>
+<line x1="1340.6210028831524" y1="130" x2="1340.6210028831524" y2="520" class="grid"/>
+<text x="1340.62" y="545.00" class="small" text-anchor="middle">20</text>
+<rect x="798" y="130" width="590" height="390" fill="none" stroke="#9caabc"/>
+<line x1="941.4905411145178" y1="130" x2="941.4905411145178" y2="520" stroke="#929ba8" stroke-dasharray="3 5"/>
+<text x="948.49" y="149.00" class="small" text-anchor="start">0.5%</text>
+<polyline points="830.47,480.04 914.64,446.91 1127.83,308.47 1159.07,252.47 1319.29,185.44" fill="none" stroke="#a0a9b5" stroke-width="2" stroke-dasharray="6 5"/>
+<g><title>Main BF16: L2 18.7810%, 153.22 TFLOP/s, KV payload 100.000% of BF16</title>
+<rect x="1328.816968433618" y="318.63003662968936" width="10" height="10" fill="#234c88"/>
+<text x="1344.82" y="314.63" class="" text-anchor="start">A</text>
+</g>
+<g><title>FAST BF16 + Q256 reset: L2 3.2962%, 143.16 TFLOP/s, KV payload 100.000% of BF16</title>
+<rect x="1140.5427612864748" y="337.77195576514373" width="10" height="10" fill="#234c88"/>
+<text x="1132.54" y="365.77" class="" text-anchor="end">B</text>
+</g>
+<g><title>Balanced FP32 QK4/PV2: L2 0.3901%, 88.42 TFLOP/s, KV payload 100.000% of BF16</title>
+<rect x="909.637014451712" y="441.91146074733" width="10" height="10" fill="#234c88"/>
+<text x="925.64" y="436.91" class="" text-anchor="start">C</text>
+</g>
+<g><title>ACCURATE FP32 QK4/PV4: L2 0.1792%, 71.01 TFLOP/s, KV payload 100.000% of BF16</title>
+<rect x="825.4708047670164" y="475.03726374401015" width="10" height="10" fill="#234c88"/>
+<text x="821.47" y="505.04" class="" text-anchor="end">D</text>
+</g>
+<g><title>LoFi B8 / compensated BF16: L2 3.7350%, 190.63 TFLOP/s, KV payload 53.125% of BF16</title>
+<circle cx="1159.0671812217197" cy="252.46877593524152" r="6" fill="#097d70"/>
+<text x="1171.07" y="240.47" class="" text-anchor="start">E</text>
+</g>
+<g><title>LoFi B8 / FP32 / native exp: L2 2.7984%, 161.19 TFLOP/s, KV payload 53.125% of BF16</title>
+<circle cx="1127.827660637554" cy="308.472385664481" r="6" fill="#097d70"/>
+<text x="1139.83" y="330.47" class="" text-anchor="start">F</text>
+</g>
+<g><title>LoFi B4 / compensated BF16: L2 17.1675%, 200.04 TFLOP/s, KV payload 28.125% of BF16</title>
+<path d="M1324.0977198245619,227.55737238925553 L1331.0977198245619,240.55737238925553 L1317.0977198245619,240.55737238925553 Z" fill="#bc5f12"/>
+<text x="1311.10" y="223.56" class="" text-anchor="end">G</text>
+</g>
+<g><title>LoFi B4 / FP32 / native exp: L2 16.9369%, 166.38 TFLOP/s, KV payload 28.125% of BF16</title>
+<path d="M1322.6341241391676,291.59115412175726 L1329.6341241391676,304.59115412175726 L1315.6341241391676,304.59115412175726 Z" fill="#bc5f12"/>
+<text x="1308.63" y="322.59" class="" text-anchor="end">H</text>
+</g>
+<g><title>Adaptive B4 / denom-only BF16: L2 16.4210%, 225.86 TFLOP/s, KV payload 28.125% of BF16</title>
+<path d="M1319.2871705541695,178.44124708832646 L1326.2871705541695,191.44124708832646 L1312.2871705541695,191.44124708832646 Z" fill="#bc5f12"/>
+<text x="1306.29" y="172.44" class="" text-anchor="end">I</text>
+</g>
+<g><title>2 x B4 residual / FP32: L2 1.4945%, 73.00 TFLOP/s, KV payload 56.250% of BF16</title>
+<path d="M1059.960573683589,469.2508463889173 L1066.960573683589,476.2508463889173 L1059.960573683589,483.2508463889173 L1052.960573683589,476.2508463889173 Z" fill="#8253a0"/>
+<text x="1069.96" y="467.25" class="" text-anchor="start">J</text>
+</g>
+<g><title>B4 + B8 residual / FP32: L2 0.5153%, 70.53 TFLOP/s, KV payload 81.250% of BF16</title>
+<path d="M944.7543009388183,473.9524136319254 L951.7543009388183,480.9524136319254 L944.7543009388183,487.9524136319254 L937.7543009388183,480.9524136319254 Z" fill="#8253a0"/>
+<text x="954.75" y="503.95" class="" text-anchor="start">K</text>
+</g>
+<text x="1093.00" y="570.00" class="" text-anchor="middle">Relative L2 error (%) · log scale · lower is better</text>
+<text transform="translate(739,325.0) rotate(-90)" text-anchor="middle">Combined chip TFLOP/s · higher is better</text>
+<text x="44.00" y="610.00" class="small" text-anchor="start">Four canonical BF16-input choices</text>
+<text x="748.00" y="610.00" class="small" text-anchor="start">Low-precision choices · K/V payload relative to BF16</text>
+<circle cx="49" cy="634" r="5" fill="#234c88"/>
+<text x="64.00" y="639.00" class="small" text-anchor="start">A  Main BF16</text>
+<circle cx="49" cy="662" r="5" fill="#234c88"/>
+<text x="64.00" y="667.00" class="small" text-anchor="start">B  FAST BF16 + Q256 reset</text>
+<circle cx="49" cy="690" r="5" fill="#234c88"/>
+<text x="64.00" y="695.00" class="small" text-anchor="start">C  Balanced FP32 QK4/PV2</text>
+<circle cx="49" cy="718" r="5" fill="#234c88"/>
+<text x="64.00" y="723.00" class="small" text-anchor="start">D  ACCURATE FP32 QK4/PV4</text>
+<circle cx="753" cy="634" r="5" fill="#097d70"/>
+<text x="768.00" y="639.00" class="small" text-anchor="start">E  LoFi B8 / compensated BF16 · 53.1%</text>
+<circle cx="753" cy="662" r="5" fill="#097d70"/>
+<text x="768.00" y="667.00" class="small" text-anchor="start">F  LoFi B8 / FP32 / native exp · 53.1%</text>
+<circle cx="753" cy="690" r="5" fill="#bc5f12"/>
+<text x="768.00" y="695.00" class="small" text-anchor="start">G  LoFi B4 / compensated BF16 · 28.1%</text>
+<circle cx="753" cy="718" r="5" fill="#bc5f12"/>
+<text x="768.00" y="723.00" class="small" text-anchor="start">H  LoFi B4 / FP32 / native exp · 28.1%</text>
+<circle cx="753" cy="746" r="5" fill="#bc5f12"/>
+<text x="768.00" y="751.00" class="small" text-anchor="start">I  Adaptive B4 / denom-only BF16 · 28.1%</text>
+<circle cx="753" cy="774" r="5" fill="#8253a0"/>
+<text x="768.00" y="779.00" class="small" text-anchor="start">J  2 x B4 residual / FP32 · 56.2%</text>
+<circle cx="753" cy="802" r="5" fill="#8253a0"/>
+<text x="768.00" y="807.00" class="small" text-anchor="start">K  B4 + B8 residual / FP32 · 81.2%</text>
+<text x="44.00" y="775.00" class="small" text-anchor="start">B: private correctness reset; frozen snapshots unchanged.</text>
+<text x="44.00" y="800.00" class="small" text-anchor="start">Dashed: strict frontier of these normal-input observations only.</text>
+<text x="44.00" y="825.00" class="small" text-anchor="start">I: known stress failures. J/K: multiple components, not single BFP4.</text>
+<text x="44.00" y="863.00" class="small" text-anchor="start">Original-input FP64 reference: 128 Q rows/head, all K/V. No ring timing or model-quality claim. Separate recorded runs; no error bars.</text>
+</svg>

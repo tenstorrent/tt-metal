@@ -410,7 +410,13 @@ class WanAttention(Module):
 
         if prompt_1BLP is None:
             # Self attention
-            if self.parallel_config.sequence_parallel.factor > 1:
+            capture = getattr(self, "_attention_capture", None)
+            if capture is not None:
+                capture(self, q_BHNE, k_BHNE, v_BHNE, N)
+            override = getattr(self, "_attention_override", None)
+            if override is not None:
+                spatial_BHNE = override(self, q_BHNE, k_BHNE, v_BHNE, N)
+            elif self.parallel_config.sequence_parallel.factor > 1:
                 # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
                 dummy_joint = self.dummy_joint_input
                 if sdpa_input_dtype is not None:

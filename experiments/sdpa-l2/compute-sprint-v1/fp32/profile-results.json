@@ -1,0 +1,122 @@
+[
+  {
+    "path": "experiments/sdpa-l2/compute-sprint-v1/fp32/D-final-profile-v1/.logs/profile_log_device.csv",
+    "run_and_core": [
+      "1024",
+      "1",
+      "2"
+    ],
+    "variant": "D",
+    "header_clock_mhz": 1350,
+    "resident_cycles": 488131001,
+    "whole_kernel_cycles": 488131218,
+    "useful_flops_per_cycle": 563.1232320440143,
+    "own_matmul_peak_util_percent": 54.99250312929828,
+    "tflops_per_core_at_header_clock": 0.7602163632594193,
+    "FPU_COUNTER": 59.0360805549463,
+    "SFPU_COUNTER": 25.642772643777395,
+    "MATH_COUNTER": 64.76814749914391,
+    "both_percent": 19.910705699579793,
+    "neither_percent": 35.23185250085609
+  },
+  {
+    "path": "experiments/sdpa-l2/compute-sprint-v1/fp32/D-final-profile-v1/.logs/profile_log_device.csv",
+    "run_and_core": [
+      "2048",
+      "1",
+      "2"
+    ],
+    "variant": "D",
+    "header_clock_mhz": 1350,
+    "resident_cycles": 488122260,
+    "whole_kernel_cycles": 488122476,
+    "useful_flops_per_cycle": 563.1333161163353,
+    "own_matmul_peak_util_percent": 54.993487901985866,
+    "tflops_per_core_at_header_clock": 0.7602299767570527,
+    "FPU_COUNTER": 59.037139672169594,
+    "SFPU_COUNTER": 25.64323124536912,
+    "MATH_COUNTER": 64.76952005348002,
+    "both_percent": 19.910850864058688,
+    "neither_percent": 35.23047994651998
+  },
+  {
+    "path": "experiments/sdpa-l2/compute-sprint-v1/fp32/D-final-profile-v1/.logs/profile_log_device.csv",
+    "run_and_core": [
+      "3072",
+      "1",
+      "2"
+    ],
+    "variant": "D",
+    "header_clock_mhz": 1350,
+    "resident_cycles": 453265835,
+    "whole_kernel_cycles": 453266078,
+    "useful_flops_per_cycle": 606.4386188383247,
+    "own_matmul_peak_util_percent": 59.22252137093015,
+    "tflops_per_core_at_header_clock": 0.8186921354317384,
+    "FPU_COUNTER": 63.57712478674945,
+    "SFPU_COUNTER": 27.61521056276957,
+    "MATH_COUNTER": 69.8189907958751,
+    "both_percent": 21.373344553643932,
+    "neither_percent": 30.181009204124905
+  },
+  {
+    "path": "experiments/sdpa-l2/compute-sprint-v1/fp32/C-final-profile-v1/.logs/profile_log_device.csv",
+    "run_and_core": [
+      "1024",
+      "1",
+      "2"
+    ],
+    "variant": "C",
+    "header_clock_mhz": 1350,
+    "resident_cycles": 396876086,
+    "whole_kernel_cycles": 396876311,
+    "useful_flops_per_cycle": 692.6038545542399,
+    "own_matmul_peak_util_percent": 50.72782137848437,
+    "tflops_per_core_at_header_clock": 0.9350152036482239,
+    "FPU_COUNTER": 54.578271314971424,
+    "SFPU_COUNTER": 38.959395412111206,
+    "MATH_COUNTER": 62.5474582626878,
+    "both_percent": 30.99020846439484,
+    "neither_percent": 37.4525417373122
+  },
+  {
+    "path": "experiments/sdpa-l2/compute-sprint-v1/fp32/C-final-profile-v1/.logs/profile_log_device.csv",
+    "run_and_core": [
+      "2048",
+      "1",
+      "2"
+    ],
+    "variant": "C",
+    "header_clock_mhz": 1350,
+    "resident_cycles": 396871383,
+    "whole_kernel_cycles": 396871589,
+    "useful_flops_per_cycle": 692.6120620392527,
+    "own_matmul_peak_util_percent": 50.72842251264058,
+    "tflops_per_core_at_header_clock": 0.9350262837529911,
+    "FPU_COUNTER": 54.57892247796482,
+    "SFPU_COUNTER": 38.959858717437555,
+    "MATH_COUNTER": 62.54820551242031,
+    "both_percent": 30.99057568298207,
+    "neither_percent": 37.45179448757969
+  },
+  {
+    "path": "experiments/sdpa-l2/compute-sprint-v1/fp32/C-final-profile-v1/.logs/profile_log_device.csv",
+    "run_and_core": [
+      "3072",
+      "1",
+      "2"
+    ],
+    "variant": "C",
+    "header_clock_mhz": 1350,
+    "resident_cycles": 329639084,
+    "whole_kernel_cycles": 329639321,
+    "useful_flops_per_cycle": 833.8753512129041,
+    "own_matmul_peak_util_percent": 61.074854825163875,
+    "tflops_per_core_at_header_clock": 1.1257317241374205,
+    "FPU_COUNTER": 65.71067487654356,
+    "SFPU_COUNTER": 37.017625127619766,
+    "MATH_COUNTER": 69.33211333748082,
+    "both_percent": 33.39618666668251,
+    "neither_percent": 30.66788666251918
+  }
+]
