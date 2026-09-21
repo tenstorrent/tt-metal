@@ -39,10 +39,10 @@ def test_gated_attention_pcc(device, setup, request):
     q_norm = sd[f"{prefix}.q_norm.weight"]
     k_norm = sd[f"{prefix}.k_norm.weight"]
 
-    x = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
+    x = torch.randn(B, T, 4096, dtype=torch.bfloat16)
 
     # RoPE for torch (cast to bfloat16 to match input dtype)
-    cos_cpu, sin_cpu = compute_rope_freqs(args.rope_head_dim, 2048, theta=args.rope_theta)
+    cos_cpu, sin_cpu = compute_rope_freqs(64, 2048, theta=10_000_000)
     pos_ids = torch.arange(T)
     cos_t = cos_cpu[pos_ids].unsqueeze(0).to(torch.bfloat16)  # [1, T, 64]
     sin_t = sin_cpu[pos_ids].unsqueeze(0).to(torch.bfloat16)
@@ -57,9 +57,9 @@ def test_gated_attention_pcc(device, setup, request):
         k_norm_weight=k_norm,
         cos=cos_t,
         sin=sin_t,
-        num_attention_heads=args.n_heads,
-        num_key_value_heads=args.n_kv_heads,
-        head_dim=args.head_dim,
+        num_attention_heads=16,
+        num_key_value_heads=4,
+        head_dim=256,
         norm_eps=1e-6,
     )
 

@@ -27,6 +27,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import (
+    _sp_enabled,
     compute_pcc,
     get_pcc_threshold,
     load_gdn_layer,
@@ -54,7 +55,7 @@ def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     gated RMSNorm, output proj) and runs a second decode step to catch shape/NaN regressions.
     """
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(f"devices={nd} gdn layer={li} Nk_tp={args.gdn_nk_tp} Nv_tp={args.gdn_nv_tp}")
@@ -197,10 +198,10 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     prefill+decode runs, proving correct row assembly with no cross-user contamination.
     """
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256, sequence_parallel=_sp_enabled())
     # forward_decode keys all shapes off self.B, so the B=1 reference needs its own
     # max_batch_size=1 args (weights tw are batch-independent and shared).
-    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(f"devices={nd} gdn layer={li} B={B}")
@@ -264,8 +265,8 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
           is exactly the pre-remap rows reindexed (no cross-row contamination).
     """
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
-    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256, sequence_parallel=_sp_enabled())
+    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(f"devices={nd} gdn layer={li} B={B}")
@@ -343,8 +344,8 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     batches correctly with per-row masking. B capped at <=4 (see kernel BH limit note above).
     """
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
-    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256, sequence_parallel=_sp_enabled())
+    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(f"devices={nd} gdn layer={li} B={B}")
@@ -406,7 +407,7 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     long-context batched prefill.
     """
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     sd = load_gdn_layer(args.CKPT_DIR, li)
@@ -455,7 +456,7 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T = 128
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(f"devices={nd} gdn layer={li} T={T}")
@@ -493,6 +494,68 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
+def test_gdn_tp_span_stitch(mesh_device, reset_seeds, ensure_gc, request):
+    """Sequence-parallel span stitching: two 128-token forward_prefill spans, the second
+    continued via injected initial_state/initial_conv_state, must reproduce a single
+    from-scratch T=256 forward_prefill(return_state=True) call (output AND final state).
+
+    Also proves the injection matters: repeating the second span WITHOUT initial_state
+    (i.e. from a zero state) must NOT reproduce the reference — a materially lower PCC.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    T = 256
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=T, sequence_parallel=_sp_enabled())
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} T={T}")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+
+    x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
+    composer = tp_composer(mesh_device)
+
+    # ---- reference: one from-scratch T=256 pass ----
+    gdn.reset_state()
+    out_full, s_full, _ = gdn.forward_prefill(shard_to_device(mesh_device, x, dim=-1), return_state=True)
+    full = ttnn.to_torch(out_full, mesh_composer=composer)[0, 0].float()  # [T, dim]
+    s_full_t = ttnn.to_torch(s_full, mesh_composer=composer).float()
+
+    # ---- two 128-token halves; second continued from the first half's returned state ----
+    gdn.reset_state()
+    x1_tt = shard_to_device(mesh_device, x[:, :, :128, :], dim=-1)
+    x2_tt = shard_to_device(mesh_device, x[:, :, 128:, :], dim=-1)
+    o1, s1, c1 = gdn.forward_prefill(x1_tt, return_state=True)
+    o2, s2, c2 = gdn.forward_prefill(x2_tt, return_state=True, initial_state=s1, initial_conv_state=c1)
+    o1_t = ttnn.to_torch(o1, mesh_composer=composer)[0, 0].float()
+    o2_t = ttnn.to_torch(o2, mesh_composer=composer)[0, 0].float()
+    stitched = torch.cat([o1_t, o2_t], dim=0)  # [T, dim]
+    s2_t = ttnn.to_torch(s2, mesh_composer=composer).float()
+
+    thr = get_pcc_threshold(request, default=0.999)
+    pcc_out = compute_pcc(full, stitched)
+    pcc_state = compute_pcc(s_full_t, s2_t)
+    logger.info(f"GDN TP span-stitch PCC out={pcc_out:.6f} state={pcc_state:.6f}")
+    assert pcc_out > thr, f"stitched output PCC {pcc_out:.6f} <= {thr}"
+    assert pcc_state > thr, f"stitched final-state PCC {pcc_state:.6f} <= {thr}"
+
+    # ---- injection matters: second half WITHOUT initial_state must NOT match the reference ----
+    o2_noinj, _, _ = gdn.forward_prefill(x2_tt, return_state=True)
+    o2_noinj_t = ttnn.to_torch(o2_noinj, mesh_composer=composer)[0, 0].float()
+    stitched_noinj = torch.cat([o1_t, o2_noinj_t], dim=0)
+    pcc_noinj = compute_pcc(full, stitched_noinj)
+    logger.info(f"GDN TP span-stitch WITHOUT injection PCC={pcc_noinj:.6f} (must be << {thr})")
+    assert pcc_noinj < 0.99, f"expected a clearly lower PCC without initial_state, got {pcc_noinj:.6f}"
+
+    logger.info(f"PASSED: GDN TP span-stitch out PCC={pcc_out:.6f} state PCC={pcc_state:.6f}")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
 def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensure_gc, request):
     """Isolate main's fused chunk_gated_delta_rule kernel (the DEFAULT prefill path).
 
@@ -506,7 +569,7 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T, chunk = 256, 128  # T > chunk => multiple internal chunks (cross-chunk recurrence exercised)
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=512)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=512, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(f"devices={nd} gdn layer={li} T={T} chunk={chunk}")

@@ -30,18 +30,6 @@ LINEAR_Q_DIM = 2048
 LINEAR_K_DIM = 2048
 
 
-def _tie_output_weight(state_dict: Dict[str, torch.Tensor]) -> None:
-    """Alias the embedding matrix to ``output.weight`` for tied-embedding checkpoints.
-
-    Qwen3.5-2B sets ``tie_word_embeddings: true`` and so ships no ``lm_head.weight``;
-    the 9B / 27B / 35B-A3B are untied and ship one. Both mapping paths call this so the
-    LM head always resolves. The alias shares storage with ``tok_embeddings.weight``
-    (both are [vocab, hidden]), so callers must not mutate either in place.
-    """
-    if "output.weight" not in state_dict and "tok_embeddings.weight" in state_dict:
-        state_dict["output.weight"] = state_dict["tok_embeddings.weight"]
-
-
 def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """Remap HF Qwen3.5-9B state dict to internal format.
 
@@ -132,7 +120,6 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         # Any remaining keys pass through
         remapped[new_key] = tensor
 
-    _tie_output_weight(remapped)
     return remapped
 
 
@@ -236,5 +223,4 @@ def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
             # input_layernorm/post_attention_layernorm, norm) passes through.
             state_dict[short] = tensor
 
-    _tie_output_weight(state_dict)
     return state_dict

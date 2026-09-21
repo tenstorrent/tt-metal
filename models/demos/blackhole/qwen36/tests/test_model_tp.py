@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.blackhole.qwen36.tests.test_factory import get_pcc_threshold, parametrize_mesh_tp
+from models.demos.blackhole.qwen36.tests.test_factory import _sp_enabled, get_pcc_threshold, parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 
@@ -35,8 +35,10 @@ from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 @parametrize_mesh_tp()
 def test_model_tp_contract(mesh_device, reset_seeds, ensure_gc):
     nd = mesh_device.get_num_devices()
-    assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
-    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8)
+    assert nd > 1 or _sp_enabled(), "this test exercises the TP (num_devices>1) contract path"
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8, sequence_parallel=_sp_enabled()
+    )
     args = model.args
     vocab = args.vocab_size
     T, N_DEC = 128, 3
@@ -103,8 +105,10 @@ def test_model_tp_long_prefill(mesh_device, reset_seeds, ensure_gc):
     conv state across the chunk boundary to match the bespoke single-pass prefill. T=2304 =>
     one full 2048 chunk + a 256 tail, so this exercises the cross-chunk carry."""
     nd = mesh_device.get_num_devices()
-    assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
-    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=4096, n_layers=8)
+    assert nd > 1 or _sp_enabled(), "this test exercises the TP (num_devices>1) contract path"
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=1, max_seq_len=4096, n_layers=8, sequence_parallel=_sp_enabled()
+    )
     args = model.args
     vocab = args.vocab_size
     T = 2304  # 1 full 2048 chunk + 256 tail
@@ -149,8 +153,10 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     overflows at T>=4096 (production never single-passes >2048). Both the eager reference and the
     traced replay re-zero GDN state at the start, so running them back-to-back on one model is safe."""
     nd = mesh_device.get_num_devices()
-    assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
-    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=8192, n_layers=8)
+    assert nd > 1 or _sp_enabled(), "this test exercises the TP (num_devices>1) contract path"
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=1, max_seq_len=8192, n_layers=8, sequence_parallel=_sp_enabled()
+    )
     args = model.args
     vocab = args.vocab_size
     torch.manual_seed(0)
@@ -192,7 +198,9 @@ def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
     op-named instead of hanging in serving. 8 layers suffices: warmed programs are layer-independent
     and layers 0..7 include the full-attention layers (3, 7) that own the fill path.
     """
-    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=2048, n_layers=8)
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=1, max_seq_len=2048, n_layers=8, sequence_parallel=_sp_enabled()
+    )
     args = model.args
 
     block_size = 64
@@ -246,13 +254,15 @@ def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
     import gc
 
     nd = mesh_device.get_num_devices()
-    assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
+    assert nd > 1 or _sp_enabled(), "this test exercises the TP (num_devices>1) contract path"
     N_DEC = 3
     torch.manual_seed(0)
 
     # ---- B=1 bespoke oracle (concat KV); collect per-user logits + argmax chains, then free
     # before allocating the batched model so only one model is resident at a time. ----
-    model1 = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8)
+    model1 = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8, sequence_parallel=_sp_enabled()
+    )
     vocab = model1.args.vocab_size
     prompt_lens = [128 + 32 * (u % 4) for u in range(B)]  # {128,160,192,224}, distinct lengths
     prompts = [torch.randint(0, vocab, (prompt_lens[u],)).tolist() for u in range(B)]
@@ -274,7 +284,9 @@ def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
     gc.collect()
 
     # ---- batched path: per-user paged prefill + batched per-user-position decode ----
-    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=B, max_seq_len=512, n_layers=8)
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=B, max_seq_len=512, n_layers=8, sequence_parallel=_sp_enabled()
+    )
     args = model.args
     block_size, bpu = 64, 8  # 8 blocks/user covers up to 512 tokens (>> max prompt + N_DEC)
     num_blocks = B * bpu
@@ -329,12 +341,14 @@ def test_model_tp_prefill_paged_slots(mesh_device, B, reset_seeds, ensure_gc):
     import gc
 
     nd = mesh_device.get_num_devices()
-    assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
+    assert nd > 1 or _sp_enabled(), "this test exercises the TP (num_devices>1) contract path"
     N_DEC = 3
     torch.manual_seed(0)
 
     # ---- B=1 bespoke oracle (concat KV) ----
-    model1 = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8)
+    model1 = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8, sequence_parallel=_sp_enabled()
+    )
     vocab = model1.args.vocab_size
     prompt_lens = [128 + 32 * (u % 4) for u in range(B)]  # {128,160,192,224}, distinct lengths
     prompts = [torch.randint(0, vocab, (prompt_lens[u],)).tolist() for u in range(B)]
@@ -354,7 +368,9 @@ def test_model_tp_prefill_paged_slots(mesh_device, B, reset_seeds, ensure_gc):
     gc.collect()
 
     # ---- vLLM path: batched warmup + per-slot prefill + batched decode ----
-    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=B, max_seq_len=512, n_layers=8)
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=B, max_seq_len=512, n_layers=8, sequence_parallel=_sp_enabled()
+    )
     args = model.args
     block_size, bpu = 64, 8
     num_blocks = B * bpu
@@ -426,7 +442,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     import gc
 
     nd = mesh_device.get_num_devices()
-    assert nd > 1, "this test exercises the TP (num_devices>1) online-slot prefill path"
+    assert nd > 1 or _sp_enabled(), "this test exercises the TP (num_devices>1) online-slot prefill path"
     B, N_DEC, block_size = 8, 2, 64
     torch.manual_seed(0)
 
@@ -437,7 +453,9 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     bpu = ((bpu + 7) // 8) * 8
 
     def _build(batch):
-        model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=batch, max_seq_len=bpu * block_size, n_layers=8)
+        model = Qwen36Model.from_pretrained(
+            mesh_device, max_batch_size=batch, max_seq_len=bpu * block_size, n_layers=8, sequence_parallel=_sp_enabled()
+        )
         args = model.args
         num_blocks = batch * bpu
         page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(batch)])
@@ -578,7 +596,7 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
     import gc
 
     nd = mesh_device.get_num_devices()
-    assert nd > 1, "this test exercises the TP (num_devices>1) traced bucket prefill path"
+    assert nd > 1 or _sp_enabled(), "this test exercises the TP (num_devices>1) traced bucket prefill path"
     N_DEC = 2
     torch.manual_seed(0)
 
@@ -593,7 +611,9 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
     bpu = max(4, -(-(bucket + N_DEC + 4) // block_size))  # covers prompt + decode, >=4
 
     def _build_model():
-        model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=B, max_seq_len=bpu * block_size, n_layers=8)
+        model = Qwen36Model.from_pretrained(
+            mesh_device, max_batch_size=B, max_seq_len=bpu * block_size, n_layers=8, sequence_parallel=_sp_enabled()
+        )
         args = model.args
         num_blocks = B * bpu
         page_table = torch.stack(
@@ -725,7 +745,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     import gc
 
     nd = mesh_device.get_num_devices()
-    assert nd > 1, "this test exercises the TP (num_devices>1) batched chunked prefill path"
+    assert nd > 1 or _sp_enabled(), "this test exercises the TP (num_devices>1) batched chunked prefill path"
     N_DEC = 2
     block_size = 64
     torch.manual_seed(0)
@@ -741,7 +761,9 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     bpu = ((bpu + 7) // 8) * 8
 
     def _build(batch):
-        model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=batch, max_seq_len=bpu * block_size, n_layers=8)
+        model = Qwen36Model.from_pretrained(
+            mesh_device, max_batch_size=batch, max_seq_len=bpu * block_size, n_layers=8, sequence_parallel=_sp_enabled()
+        )
         args = model.args
         num_blocks = batch * bpu
         page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(batch)])

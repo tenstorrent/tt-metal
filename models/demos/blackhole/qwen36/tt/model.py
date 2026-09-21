@@ -21,6 +21,20 @@ from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
+def _signpost(header):
+    """Tracy signpost, gated on QWEN36_SIGNPOSTS=1 (unset/0 -> no-op, no tracy import at all).
+    Meaningful only from an UNTRACED op sequence (see sp_prefill.py's `_sp` for the same note);
+    decode_tp's per-layer python loop always re-executes eagerly, so no extra guard is needed
+    here the way sp_prefill.py's traced/untraced `_run_layer_major` needs one."""
+    if os.environ.get("QWEN36_SIGNPOSTS") != "1":
+        return
+    try:
+        from tracy import signpost
+    except ImportError:
+        return
+    signpost(header)
+
+
 class Qwen36Model:
     """Qwen3.5-9B text LM on Blackhole P150. HF_MODEL env var selects checkpoint."""
 
@@ -534,6 +548,7 @@ class Qwen36Model:
         n_layers=None,
         layer_indices=None,
         hf_model=None,
+        sequence_parallel: bool = False,
     ):
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
@@ -545,6 +560,7 @@ class Qwen36Model:
             mesh_device=device,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
+            sequence_parallel=sequence_parallel,
         )
 
         # layer_indices: run only these checkpoint layers (e.g. [0,3,31]) for profiling.
@@ -658,8 +674,12 @@ class Qwen36Model:
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            ckpt_idx = self.layer_indices[i] if hasattr(self, "layer_indices") else i
+            kind = "attn" if layer.is_full_attention else "gdn"
+            _signpost(f"decode L{ckpt_idx} {kind}")
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
+        _signpost("decode head")
         x = self._final_norm_decode(x)
         logits = self._lm_head(x)
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
@@ -2624,11 +2644,14 @@ class Qwen36Model:
 
     def reset_state(self, batch_size=None):
         """Reset layer state for a new sequence (eager/pre-trace path; trace uses _reset_dn_state_inplace)."""
+        _sp = getattr(self.args, "sequence_parallel", False)
         for layer in self.layers:
             if layer.is_full_attention:
-                layer.attention.reset_cache()
+                # TPAttention (sequence_parallel at tp=1) has reset_state(), not reset_cache().
+                layer.attention.reset_state() if _sp else layer.attention.reset_cache()
             else:
-                layer.attention.reset_state(batch_size)
+                # TPGatedDeltaNet.reset_state() takes no batch_size arg (unlike Qwen36GatedDeltaNet).
+                layer.attention.reset_state() if _sp else layer.attention.reset_state(batch_size)
 
     def _reset_gdn_state_for_new_sequence(self):
         """Zero GDN recurrent+conv at sequence start.
@@ -2711,9 +2734,19 @@ class Qwen36Model:
         self.set_paged_kv_caches(kv_caches)
 
         self._deltanet_external_states = []
+        _sp = getattr(self.args, "sequence_parallel", False)
         for layer in self.layers:
             if not layer.is_full_attention:
                 dn = layer.attention
+                if _sp:
+                    # TPGatedDeltaNet (sequence_parallel at tp=1) self-manages recurrent/conv state
+                    # internally -- no num_v_heads/head_k_dim/head_v_dim/conv_kernel_size/.cfg and no
+                    # set_external_state (those are Qwen36GatedDeltaNet-only). Same handling as
+                    # _allocate_kv_caches_tp's GDN branch; nothing to append (no external buffers).
+                    dn.B = batch_size
+                    dn.reset_state()
+                    dn._stable_state = True
+                    continue
                 rec = ttnn.from_torch(
                     torch.zeros(batch_size, dn.num_v_heads, dn.head_k_dim, dn.head_v_dim, dtype=torch.bfloat16),
                     dtype=ttnn.bfloat16,

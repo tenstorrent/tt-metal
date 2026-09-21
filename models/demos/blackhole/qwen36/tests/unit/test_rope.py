@@ -33,7 +33,6 @@ pytestmark = run_for_blackhole()
 ROPE_HEAD_DIM = 64
 ROPE_THETA = 10_000_000.0
 MAX_SEQ_LEN = 8192
-MROPE_SECTION = [11, 11, 10]  # sums to ROPE_HEAD_DIM // 2
 PCC_THRESHOLD = 0.99
 MAX_ABS_DIFF = 0.05  # bf16 cos/sin round-trip slack
 
@@ -52,14 +51,6 @@ def rope_setup(device):
         rope_head_dim=ROPE_HEAD_DIM,
         max_seq_len=MAX_SEQ_LEN,
         rope_theta=ROPE_THETA,
-        # M-RoPE fields Qwen36RoPESetup reads. The stub predates M-RoPE; without them
-        # construction raises AttributeError before any assertion runs. Text-only values
-        # (mrope_section sums to rope_head_dim // 2), shared by 2B / 9B / 27B.
-        mrope_section=MROPE_SECTION,
-        rope_attention_scaling=1.0,
-        spatial_merge_size=2,
-        image_token_id=None,
-        video_token_id=None,
     )
     return Qwen36RoPESetup(device, args), args
 

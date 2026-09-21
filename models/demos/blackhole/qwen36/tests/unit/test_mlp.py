@@ -25,7 +25,7 @@ def test_mlp_pcc(device, setup, request):
     up_w = sd["layers.0.mlp.up_proj.weight"]
     down_w = sd["layers.0.mlp.down_proj.weight"]
 
-    x = torch.randn(1, 4, args.dim, dtype=torch.bfloat16)
+    x = torch.randn(1, 4, 4096, dtype=torch.bfloat16)
     ref = F.linear(
         F.silu(F.linear(x, gate_w.to(torch.bfloat16))) * F.linear(x, up_w.to(torch.bfloat16)),
         down_w.to(torch.bfloat16),

@@ -6,13 +6,11 @@ Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
-import os
 
 import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.tt_transformers.tt.common import Mode
 
 # Hardware constants
 TILE_SIZE = 32
@@ -23,6 +21,15 @@ DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoo
 # Compute kernel configs
 COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+# SP-prefill experiment (QWEN36_SP_PROJ_LOFI=1, sequence_parallel + num_devices==1 only): LoFi on
+# the GDN/attention prefill in-proj/out-proj matmuls. Same as COMPUTE_HIFI2 otherwise.
+COMPUTE_LOFI_PROJ = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=True,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
@@ -59,7 +66,17 @@ PREFILL_MAX_COLS_PORTABLE = 11
 # from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
 # tenant is the op under test, so it reports a win that the full model has no room for. Any future
 # raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+# TP=1 (sequence_parallel, num_devices==1) values are from a one-die sweep of the actual MLP
+# prefill shapes (K=2048/6144, N=2048/5120/6144/8224) on the model's own compute config: 2026-09-20
+# one-die sweep, scratchpad/mm/results.md. Unlike TP=4/8, the full K never splits across devices, so
+# k_tiles (64 or 192) is always divisible by 8 -- in0_block_w_cap=8 is legal and faster than the TP=4
+# cap=4. `rows=8` pins the grid height to the 8 rows that per_core_M=4 (32 M-tiles / 8) actually uses,
+# instead of leaving 2 of the default 10 rows idle. `prefer_square_subblock` lets
+# `create_prefill_mlp_matmul_program_config` try a (2,2) output subblock (legal: fp32_dest_acc_en
+# caps subblock area at 4, and both 2,2 factors are area-4) when the plain wide-column search would
+# otherwise land on a smaller subblock -- see `_square_prefill_cols`.
 _PREFILL_TUNING = {
+    1: dict(widest_cols=False, in0_block_w_divisor=True, in0_block_w_cap=8, rows=8, prefer_square_subblock=True),
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
 }
@@ -213,19 +230,26 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
+def create_prefill_matmul_program_config(
+    m, k, n, grid_size=None, fused_activation=None, tuning=None, out_subblock=None
+):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior.
+    out_subblock: optional (h, w) override (see `_square_prefill_cols`); None = the default (1, w)
+    search below."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
-    out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
+    if out_subblock is not None:
+        out_subblock_h, out_subblock_w = out_subblock
+    else:
+        out_subblock_h = 1
+        out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
 
     k_tiles = math.ceil(k / TILE_SIZE)
     cap = tuning["in0_block_w_cap"]
@@ -283,6 +307,29 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
+def _square_prefill_cols(m, n, limit, rows):
+    """TP=1 counterpart to `_best_prefill_cols`/`_widest_prefill_cols` (see `_PREFILL_TUNING[1]`).
+
+    Goes straight to the widest portable grid and checks whether a (2,2) output subblock reaches the
+    fp32_dest_acc_en area-4 cap when the plain (1, w<=4) search cannot (e.g. per_core_N=18 -> w=3 with
+    h=1, but 18 is even so (2,2) reaches area 4). Requires per_core_M and per_core_N both even. When
+    neither the plain nor the square subblock reach area 4, there's no win from going wide, so this
+    falls back to `_best_prefill_cols`'s narrower, subblock-maximizing search (e.g. N=5120 -> per_core_N
+    15 at 11 cols is odd, but 16 at 10 cols is a clean (1,4)).
+
+    Returns (cols, out_subblock | None); None means "let the caller's default (1, w) search decide"."""
+    n_tiles = math.ceil(n / TILE_SIZE)
+    m_tiles = math.ceil(m / TILE_SIZE)
+    per_core_M = max(1, math.ceil(m_tiles / rows))
+    cols = max(1, min(limit, PREFILL_MAX_COLS_PORTABLE, n_tiles))
+    per_core_N = max(1, math.ceil(n_tiles / cols))
+    if _get_out_subblock_w(per_core_N, 1) == 4:
+        return cols, None
+    if per_core_M % 2 == 0 and per_core_N % 2 == 0:
+        return cols, (2, 2)
+    return _best_prefill_cols(n, limit), None
+
+
 def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
@@ -294,11 +341,17 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
 
     tuning: a `_PREFILL_TUNING` entry. With `widest_cols` (TP=8) the subblock-first width heuristic
     is replaced by "take the width, clamped to PREFILL_MAX_COLS_PORTABLE" -- measured device time at
-    TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
+    TP=8 falls monotonically with column count, so trading cores for a wider subblock loses. With
+    `prefer_square_subblock` (TP=1) cols/out_subblock instead come from `_square_prefill_cols`.
+    `rows`, if present, overrides the grid height (default prefill_grid_default()[1])."""
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
     limit = max_cols or grid[0]
-    if tuning["widest_cols"]:
+    rows = tuning.get("rows", grid[1])
+    out_subblock = None
+    if tuning.get("prefer_square_subblock"):
+        cols, out_subblock = _square_prefill_cols(m, n, limit, rows)
+    elif tuning["widest_cols"]:
         # Cap the width at PREFILL_MAX_COLS_PORTABLE (harvested parts expose 11, not 12) and never
         # exceed the output tile count -- columns beyond it get per_core_N=1 with nothing to compute,
         # paying mcast cost for no work.
@@ -306,7 +359,7 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
     else:
         cols = _best_prefill_cols(n, limit)
     return create_prefill_matmul_program_config(
-        m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation, tuning=tuning
+        m, k, n, grid_size=(cols, rows), fused_activation=fused_activation, tuning=tuning, out_subblock=out_subblock
     )
 
 
@@ -363,23 +416,8 @@ def all_gather_matmul_prefill(
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
     # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    #
-    # This op is the single largest device-time consumer in TP prefill (30.4% of a profiled
-    # 8-layer chunk-outer run) and the (8, 9) grid uses only 72 of the 120 available worker
-    # cores. Unlike the pure-CCL reduce-scatter -- which sits at the 2-link ethernet roofline
-    # and gains nothing from more cores -- this op fuses a MATMUL with the gather, so the
-    # matmul half does scale with the grid. QWEN_AGMM_GRID="X,Y" overrides it for A/B;
-    # X must stay a multiple of num_links (grid.x == num_links * workers).
-    # get_num_links() is a hardcoded per-SKU table (BHGLX -> (2, 2)), not a hardware query,
-    # so QWEN_AGMM_LINKS exists to test whether this Galaxy actually offers more.
-    num_links = int(os.environ.get("QWEN_AGMM_LINKS", "2"))
-    _env_grid = os.environ.get("QWEN_AGMM_GRID")
-    if _env_grid:
-        _gx, _gy = (int(v) for v in _env_grid.split(","))
-        assert _gx % num_links == 0, f"QWEN_AGMM_GRID x={_gx} must be a multiple of num_links={num_links}"
-        grid = (_gx, _gy)
-    else:
-        grid = (8, grid[1])
+    num_links = 2
+    grid = (8, grid[1])
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
@@ -409,32 +447,9 @@ def all_gather_matmul_prefill(
     return out
 
 
-def prefill_norm_agmm_enabled(args):
-    """Whether a prefill norm's all-gather may be fused into the following in-proj matmul.
-
-    all_gather_minimal_matmul_async consumes a K-SHARDED activation and gathers it itself,
-    so the fusion is only valid when the norm actually leaves its output K-sharded -- i.e.
-    when the framework runs it in distributed mode. ModelArgs.is_distributed_norm is True in
-    prefill only for a 2-D mesh or dim > 4096, so on a 1-D TP mesh a narrow model takes the
-    ordinary PRE-norm all-gather instead and the activation reaches the matmul already
-    full-width. Fusing then double-gathers and the op rejects it:
-
-        all_gather_minimal_matmul_async inner dimensions must match, got K=16384 and K_w=2048
-
-    (K = the already-full 2048 x ring_size 8, against the weight's true K of 2048.)
-
-    This is why the 27B (dim 5120 -> distributed) fuses but Qwen3.5-2B (dim 2048) must not.
-    Every AGMM gate -- layer.py's two norm gates and the GDN / attention / MLP module gates --
-    keys off this one predicate so they cannot drift apart.
-    """
-    if args is None or getattr(args, "num_devices", 1) <= 1:
-        return False
-    return args.is_distributed_norm(Mode.PREFILL)
-
-
-def mlp_gateup_agmm_enabled(num_devices, args=None):
+def mlp_gateup_agmm_enabled(num_devices):
     """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
-    return num_devices > 1 and prefill_norm_agmm_enabled(args)
+    return num_devices > 1
 
 
 def all_gather_swiglu_prefill(
@@ -563,32 +578,6 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
         )
         cache[key] = (mk(N), mk(N // nd))
     return cache[key]
-
-
-def mmrs_prefill_supported(device, nd, grid=(8, 8), rs_offset=(0, 8)):
-    """Whether the fused prefill out-proj matmul_reduce_scatter can be placed on this device.
-
-    matmul_reduce_scatter_async sizes its reduce-scatter worker set from num_links AND the ring
-    size, and places it at ``rs_offset`` -- above the matmul's own grid. The (8,8)/(0,8) tuning
-    was measured at TP=4, where the workers fit the two rows left free. At nd=8 the op asks for
-    three full rows (36 cores on this 12-wide Blackhole grid) and the third falls off the bottom:
-
-        ccl_common.cpp:562 Core grid offset 0-8 pushed 12 of the 36 selected worker cores
-        (first: 0-10) off the worker grid; kernels cannot be placed there.
-
-    Dropping to num_links=1 makes the placement legal but then DEADLOCKS the collective -- the
-    prefill warmup never returns and ttnn.synchronize_device hangs -- so that is not a safe
-    workaround. Until the fused op is retuned for a wider ring, fall back to the unfused
-    row-parallel matmul + tt_all_reduce, which is verified working at TP=8.
-
-    The worker set is 36 cores (3 full rows on this 12-wide grid) at BOTH nd=4 and nd=8, so the
-    ring size is not the discriminator -- the free-row count above the matmul grid is. With the
-    tuned grid (8,8) and offset (0,8) a 10-row Blackhole leaves only 2 rows, so the fusion cannot
-    be placed at any TP here and we take the unfused path everywhere on this SKU.
-    """
-    rows_needed = 3  # measured: 36 selected worker cores / 12-wide grid
-    rows_free = max(0, device.compute_with_storage_grid_size().y - rs_offset[1])
-    return rows_free >= rows_needed
 
 
 def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):

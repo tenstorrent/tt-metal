@@ -19,6 +19,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import (
+    _sp_enabled,
     get_pcc_threshold,
     load_mlp_layer,
     model_path,
@@ -35,7 +36,7 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 @parametrize_mesh_tp()
 def test_mlp_tp(mesh_device, reset_seeds, ensure_gc, request):
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} hidden_dim={args.hidden_dim}")
 
@@ -71,7 +72,7 @@ def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     """Prefill-path (S>32) TP MLP vs torch SwiGLU. Exercises the 2D prefill matmul for w1/w3
     and the (now default) explicit w2 down-proj progcfg."""
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} hidden_dim={args.hidden_dim}")
 

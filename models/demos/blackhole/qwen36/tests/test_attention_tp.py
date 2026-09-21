@@ -26,6 +26,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import (
+    _sp_enabled,
     compute_pcc,
     get_pcc_threshold,
     load_attn_layer,
@@ -62,7 +63,7 @@ def _rope_torch(x, rope_dim, theta):  # x: [S, H, HD]
 @parametrize_batch(batches=(8, 32))
 def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
     logger.info(f"devices={nd} full-attn layer={li} NH={args.n_local_heads} NKV={args.n_local_kv_heads}")
@@ -127,7 +128,7 @@ def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
 def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     os.environ.setdefault("HF_MODEL", model_path())
     S = 64
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
     logger.info(f"devices={nd} full-attn layer={li} S={S}")
@@ -180,7 +181,7 @@ def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
 @parametrize_mesh_tp()
 def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
     NKV, HD = args.n_local_kv_heads, args.head_dim
@@ -271,7 +272,7 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     cur_pos, and paged_fill_cache batch_idx compose with no cross-user contamination.
     """
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256, sequence_parallel=_sp_enabled())
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
     NKV, HD = args.n_local_kv_heads, args.head_dim
@@ -281,7 +282,7 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
 
     # forward_decode keys all shapes off self.B (== max_batch_size), so the B=1 reference
     # needs its own max_batch_size=1 args (weights tw are batch-independent and shared).
-    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, sequence_parallel=_sp_enabled())
 
     sd = load_attn_layer(args.CKPT_DIR, li)
     from models.tt_transformers.tt.ccl import TT_CCL

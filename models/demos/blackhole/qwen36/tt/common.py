@@ -16,12 +16,15 @@ def create_tt_model(
     n_layers=None,
     layer_indices=None,
     hf_model=None,
+    sequence_parallel=False,
 ):
     """Build the Qwen3.5-9B model. Returns (args, model, state_dict).
 
     HF_MODEL (env var) is the single source of truth. `hf_model`, if given, sets it.
     `layer_indices` runs ONLY the listed checkpoint layers (profiling); it takes precedence
     over `n_layers` (first-N truncation). See Qwen36Model.from_pretrained for details.
+    `sequence_parallel`: pure passthrough to Qwen36ModelArgs (see model_config.py); builds
+    the TP-path classes at tp=1 on a 1x1 (sub)mesh for sequence-parallel prefill.
     """
     if hf_model is not None:
         os.environ["HF_MODEL"] = hf_model
@@ -30,6 +33,7 @@ def create_tt_model(
         mesh_device=mesh_device,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
+        sequence_parallel=sequence_parallel,
     )
     if layer_indices is not None:
         layer_indices = list(layer_indices)

@@ -1,20 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for Qwen3.5 / 3.6 HF -> internal weight remapping.
-
-Every expected shape is derived from the loaded checkpoint's config via the ``dims``
-fixture, so this file runs unchanged against 2B / 9B / 27B / 35B-A3B. Hardcoding the
-9B geometry here previously made the suite fail on every other checkpoint.
-"""
-from types import SimpleNamespace
-
+"""Tests for Qwen3.5-9B HF -> internal weight remapping."""
 import pytest
 import torch
 
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.tp_common import replicate_kv_weight
 from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen36_state_dict
+
+HIDDEN_SIZE = 4096
+NUM_LAYERS = 32
+LINEAR_KEY_DIM = 2048  # 16 heads × 128 head_dim
+LINEAR_VALUE_DIM = 4096  # 32 heads × 128 head_dim
+FULL_ATTN_Q_DIM = 8192  # 16 heads × 256 head_dim × 2 (query + gate)
+FULL_ATTN_KV_DIM = 1024  # 4 heads × 256 head_dim
 
 
 def _load_raw_state_dict(checkpoint_dir):
@@ -23,13 +23,8 @@ def _load_raw_state_dict(checkpoint_dir):
 
     from safetensors import safe_open
 
-    # Qwen ships both spellings: ``model-000NN-of-000MM`` and ``model.safetensors-000NN-of-000MM``.
-    paths = sorted(glob.glob(f"{checkpoint_dir}/model.safetensors-*.safetensors")) or sorted(
-        glob.glob(f"{checkpoint_dir}/model-*.safetensors")
-    )
-    assert paths, f"No safetensors shards found in {checkpoint_dir}"
     state_dict = {}
-    for path in paths:
+    for path in sorted(glob.glob(f"{checkpoint_dir}/model.safetensors-*.safetensors")):
         with safe_open(path, framework="pt", device="cpu") as f:
             for key in f.keys():
                 state_dict[key] = f.get_tensor(key)
@@ -37,48 +32,8 @@ def _load_raw_state_dict(checkpoint_dir):
 
 
 @pytest.fixture(scope="module")
-def args():
-    return Qwen36ModelArgs(mesh_device=None)
-
-
-@pytest.fixture(scope="module")
-def dims(args):
-    """Expected weight shapes, derived from the checkpoint config rather than hardcoded."""
-    layer_types = args.attention_type_list
-    return SimpleNamespace(
-        dim=args.dim,
-        hidden_dim=args.hidden_dim,
-        n_layers=args.n_layers,
-        vocab_size=args.vocab_size,
-        head_dim=args.head_dim,
-        linear_k_dim=args.linear_k_dim,
-        linear_v_dim=args.linear_v_dim,
-        # a/b decay projections, A_log and dt_bias are all per value-head.
-        n_v_heads=args.linear_num_value_heads,
-        v_head_dim=args.linear_value_head_dim,
-        conv_k=args.linear_conv_kernel_dim,
-        # q_proj is 2x wide: query and the output gate are fused into one projection.
-        full_attn_q_dim=args.n_heads * args.head_dim * 2,
-        full_attn_kv_dim=args.n_kv_heads * args.head_dim,
-        gdn_layers=[i for i, t in enumerate(layer_types) if t == "linear_attention"],
-        full_attn_layers=[i for i, t in enumerate(layer_types) if t == "full_attention"],
-    )
-
-
-@pytest.fixture(scope="module")
-def gdn_layer(dims):
-    """Index of the first DeltaNet layer (0 on every checkpoint so far)."""
-    return dims.gdn_layers[0]
-
-
-@pytest.fixture(scope="module")
-def attn_layer(dims):
-    """Index of the first full-attention layer (3 at full_attention_interval=4)."""
-    return dims.full_attn_layers[0]
-
-
-@pytest.fixture(scope="module")
-def raw_state_dict(args):
+def raw_state_dict():
+    args = Qwen36ModelArgs(mesh_device=None)
     return _load_raw_state_dict(args.CKPT_DIR)
 
 
@@ -102,109 +57,114 @@ class TestPrefixStripping:
 
 
 class TestTopLevelWeights:
-    def test_embed_tokens(self, remapped, dims):
+    def test_embed_tokens(self, remapped):
         assert "tok_embeddings.weight" in remapped
-        assert remapped["tok_embeddings.weight"].shape == (dims.vocab_size, dims.dim)
+        assert remapped["tok_embeddings.weight"].shape == (248320, HIDDEN_SIZE)
 
-    def test_lm_head(self, remapped, dims):
-        """Present on untied checkpoints from lm_head.weight, and on tied ones
-        (Qwen3.5-2B) via the embedding alias in ``_tie_output_weight``."""
+    def test_lm_head(self, remapped):
         assert "output.weight" in remapped
-        assert remapped["output.weight"].shape == (dims.vocab_size, dims.dim)
+        assert remapped["output.weight"].shape == (248320, HIDDEN_SIZE)
 
-    def test_final_norm(self, remapped, dims):
+    def test_final_norm(self, remapped):
         assert "norm.weight" in remapped
-        assert remapped["norm.weight"].shape == (dims.dim,)
+        assert remapped["norm.weight"].shape == (HIDDEN_SIZE,)
 
 
 class TestDeltaNetLayerWeights:
-    """Test the first DeltaNet / linear-attention layer."""
+    """Test layer 0 (a DeltaNet/linear attention layer)."""
 
-    def test_qkv_combined_only(self, remapped, dims, gdn_layer):
-        qkv = remapped[f"layers.{gdn_layer}.linear_attn.qkv_proj.weight"]
-        assert qkv.shape == (2 * dims.linear_k_dim + dims.linear_v_dim, dims.dim)
+    def test_qkv_combined_only(self, remapped):
+        qkv = remapped["layers.0.linear_attn.qkv_proj.weight"]
+        assert qkv.shape == (LINEAR_KEY_DIM + LINEAR_KEY_DIM + LINEAR_VALUE_DIM, HIDDEN_SIZE)  # (8192, 4096)
         # Split q/k/v_proj are no longer emitted (the op uses the combined weight)
-        for name in ("q_proj", "k_proj", "v_proj"):
-            assert f"layers.{gdn_layer}.linear_attn.{name}.weight" not in remapped
+        assert "layers.0.linear_attn.q_proj.weight" not in remapped
+        assert "layers.0.linear_attn.k_proj.weight" not in remapped
+        assert "layers.0.linear_attn.v_proj.weight" not in remapped
 
-    def test_conv1d_split(self, remapped, dims, gdn_layer):
-        pre = f"layers.{gdn_layer}.linear_attn"
-        assert remapped[f"{pre}.q_conv.weight"].shape == (dims.linear_k_dim, 1, dims.conv_k)
-        assert remapped[f"{pre}.k_conv.weight"].shape == (dims.linear_k_dim, 1, dims.conv_k)
-        assert remapped[f"{pre}.v_conv.weight"].shape == (dims.linear_v_dim, 1, dims.conv_k)
+    def test_conv1d_split(self, remapped):
+        q_conv = remapped["layers.0.linear_attn.q_conv.weight"]
+        k_conv = remapped["layers.0.linear_attn.k_conv.weight"]
+        v_conv = remapped["layers.0.linear_attn.v_conv.weight"]
+        assert q_conv.shape == (LINEAR_KEY_DIM, 1, 4)
+        assert k_conv.shape == (LINEAR_KEY_DIM, 1, 4)
+        assert v_conv.shape == (LINEAR_VALUE_DIM, 1, 4)
 
-    def test_decay_projections(self, remapped, dims, gdn_layer):
-        pre = f"layers.{gdn_layer}.linear_attn"
-        assert remapped[f"{pre}.in_proj_a.weight"].shape == (dims.n_v_heads, dims.dim)
-        assert remapped[f"{pre}.in_proj_b.weight"].shape == (dims.n_v_heads, dims.dim)
+    def test_decay_projections(self, remapped):
+        a = remapped["layers.0.linear_attn.in_proj_a.weight"]
+        b = remapped["layers.0.linear_attn.in_proj_b.weight"]
+        assert a.shape == (32, HIDDEN_SIZE)
+        assert b.shape == (32, HIDDEN_SIZE)
 
-    def test_gate_projection(self, remapped, dims, gdn_layer):
-        assert remapped[f"layers.{gdn_layer}.linear_attn.in_proj_z.weight"].shape == (dims.linear_v_dim, dims.dim)
+    def test_gate_projection(self, remapped):
+        z = remapped["layers.0.linear_attn.in_proj_z.weight"]
+        assert z.shape == (HIDDEN_SIZE, HIDDEN_SIZE)
 
-    def test_output_proj(self, remapped, dims, gdn_layer):
-        assert remapped[f"layers.{gdn_layer}.linear_attn.out_proj.weight"].shape == (dims.dim, dims.linear_v_dim)
+    def test_output_proj(self, remapped):
+        o = remapped["layers.0.linear_attn.out_proj.weight"]
+        assert o.shape == (HIDDEN_SIZE, HIDDEN_SIZE)
 
-    def test_a_log_and_dt_bias(self, remapped, dims, gdn_layer):
-        pre = f"layers.{gdn_layer}.linear_attn"
-        assert remapped[f"{pre}.A_log"].shape == (dims.n_v_heads,)
-        assert remapped[f"{pre}.dt_bias"].shape == (dims.n_v_heads,)
+    def test_a_log_and_dt_bias(self, remapped):
+        assert remapped["layers.0.linear_attn.A_log"].shape == (32,)
+        assert remapped["layers.0.linear_attn.dt_bias"].shape == (32,)
 
-    def test_norm(self, remapped, dims, gdn_layer):
-        assert remapped[f"layers.{gdn_layer}.linear_attn.norm.weight"].shape == (dims.v_head_dim,)
+    def test_norm(self, remapped):
+        assert remapped["layers.0.linear_attn.norm.weight"].shape == (128,)
 
-    def test_mlp(self, remapped, dims, gdn_layer):
-        pre = f"layers.{gdn_layer}.mlp"
-        assert remapped[f"{pre}.gate_proj.weight"].shape == (dims.hidden_dim, dims.dim)
-        assert remapped[f"{pre}.up_proj.weight"].shape == (dims.hidden_dim, dims.dim)
-        assert remapped[f"{pre}.down_proj.weight"].shape == (dims.dim, dims.hidden_dim)
+    def test_mlp(self, remapped):
+        assert remapped["layers.0.mlp.gate_proj.weight"].shape == (12288, HIDDEN_SIZE)
+        assert remapped["layers.0.mlp.up_proj.weight"].shape == (12288, HIDDEN_SIZE)
+        assert remapped["layers.0.mlp.down_proj.weight"].shape == (HIDDEN_SIZE, 12288)
 
-    def test_layernorms(self, remapped, dims, gdn_layer):
-        assert remapped[f"layers.{gdn_layer}.input_layernorm.weight"].shape == (dims.dim,)
-        assert remapped[f"layers.{gdn_layer}.post_attention_layernorm.weight"].shape == (dims.dim,)
+    def test_layernorms(self, remapped):
+        assert remapped["layers.0.input_layernorm.weight"].shape == (HIDDEN_SIZE,)
+        assert remapped["layers.0.post_attention_layernorm.weight"].shape == (HIDDEN_SIZE,)
 
 
 class TestGatedAttentionLayerWeights:
-    """Test the first Gated Full Attention layer."""
+    """Test layer 3 (a Gated Full Attention layer)."""
 
-    def test_q_proj(self, remapped, dims, attn_layer):
-        assert remapped[f"layers.{attn_layer}.self_attn.q_proj.weight"].shape == (dims.full_attn_q_dim, dims.dim)
+    def test_q_proj(self, remapped):
+        q = remapped["layers.3.self_attn.q_proj.weight"]
+        assert q.shape == (FULL_ATTN_Q_DIM, HIDDEN_SIZE)
 
-    def test_kv_proj(self, remapped, dims, attn_layer):
-        pre = f"layers.{attn_layer}.self_attn"
-        assert remapped[f"{pre}.k_proj.weight"].shape == (dims.full_attn_kv_dim, dims.dim)
-        assert remapped[f"{pre}.v_proj.weight"].shape == (dims.full_attn_kv_dim, dims.dim)
+    def test_kv_proj(self, remapped):
+        k = remapped["layers.3.self_attn.k_proj.weight"]
+        v = remapped["layers.3.self_attn.v_proj.weight"]
+        assert k.shape == (FULL_ATTN_KV_DIM, HIDDEN_SIZE)
+        assert v.shape == (FULL_ATTN_KV_DIM, HIDDEN_SIZE)
 
-    def test_o_proj(self, remapped, dims, attn_layer):
-        assert remapped[f"layers.{attn_layer}.self_attn.o_proj.weight"].shape == (dims.dim, dims.dim)
+    def test_o_proj(self, remapped):
+        o = remapped["layers.3.self_attn.o_proj.weight"]
+        assert o.shape == (HIDDEN_SIZE, HIDDEN_SIZE)
 
-    def test_qk_norm(self, remapped, dims, attn_layer):
-        pre = f"layers.{attn_layer}.self_attn"
-        assert remapped[f"{pre}.q_norm.weight"].shape == (dims.head_dim,)
-        assert remapped[f"{pre}.k_norm.weight"].shape == (dims.head_dim,)
+    def test_qk_norm(self, remapped):
+        assert remapped["layers.3.self_attn.q_norm.weight"].shape == (256,)
+        assert remapped["layers.3.self_attn.k_norm.weight"].shape == (256,)
 
-    def test_mlp(self, remapped, dims, attn_layer):
-        assert remapped[f"layers.{attn_layer}.mlp.gate_proj.weight"].shape == (dims.hidden_dim, dims.dim)
+    def test_mlp(self, remapped):
+        assert remapped["layers.3.mlp.gate_proj.weight"].shape == (12288, HIDDEN_SIZE)
 
-    def test_layernorms(self, remapped, dims, attn_layer):
-        assert remapped[f"layers.{attn_layer}.input_layernorm.weight"].shape == (dims.dim,)
-        assert remapped[f"layers.{attn_layer}.post_attention_layernorm.weight"].shape == (dims.dim,)
+    def test_layernorms(self, remapped):
+        assert remapped["layers.3.input_layernorm.weight"].shape == (HIDDEN_SIZE,)
+        assert remapped["layers.3.post_attention_layernorm.weight"].shape == (HIDDEN_SIZE,)
 
 
 class TestAllLayersPresent:
-    def test_all_layers_have_mlp(self, remapped, dims):
-        for i in range(dims.n_layers):
+    def test_all_32_layers_have_mlp(self, remapped):
+        for i in range(32):
             assert f"layers.{i}.mlp.gate_proj.weight" in remapped, f"Missing MLP for layer {i}"
 
-    def test_deltanet_layers_count(self, remapped, dims):
-        found = [i for i in range(dims.n_layers) if f"layers.{i}.linear_attn.qkv_proj.weight" in remapped]
-        assert found == dims.gdn_layers
+    def test_deltanet_layers_count(self, remapped):
+        deltanet_layers = [i for i in range(32) if f"layers.{i}.linear_attn.qkv_proj.weight" in remapped]
+        assert len(deltanet_layers) == 24
 
-    def test_full_attn_layers_count(self, remapped, dims):
-        found = [i for i in range(dims.n_layers) if f"layers.{i}.self_attn.q_proj.weight" in remapped]
-        assert found == dims.full_attn_layers
+    def test_full_attn_layers_count(self, remapped):
+        attn_layers = [i for i in range(32) if f"layers.{i}.self_attn.q_proj.weight" in remapped]
+        assert len(attn_layers) == 8
 
-    def test_full_attn_at_correct_positions(self, remapped, dims):
-        for i in dims.full_attn_layers:
+    def test_full_attn_at_correct_positions(self, remapped):
+        expected = [3, 7, 11, 15, 19, 23, 27, 31]
+        for i in expected:
             assert f"layers.{i}.self_attn.q_proj.weight" in remapped, f"Layer {i} should be full attention"
 
 

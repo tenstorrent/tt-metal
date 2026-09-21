@@ -28,6 +28,7 @@ class Qwen36DecoderLayer:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1)
+        self.tp_enabled = self.num_devices > 1 or getattr(args, "sequence_parallel", False)
         self.is_full_attention = args.is_full_attention_layer(layer_num)
 
         prefix = f"layers.{layer_num}"
@@ -45,18 +46,9 @@ class Qwen36DecoderLayer:
         # Prefill fuses the norm all-gather into the in-proj matmul (all_gather_minimal_matmul_async):
         # GDN qkvzab and full-attn QKV. attention_norm then skips its post-norm AG (prefill only;
         # decode gathers pre-norm). Gates must match the module-side _fuse_agmm gates.
-        # tpc.prefill_norm_agmm_enabled: the fusion needs the norm to emit a K-SHARDED
-        # activation, which only holds in distributed-norm mode (2-D mesh or dim > 4096).
-        # Qwen3.5-2B (dim 2048, 1-D mesh) is not, so it keeps the plain pre-norm gather.
-        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
-
-        self._fuse_norm_agmm = (
-            self.num_devices > 1
-            and _tpc.prefill_norm_agmm_enabled(args)
-            and (
-                (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
-                or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
-            )
+        self._fuse_norm_agmm = self.num_devices > 1 and (
+            (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
+            or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
         )
         self.attention_norm = self._make_norm(
             mesh_device,
@@ -74,7 +66,7 @@ class Qwen36DecoderLayer:
 
         # MoE layers gather in the norm (the sparse MoE + shared expert need full/replicated
         # hidden and do NOT run the fused gate/up AGMM), so only fuse for the dense MLP.
-        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices, args) and not args.is_moe_layer(layer_num)
+        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and not args.is_moe_layer(layer_num)
         self.ffn_norm = self._make_norm(
             mesh_device,
             args,
@@ -87,7 +79,7 @@ class Qwen36DecoderLayer:
             enable_all_gather=not self._fuse_ff_agmm,
         )
 
-        if self.num_devices > 1:
+        if self.tp_enabled:
             # Tensor-parallel modules (sharded weights from the raw substate).
             # Cache the sharded mesh weights to disk so re-runs skip the (slow,
             # single-threaded) reorder+shard of the full 27B.
@@ -127,14 +119,7 @@ class Qwen36DecoderLayer:
                 mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
             )
         else:
-            self.feed_forward = Qwen36MLP(
-                mesh_device,
-                mlp_state,
-                mlp_cache,
-                args=args,
-                tt_ccl=tt_ccl,
-                use_gateup_agmm=self._fuse_ff_agmm,
-            )
+            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
 
     def _make_norm(
         self,
@@ -198,7 +183,7 @@ class Qwen36DecoderLayer:
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
-        if self.num_devices > 1:
+        if self.tp_enabled:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
             # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
@@ -219,7 +204,7 @@ class Qwen36DecoderLayer:
             )
         attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
-        if self.num_devices > 1:
+        if self.tp_enabled:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
             # output is fractured along dim=3. cos/sin are in rope_tp format.
             if self.is_full_attention:
