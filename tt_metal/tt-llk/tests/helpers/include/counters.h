@@ -78,8 +78,7 @@ constexpr std::uint32_t COUNTER_BANK_COUNT = llk::perf::NUM_BANKS;
 
 // Unbounded, a corrupt config word would hang every thread and surface only as TENSIX TIMED OUT.
 constexpr std::uint32_t MODE_REG_POLL_LIMIT = 1024;
-// Stored instead of a count when the mode register never reports the selection: a stale read would look like a
-// plausible number. No counter reaches 2^32-1 inside a zone, so the value is free to use as a sentinel.
+// Stored when the mode register never confirms the selection: a stale count would look plausible, 2^32-1 does not.
 constexpr std::uint32_t COUNTER_SELECT_MISSED = 0xFFFFFFFFu;
 constexpr std::uint32_t COUNTER_SLOT_COUNT    = PERF_COUNTERS_CONFIG_WORDS;
 
@@ -478,7 +477,6 @@ inline __attribute__((always_inline)) void read_all_counters(std::uint32_t zone_
     std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
     volatile std::uint32_t* bank_cycles    = reinterpret_cast<volatile std::uint32_t*>(cycles_base);
     volatile std::uint32_t* counter_counts = bank_cycles + PERF_COUNTERS_BANK_CYCLES_WORDS;
-    // One reference count per bank, in Bank order.
     for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
     {
 #if defined(ARCH_QUASAR)
@@ -517,8 +515,7 @@ inline __attribute__((always_inline)) void read_all_counters(std::uint32_t zone_
 #endif
         const BankRegsRef regs = llk::perf::bank_regs(static_cast<Bank>(bank_id));
         // No mux write: it is fixed once by configure_hardware and cannot be re-aimed afterwards.
-        // select() polls the mode register back; without that the read samples the previous counter, so a poll
-        // that never converges stores the sentinel instead of that stale value.
+        // Without the readback the read samples the previous counter; a poll that never converges stores the sentinel.
         const bool selected     = llk::perf::select<MODE_REG_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
         counter_counts[out_idx] = selected ? llk::perf::read_count(regs) : COUNTER_SELECT_MISSED;
         ++out_idx;

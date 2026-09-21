@@ -31,8 +31,8 @@ def test_full_blackhole_set_schedules_one_pass_per_l1_bank():
 
 
 def test_all_non_l1_groups_and_one_l1_bank_fit_one_pass():
-    # fpu, pack, unpack, instrn plus one L1 bank is the largest single pass mask (47 with l1_0); measured to fit the
-    # BRISC firmware on Blackhole (8684 of 8704 bytes) and Wormhole (7600 of 7712).
+    # The largest single pass mask (47 with l1_0); measured to fit the BRISC firmware on Blackhole
+    # (8684 of 8704 bytes) and Wormhole (7600 of 7712).
     passes = schedule_perf_counter_passes(["fpu", "pack", "unpack", "instrn", "l1_0"])
     assert passes == [["l1_0", "fpu", "pack", "unpack", "instrn"]]
     assert perf_counter_groups_to_bitfield(passes[0]) == 47
@@ -56,7 +56,6 @@ def test_two_l1_banks_force_two_passes():
 
 
 def test_group_cap_forces_extra_pass():
-    # the cap is a parameter; with the default every non L1 group fits one pass
     assert len(schedule_perf_counter_passes(["fpu", "pack", "unpack", "instrn"])) == 1
     assert len(schedule_perf_counter_passes(["fpu", "pack", "unpack", "instrn"], max_groups_per_pass=3)) == 2
 

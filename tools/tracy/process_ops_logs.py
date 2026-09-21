@@ -912,9 +912,8 @@ def _enrich_ops_from_device_logs(
                 device_op["avg_fpu_count"] = per_op_counts.get("avg_fpu_count", {}).get(lookup_key, nan)
                 device_op["avg_math_count"] = per_op_counts.get("avg_math_count", {}).get(lookup_key, nan)
 
-                # One loop over per_op_stats, keyed by METRIC_LABELS, so the CSV cannot drift from the engine;
-                # the ratio family gets a "(ratio)" unit. The "Avg ... util on full grid" columns are filled separately
-                # from the grid-wide counts over the kernel duration.
+                # Keyed by the engine labels so the CSV cannot drift from the engine. The "Avg ... util on full grid"
+                # columns come separately from the grid-wide counts over the kernel duration.
                 for base_name, mstat in per_op_stats.items():
                     suffix = " (ratio)" if is_ratio_label(base_name) else " (%)"
                     device_op[f"{base_name} Min{suffix}"] = mstat["min"].get(lookup_key, nan)
@@ -1176,8 +1175,7 @@ def get_device_data_generate_report(
                     metrics = device_efficiency_metrics[device]
 
                     for base_name, m in metrics.items():
-                        # The ratio family gets "(ratio)", everything else "(%)". The grid-wide "Avg ... util on
-                        # full grid" columns need the kernel duration, which a device-only run does not have.
+                        # No grid-wide average columns here: they need the kernel duration a device-only run lacks.
                         suffix = " (ratio)" if is_ratio_label(base_name) else " (%)"
                         rowDict[f"{base_name} Avg{suffix}"] = m["avg"].get(lookup_key, nan)
                         rowDict[f"{base_name} Min{suffix}"] = m["min"].get(lookup_key, nan)

@@ -42,7 +42,6 @@ inline void clear_debug_feature_disable(std::uint32_t window = DEFAULT_WINDOW)
     write(dbg_feature_disable(window), 0);
 }
 
-// Free-running count with the reference period at its maximum.
 inline void configure(const BankRegs& regs)
 {
     write(regs.ref_period, REF_PERIOD_MAX);
@@ -78,8 +77,7 @@ inline void stop_all(std::uint32_t window = DEFAULT_WINDOW)
 // l1_client CSR: sel = subport*8 + event, validated by l1_client_selection_is_valid().
 constexpr std::uint32_t l1_client_ctrl_word(std::uint32_t sel)
 {
-    return ((sel / QUASAR_L1_CLIENT_NUM_EVENTS) << L1_CLIENT_SUBPORT_SHIFT) | ((sel % QUASAR_L1_CLIENT_NUM_EVENTS) << L1_CLIENT_EVENT_SHIFT) |
-           L1_CLIENT_ENABLE;
+    return ((sel / QUASAR_L1_CLIENT_NUM_EVENTS) << L1_CLIENT_SUBPORT_SHIFT) | ((sel % QUASAR_L1_CLIENT_NUM_EVENTS) << L1_CLIENT_EVENT_SHIFT) | L1_CLIENT_ENABLE;
 }
 
 // Route the selection, then read once: the counter is clear-on-read, so the window starts at zero.
@@ -100,9 +98,8 @@ inline std::uint32_t l1_client_read(const L1ClientRegs& regs)
 }
 #endif
 
-// Route one select to the bank's readout, then poll the mode register back so the next read sees the
-// new selection. PollLimit 0 polls without a bound and always returns true (the BRISC firmware is a few
-// bytes from its size limit); otherwise returns false when PollLimit reads never matched.
+// Polls the mode register back so the next readout sees the new select. PollLimit 0 spins without a bound and
+// always returns true (the BRISC firmware is a few bytes from its size limit); otherwise false if no read matched.
 template <std::uint32_t PollLimit = DEFAULT_POLL_LIMIT>
 inline bool select(const BankRegs& regs, std::uint16_t sel)
 {
@@ -138,7 +135,7 @@ inline std::uint32_t read_count(const BankRegs& regs)
     return read(regs.out_h);
 }
 
-// Read every entry of a table: emit(PerfCounterType, ref, count) once per select.
+// Calls emit(PerfCounterType, ref, count) once per table entry.
 template <std::uint32_t PollLimit = DEFAULT_POLL_LIMIT, class Emit>
 inline void read_table(const BankRegs& regs, Table table, Emit&& emit)
 {

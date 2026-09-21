@@ -15,8 +15,7 @@
 namespace llk::perf
 {
 
-// The three control registers of a bank and its two readout registers. control takes START / STOP,
-// out_l is the reference (cycle) count, out_h the count of the selected event.
+// out_l reads back the reference (cycle) count, out_h the count of the selected event.
 struct BankRegs
 {
     std::uint32_t ref_period;
@@ -32,13 +31,12 @@ inline constexpr std::uint32_t STOP  = 2;
 // mode register: low byte is the count mode, the select sits above it
 inline constexpr std::uint32_t MODE_CONTINUOUS = 0;
 inline constexpr std::uint32_t SELECT_SHIFT    = 8;
-// PERF_CNT_MUX_CTRL: the L1 mux field starts at bit 4 (its width is the arch L1_MUX_MASK)
+// L1 mux field of PERF_CNT_MUX_CTRL; its width is the per arch L1_MUX_MASK
 inline constexpr std::uint32_t L1_MUX_SHIFT       = 4;
 inline constexpr std::uint32_t REF_PERIOD_MAX     = 0xFFFFFFFF;
 inline constexpr std::uint32_t DEFAULT_POLL_LIMIT = 1024;
 
-// PERF_CNT_ALL reaches only the INSTRN_THREAD and FPU blocks (RTL confirmed on every arch); the others start
-// and stop from their own control register.
+// PERF_CNT_ALL reaches only these two blocks (RTL confirmed on every arch); the others need their own control register.
 constexpr bool follows_all(Bank bank)
 {
     return bank == Bank::INSTRN_THREAD || bank == Bank::FPU;
@@ -48,11 +46,11 @@ constexpr bool follows_all(Bank bank)
 
 // Quasar: every NEO has its own debug block. A TRISC reaches its NEO's block through the local window; the DM
 // cores reach every NEO through the NoC window, NEO n at neo_window(n). The window is the base of the block.
-inline constexpr std::uint32_t LOCAL_REGS_WINDOW  = 0x00800000;
-inline constexpr std::uint32_t NEO_WINDOW_BASE    = 0x01800000;
-inline constexpr std::uint32_t NEO_WINDOW_STRIDE  = 0x10000;
-inline constexpr std::uint32_t NUM_NEOS           = 4;
-inline constexpr std::uint32_t DEFAULT_WINDOW     = LOCAL_REGS_WINDOW;
+inline constexpr std::uint32_t LOCAL_REGS_WINDOW = 0x00800000;
+inline constexpr std::uint32_t NEO_WINDOW_BASE   = 0x01800000;
+inline constexpr std::uint32_t NEO_WINDOW_STRIDE = 0x10000;
+inline constexpr std::uint32_t NUM_NEOS          = 4;
+inline constexpr std::uint32_t DEFAULT_WINDOW    = LOCAL_REGS_WINDOW;
 
 constexpr std::uint32_t neo_window(unsigned neo)
 {
@@ -188,7 +186,6 @@ inline constexpr std::uint32_t PERF_CNT_MUX_CTRL   = DEBUG_REGS_BASE + 0x218;
 namespace detail
 {
 
-// Indexed by Bank.
 inline constexpr BankRegs BANK_REGS[NUM_BANKS] = {
     {DEBUG_REGS_BASE + 0x0, DEBUG_REGS_BASE + 0x4, DEBUG_REGS_BASE + 0x8, DEBUG_REGS_BASE + 0x100, DEBUG_REGS_BASE + 0x104},    // INSTRN_THREAD
     {DEBUG_REGS_BASE + 0x18, DEBUG_REGS_BASE + 0x1C, DEBUG_REGS_BASE + 0x20, DEBUG_REGS_BASE + 0x120, DEBUG_REGS_BASE + 0x124}, // FPU
@@ -232,7 +229,7 @@ constexpr std::uint32_t perf_cnt_mux_ctrl(std::uint32_t window = DEFAULT_WINDOW)
     return PERF_CNT_MUX_CTRL - DEBUG_REGS_BASE + window;
 }
 
-// When the arch tensix.h is visible, check every address against it.
+// Cross check every address against the arch tensix.h when it is visible.
 #ifdef RISCV_DEBUG_REG_PERF_CNT_FPU0
 static_assert(bank_regs(Bank::INSTRN_THREAD).ref_period == RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0);
 static_assert(bank_regs(Bank::INSTRN_THREAD).mode == RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD1);

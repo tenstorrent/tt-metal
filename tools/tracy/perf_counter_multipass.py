@@ -31,10 +31,8 @@ PERF_COUNTER_GROUP_BITS = {
 }
 PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"}
 PERF_COUNTER_BH_ONLY_GROUPS = {"l1_2", "l1_3", "l1_4", "l1_5"}
-# The table driven readout costs a few bytes per group, so every group fits one pass next to one L1 bank.
-# Measured BRISC .text with the five group mask (fpu, pack, unpack, instrn and one L1 bank): Blackhole 8684 of
-# 8704 bytes, Wormhole 7600 of 7712. The cap is the number of groups such a mask holds; the one L1 bank per
-# pass rule below is the hardware limit that still forces several passes.
+# Every non L1 group plus one L1 bank fits the BRISC .text: measured 8684 of 8704 bytes on Blackhole and 7600 of
+# 7712 on Wormhole with the five group mask. The one L1 bank per pass rule below is what still forces passes.
 PERF_COUNTER_MAX_GROUPS_PER_PASS = 5
 # PERF_COUNTER_PROFILER_ID in perf_counters.hpp: the timer_id the firmware tags counter rows with.
 PERF_COUNTER_MARKER_ID = "9090"
@@ -79,10 +77,8 @@ def perf_counter_groups_to_bitfield(groups):
 
 
 def detect_device_arch():
-    """The device architecture name in lower case, from the environment or from ttnn in a child process; None if
-    unknown. A child process on purpose: this runs in the capture process, and a ttnn import that touches the
-    device there keeps the device handle until the capture process exits, so the workload it then launches
-    blocks in its own open_device."""
+    """Arch name in lower case from the environment or a ttnn child process; None if unknown. A child process on
+    purpose: a ttnn import here would hold the device until this capture process exits and block the workload."""
     declared = next((os.environ.get(v) for v in ARCH_ENV_VARS if os.environ.get(v)), None)
     if declared is None:
         try:
@@ -135,10 +131,8 @@ def resolve_perf_counter_groups(requested_groups, arch):
     return resolved
 
 
-# Device profiler capacity per RISC between host reads: the DRAM buffer is 48 bytes per supported program
-# (TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT, default 1000, the tracy --op-support-count option), a counter record is
-# 24 bytes and an op leaves about 48 bytes of zone markers on BRISC next to them. Past that the tail of the run is
-# dropped and the ops report fails with a host/device op count mismatch, so say how many ops a pass holds.
+# Profiler DRAM buffer per RISC: 48 bytes per supported program (TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT, the tracy
+# --op-support-count option). Overflow drops the tail of the run; the ops report then fails on an op count mismatch.
 PROFILER_BYTES_PER_PROGRAM = 48
 PROFILER_DEFAULT_PROGRAM_SUPPORT_COUNT = 1000
 PROFILER_BYTES_PER_COUNTER_RECORD = 24

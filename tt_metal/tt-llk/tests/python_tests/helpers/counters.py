@@ -28,7 +28,6 @@ COUNTER_BANK_NAMES = {
     4: "TDMA_PACK",
 }
 
-# tt_llk_perf table keys -> harness bank names (only INSTRN is spelled differently).
 _TABLE_BANK_TO_HARNESS = {
     "INSTRN": "INSTRN_THREAD",
     "FPU": "FPU",
@@ -37,7 +36,7 @@ _TABLE_BANK_TO_HARNESS = {
     "L1": "L1",
 }
 
-# The device-side harness header this module mirrors; this file lives at tests/python_tests/helpers/.
+# parents[2] is tests/: the device-side header whose layout this module mirrors.
 LLK_COUNTERS_HEADER = (
     Path(__file__).resolve().parents[2] / "helpers" / "include" / "counters.h"
 )
@@ -189,7 +188,6 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         count_idx += 1
 
         if count == _COUNTER_SELECT_MISSED:
-            # The readout gave up on the mode register, so the slot has no value to publish.
             logger.warning(
                 f"Zone {zone_name}: {bank_name}.{counter_name} (sel {counter_id}) missed its select "
                 "readback; reporting it as missing"

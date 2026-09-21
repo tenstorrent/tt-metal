@@ -10,8 +10,8 @@
 
 #include "perf_counters/types.h"
 
-// Blackhole select tables, one per bank (the L1 bank once per mux position). Every select drives a live RTL
-// wire; tied-off and aliased selects are left out on purpose. Include through perf_counters/inventory.h.
+// Blackhole select tables. Every select drives a live RTL wire; tied-off and aliased selects are left out on purpose.
+// Include through perf_counters/inventory.h, which picks the arch.
 
 namespace llk::perf
 {
@@ -49,8 +49,7 @@ inline constexpr std::array<Entry, 5> pack_counters = {
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
      {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 
-// L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker 0 (also the packer L1-to-L1 read), unpacker 1 + ECC scrubber,
-// TDMA bundles, ring 0 NOC.
+// L1 bank 0 (MUX_CTRL[6:4] = 0); port 0 also carries the packer L1-to-L1 read.
 inline constexpr std::array<Entry, 16> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
      {PerfCounterType::L1_0_UNPACKER_1_ECC, 1},
@@ -70,8 +69,7 @@ inline constexpr std::array<Entry, 16> l1_0_counters = {
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
 
-// L1 bank 1 (MUX_CTRL[6:4] = 1): packer L1 interface 0, unpacker 1's extended read interfaces 1-3 (also the
-// packer L1-to-L1 read), ring 1 NOC.
+// L1 bank 1 (MUX_CTRL[6:4] = 1); ports 1-3 also carry the packer L1-to-L1 read.
 inline constexpr std::array<Entry, 16> l1_1_counters = {
     {{PerfCounterType::L1_1_PACKER_IF_0, 0},
      {PerfCounterType::L1_1_UNPACKER1_EXT_IF_1, 1},
@@ -91,8 +89,7 @@ inline constexpr std::array<Entry, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
 
-// L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): unpacker 1's extended read interfaces 4-7 (ports 16-19), ring 0
-// ports 2-3 (ports 20-23).
+// L1 bank 2 (BH only, MUX_CTRL[6:4] = 2, ports 16-23); ports 16-19 also carry the packer L1-to-L1 read.
 inline constexpr std::array<Entry, 16> l1_2_counters = {
     {{PerfCounterType::L1_2_UNPACKER1_EXT_IF_4, 0},
      {PerfCounterType::L1_2_UNPACKER1_EXT_IF_5, 1},
@@ -111,7 +108,7 @@ inline constexpr std::array<Entry, 16> l1_2_counters = {
      {PerfCounterType::L1_2_NOC_RING0_INCOMING_2_GRANT, 262},
      {PerfCounterType::L1_2_NOC_RING0_INCOMING_3_GRANT, 263}}};
 
-// L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): ring 1 ports 2-3 (ports 24-27), ext packers 2-5 (ports 28-31)
+// L1 bank 3 (BH only, MUX_CTRL[6:4] = 3, ports 24-31)
 inline constexpr std::array<Entry, 16> l1_3_counters = {
     {{PerfCounterType::L1_3_NOC_RING1_OUTGOING_2, 0},
      {PerfCounterType::L1_3_NOC_RING1_OUTGOING_3, 1},
@@ -130,8 +127,7 @@ inline constexpr std::array<Entry, 16> l1_3_counters = {
      {PerfCounterType::L1_3_EXT_PACKER_4_GRANT, 262},
      {PerfCounterType::L1_3_EXT_PACKER_5_GRANT, 263}}};
 
-// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): ext packers 6-7 (ports 32-33), packer L1 interface 1 arbitrated with the
-// tag-search accelerator, debug L1 RAM and timestamp (port 34), unpacker 0's extended read interfaces 1-5 (ports 35-39).
+// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4, ports 32-39); port 34 also serves tag search, debug L1 RAM and the timestamp.
 inline constexpr std::array<Entry, 16> l1_4_counters = {
     {{PerfCounterType::L1_4_EXT_PACKER_6, 0},
      {PerfCounterType::L1_4_EXT_PACKER_7, 1},
@@ -151,8 +147,7 @@ inline constexpr std::array<Entry, 16> l1_4_counters = {
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_4_GRANT, 262},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_5_GRANT, 263}}};
 
-// L1 bank 5 (BH only, MUX_CTRL[6:4] = 5): unpacker 0's extended read interfaces 6-7 (ports 40-41); the mux
-// wires only slots 0 and 1 here.
+// L1 bank 5 (BH only, MUX_CTRL[6:4] = 5, ports 40-41); the mux wires only slots 0 and 1, the rest read 0.
 inline constexpr std::array<Entry, 4> l1_5_counters = {
     {{PerfCounterType::L1_5_UNPACKER0_EXT_IF_6, 0},
      {PerfCounterType::L1_5_UNPACKER0_EXT_IF_7, 1},
@@ -160,10 +155,10 @@ inline constexpr std::array<Entry, 4> l1_5_counters = {
      {PerfCounterType::L1_5_UNPACKER0_EXT_IF_6_GRANT, 256},
      {PerfCounterType::L1_5_UNPACKER0_EXT_IF_7_GRANT, 257}}};
 
-// BH: 3-bit L1 mux at MUX_CTRL[6:4], values 0-5 (6 and 7 fall back to 0 in the RTL decode)
+// Mux values 6 and 7 fall back to 0 in the RTL decode.
 inline constexpr std::uint32_t L1_MUX_MASK = 0x7 << 4;
 
-// BH INSTRN_THREAD: sel gaps at 9-11 (XSEARCH kick tied to 0).
+// Selects 9-11 (XSEARCH kick) are tied to 0 and left out.
 inline constexpr std::array<Entry, 59> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},

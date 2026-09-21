@@ -54,11 +54,9 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter must be 128-bit");
 
-// The RISC that orchestrates the kernel owns the counters. tt-1xx: TRISC1 arms, BRISC stops and reads once
-// every TRISC is done (TRISC1 only knows when its own kernel ends, and the math thread exits early on unpack
-// or pack only kernels such as fast tilize, untilize, transpose and typecast, which left those ops with a few
-// hundred cycle window and all zero counts). Quasar: DM0 arms all four NEOs before GO and stops and reads
-// them after DONE.
+// The RISC that orchestrates the kernel owns the counters. tt-1xx: TRISC1 starts them with the compute kernel and
+// BRISC stops and reads them once every TRISC is done (the math thread exits early on unpack or pack only kernels).
+// Quasar: DM0 arms all four NEOs before GO and stops and reads them after DONE.
 #if defined(ARCH_QUASAR)
 #if defined(COMPILE_FOR_DM)
 #define PERF_COUNTER_WRAP_RISC 1
@@ -116,8 +114,7 @@ namespace kernel_profiler {
 #error "Quasar has no L1 perf counter groups; valid bits are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32) = 39"
 #endif
 
-// Counter groups and their corresponding enable bitmask bits. Shared; used on both
-// the wrap thread (start/stop loop) and the read thread (read loop).
+// Counter groups and their enable bits, shared by the wrap thread's start and the read thread's read.
 constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] PERF_COUNTER_TABLE = {
     {PerfCounterGroup::FPU, PROFILE_PERF_COUNTERS_FPU},
     {PerfCounterGroup::PACK, PROFILE_PERF_COUNTERS_PACK},
@@ -136,8 +133,7 @@ constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] PERF_
 };
 constexpr std::uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
 
-// Indexed by PerfCounterGroup; keep the enum order. The six L1 groups are the one L1 bank at different
-// mux positions.
+// Indexed by PerfCounterGroup, in enum order. The six L1 groups are the one L1 bank at different mux positions.
 constexpr llk::perf::Bank bank_for_group[10] PERF_COUNTER_TABLE = {
     llk::perf::Bank::FPU,            // FPU
     llk::perf::Bank::TDMA_PACK,      // PACK
@@ -343,8 +339,7 @@ inline void emit_record(const PerfCounter& counter) {
 #if defined(ARCH_QUASAR)
     spill_record(counter);
 #else
-    // A TS_DATA_16B record is three marker slots (marker, data, trailer); asking for two let a record be
-    // dropped when exactly two slots were left.
+    // A TS_DATA_16B record takes three marker slots; reserving two dropped a record when exactly two were left.
     kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
         kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
     kernel_profiler::timeStampedData<
@@ -363,16 +358,14 @@ inline void read_l1_client_event_counter(std::uint32_t neo) {
 }
 #endif
 
-// The mode readback poll is unbounded here (PollLimit 0): BRISC firmware is within a few bytes of its
-// size limit, and the poll never fails on hardware.
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group PERF_COUNTER_NEO_PARAM) {
     const auto& regs = regs_for(counter_group PERF_COUNTER_NEO_ARG(neo));
 #if !defined(ARCH_QUASAR)
-    // Freeze the group now that all three TRISCs are done, so the window spans the whole compute kernel
-    // (Quasar DM0 stops every NEO explicitly before reading). The next start zeroes the counts, so no clear
-    // is needed after the read.
+    // Stop now that all three TRISCs are done, so the window spans the whole compute kernel (Quasar DM0 stops every
+    // NEO explicitly before reading). No clear after the read: the next start on TRISC1 zeroes the counts.
     llk::perf::stop(regs);
 #endif
+    // PollLimit 0, unbounded readback poll: BRISC firmware is within bytes of its size limit and the poll never fails.
     llk::perf::read_table<0>(
         regs, table_for_group[counter_group], [&](PerfCounterType type, std::uint32_t ref_cnt, std::uint32_t value) {
             PerfCounter counter(value, ref_cnt, type, neo);
@@ -380,10 +373,9 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group 
         });
 }
 
-// One L1 group per pass at most; its mux position is routed here so passes without L1 carry no mux code.
-// trisc_enables is the launch message's processor enable mask. Only a launch with a compute kernel starts
-// the counters, so a data movement only op is skipped instead of reporting the values the previous op left
-// latched; Quasar skips NEOs that ran nothing.
+// At most one L1 group per pass; its mux write sits under the #if so passes without L1 carry no mux code.
+// trisc_enables is the launch message's processor enable mask. Counters start only on TRISC1 (DM0 on Quasar), so a
+// launch without a compute kernel would report values latched by the previous op; Quasar skips NEOs that ran nothing.
 void read_perf_counters(std::uint32_t trisc_enables) {
     if (kernel_profiler::get_profiler_zone_invalid()) {
         return;
