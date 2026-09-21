@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/scoped_lock_cache_ops.h"
 
 constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
 constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
@@ -348,6 +349,9 @@ void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContex
         }
 
         const uint32_t write_size = output_page_elements * sizeof(uint32_t);
+        // Quasar DM cores stage output through the cached L1 view, so flush it to TL1 before this NoC
+        // read. No-op on WH/BH, where CPU stores are already coherent with the NoC.
+        scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_dfb_addr), write_size);
         noc.async_write(dst_dfb_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
 
         sent_count += output_page_elements;

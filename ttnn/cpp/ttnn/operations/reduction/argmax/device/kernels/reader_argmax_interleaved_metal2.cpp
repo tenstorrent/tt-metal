@@ -11,6 +11,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/scoped_lock_cache_ops.h"
 #include "experimental/kernel_args.h"
 
 #include <stdint.h>
@@ -80,6 +81,9 @@ void kernel_main() {
 
         // The results were written at dst's base address, and that is where this send reads from.
         if constexpr (not reduce_all) {
+            // Quasar DM cores fill dst through the cached L1 view, so flush it to TL1 before the NoC
+            // reads it below. No-op on WH/BH, where CPU stores are already coherent with the NoC.
+            scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), dst_page_size);
             noc.async_write(dst, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
             noc.async_write_barrier();
         }
@@ -88,6 +92,8 @@ void kernel_main() {
     // TODO: Generalize write for argmax for other dims
     if constexpr (reduce_all) {
         out_idxs[0] = max_idx;
+        // Flush the CPU-written index to TL1 before the NoC reads it (Quasar DM only; no-op on WH/BH).
+        scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), dst_page_size);
         noc.async_write(dst, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
         noc.async_write_barrier();
     }
