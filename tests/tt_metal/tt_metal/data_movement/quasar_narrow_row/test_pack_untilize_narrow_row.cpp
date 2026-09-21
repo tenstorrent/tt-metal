@@ -110,6 +110,9 @@ std::uint32_t g_next_list_slot = 0;
 // Guard band after the dense output. A gather that writes past its row must not go unnoticed.
 constexpr std::uint32_t GUARD_BYTES = 256;
 constexpr std::uint32_t GUARD_FILL = 0xA5A5A5A5;
+// Fills the DRAM input buffer past the tiles this run actually uses. Never read by the
+// reader, so it should never appear anywhere; distinct from GUARD_FILL to tell the two apart.
+constexpr std::uint32_t SRC_PAD_FILL = 0xDEADBEEF;
 
 bool should_skip_test() {
     const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -226,6 +229,12 @@ bool run_narrow_row(
     // EnqueueWriteMeshBuffer takes the buffer by non-const reference, so it needs a copy of
     // the handle rather than the const one reachable through `buffers`.
     auto src_dram = buffers.src_dram;
+    // It also asserts the source FILLS the buffer (src.size()*sizeof >= buffer->size()), and
+    // the buffer is sized for the widest shape the calling test body uses -- so a body that
+    // mixes ct_dim throws on its first narrower run unless the tail is padded. Pad with a
+    // poison value rather than zeros: the reader only streams ct_dim tiles, so any of this
+    // reaching the output is a bug worth seeing rather than a plausible-looking zero.
+    src_vec.resize(src_dram->size() / sizeof(std::uint32_t), SRC_PAD_FILL);
     distributed::EnqueueWriteMeshBuffer(cq, src_dram, src_vec, /*blocking=*/true);
 
     // Prefill output + guard band, so "the gather never ran" and "the gather overran its row"
