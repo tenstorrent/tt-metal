@@ -67,6 +67,11 @@ public:
     void create_kernels();
 
     /**
+     * Snapshot each router's finalized host-side allocation and publish it on FabricBuilderContext.
+     */
+    void publish_debug_instances();
+
+    /**
      * Check if any routers were created.
      */
     bool has_routers() const { return !routers_.empty(); }
