@@ -181,4 +181,95 @@ TEST_F(SparseMatmulFp32Test, PartialReloadPreservesFp32) {
                                         "partial spill/reload boundaries";
 }
 
+TEST_F(SparseMatmulFp32Test, Fp32PartialWithBfloat16OutputUsesCorrectIntermediateSize) {
+    constexpr std::size_t M = 32;
+    constexpr std::size_t K = 128;
+    constexpr std::size_t N = 32;
+    constexpr std::size_t IN0_BLOCK_W = 1;
+
+    std::vector<float> a(M * K, 1.0f / 32.0f);
+    std::vector<float> b(K * N, 1.0f);
+
+    // One active sparse group.
+    std::vector<::bfloat16> sparsity_data(1, ::bfloat16(1.0f));
+
+    auto* dev_ptr = device_;
+
+    auto input_a = ttnn::Tensor::from_vector(
+        a,
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape({1, 1, M, K}),
+            tt::tt_metal::TensorLayout(ttnn::DataType::FLOAT32, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
+        dev_ptr);
+
+    auto input_b = ttnn::Tensor::from_vector(
+        b,
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape({1, 1, K, N}),
+            tt::tt_metal::TensorLayout(ttnn::DataType::FLOAT32, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
+        dev_ptr);
+
+    auto sparsity = ttnn::Tensor::from_vector(
+        sparsity_data,
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape({1, 1, 1, 1}),
+            tt::tt_metal::TensorLayout(
+                ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::ROW_MAJOR, ttnn::DRAM_MEMORY_CONFIG)),
+        dev_ptr);
+
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig program_config{
+        .compute_with_storage_grid_size = CoreCoord(1, 1),
+        .in0_block_w = IN0_BLOCK_W,
+        .out_subblock_h = 1,
+        .out_subblock_w = 1,
+        .out_block_h = 1,
+        .out_block_w = 1,
+        .per_core_M = 1,
+        .per_core_N = 1,
+        .fuse_batch = false,
+        .fused_activation = std::nullopt,
+        .mcast_in0 = true,
+    };
+
+    // Force FP32 destination accumulation while requesting BF16 output.
+    // With four K blocks, intermediate partials spill/reload through c_5.
+    const ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi3,
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = true,
+    };
+
+    const tt::tt_metal::Tile output_tile({32, 32});
+
+    auto result = ttnn::sparse_matmul(
+        input_a,
+        input_b,
+        sparsity,
+        program_config,
+        std::nullopt,  // nnz -- infer it
+        false,         // is_input_a_sparse
+        true,          // is_input_b_sparse
+        ttnn::DRAM_MEMORY_CONFIG,
+        ttnn::DataType::BFLOAT16,
+        compute_config,
+        std::nullopt,  // core_grid
+        output_tile,
+        std::nullopt,   // optional_output_tensor
+        std::nullopt,   // global_cb
+        std::nullopt,   // sub_device_id
+        std::nullopt);  // indices
+
+    auto output_cpu = ttnn::from_device(result);
+    auto output = output_cpu.to_vector<::bfloat16>();
+
+    ASSERT_GE(output.size(), M * N);
+
+    // Each output element is 128 * (1/32) * 1 = 4, exactly
+    // representable in BF16. This also catches gross corruption from an
+    // undersized FP32 intermediate circular-buffer page.
+    for (std::size_t i = 0; i < M * N; ++i) {
+        EXPECT_FLOAT_EQ(static_cast<float>(output[i]), 4.0f) << "Mismatch at output index " << i;
+    }
+}
+
 }  // namespace ttnn::test
