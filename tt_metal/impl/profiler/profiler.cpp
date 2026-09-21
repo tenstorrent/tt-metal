@@ -2339,8 +2339,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                     start_marker_stack.push(curr_zone_start_marker_it);
                 }
             }
-            // Performance counter records carry their fields in data; they need no enclosing zone (Quasar's DM0
-            // files them into the TRISC buffers after those TRISCs closed their last zone).
+            // Perf counter records need no zone: Quasar DM0 files them after the TRISCs closed their last zone.
             if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
                 const PerfCounter perf_counter(marker.data, marker.data_high);
                 uint32_t counter_type_raw = perf_counter.counter_type;

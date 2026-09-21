@@ -1010,8 +1010,7 @@ class PerfConfig(TestConfig):
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
-            # A counter build may come back with counters and no wall-clock stats; only the
-            # no-counter build is required to produce timing.
+            # Only the no-counter build must produce wall-clock stats; a counter build may return counters alone.
             counter_only_build = TestConfig.ENABLE_PERF_COUNTERS
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)

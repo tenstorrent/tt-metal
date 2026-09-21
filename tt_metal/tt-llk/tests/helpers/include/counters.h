@@ -8,16 +8,11 @@
 #include "barrier.h"
 #include "ckernel.h"
 #include "perf.h" // the PERF_COUNTERS_* L1 region constants
-// START_PERF_MEASURE below expands to ZONE_SCOPED, so the zone layer has to be in scope even when a
-// translation unit reaches this header before trisc.cpp includes it. Self-guarded on LLK_PROFILER.
+// START_PERF_MEASURE expands to ZONE_SCOPED, so the zone layer must be in scope here; self-guarded on LLK_PROFILER.
 #include "profiler.h"
 
-// One code path for both builds. The counters off build (no PERF_COUNTERS_COMPILED) runs the same startup,
-// zone entry, exit and readout as the counters on build and writes STOP wherever the counters on build writes
-// START: same register writes and reads, same L1 traffic, same instant of release. Both binaries are identical up to
-// a few constants, so a counters on minus counters off delta measures what the counters do and not what the
-// code around them does to the allocator or to the phase at which the threads leave a rendezvous (a bare
-// delay before release moved the Quasar INIT windows by tens of cycles per variant, with no counters at all).
+// One code path for both builds: the counters off build runs the same startup, entry, exit and readout and writes
+// STOP where the counters on build writes START. Any divergence shows up as a fake on minus off delta.
 #ifdef PERF_COUNTERS_COMPILED
 constexpr bool COUNTERS_ON = true;
 #else
@@ -25,10 +20,9 @@ constexpr bool COUNTERS_ON = false;
 #endif
 
 // BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
-// Quasar has no BRISC in this harness: the unpack TRISC does the one-time setup before it releases the others.
 
 // Counter inventory, register map and register primitives are shared with the metal profiler. On Quasar
-// bank_regs() defaults to the TRISC-local window, so every thread reaches its own NEO's block.
+// bank_regs() defaults to the TRISC-local window, so every thread reaches the block of its own NEO.
 #include <array>
 
 #include "perf_counters/hw.h"
@@ -61,8 +55,7 @@ constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
     return perf_counters_zone_data_addr(zone) + PERF_COUNTERS_ZONE_DATA_BYTES;
 }
 
-// +4 of zone 0's sync block: the zone that is frozen and still waiting for its readout, stored as zone + 1 so
-// that 0 means none. Written by the thread that freezes, read by the thread that reads (see freeze_zone).
+// +4 of the zone 0 sync block: the frozen zone still waiting for its readout, stored as zone + 1 so 0 means none.
 constexpr std::uint32_t PERF_COUNTERS_PENDING_ZONE_ADDR = perf_counters_sync_ctrl_addr(0) + 4;
 
 constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
@@ -93,8 +86,8 @@ constexpr std::uint32_t PERF_CFG_BANK_MASK     = 0xFFu; // bits 7:0
 constexpr std::uint32_t PERF_L1_MUX_MAX = llk::perf::L1_MUX_MASK >> llk::perf::L1_MUX_SHIFT;
 
 #if defined(ARCH_QUASAR)
-// No L1 counter bank: bank slot 3 carries the l1_client CSR, its counter_sel field holding the subport*8+event
-// selection. -1 leaves it out; otherwise the same encoding as TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL in metal.
+// No L1 counter bank: slot 3 carries the l1_client CSR instead. -1 leaves it out; otherwise the same encoding as
+// TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL in metal (subport*8 + event).
 #ifndef LLK_PERF_L1_CLIENT_SEL
 #define LLK_PERF_L1_CLIENT_SEL (-1)
 #endif
@@ -136,7 +129,6 @@ inline BankRegsRef get_bank_regs(Bank bank)
 constexpr std::uint8_t L1_MUX_GROUP = LLK_PERF_L1_MUX_GROUP;
 
 #if defined(ARCH_QUASAR)
-// Slot 3 holds the one l1_client selection when it is enabled.
 constexpr std::uint32_t l1_group_size(std::uint8_t)
 {
     return L1_CLIENT_ENABLED ? 1u : 0u;
@@ -191,16 +183,13 @@ constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
 
 static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory overflows the shared config region into zone 0 data");
 
-// Every place the counters on build starts a bank, the counters off build writes STOP instead, so both builds
-// keep the same code and the same register traffic.
-// Kept in memory, not as an immediate: as an immediate the compiler folded the START value into an unrelated
-// store of the same constant on the action thread, so the two builds compiled different instructions there.
-// A load from .rodata compiles identically in both and only the word differs.
+// The counters off build writes STOP wherever the counters on build writes START, from the same code.
+// Loaded from memory, not an immediate: the compiler folded the immediate into an unrelated store in one build only.
 namespace detail
 {
 inline const volatile std::uint32_t arm_cmd = COUNTERS_ON ? llk::perf::START : llk::perf::STOP;
 #if defined(ARCH_QUASAR)
-// The l1_client control word: routes the selection, with the enable bit only in the counters on build.
+// Both builds route the selection; only the counters on build sets the enable bit.
 inline const volatile std::uint32_t l1_client_cmd =
     COUNTERS_ON ? llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL))
                 : (llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL)) & ~llk::perf::L1_CLIENT_ENABLE);
@@ -208,8 +197,7 @@ inline const volatile std::uint32_t l1_client_cmd =
 } // namespace detail
 
 #if defined(ARCH_QUASAR)
-// Route the l1_client selection and clear the counter (the read clears it): the same store and read in both
-// builds, the counters off build with the enable bit clear.
+// Route the selection and clear the counter: the l1_client CSR is clear-on-read.
 inline __attribute__((always_inline)) void route_l1_client()
 {
     llk::perf::write(llk::perf::l1_client_regs().ctrl, detail::l1_client_cmd);
@@ -244,7 +232,7 @@ inline void configure_hardware()
 #if defined(ARCH_QUASAR)
         if (bank == Bank::L1)
         {
-            // The l1_client CSR: route the selection and clear it; there is no bank to configure.
+            // No bank registers behind slot 3; routing the CSR is its whole configuration.
             if constexpr (L1_CLIENT_ENABLED)
             {
                 route_l1_client();
@@ -316,16 +304,16 @@ inline void configure_all_zones()
 
     if (found_valid)
     {
-        // Both builds: the scrub writes the reset value, configure only sets periods and modes, and the arm
-        // writes STOP in the counters off build. Skipping any of it moved the release of the other threads.
+        // Both builds run all three: neither the scrub nor configure starts anything and the arm writes STOP in the
+        // counters off build. Skipping any of it moves the release of the other threads.
         llk::perf::clear_debug_feature_disable();
         configure_hardware();
         arm_hardware();
     }
 }
 
-// Write shared config to L1, clear per-zone data, then configure + arm hw. BRISC runs it on tt-1xx before it
-// releases the TRISCs; on Quasar the unpack TRISC runs it before it releases the other three (trisc.cpp).
+// Write shared config to L1, clear per-zone data, then configure + arm hw. Runs on BRISC on tt-1xx and on the
+// unpack TRISC on Quasar, in both cases before the other TRISCs are released.
 inline void configure_and_arm()
 {
     volatile std::uint32_t* shared_config = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
@@ -380,10 +368,8 @@ constexpr std::uint32_t zone_name_hash(const char* s)
 #endif
 } // namespace detail
 
-// INIT and TILE_LOOP, the two zones every perf kernel opens in this order, have fixed ids (the host maps ZONE_0
-// and ZONE_1 to those names by index). Resolving them at compile time keeps the id an immediate instead of a
-// value kept live across the measured loop, which by itself moved the math_matmul block loop by one reload per
-// iteration. Any other zone name is allocated at run time from the slots after them.
+// INIT and TILE_LOOP get fixed ids (the host maps ZONE_0 and ZONE_1 to them by index), resolved at compile time:
+// an id kept live across the measured loop cost math_matmul a reload per iteration. Other names are allocated after.
 constexpr std::uint32_t ZONE_ID_INIT       = 0;
 constexpr std::uint32_t ZONE_ID_TILE_LOOP  = 1;
 constexpr std::uint32_t FIRST_DYNAMIC_ZONE = 2;
@@ -423,7 +409,6 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counter L1 layout overflows into the profiler region");
 
 // PERF_CNT_ALL reaches only INSTRN_THREAD and FPU; the other banks take the pulse on their own control register.
-// Quasar has no L1 bank: l1_client_start routes the selection, enables the CSR and clears it (clear-on-read).
 inline __attribute__((always_inline)) void arm_all_counters()
 {
     ckernel::fence_compiler();
@@ -448,8 +433,7 @@ inline __attribute__((always_inline)) void freeze_all_counters()
     llk::perf::stop_all();
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, llk::perf::STOP);
 #if defined(ARCH_QUASAR)
-    // Before the readout below writes and reads L1: a TRISC-port selection would otherwise count those
-    // accesses into a window whose reference count is already frozen.
+    // Stopped before the readout touches L1, or a TRISC-port selection counts the readout into a frozen window.
     if constexpr (L1_CLIENT_ENABLED)
     {
         llk::perf::l1_client_stop(llk::perf::l1_client_regs());
@@ -461,16 +445,8 @@ inline __attribute__((always_inline)) void freeze_all_counters()
     ckernel::fence_compiler();
 }
 
-// The readout is a register hungry block. Inlined into the measured thread between its INIT and TILE_LOOP it
-// changes the register allocation of the measured loop itself: math_matmul MATH_ISOLATE spilled LOOP_FACTOR
-// and NUM_BLOCKS and reloaded them every iteration, one cycle per loop level (2048 to 5118 cycles), and the
-// unpack loop moved the other way by one reload, and reading the last zone after the loop on the measured
-// thread brought one reload back. So in the single thread run types the measured thread only freezes and
-// leaves the zone id behind (freeze_zone): the action thread of the next entry rendezvous reads it back before
-// it arms, and for the last zone an idle peer polls for it after its own run_kernel (read_last_zone). The span
-// run types keep reading at the exit rendezvous, on the action thread, whose loops compile identically with or
-// without the readout. No rendezvous is added: a release token can be taken by a thread that already sits at
-// the next rendezvous, which hung Quasar when one was.
+// Register hungry: inlined on the measured thread it reshuffles the registers of the measured loop itself (one
+// reload per loop level in math_matmul), so single thread run types only freeze there and a peer reads later.
 inline __attribute__((always_inline)) void read_all_counters(std::uint32_t zone_id)
 {
     ckernel::fence_compiler();
@@ -480,8 +456,7 @@ inline __attribute__((always_inline)) void read_all_counters(std::uint32_t zone_
     for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
     {
 #if defined(ARCH_QUASAR)
-        // Slot 3 has no reference counter; every bank is armed within a few cycles of INSTRN, so its count is
-        // reported over the INSTRN reference.
+        // Slot 3 has no reference counter; it is armed within cycles of INSTRN, so it borrows the INSTRN reference.
         const llk::perf::BankRegs regs = llk::perf::bank_regs(static_cast<Bank>(b));
         bank_cycles[b]                 = regs.out_l ? llk::perf::read_ref(regs) : bank_cycles[0];
 #else
@@ -534,7 +509,7 @@ inline __attribute__((always_inline)) void freeze_zone(std::uint32_t zone_id)
     (void)*pending; // landed in L1 before this thread arrives at the rendezvous the reader waits in
 }
 
-// Only ever called by the action thread inside a rendezvous, so every thread is past the frozen zone.
+// Runs only once every thread is past the frozen zone: inside a rendezvous or in read_last_zone after run_kernel.
 inline __attribute__((always_inline)) void read_pending_zone()
 {
     volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
@@ -552,9 +527,8 @@ constexpr bool is_single_thread_runtype(PerfRunType run_type)
            run_type == PerfRunType::SFPU_ISOLATE;
 }
 
-// A single thread run type freezes on its own measured thread. Holding the peers in an exit barrier instead
-// makes them poll for the whole measured window of the thread still working, which cost UNPACK_ISOLATE up to
-// 147 cycles on matmul. A span needs every thread stopped before the read, so those keep the barrier.
+// A single thread run type freezes on its measured thread; peers held in an exit barrier would spin through its
+// whole measured window. A span needs every thread stopped before the read, so those keep the barrier.
 constexpr bool exit_barrier_for(PerfRunType run_type)
 {
     return !is_single_thread_runtype(run_type);
@@ -591,20 +565,17 @@ constexpr bool is_reader_thread(PerfRunType run_type)
 #endif
 }
 
-// One L1 word read every few thousand cycles is nothing next to the traffic of the measured loop, and a bound
-// keeps a kernel without a frozen zone from waiting forever (a few hundred million cycles).
+// The backoff keeps the reader off L1 during the measured loop; the limit bounds a kernel that never freezes a zone.
 constexpr std::uint32_t READER_POLL_LIMIT   = 1u << 15;
 constexpr std::uint32_t READER_POLL_BACKOFF = 2048;
 
 namespace detail
 {
-// Set by the first zone object of a kernel whose run type makes this thread the reader; trisc.cpp has no run
-// type of its own (kernels without zones compile it too), so it asks at run time.
+// A run time flag because trisc.cpp has no PERF_RUN_TYPE of its own; the first zone object of the kernel sets it.
 static bool reader_here;
 } // namespace detail
 
-// After run_kernel, on the reader thread: the measured thread freezes its last zone whenever its loop ends and
-// leaves the id behind, so wait for it here and read it back.
+// After run_kernel on the reader thread: wait for the measured thread to freeze its last zone, then read it back.
 inline void read_last_zone()
 {
     if (detail::reader_here)
@@ -641,10 +612,8 @@ struct perf_counter_scoped
             llk_barrier::is_action_thread(),
             []
             {
-                // Only a single thread run type leaves a frozen zone behind for the next entry to read; the span run
-                // types read every zone inside their exit rendezvous, so for them this would be a dead L1 read. It is
-                // not harmless: on Wormhole an L1 read right before the arming stores and the release made every
-                // L1_CONGESTION kernel hang in the math thread (dvalid handshake lost on the first tile).
+                // Span run types read at their exit rendezvous, so this read would be dead for them, and not
+                // harmless: an L1 read here hung every Wormhole L1_CONGESTION kernel in the math thread.
                 if constexpr (is_single_thread_runtype(RUN_TYPE))
                 {
                     read_pending_zone();

@@ -21,7 +21,7 @@ union PerfCounter {
         std::uint32_t counter_value;
         std::uint32_t ref_cnt;
         std::uint32_t counter_type : 16;
-        // NEO the record came from: Quasar's DM0 reads all four; always 0 on tt-1xx.
+        // NEO the record came from: DM0 on Quasar reads all four; always 0 on tt-1xx.
         std::uint32_t neo : 4;
         std::uint32_t unused : 12;
     } __attribute__((packed));
@@ -33,7 +33,7 @@ union PerfCounter {
     struct {
         std::uint32_t value_word;
         std::uint32_t ref_word;
-        std::uint32_t type_word;  // counter_type | neo << NEO_SHIFT, unused bits 0
+        std::uint32_t type_word;
         std::uint32_t pad_word;
     } __attribute__((packed));
 
@@ -54,9 +54,8 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter must be 128-bit");
 
-// The RISC that orchestrates the kernel owns the counters. tt-1xx: TRISC1 starts them with the compute kernel and
-// BRISC stops and reads them once every TRISC is done (the math thread exits early on unpack or pack only kernels).
-// Quasar: DM0 arms all four NEOs before GO and stops and reads them after DONE.
+// The RISC that orchestrates the kernel owns the counters: TRISC1 starts and BRISC stops and reads on tt-1xx
+// (the math thread exits early on unpack or pack only kernels); DM0 arms, stops and reads all four NEOs on Quasar.
 #if defined(ARCH_QUASAR)
 #if defined(COMPILE_FOR_DM)
 #define PERF_COUNTER_WRAP_RISC 1
@@ -80,7 +79,7 @@ static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter mus
 #include "core_config.h"
 #include "kernel_profiler.hpp"
 
-// Quasar's DM firmware has a 2 KB RW data region and its linker script folds .rodata into it; the constant
+// The Quasar DM firmware has a 2 KB RW data region and its linker script folds .rodata into it; the constant
 // tables go to the 12 KB text region instead (the shared headers honour LLK_PERF_TABLES_IN_TEXT).
 #if defined(ARCH_QUASAR)
 #define LLK_PERF_TABLES_IN_TEXT
@@ -114,7 +113,7 @@ namespace kernel_profiler {
 #error "Quasar has no L1 perf counter groups; valid bits are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32) = 39"
 #endif
 
-// Counter groups and their enable bits, shared by the wrap thread's start and the read thread's read.
+// Counter groups and their enable bits, used by both the wrap thread and the read thread.
 constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] PERF_COUNTER_TABLE = {
     {PerfCounterGroup::FPU, PROFILE_PERF_COUNTERS_FPU},
     {PerfCounterGroup::PACK, PROFILE_PERF_COUNTERS_PACK},
@@ -160,8 +159,8 @@ constexpr std::uint8_t l1_mux_for_group[10] PERF_COUNTER_TABLE = {
     5,  // L1_5
 };
 
-// The per-group functions take the NEO index only on Quasar (DM0 serves four NEOs through the NoC window).
-// tt-1xx has one Tensix, and keeping the parameter out leaves its call sites and code as they were.
+// The per-group functions take a NEO index only on Quasar (DM0 reaches four NEOs through the NoC window);
+// leaving it out on tt-1xx keeps that firmware unchanged.
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t NUM_NEOS = llk::perf::NUM_NEOS;
 #define PERF_COUNTER_NEO_PARAM , std::uint32_t neo
@@ -275,8 +274,8 @@ constexpr std::array<llk::perf::Table, 10> table_for_group PERF_COUNTER_TABLE = 
 }();
 
 #if defined(ARCH_QUASAR)
-// Quasar's profiler is L1-only (about 80 records per risc buffer), so DM0 files each NEO's readout into that
-// NEO's own TRISC buffers (complete after wait_subordinates()); the record's neo field says which NEO.
+// The Quasar profiler is L1-only (about 80 records per risc buffer), so DM0 files each NEO readout into the TRISC
+// buffers of that NEO, which are complete after wait_subordinates(); the record neo field says which NEO.
 constexpr std::uint32_t TRISCS_PER_NEO = 4;
 constexpr std::uint32_t PERF_RECORD_WORDS = PROFILER_L1_MARKER_UINT32_SIZE * 3;  // marker + two 64-bit words
 
@@ -312,7 +311,7 @@ inline void spill_close() { profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_E
 inline void spill_record(const PerfCounter& counter) {
     while (spill.index + PERF_RECORD_WORDS > PROFILER_L1_VECTOR_SIZE) {
         if (spill.risc == spill.last_risc) {
-            mark_dropped_timestamps(spill.risc);  // all four buffers full: let the host's dropped-markers warning fire
+            mark_dropped_timestamps(spill.risc);  // all four buffers full: let the host dropped-markers warning fire
             return;
         }
         spill_close();
@@ -361,8 +360,8 @@ inline void read_l1_client_event_counter(std::uint32_t neo) {
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group PERF_COUNTER_NEO_PARAM) {
     const auto& regs = regs_for(counter_group PERF_COUNTER_NEO_ARG(neo));
 #if !defined(ARCH_QUASAR)
-    // Stop now that all three TRISCs are done, so the window spans the whole compute kernel (Quasar DM0 stops every
-    // NEO explicitly before reading). No clear after the read: the next start on TRISC1 zeroes the counts.
+    // Stop now that all three TRISCs are done, so the window spans the whole compute kernel; Quasar DM0 already
+    // stopped every NEO in StopPerfCounters. No clear after the read: the next start zeroes the counts.
     llk::perf::stop(regs);
 #endif
     // PollLimit 0, unbounded readback poll: BRISC firmware is within bytes of its size limit and the poll never fails.
@@ -374,8 +373,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group 
 }
 
 // At most one L1 group per pass; its mux write sits under the #if so passes without L1 carry no mux code.
-// trisc_enables is the launch message's processor enable mask. Counters start only on TRISC1 (DM0 on Quasar), so a
-// launch without a compute kernel would report values latched by the previous op; Quasar skips NEOs that ran nothing.
+// Counters start only with a compute kernel; a launch or NEO without one would report values latched by the last op.
 void read_perf_counters(std::uint32_t trisc_enables) {
     if (kernel_profiler::get_profiler_zone_invalid()) {
         return;

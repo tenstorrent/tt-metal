@@ -122,8 +122,8 @@ std::string get_default_root_path() {
 
 JitBuildEnv::JitBuildEnv() = default;
 
-// Quasar has no L1 counter unit, so the valid groups are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32). The tracy
-// frontend's "all" is the tt-1xx mask (47), so map it to the Quasar mask (39) instead of rejecting it.
+// Quasar has no L1 counter unit: valid groups are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32). The tracy frontend sends
+// the tt-1xx "all" mask (47), so map it to the Quasar mask (39) instead of rejecting it.
 static uint32_t quasar_perf_counter_mode(uint32_t mode) {
     constexpr uint32_t quasar_groups = 0x27;
     constexpr uint32_t tt1xx_all_groups = 0x2F;
@@ -138,8 +138,7 @@ static uint32_t quasar_perf_counter_mode(uint32_t mode) {
     return mode;
 }
 
-// The l1_client event counter is a single CSR behind a subport*8 + event mux (37 subports, 8 events),
-// selected per run with TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL. Same rule as
+// The l1_client event counter is one CSR behind a subport*8 + event mux (37 subports, 8 events). The checks mirror
 // llk::perf::l1_client_selection_is_valid in tt-llk/tools/include/perf_counters/quasar.h.
 static std::string quasar_l1_client_defines(const tt::llrt::RunTimeOptions& rtoptions) {
     const int sel = rtoptions.get_profiler_perf_counter_l1_sel();

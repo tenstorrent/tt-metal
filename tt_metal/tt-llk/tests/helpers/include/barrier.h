@@ -51,16 +51,8 @@ constexpr bool is_action_thread()
 
 #if defined(ARCH_QUASAR)
 
-// Quasar has 32 Tensix semaphores (tt_tensix_pkg.sv SEM_COUNT), and a TRISC reaches all of them through the
-// PC buffer (words 32 to 63), which is the path semaphore_post/get/read below take. The Tensix instructions
-// see them as four banks of eight, and t6_sem() can only build a bank-0 mask, so no LLK op can reach bank 1
-// even by accident: the indices below are out of the way by construction rather than by convention. They come
-// out of reset at 0 with max 15, and the arrival drain leaves the arrival count at 0 after every rendezvous, so
-// a killed run cannot strand a count that the next one would misread as an arrival.
-//
-// Every peer has its own release level. They date from the token protocol, where one shared count let a peer
-// that had already reached the next rendezvous (the idle sfpu stub) take the token meant for a slower peer; a
-// level cannot be taken, but the separate semaphores are free here and keep the peers independent.
+// Semaphores 8 to 11 sit in bank 1, which t6_sem() cannot address, so no LLK op can reach them even by accident.
+// The spare semaphores are free, so each peer waits on its own release level and the peers stay independent.
 constexpr std::uint8_t ARRIVE_SEM       = 8;
 constexpr std::uint8_t RELEASE_SEM_BASE = 9; // unpack 9, math 10, sfpu 11
 
@@ -107,15 +99,15 @@ constexpr std::uint8_t my_release_sem()
 
 namespace detail
 {
-// A PC buffer load has to land in a register before the next one is issued; a second load while the first is
-// still outstanding hangs the TRISC on Blackhole, and semaphore_post reads the semaphore for its assert.
+// A PC buffer load must land before the next one is issued: two outstanding loads hang the TRISC on Blackhole,
+// and semaphore_post reads the semaphore for its assert right after this one.
 __attribute__((always_inline)) inline std::uint32_t settled(std::uint32_t value)
 {
     asm volatile("mv %0, %0" : "+r"(value));
     return value;
 }
 
-// Flip a release level between 0 and 1. Only the action thread ever writes a release semaphore.
+// Only the action thread writes release semaphores, so its read-then-write flip cannot race a peer.
 __attribute__((always_inline)) inline void flip(std::uint8_t sem)
 {
     if (settled(ckernel::semaphore_read(sem)) == 0)
@@ -129,14 +121,8 @@ __attribute__((always_inline)) inline void flip(std::uint8_t sem)
 }
 } // namespace detail
 
-// The release is a level the action thread flips, not a token a peer consumes. With tokens, two peers sharing one
-// count could both read 1 while the action thread was still posting the second token, both issue SEMGET, and the
-// second get floored at 0: that thread walked on with a token left behind, and the next rendezvous released a
-// peer early. The LLK assert in semaphore_get caught it on a Wormhole fast tilize kernel, once in 47k kernels. A
-// peer now records the level before it announces its arrival, and the action thread cannot flip until every peer
-// has arrived, so the change is never missed and nothing is consumed; a stale level left by a killed run is
-// harmless. Polling reads the PC buffer, never the L1 being measured, which is what keeps a waiting thread out
-// of the numbers: an L1 rendezvous cost the Quasar unpack windows up to 5% until semaphores replaced it.
+// The release is a level, sampled by each peer before it arrives and flipped once every peer has; a token on a
+// shared count could be consumed twice and release a peer early. Waiters poll the PC buffer, not the measured L1.
 template <typename Action>
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
 {

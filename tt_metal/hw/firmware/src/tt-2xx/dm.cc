@@ -355,7 +355,7 @@ extern "C" uint32_t _start1() {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
-                // Arm the perf counters on all NEOs right before the TRISCs go.
+                // The counter window runs from here to StopPerfCounters after wait_subordinates.
                 StartPerfCounters();
                 run_triscs(enables);
 
@@ -395,7 +395,7 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
-                // Every NEO's TRISCs are done: freeze the counters and file each NEO's readout into its TRISC buffers.
+                // Every TRISC is done: the window spans the whole kernel and the TRISC profiler buffers are final.
                 StopPerfCounters();
                 ReadPerfCounters(enables);
 

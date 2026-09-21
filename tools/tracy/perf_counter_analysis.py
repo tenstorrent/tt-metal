@@ -38,8 +38,7 @@ class _TracyCounterView:
 
     @staticmethod
     def _bank_of(name: str) -> str:
-        """Bank a counter name belongs to, for captures that hold none of the _BANK_REF anchors (a
-        partial group, or Quasar's thread-3 / stall-reason INSTRN counters)."""
+        """Bank of a counter name, for captures that hold none of the _BANK_REF anchors."""
         if name.startswith(_mc.L1_CLIENT_PREFIX):
             return "L1_CLIENT"
         if name.startswith("L1_"):
@@ -75,8 +74,7 @@ class _TracyCounterView:
         for cand in self._BANK_REF.get(bank, ()):
             if cand in self._r:
                 return float(self._r[cand])
-        # Every counter of a bank shares its ref cnt (for L1_CLIENT it is the wall-clock span of the
-        # capture window), so any present member of the bank will do.
+        # Every counter of a bank shares its ref cnt (L1_CLIENT: the wall-clock capture window), so any member will do.
         for name, rc in self._r.items():
             if self._bank_of(str(name)) == bank:
                 return float(rc)
@@ -102,8 +100,7 @@ quasar_l1_client_label = _mc.quasar_l1_client_label
 
 
 def compute_metrics_per_op(perf_counter_df, device_arch=""):
-    """Per-op metrics per reader (one BRISC per core on tt-1xx, one NEO each on Quasar), then min/median/max/avg
-    per key; Quasar's l1_client rates come from compute_l1_client_metrics."""
+    """Per-op metrics per reader (BRISC per core on tt-1xx, NEO on Quasar), then min/median/max/avg per key."""
     import math
 
     result = {}
@@ -203,7 +200,7 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                     counter_type_name = counter_type_raw
                 else:
                     counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
-                # Quasar's l1_client records name the run's selection, not an enum value.
+                # Quasar l1_client records carry the run selection, which names the counter instead of the enum.
                 counter_sel = meta_dict.get("counter sel")
                 if counter_type_name == "QUASAR_L1_CLIENT_EVENT" and counter_sel is not None:
                     counter_type_name = quasar_l1_client_label(counter_sel)
@@ -211,7 +208,7 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                 risc_type = event[EVENT_RISC_TYPE_IDX]
                 neo = meta_dict.get("neo")
                 if neo is not None and str(risc_type).startswith("QUASAR_"):
-                    # Quasar's DM0 reads all four NEOs; keep each NEO its own reader row.
+                    # DM0 reads all four NEOs on Quasar; keep each NEO its own reader.
                     risc_type = f"QUASAR_NEO{neo}"
                 perf_counter_events.append(
                     {
@@ -293,7 +290,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
 
     ratio_metrics = [label for label in _mc.METRIC_LABELS.values() if label in RATIO_LABELS]
     pct_metrics = [label for label in _mc.METRIC_LABELS.values() if label not in RATIO_LABELS]
-    # Quasar l1_client metrics are named after the run's selection; pick them up from the frame.
+    # Quasar l1_client metrics are named after the run selection, so they come from the frame.
     for _suffix, _family in ((" Avg (%)", pct_metrics), (" Avg (ratio)", ratio_metrics)):
         _family.extend(
             sorted(
@@ -366,8 +363,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         mask = perf_counter_df["counter type"] == cname
         if mask.any():
             grouped = perf_counter_df[mask].groupby(["run_host_id", "trace_id_count"])["value"]
-            # These columns are util over the full grid, so the divisor counts every reader the grid has,
-            # not the ones that reported: an idle NEO contributes a zero. Quasar has NEOS_PER_CORE of them.
+            # Util over the full grid: divide by every reader the grid has, not by the ones that reported;
+            # an idle NEO contributes a zero.
             divisor = total_compute_cores * (NEOS_PER_CORE if _is_quasar(device_arch) else 1)
             per_op_counts[out_key] = (grouped.sum() / divisor).to_dict()
 
@@ -390,7 +387,7 @@ def compute_device_only_metrics(
                         stat
                     ]
 
-    # Quasar's l1_client metrics are named after the run's selection, so they are appended from the data.
+    # Quasar l1_client metrics are named after the run selection, so they are appended from the data.
     _ratio_metric_names = [label for label in _mc.METRIC_LABELS.values() if label in RATIO_LABELS]
     _pct_metric_names = [label for label in _mc.METRIC_LABELS.values() if label not in RATIO_LABELS]
     for label in sorted(label for label in agg_metrics if str(label).startswith(_mc.L1_CLIENT_PREFIX)):

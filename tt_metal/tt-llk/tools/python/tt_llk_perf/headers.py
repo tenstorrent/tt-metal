@@ -145,12 +145,10 @@ def counter_type_names(include_dir=None) -> Dict[int, str]:
 
 
 def parse_tables(text: str) -> Dict[str, List[CounterEntry]]:
-    """Bank -> entries for one <arch>.h; empty arrays (Wormhole L1 banks 2-5) are skipped.
-
-    An attribute macro such as LLK_PERF_TABLE_SECTION may sit between the array name and `=`.
-    """
+    """Bank -> entries for one <arch>.h; empty arrays (Wormhole L1 banks 2-5) are skipped."""
     banks: Dict[str, List[CounterEntry]] = {bank: [] for bank in BANK_KEYS}
     text = _strip_comments(text)
+    # an attribute macro (LLK_PERF_TABLE_SECTION) may sit between the array name and =
     decls = list(re.finditer(r"\b(\w+_counters)(?:\s+[A-Z_][A-Z0-9_]*)?\s*=", text))
     for i, decl in enumerate(decls):
         name = decl.group(1)

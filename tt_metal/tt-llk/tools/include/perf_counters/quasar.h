@@ -10,13 +10,11 @@
 
 #include "perf_counters/types.h"
 
-// Quasar (A0) select tables, verified against the tapeout RTL. Quasar has no L1 counter bank; the L1 slot
-// is taken by the l1_client CSR (see l1_client_selection_is_valid). Include through perf_counters/inventory.h.
+// Quasar (A0) select tables, verified against the tapeout RTL; include through perf_counters/inventory.h.
+// Quasar has no L1 counter bank; the L1 slot is taken by the l1_client CSR (see l1_client_selection_is_valid).
 
-// Metal's Quasar DM firmware folds .rodata into a 2 KB data region, so an includer that defines
-// LLK_PERF_TABLES_IN_TEXT gets the tables in the text region instead.
-// The tables are not `inline`: LTO drops the section attribute of COMDAT variables, and metal's DM firmware
-// needs them in .text (see LLK_PERF_TABLES_IN_TEXT below).
+// LLK_PERF_TABLES_IN_TEXT puts the tables in .text: the metal Quasar DM firmware folds .rodata into a 2 KB data
+// region. The tables are not `inline` because LTO drops the section attribute of COMDAT variables.
 #ifndef LLK_PERF_TABLE_SECTION
 #if defined(LLK_PERF_TABLES_IN_TEXT)
 #define LLK_PERF_TABLE_SECTION __attribute__((section(".text.perf_counter_tables")))
@@ -35,8 +33,8 @@ constexpr std::array<Entry, 3> fpu_counters LLK_PERF_TABLE_SECTION = {
      {PerfCounterType::SFPU_COUNTER, 1},
      {PerfCounterType::MATH_COUNTER, 257}}};
 
-// TDMA_UNPACK: sels 2/256/257 are dead on A0 (fidelity off) and 258 duplicates 3. Three unpackers per thread:
-// sel 9 is unpacker2/thread0 and sel 10 unpacker0/thread1; both and the odd-TID writes read 0 on every op swept so far.
+// TDMA_UNPACK: sels 2/256/257 are dead on A0 (fidelity off) and 258 duplicates 3, so they are left out. Three
+// unpackers per thread: sel 9 is unpacker2/thread0 and sel 10 unpacker0/thread1 (both have read 0 on every op so far).
 constexpr std::array<Entry, 18> unpack_counters LLK_PERF_TABLE_SECTION = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::MATH_NOT_D2S_STALLED, 1},
@@ -66,9 +64,8 @@ constexpr std::array<Entry, 5> pack_counters LLK_PERF_TABLE_SECTION = {
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
      {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 
-// INSTRN: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35 any-stall per thread, 36-50
-// thread-ORed backend stalls; grants (>= 256) are ibuffer dequeues. Xsearch is tied to 0 (its grants alias
-// THREAD_INSTRUCTIONS); thread 3, THCON, CFG_1, UNPACK_1/2, PACK_0/1 and SRCS_STALL_* read 0 on every op swept so far.
+// INSTRN: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35 any-stall per thread,
+// 36-50 thread-ORed backend stalls; grants (>= 256) are ibuffer dequeues. Xsearch is tied to 0, so it is left out.
 constexpr std::array<Entry, 51> instrn_counters LLK_PERF_TABLE_SECTION = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
@@ -127,9 +124,8 @@ constexpr std::array<Entry, 51> instrn_counters LLK_PERF_TABLE_SECTION = {
 inline constexpr std::uint32_t L1_MUX_MASK     = 0;
 inline constexpr std::uint8_t L1_MUX_POSITIONS = 0;
 
-// l1_client CSR selection = subport*8 + event (subports 0-3 TRISC, 4 THCON, 5-24 unpack, 25-36 pack; events 0
-// unused, 1 SBank pop, 2-6 stall/work/pending carries, 7 order FIFO active). Event 0 is tied to 0 in the RTL and
-// THCON events 1-3 alias the TRISC port's SBank 0 counters (selections 1-3), so both are rejected.
+// l1_client CSR selection = subport*8 + event (subports 0-3 TRISC, 4 THCON, 5-24 unpack, 25-36 pack). Event 0 is
+// tied to 0 in the RTL and THCON events 1-3 alias the SBank 0 counters of the TRISC port, so both are rejected.
 constexpr bool l1_client_selection_is_valid(std::uint32_t sel)
 {
     const std::uint32_t subport = sel / QUASAR_L1_CLIENT_NUM_EVENTS;

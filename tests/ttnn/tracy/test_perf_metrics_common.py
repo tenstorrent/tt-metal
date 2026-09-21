@@ -287,7 +287,7 @@ def test_quasar_families_gate_on_their_counters():
     assert out["srca_stall_math_share_pct"] is None
     assert out["unpack2_busy_t0_pct"] is None
     assert out["thread0_instrn_per_ready_cycle_ratio"] == 900.0 / 1900.0
-    # The per-ready-cycle ratio needs the thread's stall counter for its denominator.
+    # The per-ready-cycle ratio needs the stall counter of the same thread for its denominator.
     assert mc.compute_metrics(_View({"THREAD_INSTRUCTIONS_0": 900.0}))["thread0_instrn_per_ready_cycle_ratio"] is None
     out = mc.compute_metrics(
         _View(
@@ -355,10 +355,9 @@ def test_l1_client_rates_are_dynamic_and_round_trip_their_labels():
     out = mc.compute_l1_client_metrics(view, names + ["FPU_COUNTER"])
     assert out == {
         "l1_client_unpack0_if0_sbank0_sbank_pop_pct": 1.0,
-        # a carry pulses once per four lane events: carry / cycles is the mean per-lane fraction, bounded
+        # a carry pulses once per four lane events, so carry / cycles is the mean per-lane fraction
         "l1_client_unpack0_if0_sbank0_issue_stall_carry_pct": 1.0,
-        # pending-request carries report mean outstanding requests: one pulse per 128 request-cycles on packer 0's
-        # interfaces, per 64 everywhere else
+        # pending-request carries pulse once per 128 request-cycles on packer 0 interfaces, per 64 elsewhere
         "l1_client_pack0_if1_lane2_pending_reqs_carry_ratio": 1.28,
         "l1_client_trisc2_pending_reqs_carry_ratio": 0.64,
     }
@@ -374,7 +373,7 @@ def test_l1_client_rates_are_dynamic_and_round_trip_their_labels():
 
 
 def test_l1_client_labels_cover_every_subport_range():
-    # event 0 is unused in the RTL; THCON events 1-3 are the TRISC port's SBank 0 counters (sub-port 0 exposes them)
+    # event 0 is unused in the RTL; THCON events 1-3 alias the TRISC port SBank 0 counters (sub-port 0 has them)
     assert mc.quasar_l1_client_label(0) == "L1_CLIENT_INVALID_0"
     assert mc.quasar_l1_client_label(4 * 8 + 2) == "L1_CLIENT_INVALID_34"
     assert mc.quasar_l1_client_label(4 * 8 + 7) == "L1_CLIENT_THCON_ORDER_FIFO_ACTIVE"

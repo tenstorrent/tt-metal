@@ -72,8 +72,7 @@ int main(void)
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
-    // No BRISC on Quasar: the unpack TRISC writes the counter config and arms the units while the others are still held
-    // (the counters off build writes the config too and leaves the units stopped, see counters.h).
+    // No BRISC on Quasar: unpack configures and arms the counters while the other TRISCs are still held in reset.
     llk_perf::configure_and_arm();
 #endif
     clear_trisc_soft_reset(); // Release the rest of the triscs

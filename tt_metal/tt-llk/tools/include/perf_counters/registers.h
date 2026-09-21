@@ -36,7 +36,7 @@ inline constexpr std::uint32_t L1_MUX_SHIFT       = 4;
 inline constexpr std::uint32_t REF_PERIOD_MAX     = 0xFFFFFFFF;
 inline constexpr std::uint32_t DEFAULT_POLL_LIMIT = 1024;
 
-// PERF_CNT_ALL reaches only these two blocks (RTL confirmed on every arch); the others need their own control register.
+// PERF_CNT_ALL reaches only these two blocks (RTL confirmed on every arch); the others need their own control.
 constexpr bool follows_all(Bank bank)
 {
     return bank == Bank::INSTRN_THREAD || bank == Bank::FPU;
@@ -44,8 +44,8 @@ constexpr bool follows_all(Bank bank)
 
 #if defined(ARCH_QUASAR)
 
-// Quasar: every NEO has its own debug block. A TRISC reaches its NEO's block through the local window; the DM
-// cores reach every NEO through the NoC window, NEO n at neo_window(n). The window is the base of the block.
+// Every NEO has its own debug block. A TRISC reaches the block of its own NEO through the local window; the DM
+// cores reach every NEO through the NoC window, NEO n at neo_window(n).
 inline constexpr std::uint32_t LOCAL_REGS_WINDOW = 0x00800000;
 inline constexpr std::uint32_t NEO_WINDOW_BASE   = 0x01800000;
 inline constexpr std::uint32_t NEO_WINDOW_STRIDE = 0x10000;
@@ -69,8 +69,7 @@ constexpr std::uint32_t neo_window(unsigned neo)
 namespace detail
 {
 
-// Offsets inside a window, indexed by Bank. Quasar has no L1 counter bank; that row is never read.
-// Not `inline`: LTO drops the section attribute of COMDAT variables.
+// Offsets inside a window, indexed by Bank. Not `inline`: LTO drops the section attribute of COMDAT variables.
 constexpr BankRegs BANK_OFFSETS[NUM_BANKS] LLK_PERF_TABLE_SECTION = {
     {0x0, 0x4, 0x8, 0x98, 0x9C},    // INSTRN_THREAD
     {0x18, 0x1C, 0x20, 0xB0, 0xB4}, // FPU

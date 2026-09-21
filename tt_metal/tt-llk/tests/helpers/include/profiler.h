@@ -100,8 +100,7 @@ __attribute__((always_inline)) inline void sync_threads()
     llk_barrier::rendezvous(llk_barrier::is_action_thread());
 }
 
-// The barrier words are unused now that both arches rendezvous on semaphores, but BARRIER_END anchors
-// BUFFERS_START, so reclaiming them would move every buffer.
+// The barrier words are unused since the semaphore rendezvous, but BARRIER_END anchors BUFFERS_START; keep them.
 
 __attribute__((always_inline)) inline void reset()
 {

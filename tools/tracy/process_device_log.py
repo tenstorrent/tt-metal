@@ -667,7 +667,6 @@ def timeseries_events(riscData, name, analysis):
     if analysis["type"] == "event":
         riscData["events"][name] = []
 
-        # The risc filter is a single name, "ANY", or a list of names.
         marker_risc = analysis["marker"]["risc"]
         marker_riscs = [marker_risc] if isinstance(marker_risc, str) else marker_risc
         for index, (timerID, timestamp, attachedData, risc, *_) in enumerate(riscData["timeseries"]):

@@ -24,8 +24,7 @@ constexpr std::uint32_t PERF_INPUT_C    = PERF_INPUT_B + PERF_RING_TILES * 4096;
 constexpr std::uint32_t PERF_OUTPUT     = PERF_INPUT_C + PERF_RING_TILES * 4096;
 
 // Perf-counter shared config + per-zone data. Must stay below the profiler boundary at
-// 0x16AFF0 (asserted in counters.h) and must not overlap the stimuli buffers above. Both builds use it: the
-// counters off build runs the same readout with the counters stopped (see counters.h).
+// 0x16AFF0 (asserted in counters.h) and must not overlap the stimuli buffers above; both builds use it.
 #define PERF_COUNTERS_BASE_ADDR         0x169000
 #define PERF_COUNTERS_CONFIG_WORDS      200
 #define PERF_COUNTERS_DATA_WORDS        200

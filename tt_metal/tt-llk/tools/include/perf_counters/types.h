@@ -260,7 +260,7 @@ enum PerfCounterType : std::uint16_t
     SRCA_STALL_UNPACK,
     DVALID_STALL_MATH,
     SRCA_STALL_MATH,
-    // The l1_client CSR event counter; records carry QUASAR_L1_CLIENT_EVENT_BASE + (subport*8 + event).
+    // The l1_client CSR event counter; a record carries QUASAR_L1_CLIENT_EVENT_BASE + selection in counter_type.
     QUASAR_L1_CLIENT_EVENT,
     // Quasar runs 3 unpackers per thread.
     UNPACK2_BUSY_THREAD0,
@@ -268,8 +268,7 @@ enum PerfCounterType : std::uint16_t
 
 static_assert(UNPACK2_BUSY_THREAD0 <= 255, "PerfCounterType must leave 256 and up for l1_client selections");
 
-// Quasar's l1_client counter has 296 selections (subport*8 + event) behind one enum value. A record
-// carries QUASAR_L1_CLIENT_EVENT_BASE + selection in counter_type; the host maps it back.
+// l1_client selection = subport*8 + event; the host maps counter_type - QUASAR_L1_CLIENT_EVENT_BASE back to it.
 inline constexpr std::uint32_t QUASAR_L1_CLIENT_EVENT_BASE     = 256;
 inline constexpr std::uint32_t QUASAR_L1_CLIENT_NUM_SUBPORTS   = 37;
 inline constexpr std::uint32_t QUASAR_L1_CLIENT_NUM_EVENTS     = 8;

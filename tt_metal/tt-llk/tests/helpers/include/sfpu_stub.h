@@ -18,8 +18,8 @@ using namespace ckernel;
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     (void)params;
-    // Stub: SFPU TRISC not used in this test; trisc.cpp will signal completion. It still enters the other
-    // threads' INIT and TILE_LOOP phases, because every zone boundary is a four-thread rendezvous.
+    // Stub: SFPU TRISC not used in this test; trisc.cpp will signal completion. It still opens INIT and TILE_LOOP,
+    // because every zone boundary is a four-thread rendezvous.
     {
         START_PERF_MEASURE("INIT")
     }

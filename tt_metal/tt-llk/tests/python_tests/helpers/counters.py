@@ -210,11 +210,7 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
 
 
 def decode_config_word(config_word: int) -> tuple:
-    """(bank_id, bank_name, counter_id, counter_name, l1_mux) for one valid config word.
-
-    l1_mux is None outside the tt-1xx L1 bank. Quasar's slot 3 is the l1_client CSR, whose
-    counter_sel is the subport*8 + event selection and names itself through the shared engine.
-    """
+    """(bank_id, bank_name, counter_id, counter_name, l1_mux) for one valid config word."""
     bank_id = config_word & PERF_CFG_BANK_MASK
     counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
     l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK

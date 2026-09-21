@@ -28,8 +28,7 @@ inline void compiler_fence()
     asm volatile("" ::: "memory");
 }
 
-// Read-modify-write: the low bits of MUX_CTRL hold the INSTRN_THREAD debug-bus select. The window argument
-// selects the debug block (only Quasar has more than one).
+// Read-modify-write: the low bits of MUX_CTRL hold the INSTRN_THREAD debug-bus select.
 inline void set_l1_mux(std::uint8_t position, std::uint32_t window = DEFAULT_WINDOW)
 {
     const std::uint32_t reg   = perf_cnt_mux_ctrl(window);

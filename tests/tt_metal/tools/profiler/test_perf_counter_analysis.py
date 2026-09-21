@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-# tracy lives in tools/, the shared engine and header parsers in tt-llk's tools/python.
+# tracy lives in tools/, the shared engine and header parsers under tt-llk tools/python.
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "tt_metal" / "tt-llk" / "tools" / "python"))
 
@@ -81,8 +81,6 @@ QUASAR_CAPTURE_TYPES = (
     + ["L1_CLIENT_UNPACK0_IF0_SBANK3_SBANK_POP"]
 )
 
-# Display names follow the engine's families: "Thread N Stall Rate", "<CLASS> Instrn Avail Rate TN",
-# "<Reason> Rate" / "<Reason> Share", and the l1_client counter's own name plus " Rate".
 QUASAR_EXPECTED_METRICS = [
     "Thread 3 Stall Rate",
     "T3 Instrn Issue Rate",
@@ -102,7 +100,6 @@ QUASAR_EXPECTED_METRICS = [
 
 
 def make_capture(counter_types, risc_fmt, num_riscs):
-    # Deterministic spread of values; nothing here needs randomness.
     rows = []
     for n in range(num_riscs):
         for i, name in enumerate(counter_types):
@@ -123,8 +120,7 @@ def make_capture(counter_types, risc_fmt, num_riscs):
 
 
 def test_counter_type_names_match_the_shared_enum():
-    # The decode table is parsed from tt-llk's PerfCounterType enum at import, so it cannot drift from
-    # the compiled ordinals; pin the layout the firmware relies on.
+    # Pin the ordinals the firmware records; the decode table is parsed from the PerfCounterType enum at import.
     names = counter_type_names()
     assert COUNTER_TYPE_NAMES == names
     assert names[0] == "UNDEF"
@@ -198,7 +194,7 @@ def test_csv_headers_are_unique():
 
 
 def test_multi_neo_rows_are_not_collapsed():
-    # 4 NEO readers on the SAME core must contribute 4 samples, not 1 (the old pivot kept "first").
+    # Four NEO readers on the same core are four samples, not one.
     rows = []
     for neo in range(4):
         rows.append(
@@ -252,7 +248,6 @@ def test_l1_client_carry_rates_scale_by_lane_count():
     pop = list(agg["L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP Rate"]["avg"].values())[0]
     carry = list(agg["L1_CLIENT_UNPACK0_IF0_SBANK0_ISSUE_STALL_CARRY Rate"]["avg"].values())[0]
     assert abs(pop - 1.0) < 1e-9 and abs(carry - 1.0) < 1e-9, (pop, carry)
-    # the pending-request metric is a ratio column, the others percent columns
     assert "L1_CLIENT_UNPACK0_IF0_LANE0_PENDING_REQS_CARRY Mean Outstanding Avg (ratio)" in rows[0]
     assert "L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP Rate Avg (%)" in rows[0]
 
@@ -269,8 +264,8 @@ def test_absent_l1_noc_counters_give_nan_not_zero():
 
 
 def test_extract_labels_neo_and_l1_client_selection():
-    # Quasar records arrive under a TRISC's label with the NEO and the l1_client selection in the metadata;
-    # the frame must carry the NEO as the reader and the selection as the counter's own name.
+    # Quasar records arrive under a TRISC label with the NEO and the l1_client selection in the metadata;
+    # the frame must key the reader by NEO and name the counter by its selection.
     def event(counter_type, neo, sel=None, risc="QUASAR_NEO2_TRISC1"):
         md = f"'counter type': {counter_type}; 'ref cnt': 5000; 'value': 250; 'neo': {neo}"
         if sel is not None:

@@ -160,8 +160,7 @@ DROPPED_COLUMNS = (
         for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
     }
     | {
-        # The l1_client metric is named after the run's LLK_PERF_L1_CLIENT_SEL, one column per
-        # selection that can carry data; like the other metrics it stays in the CSV only.
+        # One column per l1_client selection that can carry data; like the other metrics, CSV only.
         metric_column(run_type, base)
         for run_type in RUN_TYPE_NAMES
         for metric in _L1_CLIENT_METRIC_KEYS

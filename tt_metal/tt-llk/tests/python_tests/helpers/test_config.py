@@ -1403,8 +1403,8 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # BRISC writes the counter config and runs the startup sequence in both builds
-                # (see counters.h); only PERF_COUNTERS_COMPILED tells the two apart.
+                # Both builds get the mux group: BRISC writes the counter config and runs the startup
+                # sequence either way (see counters.h); only PERF_COUNTERS_COMPILED tells them apart.
                 perf_cnt_flag = (
                     f"-DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                 )
@@ -1708,11 +1708,8 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
-                # tt-1xx selects one L1 mux group; Quasar has no L1 bank and takes one l1_client
-                # event instead (the unpack TRISC does the setup BRISC does elsewhere, see
-                # trisc.cpp). Both builds get the selection: the counters off build compiles the
-                # same zone code with the counters stopped (see counters.h), so the selection has
-                # to shape it the same way. Only PERF_COUNTERS_COMPILED tells the two apart.
+                # Both builds get the L1 selection (mux group on tt-1xx, l1_client event on Quasar): the
+                # counters off build compiles the same zone code with the counters stopped (counters.h).
                 if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
                     optional_kernel_flags += (
                         f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"

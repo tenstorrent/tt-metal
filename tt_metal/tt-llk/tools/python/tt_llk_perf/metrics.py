@@ -142,8 +142,7 @@ L1_ALL = (
     + L1_TDMA_BUNDLE
 )
 
-# Quasar (A0): four threads, the INSTISSUE class, backend stall reasons OR-reduced across threads
-# Metric key stem -> INSTRN counter, one per thread-ORed stall reason.
+# Quasar (A0): metric key stem -> INSTRN counter, one per stall reason OR-reduced across the four threads.
 STALL_REASON_COUNTERS = {
     "tile_counter_stall_pack": "TILE_COUNTER_STALL_PACK",
     "tile_counter_stall_unpack": "TILE_COUNTER_STALL_UNPACK",
@@ -593,9 +592,8 @@ def compute_metrics(v: CounterView) -> dict:
             "INSTRN_THREAD", f"{cls}_INSTRN_AVAILABLE_{t}", instrn_cycles
         )
 
-    # A stall reason's rate is over the INSTRN bank's cycles; its share is its part of every reason
-    # captured, so it needs at least two of them to mean anything. DVALID_STALL_MATH is srcA-or-srcB not
-    # valid and contains SRCA_STALL_MATH, so the share basis carries the derived srcB part instead of it.
+    # A stall reason share needs at least two captured reasons to mean anything. DVALID_STALL_MATH is srcA-or-srcB
+    # not valid and contains SRCA_STALL_MATH, so the share basis carries the derived srcB part instead of it.
     _reason_counts = {
         c: v.count("INSTRN_THREAD", c)
         for c in STALL_REASON_COUNTERS.values()
@@ -757,7 +755,6 @@ def compute_metrics(v: CounterView) -> dict:
         "srca_write_even_tid_share_pct": pct(srca_write_even_share),
         "srcb_write_even_tid_share_pct": pct(srcb_write_even_share),
         # Quasar (A0)
-        # Thread 3
         "thread3_stall_pct": pct(thread3_stall),
         "thread3_ipc_pct": pct(thread3_ipc),
         # Per-class instruction availability, the (class, thread) pairs not covered above
@@ -821,16 +818,13 @@ def compute_metrics(v: CounterView) -> dict:
         "srca_stall_unpack_share_pct": pct(_reason_share("SRCA_STALL_UNPACK")),
         "srca_stall_math_share_pct": pct(_reason_share("SRCA_STALL_MATH")),
         "srcb_stall_math_share_pct": pct(_reason_share("SRCB_STALL_MATH")),
-        # Unpacker busy per unpacker and thread
         "unpack0_busy_t0_pct": pct(_unpack_busy(0, 0)),
         "unpack1_busy_t0_pct": pct(_unpack_busy(1, 0)),
         "unpack2_busy_t0_pct": pct(_unpack_busy(2, 0)),
         "unpack0_busy_t1_pct": pct(_unpack_busy(0, 1)),
         "unpack1_busy_t1_pct": pct(_unpack_busy(1, 1)),
-        # Math source readiness, FPU/SFPU overlap
         "math_src_data_ready_pct": pct(math_src_data_ready),
         "fpu_sfpu_overlap_pct": pct(fpu_sfpu_overlap),
-        # Instructions per issue-ready cycle, per thread
         "thread0_instrn_per_ready_cycle_ratio": _per_ready_cycle(0),
         "thread1_instrn_per_ready_cycle_ratio": _per_ready_cycle(1),
         "thread2_instrn_per_ready_cycle_ratio": _per_ready_cycle(2),
@@ -1013,12 +1007,11 @@ RATIO_KEYS = {k for k in METRIC_LABELS if k.endswith("_ratio")}
 RATIO_LABELS = {METRIC_LABELS[k] for k in RATIO_KEYS}
 
 
-# Quasar l1_client event counter: one clear-on-read CSR behind a subport*8 + event mux, selected per run
-# Records are named after the selection, so this metric family is dynamic (compute_l1_client_metrics, metric_label).
+# Quasar l1_client event counter: one clear-on-read CSR behind a subport*8 + event mux, one selection per run.
+# Records are named after the selection, so this metric family is dynamic (see compute_l1_client_metrics).
 L1_CLIENT_PREFIX = "L1_CLIENT_"
 QUASAR_L1_CLIENT_NUM_SUBPORTS = 37
-# Verified against the A0 L1 RTL; events 2-6 are counter carries (one pulse per lane count or order
-# depth), events 1 and 7 are per-cycle indicators.
+# A0 L1 RTL: events 2-6 are counter carries (one pulse per lane count or order depth), 1 and 7 per-cycle indicators.
 QUASAR_L1_CLIENT_EVENT_NAMES = (
     "UNUSED",
     "SBANK_POP",
@@ -1036,9 +1029,7 @@ QUASAR_L1_CLIENT_SBANK_EVENTS = (1, 2, 3)
 
 
 def quasar_l1_client_selection_is_valid(sel) -> bool:
-    """False for selections that cannot carry data: out of range, event 0 (unused, reads 0 in the RTL), and the THCON
-    sub-port's events 1-3 (the TRISC port's SBank 0 counters, which sub-port 0 already exposes).
-    """
+    """False for event 0 (tied to 0 in the RTL) and THCON events 1-3 (aliases of the TRISC port SBank 0 counters)."""
     sel = int(sel)
     if not 0 <= sel < QUASAR_L1_CLIENT_NUM_SUBPORTS * 8:
         return False
@@ -1047,9 +1038,8 @@ def quasar_l1_client_selection_is_valid(sel) -> bool:
 
 
 def quasar_l1_client_label(sel) -> str:
-    """Counter name for an l1_client selection (subport*8 + event). Subports (t6_l1_client_map.sv): 0-3 TRISC, 4 THCON,
-    5-24 unpacker reads (3 unpackers x 2 interfaces x 4 lanes, unpacker 2 has interface 0 only), 25-36 packer writes
-    (packer 0 interfaces 0-1, packer 1 interface 0). Events 1-3 name the SBank of the port instead of the sub-port.
+    """Counter name for an l1_client selection. Subports (t6_l1_client_map.sv): 0-3 TRISC, 4 THCON, 5-24 unpacker
+    reads and 25-36 packer writes, 8 per unit (2 interfaces x 4 lanes; unpacker 2 and packer 1 have IF0 only).
     """
     sel = int(sel)
     if not quasar_l1_client_selection_is_valid(sel):
@@ -1071,8 +1061,8 @@ def quasar_l1_client_label(sel) -> str:
 
 
 def l1_client_pending_reqs_divisor(counter_name: str) -> float:
-    """Outstanding-request cycles per PENDING_REQS_CARRY pulse: 2^clog2(3 * RSP_BUF_D), 128 on packer 0's two
-    interfaces (24-deep response buffer) and 64 on every other sub-port."""
+    """Outstanding-request cycles per PENDING_REQS_CARRY pulse: 2^clog2(3 * RSP_BUF_D), so 128 on the two packer 0
+    interfaces (24-deep response buffer) and 64 elsewhere."""
     port = str(counter_name)[len(L1_CLIENT_PREFIX) :].split("_")
     return 128.0 if port[0] == "PACK0" and port[1] in ("IF0", "IF1") else 64.0
 
@@ -1083,7 +1073,6 @@ def l1_client_is_ratio(counter_name_or_label: str) -> bool:
 
 
 def l1_client_metric_key(counter_name: str) -> str:
-    """Metric key of an l1_client counter: lower-case name plus the family suffix (_ratio for the pending carry)."""
     return (
         f"{counter_name.lower()}_ratio"
         if l1_client_is_ratio(counter_name)
@@ -1092,7 +1081,6 @@ def l1_client_metric_key(counter_name: str) -> str:
 
 
 def l1_client_metric_label(counter_name: str) -> str:
-    """Display name of an l1_client metric: the counter name plus ' Rate', or ' Mean Outstanding' for the pending carry."""
     return (
         f"{counter_name} Mean Outstanding"
         if l1_client_is_ratio(counter_name)
@@ -1101,14 +1089,12 @@ def l1_client_metric_label(counter_name: str) -> str:
 
 
 def is_ratio_label(label: str) -> bool:
-    """Whether a display label belongs to the unbounded ratio family (static RATIO_LABELS or the pending-request carry)."""
     return label in RATIO_LABELS or (
         str(label).startswith(L1_CLIENT_PREFIX) and l1_client_is_ratio(label)
     )
 
 
 def metric_label(key: str) -> str:
-    """Display name for a metric key: METRIC_LABELS, or the dynamic l1_client family, else the key itself."""
     if key in METRIC_LABELS:
         return METRIC_LABELS[key]
     if key.startswith(L1_CLIENT_PREFIX.lower()):
@@ -1119,10 +1105,9 @@ def metric_label(key: str) -> str:
 
 
 def compute_l1_client_metrics(v: CounterView, counter_names) -> dict:
-    """Per-run value of every l1_client counter present over the capture's wall-clock span (the CSR has no reference
-    counter). SBANK_POP and ORDER_FIFO_ACTIVE are cycle indicators; the ISSUE/FLEX carries fire once per four lane
-    events, so carry / cycles is the mean per-lane fraction (bounded); the pending-request carry times its divisor
-    over cycles is the mean number of outstanding requests (a ratio)."""
+    """Value of every l1_client counter present, over the wall-clock span (the CSR has no reference counter). A carry
+    over cycles is a bounded per-lane fraction; the pending carry times its divisor is mean outstanding requests.
+    """
     cycles = v.cycles("L1_CLIENT")
     out = {}
     for name in sorted(set(counter_names)):
