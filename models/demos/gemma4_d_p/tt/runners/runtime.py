@@ -159,3 +159,4 @@ class Gemma4PrefillRuntime:
             ttnn.release_trace(self.mesh_device, self.trace_id)
             self.trace_id = None
         self.d2h_service = None
+        self.layer_completion_sink = None
