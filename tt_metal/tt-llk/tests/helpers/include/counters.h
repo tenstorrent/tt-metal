@@ -644,7 +644,14 @@ struct perf_counter_scoped
             llk_barrier::is_action_thread(),
             []
             {
-                read_pending_zone();
+                // Only a single thread run type leaves a frozen zone behind for the next entry to read; the span run
+                // types read every zone inside their exit rendezvous, so for them this would be a dead L1 read. It is
+                // not harmless: on Wormhole an L1 read right before the arming stores and the release made every
+                // L1_CONGESTION kernel hang in the math thread (dvalid handshake lost on the first tile).
+                if constexpr (is_single_thread_runtype(RUN_TYPE))
+                {
+                    read_pending_zone();
+                }
                 arm_all_counters();
             });
         ckernel::fence_compiler();
