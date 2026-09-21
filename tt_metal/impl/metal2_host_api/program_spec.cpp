@@ -2924,7 +2924,13 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const size_t n_banks = bank_coords.size();
 
     cta_payload.push_back(static_cast<uint32_t>(rank));
-    cta_payload.push_back(static_cast<uint32_t>(n_banks));
+    TT_FATAL(
+        n_banks < tensor_accessor::ShardContiguousBit,
+        "TensorParameter '{}' has too many banks ({}) to pack the shard-contiguous flag",
+        tensor_parameter.unique_id,
+        n_banks);
+    cta_payload.push_back(tensor_accessor::pack_num_banks(
+        static_cast<uint32_t>(n_banks), bds.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D));
 
     if (!dyn_shape) {
         for (size_t i = 0; i < rank; ++i) {

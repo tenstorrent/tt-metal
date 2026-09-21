@@ -93,10 +93,10 @@ public:
         MeshCommandQueue* trace_capture_cq);
 
     // PrefetcherPipe delivery. Receiver-contiguous tensors support batched delivery and streaming
-    // rotation. Block sizes may vary per tensor and need not match the creation entry size or divide
+    // rotation. Block sizes may vary per tensor and need not match the initial applied size or divide
     // the fixed ring; the ring must hold at least one block (consumers may require more for lookahead).
-    // `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned, in that
-    // order (see the public QueueTensorPrefetcherRequest overload for what the order fixes).
+    // `prefetcher_pipes` may be any order or subset of one CreatePrefetcherPipesForTensorPrefetcher
+    // result.
     void queue(
         const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
         const std::optional<MeshCoordinateRangeSet>& device_subset,

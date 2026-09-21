@@ -1755,7 +1755,7 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
 
 RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
 
-::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {
+::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() const {
     TT_FATAL(
         drisc_l1_arena_ != nullptr,
         "DriscL1Arena not constructed; programmable DRAM cores auto-enable on Blackhole with firmware "

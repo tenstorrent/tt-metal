@@ -412,11 +412,20 @@ def test_bw_tensor_prefetcher_pipe_recv_contig(device, op_name, shape):
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
     # Depth in whole blocks matches _gcb_size_bytes(page_size, pages_per_layer), so both transports
     # give the sender the same in-flight headroom before reserve_back backpressures.
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+    receiver_domain = ttnn.CoreRangeSet(
+        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
+    )
+    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
         device,
+        sender_cores=ttnn.CoreRangeSet(set()),
+        receiver_domain=receiver_domain,
+        ring_size=page_size * pages_per_layer,
+        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
+        num_dram_senders=2 * len(bank_to_receivers),
+    )
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        pipe_space,
         bank_to_receivers,
-        entry_size=page_size,
-        num_entries=pages_per_layer,
         support_multi_receiver_shards=not dual_senders,
     )
 

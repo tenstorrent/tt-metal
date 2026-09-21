@@ -11,16 +11,21 @@
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/allocator/allocator.hpp"
+#include "impl/buffers/drisc_l1_arena.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt_align.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <type_traits>
 #include <unordered_set>
@@ -28,13 +33,17 @@
 #include <vector>
 
 #include "hostdev/remote_dfb_config_layout.h"
+#include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/api/tt-metalium/tt_metal.hpp"
 
 namespace tt::tt_metal::experimental {
 
 namespace {
+
+std::atomic<uint64_t> next_prefetcher_pipe_identity{1};
 
 // See remote_dfb_config_layout.h. SENT and ACKED live in separate cache lines so a core's
 // cached stores to its own counters can never write back over the peer's NoC-written ones.
@@ -58,6 +67,60 @@ PrefetcherPipeConfigPageLayout compute_prefetcher_pipe_config_page_layout(
 uint32_t l1_alignment_for(const distributed::MeshDevice* device) {
     const auto context_id = extract_context_id(device);
     return MetalContext::instance(context_id).hal().get_alignment(HalMemType::L1);
+}
+
+struct PrefetcherPipePageCommon {
+    const PrefetcherPipeConfigPageLayout& layout;
+    uint32_t l1_alignment;
+    uint32_t num_receivers;
+    uint32_t data_base_addr;
+    uint32_t ring_size;
+    uint32_t applied_entry_size;
+};
+
+uint32_t write_shared_config_words(
+    std::vector<uint32_t>& page, const PrefetcherPipePageCommon& common, bool is_sender) {
+    uint32_t i = 0;
+    page[i++] = is_sender ? 1u : 0u;
+    page[i++] = common.num_receivers;
+    page[i++] = common.data_base_addr;
+    page[i++] = common.ring_size;
+    page[i++] = common.data_base_addr;
+    page[i++] = common.applied_entry_size;
+    page[i++] = common.layout.noc_xy_offset;
+    return i;
+}
+
+std::vector<uint32_t> build_sender_config_page(
+    const PrefetcherPipePageCommon& common,
+    uint32_t peer_counter_offset,
+    const std::vector<CoreCoord>& receiver_noc_xy) {
+    std::vector<uint32_t> page(common.layout.page_size / sizeof(uint32_t), 0);
+    uint32_t i = write_shared_config_words(page, common, true);
+    page[i++] = common.layout.sent_offset;
+    page[i++] = common.layout.acked_offset;
+    page[i++] = peer_counter_offset;
+    for (const CoreCoord& phys : receiver_noc_xy) {
+        page[i++] = static_cast<uint32_t>(phys.x);
+        page[i++] = static_cast<uint32_t>(phys.y);
+    }
+    return page;
+}
+
+std::vector<uint32_t> build_receiver_config_page(
+    const PrefetcherPipePageCommon& common,
+    uint32_t receiver_index,
+    uint32_t peer_counter_offset,
+    CoreCoord sender_noc_xy) {
+    std::vector<uint32_t> page(common.layout.page_size / sizeof(uint32_t), 0);
+    uint32_t i = write_shared_config_words(page, common, false);
+    const uint32_t slot = receiver_index * common.l1_alignment;
+    page[i++] = common.layout.sent_offset + slot;
+    page[i++] = common.layout.acked_offset + slot;
+    page[i++] = peer_counter_offset;
+    page[i++] = static_cast<uint32_t>(sender_noc_xy.x);
+    page[i++] = static_cast<uint32_t>(sender_noc_xy.y);
+    return page;
 }
 
 }  // namespace
@@ -97,13 +160,9 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
         "more receivers than the domain it is carved from",
         config_.max_receivers_per_pipe,
         config_.receiver_domain.num_cores());
-    // DRAM-sender endpoints are capacity-only until the DRISC-resident sender page lands
-    // (tt-metal#55285); reject the field rather than reserve for something that cannot be carved.
     TT_FATAL(
-        config_.num_dram_senders == 0,
-        "PrefetcherPipeSpace: num_dram_senders = {} is not supported yet (DRAM-sender pipes are blocked on "
-        "tt-metal#55285); pass 0",
-        config_.num_dram_senders);
+        config_.sender_cores.num_cores() > 0 || config_.num_dram_senders > 0,
+        "PrefetcherPipeSpace: provide worker sender_cores, num_dram_senders, or both");
     reservation_cores_ = config_.sender_cores.merge(config_.receiver_domain);
     // Worker-only public surface: sender_cores / receiver_domain are logical worker coordinates,
     // which the persistent arena validates against the worker grid on allocate.
@@ -277,7 +336,8 @@ void PrefetcherPipeSpaceImpl::write_page(const CoreRangeSet& cores, const std::v
             if (range.size() == 1) {
                 auto page_copy = page;
                 TT_FATAL(
-                    detail::WriteToDeviceL1(target_device, range.start_coord, config_address_, page_copy),
+                    ::tt::tt_metal::detail::WriteToDeviceL1(
+                        target_device, range.start_coord, config_address_, page_copy),
                     "Failed to write PrefetcherPipe config page to core {} on device {}",
                     range.start_coord.str(),
                     target_device->id());
@@ -328,13 +388,153 @@ std::vector<PrefetcherPipe> PrefetcherPipeSpaceImpl::create_pipes(
     return result;
 }
 
+void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> dram_senders) {
+    TT_FATAL(config_.num_dram_senders > 0, "set_dram_sender_cores: this is a worker-only space");
+    TT_FATAL(
+        dram_senders.size() <= config_.num_dram_senders,
+        "set_dram_sender_cores: {} cores exceed the space capacity {}",
+        dram_senders.size(),
+        config_.num_dram_senders);
+    std::unordered_set<CoreCoord> distinct;
+    for (const CoreCoord& sender : dram_senders) {
+        TT_FATAL(distinct.insert(sender).second, "set_dram_sender_cores: duplicate DRAM sender {}", sender.str());
+    }
+    if (!dram_sender_allocations_.empty()) {
+        TT_FATAL(
+            distinct.size() == dram_sender_allocations_.size() &&
+                std::all_of(
+                    distinct.begin(),
+                    distinct.end(),
+                    [&](const CoreCoord& sender) { return dram_sender_allocations_.contains(sender); }),
+            "set_dram_sender_cores: this space is already reserved for a different DRAM sender set");
+        return;
+    }
+
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_mapping;
+    sender_mapping.reserve(dram_senders.size());
+    for (const CoreCoord& sender : dram_senders) {
+        sender_mapping.emplace_back(sender, CoreRangeSet{});
+    }
+    validate_dram_senders_across_mesh(device_, sender_mapping);
+
+    const auto& hal = MetalContext::instance(device_->impl().get_context_id()).hal();
+    TT_FATAL(
+        hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
+        "set_dram_sender_cores requires programmable DRAM cores");
+    const uint32_t alignment = std::max(l1_alignment_for(device_), PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN);
+
+    // Allocate the complete sender-state capacity before any consumer Program is built or a pipe
+    // is carved. A later carve only stamps/reuses this storage, so destroy/recarve is allocation-free.
+    std::unordered_map<CoreCoord, std::shared_ptr<DriscL1Allocation>> allocations;
+    for (const CoreCoord& sender : dram_senders) {
+        allocations.emplace(sender, device_->impl().drisc_l1_arena().allocate_on(sender, layout_.page_size, alignment));
+    }
+    dram_sender_allocations_ = std::move(allocations);
+}
+
+void PrefetcherPipeSpaceImpl::validate_dram_carve(
+    CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const {
+    TT_FATAL(
+        dram_sender_allocations_.contains(sender),
+        "create_dram_sender_pipe: sender {} was not selected for this space",
+        sender.str());
+    TT_FATAL(receivers.num_cores() > 0, "create_dram_sender_pipe: a pipe requires at least one receiver");
+    TT_FATAL(
+        receivers.num_cores() <= config_.max_receivers_per_pipe,
+        "create_dram_sender_pipe: {} receivers exceed max_receivers_per_pipe {}",
+        receivers.num_cores(),
+        config_.max_receivers_per_pipe);
+    TT_FATAL(
+        config_.receiver_domain.contains(receivers),
+        "create_dram_sender_pipe: receivers {} are outside receiver_domain {}",
+        receivers.str(),
+        config_.receiver_domain.str());
+    TT_FATAL(
+        !claimed_dram_senders_.contains(sender),
+        "create_dram_sender_pipe: DRAM sender {} is already claimed by a live pipe",
+        sender.str());
+    TT_FATAL(
+        pending == nullptr || !pending->contains(sender),
+        "create_dram_sender_pipe: DRAM sender {} appears more than once in the batch",
+        sender.str());
+    for (const CoreCoord& receiver : corerange_to_cores(receivers)) {
+        TT_FATAL(
+            !claimed_.contains(receiver),
+            "create_dram_sender_pipe: receiver {} is already claimed by a live pipe",
+            receiver.str());
+    }
+}
+
+void PrefetcherPipeSpaceImpl::validate_dram_carves(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes) const {
+    TT_FATAL(
+        pipes.size() <= config_.num_dram_senders,
+        "DRAM pipe batch has {} senders, exceeding this space's capacity {}",
+        pipes.size(),
+        config_.num_dram_senders);
+    std::unordered_set<CoreCoord> pending_senders;
+    std::unordered_set<CoreCoord> pending_receivers;
+    for (const auto& [sender, receivers] : pipes) {
+        TT_FATAL(
+            pending_senders.insert(sender).second,
+            "DRAM sender {} appears in more than one pipe of the batch",
+            sender.str());
+        TT_FATAL(
+            !claimed_dram_senders_.contains(sender), "DRAM sender {} is already claimed by a live pipe", sender.str());
+        if (!dram_sender_allocations_.empty()) {
+            TT_FATAL(
+                dram_sender_allocations_.contains(sender),
+                "DRAM sender {} is not reserved by this space",
+                sender.str());
+        }
+        TT_FATAL(receivers.num_cores() > 0, "DRAM pipe batch contains a pipe with no receivers");
+        TT_FATAL(
+            receivers.num_cores() <= config_.max_receivers_per_pipe,
+            "DRAM pipe with sender {} has {} receivers, exceeding max_receivers_per_pipe {}",
+            sender.str(),
+            receivers.num_cores(),
+            config_.max_receivers_per_pipe);
+        TT_FATAL(
+            config_.receiver_domain.contains(receivers),
+            "DRAM pipe with sender {} has receivers {} outside receiver_domain {}",
+            sender.str(),
+            receivers.str(),
+            config_.receiver_domain.str());
+        for (const CoreCoord& receiver : corerange_to_cores(receivers)) {
+            TT_FATAL(
+                !claimed_.contains(receiver),
+                "DRAM pipe receiver {} is already claimed by a live pipe",
+                receiver.str());
+            TT_FATAL(
+                pending_receivers.insert(receiver).second,
+                "DRAM pipe receiver {} appears in more than one pipe of the batch",
+                receiver.str());
+        }
+    }
+}
+
+PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
+    CoreCoord sender, const CoreRangeSet& receivers, uint32_t recv_index_base, uint64_t tensor_prefetcher_factory_id) {
+    validate_dram_carve(sender, receivers, nullptr);
+    return PrefetcherPipe(std::make_unique<PrefetcherPipeImpl>(
+        *this,
+        sender,
+        receivers,
+        dram_sender_allocations_.at(sender),
+        recv_index_base,
+        tensor_prefetcher_factory_id));
+}
+
 // ---------------------------------------------------------------------------------------------
 // PrefetcherPipeImpl
 // ---------------------------------------------------------------------------------------------
 
 PrefetcherPipeImpl::PrefetcherPipeImpl(
     PrefetcherPipeSpaceImpl& space, CoreCoord sender_core, const CoreRangeSet& receiver_cores) :
-    space_(&space), sender_core_(sender_core), receiver_cores_(receiver_cores), claimed_(true) {
+    space_(&space),
+    identity_(next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)),
+    sender_core_(sender_core),
+    receiver_cores_(receiver_cores),
+    claimed_(true) {
     space_->validate_carve(sender_core_, receiver_cores_, nullptr);
     sender_cores_ = CoreRangeSet(CoreRange(sender_core_));
     all_cores_ = sender_cores_.merge(receiver_cores_);
@@ -349,9 +549,44 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     }
 }
 
+PrefetcherPipeImpl::PrefetcherPipeImpl(
+    PrefetcherPipeSpaceImpl& space,
+    CoreCoord dram_sender,
+    const CoreRangeSet& receiver_cores,
+    std::shared_ptr<DriscL1Allocation> drisc_config_page,
+    uint32_t recv_index_base,
+    uint64_t tensor_prefetcher_factory_id) :
+    space_(&space),
+    identity_(next_prefetcher_pipe_identity.fetch_add(1, std::memory_order_relaxed)),
+    sender_core_(dram_sender),
+    receiver_cores_(receiver_cores),
+    all_cores_(receiver_cores),
+    sender_core_type_(SenderCoreType::Dram),
+    initial_entry_size_(l1_alignment_for(space_->get_device())),
+    recv_index_base_(recv_index_base),
+    tensor_prefetcher_factory_id_(tensor_prefetcher_factory_id),
+    drisc_config_page_(std::move(drisc_config_page)) {
+    TT_FATAL(drisc_config_page_ != nullptr, "DRAM-sender PrefetcherPipe requires reserved DRISC L1");
+    space_->validate_dram_carve(sender_core_, receiver_cores_, nullptr);
+    space_->claim(receiver_cores_, *this);
+    space_->claimed_dram_senders_.insert(sender_core_);
+    claimed_ = true;
+    try {
+        build_dram_sender_config_pages();
+    } catch (...) {
+        space_->unclaim(receiver_cores_, *this);
+        space_->claimed_dram_senders_.erase(sender_core_);
+        claimed_ = false;
+        throw;
+    }
+}
+
 PrefetcherPipeImpl::~PrefetcherPipeImpl() {
     if (claimed_ && space_ != nullptr) {
         space_->unclaim(all_cores_, *this);
+        if (sender_core_type() == SenderCoreType::Dram) {
+            space_->claimed_dram_senders_.erase(sender_core_);
+        }
     }
 }
 
@@ -426,6 +661,64 @@ void PrefetcherPipeImpl::build_config_pages() {
         receiver_page[rci++] = static_cast<uint32_t>(sender_phys.y);
         config_pages_[receiver_vec[ri]] = std::move(receiver_page);
     }
+}
+
+void PrefetcherPipeImpl::build_dram_sender_config_pages() {
+    TT_FATAL(space_->credit_lane_capacity() == 1, "DRAM-sender PrefetcherPipes support one credit lane per receiver");
+    const uint32_t l1_alignment = l1_alignment_for(space_->get_device());
+    const auto& layout = space_->layout();
+    const auto receivers = corerange_to_cores(receiver_cores_, /*max_cores=*/std::nullopt, /*row_wise=*/true);
+    const uint32_t num_receivers = static_cast<uint32_t>(receivers.size());
+    const PrefetcherPipePageCommon common{
+        .layout = layout,
+        .l1_alignment = l1_alignment,
+        .num_receivers = num_receivers,
+        .data_base_addr = space_->buffer_address(),
+        .ring_size = space_->ring_size(),
+        // A DRISC sender has to start with a nonzero applied size before a request can re-grid it.
+        .applied_entry_size = initial_entry_size_};
+    const uint32_t sender_page_addr = static_cast<uint32_t>(drisc_config_page_->addr());
+    const uint32_t receiver_sent_base = space_->config_address() + layout.sent_offset;
+    TT_FATAL(
+        (receiver_sent_base & ~dev_msgs::REMOTE_CB_PACKED_ADDR_MASK) == 0,
+        "Receiver counter base 0x{:x} does not fit the packed remote-pointer field",
+        receiver_sent_base);
+
+    const distributed::MeshDevice* mesh_device = space_->get_device();
+    config_pages_.clear();
+    for (IDevice* target_device : mesh_device->get_devices()) {
+        std::vector<CoreCoord> receiver_phys;
+        receiver_phys.reserve(receivers.size());
+        for (const CoreCoord& receiver : receivers) {
+            receiver_phys.push_back(target_device->worker_core_from_logical_core(receiver));
+        }
+        const auto sender_page = build_sender_config_page(common, receiver_sent_base - sender_page_addr, receiver_phys);
+        write_dram_sender_l1(
+            *mesh_device, target_device, sender_core_, sender_page_addr, std::as_bytes(std::span(sender_page)));
+
+        const CoreCoord sender_virtual = target_device->virtual_core_from_logical_core(sender_core_, CoreType::DRAM);
+        for (uint32_t r = 0; r < num_receivers; ++r) {
+            const uint32_t sender_acked_slot = sender_page_addr + layout.acked_offset + r * l1_alignment;
+            auto receiver_page =
+                build_receiver_config_page(common, r, sender_acked_slot - space_->config_address(), sender_virtual);
+            auto page_copy = receiver_page;
+            TT_FATAL(
+                ::tt::tt_metal::detail::WriteToDeviceL1(
+                    target_device, receivers[r], space_->config_address(), page_copy),
+                "Failed to write DRAM-sender PrefetcherPipe receiver page on core {} device {}",
+                receivers[r].str(),
+                target_device->id());
+            if (config_pages_.empty() || !config_pages_.contains(receivers[r])) {
+                config_pages_.emplace(receivers[r], std::move(receiver_page));
+            }
+        }
+    }
+}
+
+SenderCoreType PrefetcherPipeImpl::sender_core_type() const { return sender_core_type_; }
+
+DeviceAddr PrefetcherPipeImpl::sender_state_drisc_l1_base() const {
+    return drisc_config_page_ == nullptr ? 0 : drisc_config_page_->addr();
 }
 
 const std::vector<uint32_t>& PrefetcherPipeImpl::config_page(const CoreCoord& core) const {
@@ -529,6 +822,12 @@ const CoreRangeSet& PrefetcherPipe::all_cores() const { return pimpl_->all_cores
 
 const distributed::MeshDevice* PrefetcherPipe::get_device() const { return pimpl_->get_device(); }
 
+SenderCoreType PrefetcherPipe::sender_core_type() const { return pimpl_->sender_core_type(); }
+
+uint64_t PrefetcherPipe::identity() const { return pimpl_->identity(); }
+
+uint32_t PrefetcherPipe::initial_entry_size() const { return pimpl_->initial_entry_size(); }
+
 PrefetcherPipeSpace::PrefetcherPipeSpace(std::unique_ptr<PrefetcherPipeSpaceImpl> impl) : pimpl_(std::move(impl)) {
     TT_FATAL(pimpl_ != nullptr, "PrefetcherPipeSpace requires an implementation object");
 }
@@ -576,27 +875,37 @@ PrefetcherPipeSpace CreatePrefetcherPipeSpace(
 }
 
 void set_dram_sender_cores(PrefetcherPipeSpace& space, std::span<const CoreCoord> dram_senders) {
-    TT_FATAL(
-        space.num_dram_senders() > 0,
-        "set_dram_sender_cores: the space was created with num_dram_senders = 0 (worker-only)");
-    TT_FATAL(
-        dram_senders.size() <= space.num_dram_senders(),
-        "set_dram_sender_cores: {} DRAM sender cores exceed the space's num_dram_senders capacity {}",
-        dram_senders.size(),
-        space.num_dram_senders());
-    TT_THROW(
-        "set_dram_sender_cores: DRAM-sender PrefetcherPipes are not implemented yet (DRISC L1 for the sender ring / "
-        "config page is blocked on tt-metal#55285)");
+    space.impl().set_dram_sender_cores(dram_senders);
 }
 
 PrefetcherPipe create_dram_sender_pipe(
-    PrefetcherPipeSpace& space, CoreCoord /*dram_sender*/, const CoreRangeSet& /*receivers*/) {
-    TT_FATAL(
-        space.num_dram_senders() > 0,
-        "create_dram_sender_pipe: the space was created with num_dram_senders = 0 (worker-only)");
-    TT_THROW(
-        "create_dram_sender_pipe: DRAM-sender PrefetcherPipes are not implemented yet (DRISC L1 for the sender ring / "
-        "config page is blocked on tt-metal#55285)");
+    PrefetcherPipeSpace& space,
+    CoreCoord dram_sender,
+    const CoreRangeSet& receivers,
+    uint32_t recv_index_base,
+    uint64_t tensor_prefetcher_factory_id) {
+    return space.impl().create_dram_sender_pipe(dram_sender, receivers, recv_index_base, tensor_prefetcher_factory_id);
+}
+
+std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+    mapping.reserve(pipes.size());
+    for (const auto& pipe : pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", mapping.size());
+        mapping.emplace_back(pipe->sender_core(), pipe->receiver_cores());
+    }
+    return mapping;
+}
+
+CoreRangeSet prefetcher_pipe_receiver_cores(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
+    std::vector<CoreRange> ranges;
+    for (const auto& pipe : pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe");
+        const auto& receiver_ranges = pipe->receiver_cores().ranges();
+        ranges.insert(ranges.end(), receiver_ranges.begin(), receiver_ranges.end());
+    }
+    return CoreRangeSet().merge(ranges);
 }
 
 }  // namespace tt::tt_metal::experimental

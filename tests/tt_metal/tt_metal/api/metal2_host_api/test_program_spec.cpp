@@ -5428,6 +5428,25 @@ TEST_F(ProgramSpecTestGen1, CPU_DifferentTensorSpecProducesDifferentKernelHash) 
     EXPECT_NE(hash_dram, hash_l1);
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_ContiguousNdTensorBindingPacksDistributionFlag) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {
+        MakeNdShardedTensorParameter("input_tensor", Shape{64, 64}, Shape{32, 32}, /*num_cores=*/4)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto& handles = kernel->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+
+    // Static sharded payload: args_config, page size, rank, then packed num_banks.
+    const auto compile_args = kernel->compile_time_args();
+    const size_t num_banks_offset = handles[0].cta_offset + 3;
+    ASSERT_LT(num_banks_offset, compile_args.size());
+    EXPECT_EQ(tensor_accessor::unpack_num_banks(compile_args[num_banks_offset]), 4u);
+    EXPECT_TRUE(tensor_accessor::unpack_is_shard_contiguous(compile_args[num_banks_offset]));
+}
+
 TEST_F(ProgramSpecTestGen1, CPU_IdenticalTensorSpecProducesIdenticalKernelHash) {
     // Determinism canary: two specs constructed identically must hash identically. If this ever
     // fails, something nondeterministic crept into the hash (iteration order over a hash map,
