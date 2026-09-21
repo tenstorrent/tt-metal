@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "35570168855",
-    "timestamp": "2026-09-21T06:53:00Z"
+    "run_id": "35600280323",
+    "timestamp": "2026-09-21T12:36:23Z"
   },
-  "run_id": "35570168855",
+  "run_id": "35600280323",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -222,7 +222,7 @@
     "56827_concat_width_retry": {
       "issue": 56827,
       "branch": "repo-assist/fix-issue-56827-concat-block-sharded-width-ragged",
-      "status": "opened this run (retry after #56864 was auto-closed without merge/comment despite green checks); real padded_shape()[-1] instead of shard capacity for width cursor, output range clipped; added parametrized regression test; CI outcome unknown yet, check next run; docker unavailable so unverified locally"
+      "status": "SUPERSEDED: issue #56827 fixed and closed via external PR #57100 on 2026-09-21; this repo-assist retry is moot"
     },
     "57099": {
       "issue": 56827,
@@ -1454,7 +1454,22 @@
     "57112": "bug",
     "57103": "performance monitoring",
     "57102": "bug",
-    "57095": "bug"
+    "57095": "bug",
+    "57162": {
+      "label": "bug",
+      "date": "2026-09-21",
+      "note": "SDPA perf-table test deadlocks other-session device lock, confirmed against current test code"
+    },
+    "57165": {
+      "label": "performance monitoring",
+      "date": "2026-09-21",
+      "note": "indexer_score math-util band board-variance report"
+    },
+    "57178": {
+      "label": "performance monitoring",
+      "date": "2026-09-21",
+      "note": "streaming SDPA fp32 DEST rescale regression at 8q/1kv bfp8"
+    }
   },
   "issues_commented": {
     "53922": {
@@ -1517,9 +1532,18 @@
     "56967": {
       "date": "2026-09-20",
       "note": "confirmed LO16 vs UINT16 naming discrepancy against current llk_defs.h, no bug label"
+    },
+    "57162": {
+      "date": "2026-09-21",
+      "note": "confirmed device-lock deadlock root cause against current test file, attributed analysis to reporter"
     }
   },
   "run_history": [
+    {
+      "run_id": "35600280323",
+      "date": "2026-09-21T12:36:23Z",
+      "summary": "Task5: checked CI on 26 open repo-assist PRs (57145/57146/57131/57130/56817/56997/56956/56943/56714/56598/56529/56428/56396/56375/56195/55670/55688/55435/54932/54792/54666/54246/54862/52106/55670/53113/53690/51868) via get_check_runs -- all green except 3 previously-flagged, unchanged infra-noise cases (#51868 and #56195/#55435 RTL Sim CI broken-placeholder details_url domain 'github.com/tenstorrernt'; #55670's 3 failures already root-caused in a prior run as pre-existing tilize/glm5-perf issues, unrelated to the PR's tensor-aliasing fix). Re-verified via get_job_logs that #55670's flagged run genuinely has 0 failed jobs by the job-logs API despite 3 non-success check runs (consistent with the prior root-cause). Confirmed issue #56827 (concat block-sharded width ragged-tail) is now CLOSED, fixed by external PR #57100 -- removed the stale 'fresh fix needed' suggested-action item; no new repo-assist attempt needed (superseded prior repo-assist retries #56864/#57099, both already closed/unmerged). Task1/2: reviewed newest ~50 open issues (#57186 down through #57001); most already labeled or are maintainer-authored perf/infra notes. Found and verified 3 fresh, well-documented reports from mvlahovicTT (SDPA integration sweep on Blackhole p100a): #57162 (test_sdpa_create_perf_table deadlocks other-session device lock) -- confirmed against current tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py (missing device fixture at line 281, CI-only skipif at lines 190/275, subprocess-based tracy profiler invocation matches reporter's exact mechanism); labeled bug and commented with root-cause confirmation (attributed to reporter, not independently derived). #57165 (indexer_score math-utilization band board-variance) and #57178 (streaming SDPA fp32 DEST rescale slower than legacy at 8q/1kv bfp8) -- both credible perf-board reports with detailed measurement tables, labeled performance monitoring, no comment (reporter's own numbers, not independently verifiable, no additional insight to add beyond labeling). Did not comment on 57165/57178 to avoid restating unverified reporter benchmark numbers as fact. Task6: skipped (last run 2026-09-21 06:53, well under 3-day cadence). Task8: rewrote monthly summary #55015 with this run's entries, removed the resolved #56827 item, added new #57162 comment entry."
+    },
     {
       "run_id": "35549609194",
       "date": "2026-09-20T18:57:00Z",
@@ -1554,21 +1578,6 @@
       "run_id": "35411011460",
       "date": "2026-09-19T01:15:00Z",
       "summary": "Task2 (investigate/comment, least-recently-run task): commented on 3 fresh open issues without prior repo-assist engagement. #56941 (Quasar BFD datacopy DFB race) -- verified the AI-suggested fix snippet against current dataflow_buffer.inl and found the file already has an additional read_acked/ctxn_id_loop_cnt_ modular-comparison guard not present in the issue's quoted code; couldn't determine from static reading whether this closes the race, asked reporter to re-verify repro against current main. #56616 (gelu accurate-mode CDF bug) -- confirmed via merged PR #56338's body/docstrings that this was a misattribution: the failing element (x=-5.34375) traces to torch's own fp32 golden cancellation, not a device defect; fix (float64 golden) is already merged and the PR explicitly says to close #56616 as a misattribution -- suggested maintainer close it. #56526 (ttnn.quantize Int32 output can't represent -128) -- verified root cause against current ckernel_sfpu_quant.h (WH+BH): Int32 output routes through FP32_TO_INT8's 7-bit sign-magnitude saturation at +-127, confirmed via the kernel's own comments; reporter supplied a well-tested but non-trivial SFPU replay-buffer rewrite patch (gist) that also touches a companion RNE-rounding issue (#56525) -- too architecturally risky to port blind without hardware, encouraged reporter to submit it as their own PR. Task1 spot-check: reviewed newest ~13 issues below prior cursor (#56993 down to #56913), most already labeled/maintainer-tracked or are perf/feature investigations without confirmed-defect status; #56945 already covered by merged PR #56932 (no dup); #56976 (matmul L1-interleaved 4x slowdown) confirmed root cause but is an architectural perf issue, left unlabeled/uncommented pending maintainer triage. Task7: checked all issues/PRs from the last 24h (#57081, 57066, 57055, 57042, 57028 and recent PRs) -- all authors are established maintainers/contributors (rtawfik01, blozano-tt, bbradelTT, nathan-TT etc), no new-contributor welcomes needed. Task8: updated monthly summary #55015 with this run's entry."
-    },
-    {
-      "run_id": "35380382139",
-      "date": "2026-09-18T18:34:00Z",
-      "summary": "Task5: addressed maintainer mateusznowakTT's /repo-assist review request on PR #56396 -- replaced compare_pcc with assert_with_ulp(ulp_threshold=2) in test_bw_pow_zero_input_finite_gradient (exact-value golden at input==0 warrants tight ULP bound, matching test_backward_expm1.py's pattern); fetched PR branch via git (shallow fetch worked despite no push creds), edited locally, pushed via push_to_pull_request_branch, commented explaining the change. Task1/2: reviewed newest issues #57042 down to #56998; labeled #57042/#57023/#57022 bug (quasar resnet build failure in ckernel_sfpu_reduce.h, quasar conv2d DFB credit underflow, borrowed-memory DFB constraint-query fatal -- all confirmed genuine defects from issue text), #57018 feature-request (TeaCache telemetry); confirmed #56945/#56954 already covered by external PRs per memory (no dup); #57009 MiniMax hang well-documented already, needs HW bisect beyond budget. Task4: fixed #56998 (prefill runner docs missing capture_trace optional hook) -- verified against prefill_runner.py:793's getattr-gated call and the one existing implementation (tt_prefill_runtime.py:433); opened docs-only [skip ci] PR. Task6: nudged 2 never-nudged stale PRs (#51533, #51991, both dirty mergeable_state, author-blocked). Also spot-checked ~24 tracked repo-assist PRs' CI: several recent ones show pr-gate.yaml conclusion=action_required (repo-side gating, not build failure) -- flagged as a pattern to watch. Task8: rewrote monthly summary #55015 from scratch (body had regrown to ~247KB with duplicated Suggested-Actions/footer blocks); trimmed to canonical current-state format."
-    },
-    {
-      "run_id": "35315773605",
-      "date": "2026-09-18T06:43:00Z",
-      "summary": "Task2/3: investigated fresh issue #56949 (gpt-oss-120b fused MoE router topk_router_gpt selected on Blackhole Galaxy despite requiring 12 DRAM-aligned cores vs Blackhole's 8; model code gated the fused kernel purely on num_experts==128 with no arch check). Verified against current models/demos/gpt_oss/tt/topk.py and its models/experimental/ops/quasar/gpt_oss/tt/topk.py duplicate (byte-identical apart from import path) and confirmed the op's own unit tests already @skip_for_blackhole this exact scenario. Opened PR gating use_fused_op on not ttnn.device.is_blackhole(mesh_device) in both files, matching the existing is_blackhole(mesh_device) convention used in models/tt_transformers/tt/model_config.py. Python-only change, no build needed per copilot-cloud rules. Task7: checked contributor history for all 24h-fresh issue/PR authors (VirdhatchaniKN, vcankovicTT, awliu-TT, sagarwalTT, heroxcreed) via search_pull_requests/search_issues -- all have prior merged PRs and/or issues, none qualify as new contributors, no welcomes posted. Also discovered during review that repo-assist's prior fix PR #56864 (for #56827, concat block-sharded width ragged-tail) was auto-closed by CI/github-actions[bot] without merging despite 5/5 green checks -- flagged in monthly summary for a fresh fix attempt next run. Task8: rewrote monthly summary #55015 (body had regrown to ~252KB from repeated duplicated Suggested-Actions/Run-History blocks across many prior runs); trimmed to current suggested actions + last several run history entries."
-    },
-    {
-      "run_id": "35190856437",
-      "date": "2026-09-17T06:44:35Z",
-      "summary": "Task5 (CI check follow-up on own PR): investigated CI failure on PR #56817 (test-only fix opened last run for issue #56808). The new test_eltwise_unary_typecast_int32_negative[Int32->Float32, dest_acc=Yes] caught a genuine WH/BH kernel defect: calculate_typecast_int32_to_fp32/_to_fp16b used TTI_SFPABS(mod1=0) (two's-complement int abs) on Int32 data that is sign-magnitude in hardware. Verified via DeepWiki against tt-isa-documentation (SFPABS.md/SFPCAST_IntFloat.md) and cross-checked against tt_llk_quasar's own calculate_abs (already uses the correctly-named SFPABS_MOD1_FLOAT constant with an identical warning comment). Pushed a fix (both WH/BH, both plain-loop and SFPLOADMACRO variants) switching to SFPABS_MOD1_FLOAT; posted explanatory comment on the PR. Re-verified other tracked PRs (56714/56598/56529/56428, rest of ~19 total) all green, no regressions. Task8: rewrote monthly summary #55015 (had regrown to 165KB) with current suggested actions + this run's entry."
     }
   ],
   "no_action_reviewed": [
@@ -1628,6 +1637,10 @@
       "status": "merged",
       "merged_at": "2026-09-09T11:24:16Z",
       "note": "softplus bias fix (was PR for issues 55266/55263)"
+    },
+    "56827": {
+      "date": "2026-09-21",
+      "note": "fixed and closed via external PR #57100; repo-assist retries #56864/#57099 both stale/closed, no further action"
     }
   },
   "monthly_summary_issue": 55015,
@@ -1651,7 +1664,7 @@
       "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
     }
   },
-  "task8_last_update": "2026-09-21T06:53:00Z",
+  "task8_last_update": "2026-09-21T12:36:23Z",
   "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
   "lessons_learned": [
     "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning."
