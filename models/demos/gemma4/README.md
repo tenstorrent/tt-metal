@@ -192,6 +192,7 @@ HF_MODEL=<path-or-id> pytest models/demos/gemma4/demo/text_demo.py::test_demo_si
   - Sparse MoE block on 26B-A4B and 31B; dense MLP on E2B/E4B.
 - **Pre/post-processing:** tokenization via the upstream HF tokenizer on host; logit softcapping (`final_logit_softcapping=30.0`) applied on device.
 - **Speculative PLI verification:** E2B/E4B host PLI is evaluated independently for every candidate and supplied as `[n_layers, 1, rows, pli_size]`. Eager packed and batch-dimension verification accept host token IDs or explicit per-layer/stacked PLI inputs. Traced host PLI requires persistent-buffer support.
+- **Device PLI (opt-in):** `GEMMA4_DECODE_PLI_DEV=1` computes plain-decode PLI from device token IDs; `GEMMA4_SPEC_PLI_DEV=1` does the same in host-loop packed verify. Uploading the PLI table is a large setup allocation (about 4.38 GiB on E2B). Host FP32 projection and device BF16 arithmetic can differ by a rounding unit; compare them numerically rather than expecting bit equality.
 
 ## Notes
 

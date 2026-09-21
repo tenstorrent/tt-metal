@@ -170,6 +170,7 @@ class SpeculativeDecoder:
             getattr(target_model, "hidden_size_per_layer_input", 0)
             and getattr(target_model, "per_layer_input_weights", None)
         )
+        self._pli_dev_host = os.environ.get("GEMMA4_SPEC_PLI_DEV", "0") == "1"
         # Tracing: persistent I/O buffers + execute_trace replace per-op host
         # dispatch (the untraced loop is host-bound: ~77ms/decode vs a few ms
         # traced). Verify traces are keyed by batch (K+1 for verify, 1 for
@@ -950,6 +951,7 @@ class SpeculativeDecoder:
             kv_write_idxs = [
                 self._pv_from_torch(torch.tensor([c + p], dtype=torch.int32), ttnn.int32) for p in range(P)
             ]
+        device_pli = self.target_has_pli and self._pli_dev_host
         return self.target.ttnn_packed_verify_forward(
             x=dev["x"],
             position_idx=dev["pos"],
@@ -968,8 +970,9 @@ class SpeculativeDecoder:
             # exactly as wide as its type's mask. Applies unbounded too -- the
             # full-width flat table's unwritten tail diluted softmax.
             page_tables_per_layer=self._pv_tables_per_layer(dev["S_k"]),
-            token_ids_host=tokens,
-            pli_stacked=pli_stacked,
+            token_ids_host=None if device_pli else tokens,
+            pli_stacked=None if device_pli else pli_stacked,
+            pli_on_device=device_pli,
         )
 
     def _verify_packed(self, tokens, positions):
