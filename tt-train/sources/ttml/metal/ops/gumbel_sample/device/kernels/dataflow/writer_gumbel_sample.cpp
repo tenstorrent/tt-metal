@@ -25,7 +25,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/numeric/float32.h"
-#include "position_window.hpp"  // PositionWindow / stage_position_window, shared with the reader
+#include "position_window.hpp"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 namespace {

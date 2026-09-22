@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <utility>
@@ -23,6 +24,11 @@
 #include "metal/ops/gumbel_sample/gumbel_sample.hpp"
 #include "metal/ops/gumbel_sample/gumbel_sample_constants.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/rand/rand.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"  // to_l1_interleaved, for the buffer-placement test
 
@@ -210,6 +216,26 @@ namespace {
 // added to the scaled logits is bounded to roughly [-3.1, +16.6]. The tests below size their logit
 // gaps against this span so that "the scaled logits must win" is a guarantee, not a coin flip.
 constexpr float kGumbelNoiseSpan = 20.0F;
+
+// The logits dtypes the op supports. Tests whose body is dtype-agnostic iterate this list rather
+// than hand-rolling one run per dtype; upload_as does the runtime-value -> template-parameter
+// dispatch that from_xtensor's DType parameter otherwise forces onto every call site. bf16 and
+// fp32 compile to genuinely different programs (dtype is in the cache key, and fp32 tile copies
+// ride unpack-to-dest instead of SrcA), so per-dtype runs are distinct-coverage, not repetition.
+struct DtypeCase {
+    ttnn::DataType dtype;
+    const char* label;
+};
+constexpr std::array<DtypeCase, 2> kLogitsDtypes = {
+    DtypeCase{ttnn::DataType::BFLOAT16, "bf16"},
+    DtypeCase{ttnn::DataType::FLOAT32, "fp32"},
+};
+
+ttnn::Tensor upload_as(const xt::xarray<float>& data, ttnn::DataType dtype) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    return dtype == ttnn::DataType::FLOAT32 ? ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(data, device)
+                                            : ttml::core::from_xtensor(data, device);
+}
 
 // Logits with one WINNER column planted per (batch, token) row above a uniform floor, plus the
 // row-major expected argmax. Winners walk the vocabulary with a per-row stride, so a row, page or
@@ -494,7 +520,9 @@ TEST_F(GumbelSampleOpTest, TestSamplingRaggedShapes) {
     // winner/floor values are exact in both dtypes, so one grid serves both runs below.
     const auto winners = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 7U);
 
-    auto run = [&](const ttnn::Tensor& tensor_a, const char* what) {
+    for (const auto& [dtype, what] : kLogitsDtypes) {
+        auto tensor_a = upload_as(winners.logits, dtype);
+
         // Greedy is exact, so assert the full result vector: one id per token, in [batch, token] order.
         auto greedy = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 0.0F, 7));
         ASSERT_EQ(greedy.size(), kBatch * kTokens) << what << ": one sampled id per token, across all batch entries";
@@ -508,14 +536,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingRaggedShapes) {
         for (uint32_t i = 0; i < sampled.size(); ++i) {
             EXPECT_LT(sampled[i], kVocab) << what << ": index " << i << " left the logical vocabulary";
         }
-    };
-
-    // Both dtypes: bf16 tile copies ride SrcA while FLOAT32 rides the factory's unpack-to-dest
-    // path, and dtype is in the program-cache key -- two distinct programs whose ragged scan and
-    // write-out bounds must hold independently.
-    auto* device = &ttml::autograd::ctx().get_device();
-    run(ttml::core::from_xtensor(winners.logits, device), "bf16");
-    run(ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(winners.logits, device), "fp32");
+    }
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingHonoursBufferPlacement) {
@@ -660,9 +681,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingGreedyMatchesTtnnArgmax) {
     constexpr uint32_t kTokens = 37U;  // ragged, so the comparison spans partly-padded tile rows
     constexpr uint32_t kVocab = 77U;   // ragged vocab: both ops must stop their scan mid-tile
 
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    auto check_against_argmax = [&](const ttnn::Tensor& tensor_logits, const char* what) {
+    auto check_against_argmax = [&](const ttnn::Tensor& tensor_logits, const std::string& what) {
         auto greedy = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_logits, 0.0F, 7));
         auto argmax = ttml::core::to_vector<uint32_t>(ttnn::argmax(tensor_logits, /* dim */ 3, /* keepdim */ true));
         ASSERT_EQ(greedy.size(), argmax.size()) << what;
@@ -673,9 +692,9 @@ TEST_F(GumbelSampleOpTest, TestSamplingGreedyMatchesTtnnArgmax) {
     // so this also covers agreement on the lowest-index tie-break.
     const xt::xarray<float> random_logits = ttml::test_utils::make_uniform_xarray<float>(
         xt::xarray<float>::shape_type{kBatch, 1U, kTokens, kVocab}, -2.0F, 2.0F, 4242U);
-    check_against_argmax(ttml::core::from_xtensor(random_logits, device), "bf16, random");
-    check_against_argmax(
-        ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(random_logits, device), "fp32, random");
+    for (const auto& [dtype, label] : kLogitsDtypes) {
+        check_against_argmax(upload_as(random_logits, dtype), std::string(label) + ", random");
+    }
 
     // fp32 near-ties (fp32-only: 1 + 2^-20 is not representable in bf16, so a bf16 build of this
     // grid would collapse the pair into a genuine tie and test nothing). Assert both ops against
@@ -693,7 +712,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingGreedyMatchesTtnnArgmax) {
             expected[b * kTokens + t] = winner;
         }
     }
-    auto near_tie_tensor = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(near_ties, device);
+    auto near_tie_tensor = upload_as(near_ties, ttnn::DataType::FLOAT32);
     auto greedy = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(near_tie_tensor, 0.0F, 7));
     EXPECT_EQ(greedy, expected) << "fp32 near-ties: greedy gumbel must resolve sub-TF32 gaps exactly";
     auto argmax = ttml::core::to_vector<uint32_t>(ttnn::argmax(near_tie_tensor, /* dim */ 3, /* keepdim */ true));
@@ -723,7 +742,11 @@ TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositions) {
         expected_at_positions[b] = expected_all[b * kTokens + positions[b]];
     }
 
-    auto run = [&](const ttnn::Tensor& tensor_a, const char* what) {
+    // Per dtype (the position-mode page walk and the single-row writer path run against distinct
+    // bf16/fp32 programs, and the cache-collision setup below is staged once per dtype too):
+    for (const auto& [dtype, what] : kLogitsDtypes) {
+        auto tensor_a = upload_as(winners.logits, dtype);
+
         // Sample everything first. Besides producing the reference, this seeds the program cache with
         // the no-positions program: the positioned call that follows has the same shapes, dtype and
         // mask-ness, so it collides with it unless the cache key knows about positions -- and a
@@ -758,14 +781,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositions) {
         for (uint32_t b = 0; b < kBatch; ++b) {
             EXPECT_EQ(greedy_uniform[b], expected_all[b * kTokens + (kTokens - 1U)]) << what;
         }
-    };
-
-    // Both dtypes: the position-mode page walk and the single-row writer path run against a bf16
-    // program (tile copies through SrcA) and a FLOAT32 program (unpack-to-dest); dtype is in the
-    // program-cache key, so the cache-collision setup above is staged once per dtype too.
-    auto* device = &ttml::autograd::ctx().get_device();
-    run(ttml::core::from_xtensor(winners.logits, device), "bf16");
-    run(ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(winners.logits, device), "fp32");
+    }
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositionsAcrossTokenCounts) {
@@ -1098,8 +1114,6 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
             }
         }
     }
-    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
-
     // Reverse map so a sampled column can be attributed to its weight.
     std::vector<int> col_to_slot(kVocab, -1);
     for (uint32_t c = 0; c < kActive; ++c) {
@@ -1112,7 +1126,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     //
     // LIMITATION: this bound cannot see the approximate-log BIAS.
     auto expect_counts_match_weights =
-        [&](const std::array<uint32_t, kActive>& counts, uint32_t total, const char* what) {
+        [&](const std::array<uint32_t, kActive>& counts, uint32_t total, const std::string& what) {
             for (uint32_t c = 0; c < kActive; ++c) {
                 const double p = static_cast<double>(kWeights[c]) / kWeightTotal;
                 const double expected_count = p * total;
@@ -1125,36 +1139,12 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
 
     // Pool several seeds so the result does not hinge on the internal structure of one RNG stream.
     const std::vector<uint32_t> seeds = {1U, 2U, 3U, 4U};
-    std::array<uint32_t, kActive> counts{};
-    uint32_t total_samples = 0U;
-    for (auto seed : seeds) {
-        auto picks = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, seed));
-        ASSERT_EQ(picks.size(), kBatch * kRows);
-        for (auto pick : picks) {
-            // Past kVocab is tile padding, which from_xtensor zero-fills -- reaching it would beat
-            // the weight-1 column outright, so this also guards the ragged-width scan bound.
-            ASSERT_LT(pick, kVocab) << "sampled index left the logical vocabulary";
-            ASSERT_NE(col_to_slot[pick], -1) << "sampled column " << pick << ", whose logit was " << kSuppressed;
-            ++counts[static_cast<uint32_t>(col_to_slot[pick])];
-            ++total_samples;
-        }
-    }
 
-    expect_counts_match_weights(counts, total_samples, "every-row path");
-
-    // A nonzero seed is contractually reproducible, and distinct seeds must actually decorrelate --
-    // both are properties the fused in-place chain could silently break.
-    auto first = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 1234U));
-    auto again = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 1234U));
-    EXPECT_EQ(first, again) << "same seed must reproduce the same samples";
-    auto other = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 5678U));
-    EXPECT_NE(first, other) << "different seeds must produce different samples";
-
-    // ---- the same guarantee through the positions + mask path ----
+    // ---- host-side data for the positions + mask path (device tensors are built per dtype) ----
     //
     // Position mode is a different program: its own work split (NC * Wt virtual tiles), its own RNG
     // stream layout, and the single-row writer path. Nothing above proves the distribution survives
-    // it, so it is re-proven here with the BATCH as the sample axis: 2050 entries x 4 seeds is the
+    // it, so it is re-proven with the BATCH as the sample axis: 2050 entries x 4 seeds is the
     // same 8200 samples, so the 5-sigma bounds carry over unchanged.
     //
     // Two tripwires ride along:
@@ -1190,27 +1180,61 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     xt::xarray<float> mask = xt::zeros<float>(mask_shape);
     mask(0, 0, 0, kDecoyCol) = 1e4F;
 
-    auto* device = &ttml::autograd::ctx().get_device();
-    auto pos_tensor = ttml::core::from_xtensor(pos_logits, device);
-    auto mask_tensor = ttml::core::from_xtensor(mask, device);
+    // Per dtype: the fp32 programs differ from the bf16 ones beyond formats (tile copies ride
+    // unpack-to-dest instead of SrcA), and the noise chain accumulates against fp32 rather than
+    // bf16 scores. The positions tensor is UINT32 either way, so one serves both runs.
     auto positions_tensor = make_positions(entry_positions);
+    for (const auto& [dtype_id, label] : kLogitsDtypes) {
+        const std::string dtype = label;
+        auto tensor_a = upload_as(a, dtype_id);
+        auto pos_tensor = upload_as(pos_logits, dtype_id);
+        auto mask_tensor = upload_as(mask, dtype_id);
 
-    std::array<uint32_t, kActive> pos_counts{};
-    uint32_t pos_total = 0U;
-    for (auto seed : seeds) {
-        auto picks = ttml::core::to_vector<uint32_t>(
-            ttml::metal::gumbel_sample(pos_tensor, 1.0F, seed, /* seed_axes */ {}, mask_tensor, positions_tensor));
-        ASSERT_EQ(picks.size(), kPosBatch);
-        for (auto pick : picks) {
-            ASSERT_LT(pick, kVocab) << "sampled index left the logical vocabulary";
-            ASSERT_NE(col_to_slot[pick], -1) << "sampled column " << pick << ": a wrong row (sentinel " << kSentinelCol
-                                             << "), an unmasked decoy (" << kDecoyCol << "), or a suppressed column";
-            ++pos_counts[static_cast<uint32_t>(col_to_slot[pick])];
-            ++pos_total;
+        std::array<uint32_t, kActive> counts{};
+        uint32_t total_samples = 0U;
+        for (auto seed : seeds) {
+            auto picks = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, seed));
+            ASSERT_EQ(picks.size(), kBatch * kRows) << dtype;
+            for (auto pick : picks) {
+                // Past kVocab is tile padding, which from_xtensor zero-fills -- reaching it would beat
+                // the weight-1 column outright, so this also guards the ragged-width scan bound.
+                ASSERT_LT(pick, kVocab) << dtype << ": sampled index left the logical vocabulary";
+                ASSERT_NE(col_to_slot[pick], -1)
+                    << dtype << ": sampled column " << pick << ", whose logit was " << kSuppressed;
+                ++counts[static_cast<uint32_t>(col_to_slot[pick])];
+                ++total_samples;
+            }
         }
-    }
 
-    expect_counts_match_weights(pos_counts, pos_total, "positions+mask");
+        expect_counts_match_weights(counts, total_samples, dtype + ": every-row path");
+
+        // A nonzero seed is contractually reproducible, and distinct seeds must actually decorrelate --
+        // both are properties the fused in-place chain could silently break.
+        auto first = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 1234U));
+        auto again = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 1234U));
+        EXPECT_EQ(first, again) << dtype << ": same seed must reproduce the same samples";
+        auto other = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 5678U));
+        EXPECT_NE(first, other) << dtype << ": different seeds must produce different samples";
+
+        // ---- the same guarantee through the positions + mask path (see the host-data comment) ----
+        std::array<uint32_t, kActive> pos_counts{};
+        uint32_t pos_total = 0U;
+        for (auto seed : seeds) {
+            auto picks = ttml::core::to_vector<uint32_t>(
+                ttml::metal::gumbel_sample(pos_tensor, 1.0F, seed, /* seed_axes */ {}, mask_tensor, positions_tensor));
+            ASSERT_EQ(picks.size(), kPosBatch) << dtype;
+            for (auto pick : picks) {
+                ASSERT_LT(pick, kVocab) << dtype << ": sampled index left the logical vocabulary";
+                ASSERT_NE(col_to_slot[pick], -1)
+                    << dtype << ": sampled column " << pick << ": a wrong row (sentinel " << kSentinelCol
+                    << "), an unmasked decoy (" << kDecoyCol << "), or a suppressed column";
+                ++pos_counts[static_cast<uint32_t>(col_to_slot[pick])];
+                ++pos_total;
+            }
+        }
+
+        expect_counts_match_weights(pos_counts, pos_total, dtype + ": positions+mask");
+    }
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingWideRowManyOwners) {
@@ -1394,4 +1418,148 @@ TEST_F(GumbelSampleOpTest, TestSamplingPreallocatedOutput) {
     EXPECT_EQ(out.buffer()->address(), preallocated_address) << "output must reuse the preallocated buffer";
     EXPECT_EQ(ttml::core::to_vector<uint32_t>(out), expected);
     EXPECT_EQ(ttml::core::to_vector<uint32_t>(preallocated), expected) << "samples must land in the caller's tensor";
+}
+
+namespace {
+
+// Test-only resurrection of the COMPOSITE sampler the fused op replaced (ttnn_fixed::sample before
+// this PR, single-device path): U ~ ttnn::rand on [2^-32, 1 - 2^-24], g = -log(-log(U)) via ttnn
+// eltwise ops, scores = logits / T + g [- mask], then untilize + ttnn::argmax(dim=3). Faithful to
+// the deleted implementation except the per-device mesh seeding, which a single-device test never
+// exercised. ttnn::rand and the fused op's rand_tile draw from DIFFERENT RNG streams, so a given
+// seed does not reproduce the same samples across the two -- parity is distributional (see the
+// test below), never per-sample.
+ttnn::Tensor composite_gumbel_sample(
+    const ttnn::Tensor& logits, float temperature, uint32_t seed, const std::optional<ttnn::Tensor>& mask) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    ttnn::Tensor scores = logits;
+    if (temperature > 0.0F) {
+        auto uniform = ttnn::rand(
+            logits.logical_shape(),
+            *device,
+            ttnn::DataType::FLOAT32,
+            ttnn::Layout::TILE,
+            ttnn::types::DRAM_MEMORY_CONFIG,
+            /* from */ 0x1p-32F,
+            /* to */ std::nextafterf(1.0F, 0.0F),
+            seed);
+        auto gumbel = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(uniform))));
+        if (gumbel.dtype() != logits.dtype()) {
+            gumbel = ttnn::typecast(gumbel, logits.dtype());
+        }
+        scores = ttnn::multiply(scores, 1.0F / temperature);
+        scores = ttnn::add(scores, gumbel);
+    }
+    if (mask.has_value()) {
+        scores = ttnn::subtract(scores, *mask);
+    }
+    return ttnn::argmax(ttnn::untilize(scores), /* dim */ 3, /* keepdim */ true);
+}
+
+}  // namespace
+
+TEST_F(GumbelSampleOpTest, TestSamplingNoisyMatchesCompositeDistribution) {
+    // Fused-versus-composite parity for the NOISY path. The composite was deleted from production
+    // when the fused op landed, so the reference lives above as a test-only helper. The two draw
+    // from different RNG streams, so parity is DISTRIBUTIONAL: both samplers run the same weighted
+    // logits at temperature 0.5 -- a NON-UNIT temperature, so the scaling semantics (1/T applied
+    // to the logits, not the noise) are part of what parity checks; at T = 0.5 the target follows
+    // softmax(logits / T), i.e. weights squared -- with a masked decoy column so the mask sign and
+    // its row broadcast are checked too. Each sampler must match the exact softmax target within
+    // 5 sigma, and the two samplers must match EACH OTHER within 5 sigma of a two-sample
+    // difference (variance doubled). The composite's exact ttnn::log versus the kernel's
+    // approximate log is invisible at this resolution -- see the limitation note on
+    // expect_counts_match_weights above.
+    constexpr uint32_t kBatch = 2;
+    constexpr uint32_t kRows = 1025;  // ragged: the last of 33 tile rows contributes one sample
+    constexpr uint32_t kVocab = 120;  // ragged: the last of 4 vocab tiles is partly padding
+    constexpr uint32_t kActive = 4;
+    constexpr std::array<uint32_t, kActive> kActiveCols = {5U, 52U, 70U, 115U};  // 4 tiles, both faces
+    constexpr std::array<float, kActive> kWeights = {8.0F, 4.0F, 2.0F, 1.0F};
+    constexpr float kSuppressed = -60.0F;
+    constexpr uint32_t kDecoyCol = 100U;  // outranks every active column unless the mask lands
+    constexpr float kTemperature = 0.5F;
+
+    xt::xarray<float>::shape_type shape = {kBatch, 1, kRows, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(kSuppressed);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t r = 0; r < kRows; ++r) {
+            for (uint32_t c = 0; c < kActive; ++c) {
+                a(b, 0, r, kActiveCols[c]) = std::log(kWeights[c]);
+            }
+            a(b, 0, r, kDecoyCol) = std::log(1000.0F);
+        }
+    }
+    xt::xarray<float> m = xt::zeros<float>(xt::xarray<float>::shape_type{1, 1, 1, kVocab});
+    m(0, 0, 0, kDecoyCol) = 1e4F;
+
+    // softmax(logits / T) over the active columns: at T = 0.5 the unnormalized masses are w^2.
+    // (bf16 rounding of log(w) shifts these by well under a tenth of a sigma; ignored.)
+    std::array<double, kActive> target_p{};
+    double mass_total = 0.0;
+    for (uint32_t c = 0; c < kActive; ++c) {
+        target_p[c] = std::pow(static_cast<double>(kWeights[c]), 1.0 / kTemperature);
+        mass_total += target_p[c];
+    }
+    for (auto& p : target_p) {
+        p /= mass_total;
+    }
+
+    std::vector<int> col_to_slot(kVocab, -1);
+    for (uint32_t c = 0; c < kActive; ++c) {
+        col_to_slot[kActiveCols[c]] = static_cast<int>(c);
+    }
+
+    const std::vector<uint32_t> seeds = {1U, 2U, 3U, 4U};
+    const double total = static_cast<double>(seeds.size()) * kBatch * kRows;
+
+    // Per dtype: this is the only DISTRIBUTIONAL check the fp32 noisy path gets besides the
+    // softmax-distribution test -- the other fp32 noisy coverage asserts bounds only. The composite
+    // typecasts its fp32 noise to the logits dtype, so it serves both runs unchanged.
+    for (const auto& [dtype_id, label] : kLogitsDtypes) {
+        const std::string dtype = label;
+        auto tensor_a = upload_as(a, dtype_id);
+        auto tensor_m = upload_as(m, dtype_id);
+
+        auto tally = [&](auto&& sampler, const std::string& what) {
+            std::array<uint32_t, kActive> counts{};
+            for (auto seed : seeds) {
+                auto picks = ttml::core::to_vector<uint32_t>(sampler(seed));
+                EXPECT_EQ(picks.size(), kBatch * kRows) << what;
+                for (auto pick : picks) {
+                    EXPECT_LT(pick, kVocab) << what << ": sampled index left the logical vocabulary";
+                    EXPECT_NE(col_to_slot[pick], -1)
+                        << what << ": sampled column " << pick << " -- masked decoy or suppressed column";
+                    if (pick < kVocab && col_to_slot[pick] != -1) {
+                        ++counts[static_cast<uint32_t>(col_to_slot[pick])];
+                    }
+                }
+            }
+            return counts;
+        };
+
+        const auto fused_counts = tally(
+            [&](uint32_t seed) {
+                return ttml::metal::gumbel_sample(tensor_a, kTemperature, seed, /* seed_axes */ {}, tensor_m);
+            },
+            dtype + " fused");
+        const auto composite_counts = tally(
+            [&](uint32_t seed) { return composite_gumbel_sample(tensor_a, kTemperature, seed, tensor_m); },
+            dtype + " composite");
+
+        for (uint32_t c = 0; c < kActive; ++c) {
+            const double sigma = std::sqrt(total * target_p[c] * (1.0 - target_p[c]));
+            EXPECT_NEAR(static_cast<double>(fused_counts[c]), target_p[c] * total, 5.0 * sigma)
+                << dtype << " fused vs softmax(logits/T): column " << kActiveCols[c];
+            EXPECT_NEAR(static_cast<double>(composite_counts[c]), target_p[c] * total, 5.0 * sigma)
+                << dtype << " composite vs softmax(logits/T): column " << kActiveCols[c];
+            // Two independent samples of the same multinomial: the difference has doubled variance.
+            EXPECT_NEAR(
+                static_cast<double>(fused_counts[c]),
+                static_cast<double>(composite_counts[c]),
+                5.0 * sigma * std::numbers::sqrt2)
+                << dtype << " fused vs composite: column " << kActiveCols[c];
+        }
+    }
 }

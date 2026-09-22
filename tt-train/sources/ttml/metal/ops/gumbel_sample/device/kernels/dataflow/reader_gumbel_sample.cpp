@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "position_window.hpp"  // PositionWindow / stage_position_window, shared with the writer
+#include "position_window.hpp"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
