@@ -12,6 +12,8 @@ candidate tokens from a single backbone position. Each step:
         h = layer(h, kv = target's last {sliding,full} layer KV)     #   into target KV
     h = norm(h)
     logits      = lm_head(h)                                         # next draft token (argmax)
+                  # or, when use_ordered_embeddings (E2B): a Centroid Masked
+                  # Embedding head over ~4096 candidates — see masked_embedding.py
     next_hidden = post_projection(h)                                 # recurrent hidden
 
 The decoder layers are ordinary ``Gemma4DecoderLayer``s (MoE disabled) run in
@@ -34,6 +36,7 @@ Constraints (first cut):
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.assistant.masked_embedding import Gemma4TTMaskedEmbedder
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import ccl_allgather
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
@@ -92,11 +95,9 @@ class Gemma4AssistantModel:
         self.vocab_size = self.text_args.vocab_size
         self.layer_types = list(self.text_args.layer_types)
 
-        if assistant_args.use_ordered_embeddings:
-            raise NotImplementedError(
-                "use_ordered_embeddings (centroid masked embedding) is not supported; "
-                "31B/12B assistants set it False."
-            )
+        # E2B's assistant replaces the dense lm_head with a Centroid Masked
+        # Embedding head (31B/12B assistants set this False and use lm_head).
+        self.use_cme = bool(assistant_args.use_ordered_embeddings)
 
         tp = mesh_config.tp if mesh_config else 1
         is_mesh = hasattr(mesh_device, "shape")
@@ -168,12 +169,29 @@ class Gemma4AssistantModel:
 
         self.pre_projection = _linear("pre_projection.weight", None)
         self.post_projection = _linear("post_projection.weight", None)
-        # lm_head tied to the assistant's own embed_tokens when a separate
-        # lm_head.weight isn't stored.
-        lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        self.lm_head = _linear(lm_key, col_mapper)
-        if self.pre_projection is None or self.post_projection is None or self.lm_head is None:
-            raise ValueError("Assistant checkpoint missing pre_projection / post_projection / lm_head weights")
+        # CME mode computes only ~4096 of the 262144 logits, so it needs a
+        # row-gatherable [V, H] copy of the output embedding instead of the dense
+        # [H, V] lm_head — building both would waste 134 MB of DRAM.
+        self.masked_embedding = None
+        self.lm_head = None
+        if self.use_cme:
+            self.masked_embedding = Gemma4TTMaskedEmbedder(
+                mesh_device=mesh_device,
+                assistant_args=assistant_args,
+                state_dict=state_dict,
+                dtype=dtype,
+                tensor_cache_path=tensor_cache_path,
+                mesh_config=mesh_config,
+            )
+        else:
+            # lm_head tied to the assistant's own embed_tokens when a separate
+            # lm_head.weight isn't stored.
+            lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
+            self.lm_head = _linear(lm_key, col_mapper)
+            if self.lm_head is None:
+                raise ValueError("Assistant checkpoint missing lm_head weights")
+        if self.pre_projection is None or self.post_projection is None:
+            raise ValueError("Assistant checkpoint missing pre_projection / post_projection weights")
 
     def _raw_token_embed(self, token_tt):
         """Target token embedding of a single token id -> [1,1,1,backbone] TILE.
@@ -204,12 +222,15 @@ class Gemma4AssistantModel:
                 for both types in the simple unbounded case).
             pos_uint32: [1,32] uint32 fixed position for RoPE lookup.
             pos_int32: [1] int32 fixed position for SDPA cur_pos.
-            return_logits: when False, skip the lm_head + its TP all-gather and
-                return ``(None, next_hidden)`` (used to isolate the lm_head/CCL
-                cost in timing harnesses).
+            return_logits: when False, skip the output head + its TP all-gather
+                and return ``(None, next_hidden)`` (used to isolate the
+                lm_head/CCL cost in timing harnesses).
 
         Returns:
-            (logits [1,1,1,vocab], next_hidden [1,1,1,backbone]).
+            (logits, next_hidden [1,1,1,backbone]). ``logits`` is a dense
+            [1,1,rows,vocab] tensor normally, or a compact ``CmeLogits`` pair
+            under Centroid Masked Embedding (E2B). ``spec_decode`` dispatches on
+            the type in ``_logits_to_host`` / ``_argmax_last``.
         """
         tok_embed = self._raw_token_embed(token_tt)
         inp = ttnn.concat([tok_embed, target_hidden], dim=-1)
@@ -238,9 +259,13 @@ class Gemma4AssistantModel:
 
         logits = None
         if return_logits:
-            logits = ttnn.linear(normed, self.lm_head)
-            if self.mesh_config is not None and self.mesh_config.tp > 1:
-                logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
+            if self.use_cme:
+                # Replicated weights, ~4096-wide output: no all-gather needed.
+                logits = self.masked_embedding.forward(normed)
+            else:
+                logits = ttnn.linear(normed, self.lm_head)
+                if self.mesh_config is not None and self.mesh_config.tp > 1:
+                    logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
         next_hidden = ttnn.linear(normed, self.post_projection)
         normed.deallocate(True)
