@@ -288,6 +288,32 @@ class TPGatedDeltaNet:
         # 27B runs a single chunk (unchanged); see model_config.gdn_conv_channel_chunks.
         self._conv_chunks = getattr(args, "gdn_conv_channel_chunks", 1)
         self._conv1d_wprep = None  # prepared depthwise weight (populated on first prefill call)
+        # Fused KDA depthwise-conv1d+SiLU+QKV-split (SP prefill, tp=1, K=4 only). Probe
+        # (2026-09-22, scripts/sp_kda_conv_probe.py): T=1024/C=6144, chunk=512, op-default
+        # compute config -> 316us vs 643us for the ttnn.conv1d path; PCC 0.99999, same max error.
+        self._use_kda_conv = (
+            bool(getattr(args, "sequence_parallel", False))
+            and self.mesh.get_num_devices() == 1
+            and self.K == 4
+            and os.environ.get("QWEN36_SP_KDA_CONV", "1") != "0"
+        )
+        if self._use_kda_conv:
+            # tw["conv_taps"][j] is already TILE/bf16/DRAM with logical volume qkv_dim_tp at
+            # tp=1 (shard_small's ShardTensorToMesh over a 1-device mesh is a no-op split), and
+            # tap order matches: tap j multiplies x[t-(K-1)+j] (same contract the decode FIR
+            # MAC path uses at tp.py:1217-1219). Reused as-is, no rebuild needed.
+            self._kda_taps = tw["conv_taps"]
+        # L1-resident DRAM-bound eltwise intermediates (SP prefill, tp=1): one-die T=1024 profile
+        # (2026-09-22, sp_prefill_reports/2026-09-22_one_die_T1024_kda) shows Unary (SiLU of z)
+        # 19.5us L1->DRAM, BinaryNg (gate multiply) 36us L1->DRAM, then the out-proj Matmul reads
+        # DRAM->DRAM (84us); also gates the KDA-conv row-major intermediates (qkv_rm/cs_rm) in
+        # _conv1d_prefill, replacing an 86us Untilize L1->DRAM. QWEN36_SP_L1_RES=0 opts out; tp>1
+        # and non-SP behavior is unchanged.
+        self._sp_l1_res = (
+            bool(getattr(args, "sequence_parallel", False))
+            and self.mesh.get_num_devices() == 1
+            and os.environ.get("QWEN36_SP_L1_RES", "1") != "0"
+        )
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
@@ -375,9 +401,13 @@ class TPGatedDeltaNet:
         """
         dev, K, C = self.mesh, self.K, self.qkv_dim_tp
         _dram = ttnn.DRAM_MEMORY_CONFIG
-        # Row-major conv intermediates stay in DRAM: in L1 they clash with conv1d's static CBs at
-        # T=1024 (L1 buffer at 628608 vs CB region end 701504, 2026-09-20).
-        _rm_mc = _dram
+        # Row-major conv intermediates: DRAM by default -- in L1 they clash with the native
+        # ttnn.conv1d path's static CBs at T=1024 (L1 buffer at 628608 vs CB region end 701504,
+        # 2026-09-20). That conv path is skipped entirely on _use_kda_conv (fused chunk kernel,
+        # no static CBs), so retry L1 there under the SP round-4 gate (one-die T=1024 profile,
+        # 2026-09-22: Untilize 86us L1->DRAM for qkv_rm + the cs_rm carry rows). KDA op OUTPUTS
+        # (q,k,v) stay DRAM regardless -- the chunk kernel needs L1 free.
+        _rm_mc = ttnn.L1_MEMORY_CONFIG if (self._use_kda_conv and self._sp_l1_res) else _dram
         Lin = (K - 1) + T
         # Single untilize of qkv (the ONE untilize): slice/concat/conv all want ROW_MAJOR, and doing it
         # once here avoids concat's untilize->RM-concat->retilize path (that path fires whenever any TILE
@@ -394,6 +424,23 @@ class TPGatedDeltaNet:
             )
         else:
             cs_rm = ttnn.to_layout(conv_state, ttnn.ROW_MAJOR_LAYOUT, memory_config=_rm_mc)
+        if self._use_kda_conv:
+            # Fused depthwise-conv1d+SiLU+QKV-split kernel; replaces the concat/conv1d/silu/slice
+            # path below entirely (see probe numbers on self._use_kda_conv, __init__). op default
+            # compute config is HiFi4; it rejects packer_l1_acc=True and math_approx_mode=True.
+            kd, vd = self.key_dim_tp, self.value_dim_tp
+            q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+                qkv_rm,
+                cs_rm,
+                *self._kda_taps,
+                kd,
+                kd,
+                vd,
+                program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=512),
+            )
+            ttnn.deallocate(cs_rm)
+            ttnn.deallocate(qkv_rm)
+            return [q, k, v], new_state
         xin = ttnn.concat([cs_rm, qkv_rm], dim=1, memory_config=_rm_mc)
         ttnn.deallocate(cs_rm)
         ttnn.deallocate(qkv_rm)
@@ -647,7 +694,11 @@ class TPGatedDeltaNet:
         if self._gdn_conv1d and valid_len is None:
             # Native depthwise ttnn.conv1d (masked buckets keep the MAC FIR: valid_len new_state differs)
             outs, conv_new_state = self._conv1d_prefill(qkv, T, _cstate)
+            # KDA path (see _conv1d_prefill) only fires here, valid_len is None; guards the outs
+            # unpack below against the FIR branch's single-element outs=[conv].
+            _used_kda = self._use_kda_conv
         else:
+            _used_kda = False
             conv, conv_new_state = _causal_conv1d_fir(
                 qkv,
                 None,
@@ -667,7 +718,18 @@ class TPGatedDeltaNet:
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
         kd = self.key_dim_tp
         vd = self.value_dim_tp
-        if self._gdn_flat_qkv:
+        if _used_kda:
+            # KDA fused conv already returns split, activated q/k/v (see _conv1d_prefill); skip
+            # _assemble_qkv_from_chunks and the concat/slice path entirely.
+            q, k, v = outs
+            if self._gdn_flat_qkv:
+                _qkv_head_dims = (Nk, Dk, Nv, Dv)
+            else:
+                q = ttnn.reshape(q, (1, T, Nk, Dk))
+                k = ttnn.reshape(k, (1, T, Nk, Dk))
+                v = ttnn.reshape(v, (1, T, Nv, Dv))
+                _qkv_head_dims = None
+        elif self._gdn_flat_qkv:
             # Flat q/k/v: adapter splits heads inside untilize. `outs` is n_cc equal-width chunks;
             # assemble each of q/k/v from the minimal per-chunk pieces (whole chunk -> no op, range
             # inside one chunk -> one slice, range spanning chunks -> per-chunk slices + concat)
@@ -769,7 +831,12 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
-        gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG)
+        # SP prefill (tp=1): keep SiLU(z) and the gate multiply in L1 instead of DRAM (one-die
+        # T=1024 profile, 2026-09-22: Unary 19.5us + BinaryNg 36us L1->DRAM); the out-proj matmul
+        # below reads whatever memory config `gated` lands in, so this also removes its DRAM read.
+        # Default TP path (and non-SP) unchanged.
+        _gated_mc = _L1 if self._sp_l1_res else ttnn.DRAM_MEMORY_CONFIG
+        gated = _silu_mul(out_f, z, _gated_mc)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
         # Prefill: fused out-proj matmul + reduce-scatter (matmul_reduce_scatter_async), flag-gated.

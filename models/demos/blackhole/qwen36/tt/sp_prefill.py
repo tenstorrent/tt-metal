@@ -172,6 +172,35 @@ class SPPrefill:
     ):
         # fifo_bytes overrides the per-mode default (128 direct / 64KiB async) -- e.g. a smaller
         # async FIFO if 64KiB clashes with other L1 users (see the class docstring).
+
+        # ---- QWEN36_SP_SOCKET_FIFO_MB experiment (opt-in; unset/0 leaves everything below
+        # byte-identical to before this flag existed). Goal: give each socket a receiver-side
+        # FIFO at least as large as one layer's payload (GDN state 1MB + conv 36KB; KV prefix up
+        # to 6MB on the die2->die3 edge) so a send can drain into the FIFO without blocking on
+        # the receiver's matching recv -- unlike today's direct-mode rendezvous (128B FIFO, send
+        # blocks device-side until recv is issued; see the class docstring and
+        # send_direct_async_op_device_operation.cpp). That requires "async" mode: direct-mode's
+        # send_direct_async/recv_direct_async hard-require L1 storage (TT_FATAL "send_direct_async
+        # requires an L1 socket storage type" / same for recv) and only ever push a 64B handshake
+        # page through the FIFO, not the tensor itself -- send_async/recv_async are the ops that
+        # actually stream tensor data through the FIFO (fifo_size need only be >= one tensor page,
+        # per validate_fifo_size in send_recv_utils.cpp; N MB here is deliberately oversized to
+        # cover a whole layer's payload, not the streaming minimum). Storage moves to DRAM
+        # (socket_storage_type=DRAM) instead of L1 so a multi-MB FIFO doesn't reserve L1 address
+        # space on every worker core (the collision the direct-mode default was chosen to avoid).
+        _fifo_mb = float(os.environ.get("QWEN36_SP_SOCKET_FIFO_MB", "0") or "0")
+        socket_storage = ttnn.BufferType.L1
+        if _fifo_mb > 0:
+            state_socket_mode = "async"
+            kv_socket_mode = "async"
+            state_fifo_bytes = max(2 * 1024 * 1024, int(_fifo_mb * 1024 * 1024))
+            kv_fifo_bytes = int(_fifo_mb * 1024 * 1024)
+            socket_storage = ttnn.BufferType.DRAM
+            logger.info(
+                f"[sp] socket FIFO experiment: mode=async, state_fifo={state_fifo_bytes}B, "
+                f"kv_fifo={kv_fifo_bytes}B, storage=DRAM"
+            )
+
         assert state_socket_mode in ("direct", "async") and kv_socket_mode in ("direct", "async")
         self.state_socket_mode = state_socket_mode
         self.kv_socket_mode = kv_socket_mode
@@ -265,7 +294,7 @@ class SPPrefill:
                         self.subs[d + 1],
                         _STATE_SEND_CORES,
                         _STATE_RECV_CORES,
-                        ttnn.BufferType.L1,
+                        socket_storage,
                         state_fifo_bytes,
                     )
                 )
@@ -275,7 +304,7 @@ class SPPrefill:
                         self.subs[d + 1],
                         _KV_SEND_CORES,
                         _KV_RECV_CORES,
-                        ttnn.BufferType.L1,
+                        socket_storage,
                         kv_fifo_bytes,
                     )
                 )
@@ -291,6 +320,8 @@ class SPPrefill:
             self._sin_buf = [None] * n_spans
             self._sel_buf = None  # persistent one-hot last-position selector (last die's tail only)
             self._traced_logits = None  # persistent device tensor the trace writes logits into (last die)
+            self._traced_tok = None  # persistent device tensor the trace writes the on-device argmax token into
+            self.last_first_token = None  # set by prefill_traced(): the device-computed first token
         except Exception:
             self.close()
             raise
@@ -433,8 +464,11 @@ class SPPrefill:
 
         traced=True: use the PERSISTENT one-hot selector (span_len -- and so the selected
         position -- never changes, so it needs no per-call update) and return the raw device
-        logits tensor (no to_torch: that is a host readback, not allowed inside a captured
-        trace). The caller reads it back AFTER replay, in prefill_traced().
+        logits tensor plus an on-device argmax token tensor (no to_torch: that is a host
+        readback, not allowed inside a captured trace). The caller reads both back AFTER
+        replay, in prefill_traced(). Row 0 of logits (and so of the argmax) is the real
+        last-token row -- see the sel one-hot construction in capture()/here: sel[..., T-1] =
+        1.0 selects the last position into row 0 of the 1-row matmul result.
         """
         T = self.span_len
         if traced:
@@ -455,8 +489,16 @@ class SPPrefill:
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = model.norm(x_last, mode=Mode.PREFILL)
         logits = model._lm_head(x_last)
+        # Always run the to_layout+argmax pipeline (not just when traced) so the untraced warmup
+        # call capture() makes before begin_trace_capture (self.prefill(tokens), traced=False)
+        # compiles these programs into the cache -- trace capture cannot load new binaries
+        # (TT_FATAL !is_capturing_trace) and would otherwise fail the first time this runs.
+        logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        tok = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
+        ttnn.deallocate(logits_rm)
         if traced:
-            return logits
+            return logits, tok
+        ttnn.deallocate(tok)
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.device, dim=0))
         return lt[0].reshape(-1)[: model.args.vocab_size]
 
@@ -667,7 +709,7 @@ class SPPrefill:
                 ttnn.end_trace_capture(self.subs[d], opened[d], cq_id=0)
                 self._trace_ids[d] = opened[d]
             if last in dies:
-                self._traced_logits = out
+                self._traced_logits, self._traced_tok = out
         except Exception:
             self._safe_end_traces(opened)
             raise
@@ -685,7 +727,10 @@ class SPPrefill:
         """Replay the captured per-die traces on a new prompt. capture() must have run first.
 
         Returns (logits, wavefront_s, total_s): wavefront_s is device time (all 4 traces launched
-        + synchronized); total_s additionally includes the host readback + argmax-ready logits.
+        + synchronized); total_s additionally includes only the small on-device-argmax token
+        readback (time-to-first-token). The full [1,1,32,vocab] logits readback used for the
+        return value and for PCC checks happens AFTER total_s is stamped, so it does not count
+        against either timing; it also cross-checks the on-device argmax via an assert.
         """
         assert all(t is not None for t in self._trace_ids), "capture() must run before prefill_traced()"
         assert tokens.shape[0] == 1, "SPPrefill is B=1 only (batch_idx=0/user_id=0 throughout)"
@@ -708,10 +753,20 @@ class SPPrefill:
         for d in range(self.n_spans):
             ttnn.synchronize_device(self.subs[d])
         t1 = time.perf_counter()
+        tok_t = ttnn.to_torch(self._traced_tok, mesh_composer=ttnn.ConcatMeshToTensor(self.subs[-1], dim=0))
+        first_token = int(tok_t.reshape(-1)[0])
+        t2 = time.perf_counter()
+
+        # Outside the timed window: full-logits readback, kept for PCC checks and to cross-check
+        # the on-device argmax computed above.
         lt = ttnn.to_torch(self._traced_logits, mesh_composer=ttnn.ConcatMeshToTensor(self.subs[-1], dim=0))
         logits = lt[0].reshape(-1)[: self.args_list[-1].vocab_size].float()
-        _ = int(torch.argmax(logits))
-        t2 = time.perf_counter()
+        host_argmax = int(torch.argmax(logits))
+        assert (
+            host_argmax == first_token
+        ), f"[SPPrefill] traced ttft: device argmax {first_token} != host argmax {host_argmax}"
+        self.last_first_token = first_token
+        logger.info(f"[traced ttft] first_token(device)={first_token} host_argmax={host_argmax}")
         return logits, (t1 - t0), (t2 - t0)
 
     def export_state_host(self):

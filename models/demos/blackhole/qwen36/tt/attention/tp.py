@@ -772,17 +772,34 @@ class TPAttention:
 
         # chunk_start_idx % q_chunk_size == 0; FLEXIBLE path uses one program per trace.
         # q/k_chunk=128 is valid (chunk_start always divisible by 2048) and faster than 64/256.
-        if chunk_start_idx_tensor is not None:
-            qk_chunk = 128
+        sp_mode = getattr(self.args, "sequence_parallel", False) and self.mesh.get_num_devices() == 1
+        sp_sdpa_legacy = os.environ.get("QWEN36_SP_SDPA_LEGACY", "0") == "1"
+        if (
+            sp_mode
+            and not sp_sdpa_legacy
+            and chunk_start_idx_tensor is None
+            and S % 128 == 0
+            and chunk_start_idx % 256 == 0
+        ):
+            # SP (tp=1, 1024-token span): sweep 2026-09-22 (scripts/sp_sdpa_sweep.py) 1198 -> 703 us
+            # on the 4096-key die, PCC unchanged; the op is DRAM-bound on K/V re-reads per q chunk;
+            # 8x8 beats the full grid at q_chunk=128.
+            q_chunk, k_chunk = 128, 256
+            grid = (8, 8)
         else:
-            cap = 128 if S >= 2048 else 64  # 128 beats 256
-            qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
-        # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
+            if chunk_start_idx_tensor is not None:
+                qk_chunk = 128
+            else:
+                cap = 128 if S >= 2048 else 64  # 128 beats 256
+                qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
+            q_chunk = k_chunk = qk_chunk
+            # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
+            grid = self.mesh.compute_with_storage_grid_size()
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=grid,
             exp_approx_mode=False,
-            q_chunk_size=qk_chunk,
-            k_chunk_size=qk_chunk,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
         )
 
         # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality)

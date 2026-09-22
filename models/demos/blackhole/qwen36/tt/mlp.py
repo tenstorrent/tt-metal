@@ -168,6 +168,14 @@ class Qwen36MLP:
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
         self._sequence_parallel = getattr(args, "sequence_parallel", False)
+        # L1-resident gate*up multiply (SP prefill, tp=1): one-die T=1024 profile (2026-09-22,
+        # sp_prefill_reports/2026-09-22_one_die_T1024_kda) shows BinaryNg 106us L1->DRAM for the
+        # SiLU(gate)*up multiply, then the down-proj Matmul reads it back DRAM->L1 (94us). Keeping
+        # the multiply output in L1 avoids that round trip. QWEN36_SP_L1_RES=0 opts out; TP>1 and
+        # non-SP behavior is unchanged.
+        self._sp_l1_res = (
+            self._sequence_parallel and self.num_devices == 1 and os.environ.get("QWEN36_SP_L1_RES", "1") != "0"
+        )
         # 1D-decode (default): small-grid 1D matmuls beat the ~80-core DRAM-sharded grid on the
         # bandwidth-bound skinny decode MLP matmuls (see test_mlp_matmul_sweep). Forces interleaved weights.
         self._mlp_1d_decode = args is not None and getattr(args, "mlp_1d_decode", False)
@@ -315,12 +323,16 @@ class Qwen36MLP:
             w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
             _silu_fused = True
 
-        # gated activation (down-proj INPUT): L1 in decode, DRAM in prefill. The L1 win is OUTPUT-only;
-        # keeping both down input (hidden) and output (partial) in L1 at seq 2048 overflows L1.
+        # gated activation (down-proj INPUT): L1 in decode, DRAM in prefill (default TP path). The
+        # L1 win is OUTPUT-only; keeping both down input (hidden) and output (partial) in L1 at seq
+        # 2048 overflows L1. SP prefill (tp=1) exception below (self._sp_l1_res).
         _prefill_tuned = x.shape[-2] > ttnn.TILE_SIZE and _silu_fused
         # gate * up (skipped when _fused_gu already produced `hidden` with SwiGLU in-kernel).
         if not _fused_gu:
-            mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
+            # SP prefill (tp=1): keep hidden in L1 instead of DRAM (see self._sp_l1_res comment in
+            # __init__ for the profile numbers). Default TP path (mc = DRAM) unchanged.
+            _l1_res_prefill = self._sp_l1_res and x.shape[-2] > ttnn.TILE_SIZE
+            mc_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _l1_res_prefill) else mc
             # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
             if gate_needs_silu:
                 # SiLU fused into the packer doubles the gate matmul time (179 vs 91 us @1024x2048x6144,
