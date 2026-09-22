@@ -137,15 +137,27 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
 
 
-def _close_device_mesh_quietly() -> None:
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
+@pytest.fixture(scope="session")
+def reset_metal_env_quietly():
+    """`reset_metal_env_quietly()` -- `ttml.reset_metal_env()`, ignoring errors so cleanup
+    never hides the failure that triggered it.
+
+    A fixture because test modules can't import from this file: ``--import-mode=importlib``
+    loads it as ``tt-train.tests.python.conftest``, so ``from conftest import ...`` would
+    load a second copy. Session-scoped so fixtures of any scope can request it.
+    """
+
+    def reset() -> None:
+        try:
+            ttml.reset_metal_env()
+        except Exception:  # noqa: BLE001
+            pass
+
+    return reset
 
 
 @pytest.fixture(scope="module")
-def tp_mesh():
+def tp_mesh(reset_metal_env_quietly):
     """A ``[1, 2]`` mesh with axes ``("dp", "tp")``, per requesting module.
 
     Skips the requesting tests on a host with too few devices for the shape. A host
@@ -156,7 +168,11 @@ def tp_mesh():
     dp_expected, tp_expected = TP_MESH_SHAPE
     _skip_if_host_too_small(TP_MESH_SHAPE, "tensor-parallel tests")
     previous_mgd = _ensure_mgd_path(TP_MESH_SHAPE)
-    _close_device_mesh_quietly()
+    # The host-size check above already created the process-wide MetalEnv, and a MetalEnv
+    # reads TT_MESH_GRAPH_DESC_PATH only once, when it is created. Drop it now that
+    # _ensure_mgd_path has set the descriptor, so the open below builds a new one from it;
+    # otherwise the fabric control plane is built from the wrong descriptor.
+    ttml.reset_metal_env()
     try:
         ttml.open_device_mesh(ttml.Mesh(TP_MESH_SHAPE, ("dp", "tp")))
         ctx = ttml.autograd.AutoContext.get_instance()
@@ -176,11 +192,11 @@ def tp_mesh():
         else:
             ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
     except Exception:  # noqa: BLE001
-        _close_device_mesh_quietly()
+        reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
 
     yield ttml.mesh()
 
-    _close_device_mesh_quietly()
+    reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)

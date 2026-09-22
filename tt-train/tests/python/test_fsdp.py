@@ -85,22 +85,6 @@ def _detect_arch() -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _close_device_quietly() -> None:
-    try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so teardown never masks a real failure."""
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
     """If ``TT_MESH_GRAPH_DESC_PATH`` isn't set, point it at a bundled MGD.
 
@@ -135,7 +119,7 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
 
 
 @pytest.fixture(scope="module")
-def fsdp_mesh(skip_if_host_too_small):
+def fsdp_mesh(skip_if_host_too_small, reset_metal_env_quietly):
     """Open a 2D mesh ``[1, FSDP_AXIS_SIZE]`` with axes ``("dp", "fsdp")``.
 
     A 2D layout with ``dp=1`` keeps the same fixture re-usable for HSDP
@@ -152,12 +136,16 @@ def fsdp_mesh(skip_if_host_too_small):
     skip_if_host_too_small(shape, "FSDP tests")
     previous_mgd = _ensure_mgd_path(shape)
 
-    _close_device_quietly()
+    # The host-size check above already created the process-wide MetalEnv, and a MetalEnv
+    # reads TT_MESH_GRAPH_DESC_PATH only once, when it is created. Drop it now that
+    # _ensure_mgd_path has set the descriptor, so the open below builds a new one from it;
+    # otherwise the fabric control plane is built from the wrong descriptor.
+    ttml.reset_metal_env()
     try:
         m = ttml.Mesh(shape, ("dp", "fsdp"))
         ttml.open_device_mesh(m)
     except Exception:  # noqa: BLE001
-        _close_device_mesh_quietly()
+        reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
 
@@ -167,7 +155,7 @@ def fsdp_mesh(skip_if_host_too_small):
     # single-device handle if they need to. The global ``ttml._mesh._mesh``
     # is reset so ``ttml.mesh()`` doesn't return a handle to a closed
     # device for any test that runs after this module.
-    _close_device_mesh_quietly()
+    reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)
 
 

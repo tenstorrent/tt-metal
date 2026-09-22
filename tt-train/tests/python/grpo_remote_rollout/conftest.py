@@ -7,6 +7,7 @@ before any device opens."""
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 from pathlib import Path
@@ -22,6 +23,38 @@ EXAMPLES_DIR = REPO_ROOT / "tt-train" / "sources" / "examples"
 for _p in (str(HERE), str(EXAMPLES_DIR), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Destroy each module's tt_transformers model graph before the next module runs.
+
+    The graph -- device tensors, ``TT_CCL`` global semaphores, the mesh's program
+    cache -- frees device resources from its destructors and must be destroyed while
+    the ``MetalEnv`` it was created under is still alive. Left for a later collection,
+    it outlives a ``ttml.reset_metal_env`` in the next module and segfaults.
+
+    Two things keep it reachable. ``ModelArgs`` decorates ~30 instance methods with
+    ``functools.lru_cache``; the wrapper lives on the class and keys on ``self``, so
+    every ``ModelArgs`` these tests build stays alive until the caches are cleared
+    (tt_transformers is outside tt-train, so this is the closest place to fix it).
+    And pytest keeps the last test's fixture values in ``item.funcargs`` until after
+    every teardown has run, so this can't be a module-fixture teardown: the graph is
+    only unreachable once the protocol for that item returns.
+    """
+    yield
+    if nextitem is not None and getattr(nextitem, "module", None) is getattr(item, "module", None):
+        return
+    try:
+        from models.tt_transformers.tt.model_config import ModelArgs
+    except Exception:  # noqa: BLE001
+        pass
+    else:
+        for attr in vars(ModelArgs).values():
+            cache_clear = getattr(attr, "cache_clear", None)
+            if callable(cache_clear):
+                cache_clear()
+    gc.collect()
 
 
 @pytest.fixture(scope="session")

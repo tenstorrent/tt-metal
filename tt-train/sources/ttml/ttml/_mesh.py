@@ -212,6 +212,12 @@ def close_device_mesh() -> None:
         _mesh = None
 
 
+def reset_metal_env() -> None:
+    """Close the device mesh and release ownership of the process-global `MetalEnv`."""
+    close_device_mesh()
+    ttml.core.distributed.release_metal_env()
+
+
 def maybe_mesh() -> Mesh | None:
     """Return the active device mesh, or ``None`` if no mesh has been opened."""
     global _mesh
