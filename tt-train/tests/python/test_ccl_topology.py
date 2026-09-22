@@ -34,7 +34,6 @@ import pytest
 import ttnn
 import ttml
 
-
 pytestmark = pytest.mark.requires_device
 
 # Default mesh for the main tests: 2x2 with both axes addressable as the
@@ -71,15 +70,6 @@ def _detect_arch() -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Multi-device mesh fixtures
 # ---------------------------------------------------------------------------
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so it is safe on the pre-open and teardown paths."""
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
@@ -138,29 +128,37 @@ def _skip_if_unsupported(shape: tuple[int, ...], skip_if_host_too_small: Callabl
         )
 
 
-def _open_mesh_or_skip(shape: tuple[int, ...], skip_if_host_too_small: Callable[[Sequence[int], str], None]):
+def _open_mesh_or_skip(
+    shape: tuple[int, ...],
+    skip_if_host_too_small: Callable[[Sequence[int], str], None],
+    reset_metal_env_quietly: Callable[[], None],
+):
     """Open a fresh mesh of ``shape``, skipping only if there are not enough devices.
 
     Returns the previous MGD path so a teardown can restore it.
     """
     _skip_if_unsupported(shape, skip_if_host_too_small)
     previous_mgd = _ensure_mgd_path(shape)
-    _close_device_mesh_quietly()
+    # The host-size check above already created the process-wide MetalEnv, and a MetalEnv
+    # reads TT_MESH_GRAPH_DESC_PATH only once, when it is created. Drop it now that
+    # _ensure_mgd_path has set the descriptor, so the open below builds a new one from it;
+    # otherwise the fabric control plane is built from the wrong descriptor.
+    ttml.reset_metal_env()
     try:
         ttml.open_device_mesh(shape)
     except Exception:  # noqa: BLE001
-        _close_device_mesh_quietly()
+        reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
     return previous_mgd
 
 
 @pytest.fixture(scope="module")
-def ccl_mesh(skip_if_host_too_small):
+def ccl_mesh(skip_if_host_too_small, reset_metal_env_quietly):
     """Open the default 2x2 mesh used by the main test classes."""
-    previous_mgd = _open_mesh_or_skip(MESH_SHAPE_2X2, skip_if_host_too_small)
+    previous_mgd = _open_mesh_or_skip(MESH_SHAPE_2X2, skip_if_host_too_small, reset_metal_env_quietly)
     yield ttml.mesh()
-    _close_device_mesh_quietly()
+    reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)
 
 

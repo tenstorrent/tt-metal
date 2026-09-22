@@ -122,29 +122,13 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
 
 
-def _close_device_quietly() -> None:
-    try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so teardown never masks a real failure."""
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _mesh_shape_from_env() -> Tuple[int, ...]:
     raw = os.environ.get("SAMPLE_SEEDING_MESH", _DEFAULT_MESH)
     return tuple(int(x) for x in raw.replace(" ", "").split(","))
 
 
 @pytest.fixture(scope="module")
-def seeding_mesh(skip_if_host_too_small):
+def seeding_mesh(skip_if_host_too_small, reset_metal_env_quietly):
     """Open ONE mesh (shape from ``SAMPLE_SEEDING_MESH``) for all seeding scenarios.
 
     Skips the whole module if the host has too few devices for the shape. A host
@@ -155,18 +139,22 @@ def seeding_mesh(skip_if_host_too_small):
     skip_if_host_too_small(shape, "sample-seeding tests")
 
     previous_mgd = _ensure_mgd_path(shape)
-    _close_device_quietly()
+    # The host-size check above already created the process-wide MetalEnv, and a MetalEnv
+    # reads TT_MESH_GRAPH_DESC_PATH only once, when it is created. Drop it now that
+    # _ensure_mgd_path has set the descriptor, so the open below builds a new one from it;
+    # otherwise the fabric control plane is built from the wrong descriptor.
+    ttml.reset_metal_env()
     try:
         ttml.open_device_mesh(shape)
     except BaseException:  # noqa: BLE001
-        _close_device_mesh_quietly()
+        reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
 
     ttml.autograd.AutoContext.get_instance().set_seed(SEED)
     yield shape
 
-    _close_device_mesh_quietly()
+    reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)
 
 
