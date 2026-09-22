@@ -41,7 +41,7 @@ uint32_t choose_num_dest_write_slots(
     IDevice* device,
     bool pages_noc_aligned,
     bool can_use_dual_kernel,
-    uint32_t dfb_size0,
+    uint32_t scratch_size0,
     uint32_t dest_slot_size_bytes) {
     if (pages_noc_aligned) {
         return 1u;
@@ -59,16 +59,16 @@ uint32_t choose_num_dest_write_slots(
     const uint32_t l1_available = l1_ceiling - l1_base;
 
     const uint32_t num_kernel_copies = can_use_dual_kernel ? 2u : 1u;
-    const uint32_t source_dfb_bytes = dfb_size0 * 2u * num_kernel_copies;
-    const uint32_t min_dest_dfb_bytes = dest_slot_size_bytes * num_kernel_copies;
+    const uint32_t source_scratch_bytes = scratch_size0 * 2u * num_kernel_copies;
+    const uint32_t min_dest_scratch_bytes = dest_slot_size_bytes * num_kernel_copies;
     TT_FATAL(
-        l1_available >= source_dfb_bytes + min_dest_dfb_bytes,
+        l1_available >= source_scratch_bytes + min_dest_scratch_bytes,
         "RM reshape dest staging does not fit in L1: need at least {} B dest + {} B source, have {} B",
-        min_dest_dfb_bytes,
-        source_dfb_bytes,
+        min_dest_scratch_bytes,
+        source_scratch_bytes,
         l1_available);
 
-    const uint32_t max_slots = (l1_available - source_dfb_bytes) / (dest_slot_size_bytes * num_kernel_copies);
+    const uint32_t max_slots = (l1_available - source_scratch_bytes) / (dest_slot_size_bytes * num_kernel_copies);
     return std::max(1u, std::min(small_dest_write_slots, max_slots));
 }
 }  // namespace
@@ -113,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
         responsibility++;
     }
-    const uint32_t dfb_size0 = source_read_size_bytes;
+    const uint32_t scratch_size0 = source_read_size_bytes;
     const uint32_t dest_slot_size_bytes = ((dest_page_size_bytes - 1) & MASK_64) + 80;
 
     const bool pages_noc_aligned = (source_page_size_bytes % noc_page_alignment_bytes == 0) &&
@@ -126,9 +126,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     // but doesn't affect the size of writes hitting DRAM.
     const bool can_use_dual_kernel = pages_divisible && (dest_noc_aligned || !dst_buffer->is_dram());
 
-    const uint32_t num_dest_write_slots =
-        choose_num_dest_write_slots(device, pages_noc_aligned, can_use_dual_kernel, dfb_size0, dest_slot_size_bytes);
-    const uint32_t dfb_size1 = dest_slot_size_bytes * num_dest_write_slots;
+    const uint32_t num_dest_write_slots = choose_num_dest_write_slots(
+        device, pages_noc_aligned, can_use_dual_kernel, scratch_size0, dest_slot_size_bytes);
+    const uint32_t scratch_size1 = dest_slot_size_bytes * num_dest_write_slots;
 
     const uint32_t write_alignment =
         dst_buffer->is_dram() ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
@@ -208,12 +208,12 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     ProgramSpec spec;
     spec.name = "reshape_view_rm";
     spec.kernels.push_back(make_rm_kernel(READER, create_reader_datamovement_config(device->arch()), SRC0, SRC1));
-    spec.scratchpads.push_back(make_scratch(SRC0, dfb_size0, 2));
-    spec.scratchpads.push_back(make_scratch(SRC1, dfb_size1, 1));
+    spec.scratchpads.push_back(make_scratch(SRC0, scratch_size0, 2));
+    spec.scratchpads.push_back(make_scratch(SRC1, scratch_size1, 1));
     if (can_use_dual_kernel) {
         spec.kernels.push_back(make_rm_kernel(WRITER, create_writer_datamovement_config(device->arch()), SRC2, SRC3));
-        spec.scratchpads.push_back(make_scratch(SRC2, dfb_size0, 2));
-        spec.scratchpads.push_back(make_scratch(SRC3, dfb_size1, 1));
+        spec.scratchpads.push_back(make_scratch(SRC2, scratch_size0, 2));
+        spec.scratchpads.push_back(make_scratch(SRC3, scratch_size1, 1));
     }
     spec.tensor_parameters = {
         TensorParameter{.unique_id = SRC, .spec = input_mt.tensor_spec()},
