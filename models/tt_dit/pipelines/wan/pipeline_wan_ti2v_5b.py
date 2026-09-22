@@ -5,8 +5,7 @@
 
 Dense 5B + Wan2.2-VAE (48-ch residual decoder, patch_size=2).
 The DiT matmul tables are keyed on the shapes and grids the model actually
-requests (see ``_register_5b_matmul_tables``); entries marked PRE-SWEEP are
-placeholders awaiting the block-size sweep.
+requests and carry swept blockings (see ``_register_5b_matmul_tables``).
 """
 
 import ttnn
@@ -42,15 +41,18 @@ def _register_5b_matmul_tables() -> None:
     The earlier version of this table registered everything under "11x10" at M in (2368, 2720,
     3488, 9472, 13952), none of which the model requests, so no entry was ever reached.
 
-    Entries marked PRE-SWEEP reproduce exactly what the lookup resolved to before they existed (the
-    rule-engine pick, or the default), so registering them changes keys, not kernels. Replace them
-    with the winners of the eleven 5B shapes in ``sweep_mm_block_sizes.py``::
+    Blockings are the winners of the per-shape sweep in ``sweep_mm_block_sizes.py`` (the eleven 5B
+    shapes listed there; the orchestrator prints each winner as a PASTE line in this file's tuple
+    format)::
 
         pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep -sv --timeout=0 \\
           -k "bh_4x8_sp1_tp0 and (3072_2304 or 3072_768 or 3072_3584 or 3584_3072 \\
                                   or 3072_192 or 512_3072_1536)"
 
-    The orchestrator prints each winner as a PASTE line in this file's tuple format.
+    An entry marked PRE-SWEEP is not swept yet and reproduces exactly what the lookup resolved to
+    before the table existed, so it changes the key, not the kernel. Note the sweep compiles one
+    program per combo and the kernel JIT cache keeps every one (~12 GB per shape under
+    ``~/.cache/tt-metal-cache``, on top of ~3 GB of profiler capture); budget disk accordingly.
     """
     dim, ffn = 3072, 14336
     dim_tp = dim // 4
@@ -60,40 +62,44 @@ def _register_5b_matmul_tables() -> None:
     prompt_seq = 512
     m_720p, m_480p = 2336, 1024
 
+    # Swept 2026-09-22 on this Galaxy (sweep_mm_block_sizes.py, DEVICE KERNEL DURATION, ~330-380
+    # L1-feasible combos per shape). "was" is the blocking the lookup resolved to before the table
+    # existed: the AGMM v3 / MMRS v2.3 rule pick where one fired, the warned 8x8x8 default otherwise.
     register_matmul_configs(
         {
             # AGMM (ColumnParallelLinear, TP ring): global K, 12x9 worker grid.
             "12x9": {
                 # attn1.to_qkv (chunks=3, approx math)
-                (m_480p, dim, qkv_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned 8x8x8 default
-                (m_720p, dim, qkv_tp): (4, 8, 8, (2, 2)),  # PRE-SWEEP: AGMM v3 rule pick
+                (m_480p, dim, qkv_tp): (3, 8, 16, (1, 4)),  # 149.5 us; was (8, 8, 8) 160.2 us
+                (m_720p, dim, qkv_tp): (7, 6, 8, (1, 4)),  # 275.8 us; was v3 (4, 8, 8) 315.3 us
                 # attn1.to_out (+ fused addcmul residual, approx math)
-                (m_480p, dim, dim_tp): (3, 8, 3, (1, 3)),  # PRE-SWEEP: AGMM v3 rule pick
-                (m_720p, dim, dim_tp): (4, 8, 3, (4, 1)),  # PRE-SWEEP: AGMM v3 rule pick
-                # ffn.ff1 (fused gelu_tanh)
-                (m_480p, dim, ffn_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned 8x8x8 default
-                (m_720p, dim, ffn_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned 8x8x8 default
+                (m_480p, dim, dim_tp): (3, 8, 3, (1, 3)),  # 108.5 us; the v3 pick, confirmed optimal
+                (m_720p, dim, dim_tp): (7, 6, 3, (1, 3)),  # 229.2 us; was v3 (4, 8, 3) 236.0 us
+                # ffn.ff1 (fused gelu_tanh). N=3584 is 112 tiles over 9 columns -> 13 per core.
+                (m_480p, dim, ffn_tp): (3, 6, 13, (3, 1)),  # 203.8 us; was (8, 8, 8) 239.3 us
+                (m_720p, dim, ffn_tp): (7, 6, 13, (1, 1)),  # 352.1 us; was (8, 8, 8) 400.7 us
             },
             # Plain minimal_matmul / minimal_matmul_split: Galaxy-clamped 11x10 grid.
             "11x10": {
-                # proj_out: 6 N tiles, so the default's N block was clamped to the 2-wide subblock.
-                (m_480p, dim, proj_out_n): (8, 8, 2, (2, 2)),  # PRE-SWEEP: was the warned default
-                (m_720p, dim, proj_out_n): (8, 8, 2, (2, 2)),  # PRE-SWEEP: was the warned default
+                # proj_out (6 N tiles)
+                (m_480p, dim, proj_out_n): (3, 8, 2, (3, 1)),  # 33.7 us; was (8, 8, 2) 35.4 us
+                (m_720p, dim, proj_out_n): (4, 8, 4, (2, 2)),  # 70.2 us; was (8, 8, 2) 74.7 us
                 # attn2.to_kv over the padded prompt (chunks=2, approx math); same at both resolutions.
                 (prompt_seq, dim, 2 * dim_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned default
             },
         }
     )
-    # ffn.ff2: fused matmul + reduce-scatter + addcmul. Keyed by the full device grid; per-device K.
+    # ffn.ff2: fused matmul + reduce-scatter + addcmul. Keyed by the full device grid; per-device K
+    # (112 tiles). Both M blocks leave >= 2 blocks per core, so both take the windowed L1 handoff.
     register_fused_mmrs_configs(
         {
             ttnn.CoreCoord(12, 10): {
                 (m_480p, ffn_tp, dim): FusedMMRSConfig(
-                    ttnn.CoreCoord(12, 8), 2, 4, 6, 2, 2, None, 1
-                ),  # PRE-SWEEP: v2.3 rule pick
+                    ttnn.CoreCoord(12, 8), 3, 7, 14, 3, 1, None, 1
+                ),  # 210.4 us; was v2.3 (2, 4, 6) 270.5 us
                 (m_720p, ffn_tp, dim): FusedMMRSConfig(
-                    ttnn.CoreCoord(12, 8), 6, 4, 6, 2, 2, None, 1
-                ),  # PRE-SWEEP: v2.3 rule pick
+                    ttnn.CoreCoord(12, 8), 6, 2, 8, 2, 2, None, 1
+                ),  # 357.7 us; was v2.3 (6, 4, 6) 410.6 us
             }
         }
     )

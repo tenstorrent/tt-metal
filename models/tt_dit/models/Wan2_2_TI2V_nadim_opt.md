@@ -227,13 +227,37 @@ All verified by reading the code; none implemented.
 
    *Keys fixed (2026-09-21):* `_register_5b_matmul_tables` now registers the eleven shapes the
    model requests — AGMM under `"12x9"`, proj_out and cross-attn `to_kv` under `"11x10"`, ff2 as
-   fused MMRS — at M=2336 and M=1024. Every entry is a PRE-SWEEP placeholder equal to what the
-   lookup resolved to before (rule pick or default), so the re-key alone changes no kernel; the
-   `get_matmul_config` warnings go away. Still to do: run the eleven-shape sweep (command in
-   the function docstring), paste the `PASTE:` lines the orchestrator prints, then re-gate perf.
-   The pre-change resolution, for reference: qkv@2336 and to_out at both M came from the AGMM v3
-   rules, ff2 from the MMRS v2.3 rules, and ff1 at both M, qkv@1024, proj_out and to_kv were on
-   the warned 8x8x8 default. 720p/121f (M=3424) is not tabled.
+   fused MMRS — at M=2336 and M=1024. The pre-change resolution, for reference: qkv@2336 and
+   to_out at both M came from the AGMM v3 rules, ff2 from the MMRS v2.3 rules, and ff1 at both
+   M, qkv@1024, proj_out and to_kv were on the warned 8x8x8 default. 720p/121f (M=3424) is not
+   tabled.
+
+   *Swept (2026-09-22), 10 of 11 shapes* — device kernel time, best of ~330-380 L1-feasible combos
+   per shape, against the blocking that ran before:
+
+   | shape | M | before | after | gain |
+   |---|---|---|---|---|
+   | qkv | 1024 | 160.2 us (default) | 149.5 | 6.7% |
+   | qkv | 2336 | 315.3 us (v3) | 275.8 | 12.5% |
+   | to_out | 1024 | 108.5 us (v3) | 108.5 | 0 — v3 was optimal |
+   | to_out | 2336 | 236.0 us (v3) | 229.2 | 2.9% |
+   | ff1 | 1024 | 239.3 us (default) | 203.8 | 14.8% |
+   | ff1 | 2336 | 400.7 us (default) | 352.1 | 12.1% |
+   | ff2 (MMRS) | 1024 | 270.5 us (v2.3) | 210.4 | 22.2% |
+   | ff2 (MMRS) | 2336 | 410.6 us (v2.3) | 357.7 | 12.9% |
+   | proj_out | 1024 | 35.4 us | 33.7 | 5.0% |
+   | proj_out | 2336 | 74.7 us | 70.2 | 6.0% |
+
+   At 720p the pattern is one full M block per core (73 M tiles over 12 columns -> M_block 7) with
+   K_block 6, and the top-5 combos per shape sit within ~1% of each other, so the winners are not
+   noise picks. Cross-attn `to_kv` (512x3072x1536) is still PRE-SWEEP. E2E perf gates not yet
+   re-run with the swept table.
+
+   **The sweep fills the disk.** It compiles one program per combo and the kernel JIT cache
+   (`~/.cache/tt-metal-cache`) keeps every one: ~118 GB across 587k files for ten shapes, plus
+   ~3 GB of profiler capture per shape. Two sweep runs died with `ENOSPC` on this box before
+   that was understood. Budget ~15 GB per shape, or prune the sweep-window cache entries
+   afterwards (they are unique blockings and never reused).
 2. **Hoist the per-step modulation.** `combined_step` calls `inner_step` twice with the **same
    timestep**, so the timestep MLP, patch embed and every block's modulation are recomputed
    identically — ~26,400 op launches per generation, half of them exact duplicates.
