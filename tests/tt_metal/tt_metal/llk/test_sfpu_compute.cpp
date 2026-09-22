@@ -90,11 +90,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"gtz", {{"SFPU_OP_CHAIN_0", "gtz_tile_init(); gtz_tile(0);"}}},
     {"gez", {{"SFPU_OP_CHAIN_0", "gez_tile_init(); gez_tile(0);"}}},
     {"lez", {{"SFPU_OP_CHAIN_0", "lez_tile_init(); lez_tile(0);"}}},
-    {"ceil", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); ceil_tile(0);"}}},
-    {"floor", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); floor_tile(0);"}}},
-    {"trunc", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); trunc_tile(0);"}}},
-    {"frac", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); frac_tile(0);"}}},
-    {"round", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); round_tile(0, 0 /* decimals */);"}}},
+    {"ceil", {{"SFPU_OP_CHAIN_0", "ceil_tile_init(); ceil_tile(0);"}}},
+    {"floor", {{"SFPU_OP_CHAIN_0", "floor_tile_init(); floor_tile(0);"}}},
+    {"trunc", {{"SFPU_OP_CHAIN_0", "trunc_tile_init(); trunc_tile(0);"}}},
+    {"frac", {{"SFPU_OP_CHAIN_0", "frac_tile_init(); frac_tile(0);"}}},
+    {"round", {{"SFPU_OP_CHAIN_0", "round_tile_init(); round_tile(0, 0 /* decimals */);"}}},
 };
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.

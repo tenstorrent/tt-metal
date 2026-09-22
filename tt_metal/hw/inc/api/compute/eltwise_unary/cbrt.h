@@ -40,6 +40,6 @@ ALWI void cbrt_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cbrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(cbrt, sfpu::cube_root_init, (APPROX))); }
+ALWI void cbrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(cbrt, sfpu::cube_root_init, (APPROX, DST_ACCUM_MODE))); }
 
 }  // namespace ckernel

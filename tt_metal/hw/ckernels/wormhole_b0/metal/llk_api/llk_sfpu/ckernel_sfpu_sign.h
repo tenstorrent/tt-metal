@@ -16,9 +16,12 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-inline void sign_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+template <bool is_fp32_dest_acc_en /* unused on Wormhole */>
+inline void sign_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /* unused on Wormhole */, int ITERATIONS = 8>
 inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
 // All params are in FP16 format
 #pragma GCC unroll 0

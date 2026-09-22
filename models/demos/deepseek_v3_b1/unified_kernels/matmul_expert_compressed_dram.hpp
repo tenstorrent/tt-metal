@@ -1012,7 +1012,8 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t num_dram_pushed = 0;
 
                 if constexpr (CTArgs::fuse_silu) {
-                    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
+                    PACK(SFPU_UNARY_INIT_FN(
+                        silu, sfpu::silu_init, (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/)));
                 }
 
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {

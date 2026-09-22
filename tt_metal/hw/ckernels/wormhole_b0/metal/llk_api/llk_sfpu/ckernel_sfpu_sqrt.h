@@ -148,7 +148,8 @@ inline void calculate_sqrt() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool legacy_compat = false>
+// is_fp32_dest_acc_en mirrors the Blackhole signature (selects the bf16 fast kernel there); unused on Wormhole.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /* unused on Wormhole */, bool legacy_compat = false>
 void sqrt_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {

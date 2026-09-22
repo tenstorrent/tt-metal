@@ -46,7 +46,10 @@ inline void calculate_add_rsqrt(uint32_t param0) {
 // Initialize for add + rsqrt operation (just initializes rsqrt constants)
 template <bool APPROXIMATION_MODE>
 inline void init_add_rsqrt() {
-    sqrt_init<APPROXIMATION_MODE>();
+    // add_rsqrt reuses _calculate_sqrt_body_ in every dest mode, so it needs the production seed constants, not
+    // the bf16 fast-kernel constants sqrt_init<APPROXIMATION_MODE, false> would program.
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    _init_sqrt_body_constants_<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu

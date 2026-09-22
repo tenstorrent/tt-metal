@@ -29,12 +29,14 @@ inline void calculate_silu() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en mirrors the Blackhole signature (arch-shared silu_tile_init); Wormhole has no
+// dest-acc-dependent silu init, so it only forwards.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void silu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // calculate_silu always uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must
     // use non-approx sigmoid_init regardless of APPROXIMATION_MODE.
-    sigmoid_init<false>();
+    sigmoid_init<false, is_fp32_dest_acc_en>();
 }
 
 }  // namespace ckernel::sfpu

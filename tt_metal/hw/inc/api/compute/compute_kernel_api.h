@@ -107,12 +107,12 @@ namespace ckernel {
  * Please refer to documentation for any_init.
  */
 // clang-format on
-template <bool fast_and_approx = false>
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sigmoid_tile_init() {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(sigmoid));
 #else
-    MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
+    MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx, is_fp32_dest_acc_en)));
 #endif
 }
 
@@ -180,7 +180,7 @@ ALWI void silu_tile_init() {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(silu));
 #else
-    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX)));
+    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX, DST_ACCUM_MODE)));
 #endif
 }
 
@@ -269,9 +269,9 @@ ALWI void square_tile_init() {
 
 #ifndef ARCH_QUASAR
 
-template <bool fast_and_approx = false>
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sigmoid_tile_init_pack() {
-    PACK(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
+    PACK(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx, is_fp32_dest_acc_en)));
 }
 
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -291,7 +291,10 @@ ALWI void sigmoid_tile_pack(uint32_t idst) {
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log_tile_init() {
     // TODO(AP): move out init
-    MATH(SFPU_UNARY_INIT_FN(log, sfpu::log_init, (APPROX, fast_and_approx, is_fp32_dest_acc_en)));
+    MATH(SFPU_UNARY_INIT_FN(
+        log,
+        sfpu::log_init,
+        (APPROX, fast_and_approx, is_fp32_dest_acc_en, false /* HAS_BASE_SCALING */, false /* IS_BASE_TWO */)));
 }
 
 // clang-format off
@@ -329,7 +332,10 @@ ALWI void log_tile(uint32_t idst) {
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log_with_base_tile_init() {
     // TODO(AP): move out init
-    MATH(SFPU_UNARY_INIT_FN(log_with_base, sfpu::log_init, (APPROX, fast_and_approx, is_fp32_dest_acc_en)));
+    MATH(SFPU_UNARY_INIT_FN(
+        log_with_base,
+        sfpu::log_init,
+        (APPROX, fast_and_approx, is_fp32_dest_acc_en, true /* HAS_BASE_SCALING */, false /* IS_BASE_TWO */)));
 }
 
 // clang-format off
@@ -442,13 +448,14 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void abs_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
+ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT_FN(abs, sfpu::abs_init, (DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
@@ -486,13 +493,19 @@ ALWI void abs_tile_int32(uint32_t idst) {
 // clang-format on
 ALWI void sign_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX), idst, VectorMode::RC, 1 /* exponent_size_8 */));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sign,
+        (APPROX, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC,
+        1 /* exponent_size_8 */));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
+ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT_FN(sign, sfpu::sign_init, (DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
@@ -689,7 +702,7 @@ ALWI void silu_tile_pack(uint32_t idst) {
         idst,
         VectorMode::RC));
 }
-ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
+ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX, DST_ACCUM_MODE))); }
 
 #endif  // !ARCH_QUASAR
 

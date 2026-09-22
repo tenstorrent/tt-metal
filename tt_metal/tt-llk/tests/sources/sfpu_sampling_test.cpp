@@ -156,7 +156,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // repair -- see tt-metal #52745. Any vConstFloatPrgm0 writer would do; log is picked
     // because its constant is nine orders of magnitude away, so a surviving pollution is
     // unmistakable rather than a near-miss.
-    ckernel::sfpu::log_init<false /* APPROXIMATION_MODE */, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
+    ckernel::sfpu::log_init<
+        false /* APPROXIMATION_MODE */,
+        false /* FAST_APPROX */,
+        is_fp32_dest_acc_en,
+        false /* HAS_BASE_SCALING */,
+        false /* IS_BASE_TWO */>();
 #endif
 
 #if !defined(SAMPLING_SKIP_RECIP_INIT)

@@ -60,7 +60,7 @@ constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
                                              1.2677097321e-01f,
                                              -2.1375391632e-02f}};
 
-template <int ITERATIONS = 8>
+template <bool is_fp32_dest_acc_en /* unused on Wormhole */, int ITERATIONS = 8>
 inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -77,7 +77,7 @@ inline void calculate_erfc() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /* unused on Wormhole */>
 void erfc_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<true>();

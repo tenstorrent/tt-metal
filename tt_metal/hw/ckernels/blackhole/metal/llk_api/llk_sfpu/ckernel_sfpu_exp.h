@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "ckernel_addrmod.h"
+#include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 // clang-format off: sfpi_inline must be defined before ckernel_sfpu_polyval.h
 #include "sfpi.h"
@@ -16,8 +17,10 @@
 #include "sfpu/ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 #include "lltt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -154,7 +157,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
  * This implementation is faster, and give comparable accuracy as _sfpu_exp_21f_bf16_
  * (~< 1 ULP).
  *
- * Requires _init_exponential_tti_bf16_() to have been called to configure
+ * Requires _init_exponential_tti_bf16_constants_() to have been called to configure
  * ADDR_MOD_6 (dest auto-increment by 2 on SFPSTORE) and to load:
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
@@ -484,6 +487,151 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
     return result;
 }
 
+// Constants for the exp_21f TTI kernel (_sfpu_exp_21f_bf16_tti_): ADDR_MOD_6 dest auto-increment by 2 on SFPSTORE,
+// LREG12 = 1/ln2 and LREG13 = c2. Programmed by exp_init when the fast bf16 kernel below is compiled out
+// (DISABLE_SFPLOADMACRO), and re-armed by calculate_exponential when it must fall back to the exp_21f kernel
+// (SCALE_EN or ITERATIONS != 8) with the fast kernel's constants installed.
+inline void _init_exponential_tti_bf16_constants_() {
+    // Auto-increment Dest on ADDR_MOD_6
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_6);
+
+    // LREG12 = 1/ln2
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+
+    // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+}
+
+// Fast bf16 exp for Blackhole. Origin: llk-bench (LLM-agent-written kernel, claude-fable-5, 2026-08),
+// validated exhaustively over all 65,536 bf16 inputs vs the exact golden: max 1 ULP (gate <= 2).
+// Measured 371.13 cycles/tile vs 579.10 for the previous kernel on p150b (tt-metal v0.76.0 baseline).
+//
+// Selected by exp_init / calculate_exponential for APPROXIMATION_MODE = false, bf16 dest, SCALE_EN = false,
+// ITERATIONS = 8 (SFPLOADMACRO builds only). CLAMP_NEGATIVE does not enter the gate: like the exp_21f kernel it
+// replaces, the negative-input handling is unconditional (the min(v, 0) clamp yields exp(x) = +0 down to -inf).
+//
+// SFPU state programmed by _init_exponential_bf16_fast_(): programmable constants LREG11..LREG14 (SFPCONFIG),
+// macro instruction 1 (mux 5, backdoor-loaded SFPMAD) and macro sequence register 0 (SFPCONFIG dest 4), plus a
+// LoadMacroConfig.Misc reset. No replay slots and no ADDR_MOD_6: dst is addressed with explicit offsets 0,2,..,14
+// via ADDR_MOD_7 (dest increment 0, as programmed by the common init prologue). LREG5 (poly coefficient -c1) is
+// a plain LREG and is (re)loaded at the top of every _calculate_exponential_bf16_fast_() call: the bench loaded
+// it once in init, but plain LREGs do not survive other SFPU ops issued between exp_tile_init and exp_tile in
+// fused production kernels (e.g. sinkhorn_row_max_sub only guarantees LREG12..14).
+//
+// Algorithm (negated frame):
+//   v  = x*(-1/ln2) - 126.5                  [fused: LOADMACRO -> MAD]
+//   v  = min(v, 0)                           [SFPSWAP vs LCONST_0]
+//   k  = rnd_uint8(|v|) saturating [0,255]   [SFPSTOCHRND, abs-rounding]
+//   u  = float(k) + v                        [SFPCAST; SFPMAD w/ LCONST_1]
+//   p  = (c2*u - c1)*u + c0 ~= 2^(0.5-u)     [2x SFPMAD]
+//   s  = setexp(+0, k) = 2^(k-127) exactly   [SFPSETEXP]
+//   y  = p*s ; truncating bf16 store
+// Exhaustive fp32-exact simulation + on-silicon sweep: max ULP = 1.
+//
+// The LOADMACRO (sequence 0) performs LD + MAD (srcA=L12, srcB=loaded, srcC=L11) writing v to the macro lreg --
+// one issue slot instead of two. (A SWAP cannot join the macro: the inter-unit staging path truncates to bf16,
+// destroying v's mantissa -- measured on silicon.) Macros for pair i+1 are embedded inside pair i's 20-slot
+// window (slots 2 and 18), placed so the macro's internal MAD never lands on the same cycle as a plain MAD and
+// its result is ready >= 3 slots before first use. A 3-slot prologue primes pair 0; the last window is a compact
+// 18-slot form with no trailing macros. All dependent ops are >= 2 issue slots apart (SFPU latency); measured
+// issue rate is 1.0 cycle/instruction with only SFPSWAP costing ~1.5 slots. Constants: L11-L14 via SFPCONFIG.
+constexpr auto exp_fast_bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
+
+constexpr float EXP_FAST_NEG_LOG2E = -1.4426950408889634f;
+constexpr float EXP_FAST_NEG_BIAS = -126.5f;
+constexpr float EXP_FAST_C0 = 1.414815267f;
+constexpr float EXP_FAST_C2 = 0.337158203125f;
+// negc1 = -0.99462890625 in L5 (fp16a imm 0xBBF5), loaded per call in _calculate_exponential_bf16_fast_.
+
+inline void _init_exponential_bf16_fast_() {
+    _sfpu_load_config32_(
+        p_sfpu::LREG12, exp_fast_bits(EXP_FAST_NEG_LOG2E) >> 16, exp_fast_bits(EXP_FAST_NEG_LOG2E) & 0xFFFF);
+    _sfpu_load_config32_(
+        p_sfpu::LREG11, exp_fast_bits(EXP_FAST_NEG_BIAS) >> 16, exp_fast_bits(EXP_FAST_NEG_BIAS) & 0xFFFF);
+    _sfpu_load_config32_(p_sfpu::LREG13, exp_fast_bits(EXP_FAST_C0) >> 16, exp_fast_bits(EXP_FAST_C0) & 0xFFFF);
+    _sfpu_load_config32_(p_sfpu::LREG14, exp_fast_bits(EXP_FAST_C2) >> 16, exp_fast_bits(EXP_FAST_C2) & 0xFFFF);
+    // Macro instruction 1 (mux 5): MAD v = L12*loaded + L11 (backdoor install
+    // via lreg_dest = 13).
+    TTI_SFPMAD(p_sfpu::LREG12, 0, p_sfpu::LREG11, 13, 0);
+    // Macro sequence 0: slot2 = MAD (mux5, delay 0, srcB = loaded value)
+    // -> byte 0x85; SIMPLE/ROUND/STORE slots unused.
+    TTI_SFPLOADI(0, 0xA, 0x8500);
+    TTI_SFPLOADI(0, 0x8, 0x0000);
+    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPCONFIG(0, 8, 1);  // reset LoadMacroConfig misc
+}
+
+// 20-slot steady window for one pair (v_A in lreg LA, v_B in LB), issuing the
+// next pair's LOADMACROs (writing LA2/LB2 from dst offsets OA2/OB2) inside.
+// Scratch: L4 = k/s/y of A, L7 = k/s/y of B, L6 = u/p of A; u/p of B reuses
+// LA after A frees it; p1 of A in LB, p1 of B transits through LB2.
+// clang-format off
+#define EXP_FAST_WIN(LA, LB, LA2, LB2, OA, OB, OA2, OB2)                    \
+    TTI_SFPSWAP(0, p_sfpu::LCONST_0, LA, 1);       /* 1  vA = min(vA,0)   */ \
+    TTI_SFPLOADMACRO(LA2, 0, ADDR_MOD_7, OA2);     /* 2  vA' -> LA2       */ \
+    TTI_SFP_STOCH_RND(0, 0, 0, LA, 4, 2);          /* 3  kA -> L4         */ \
+    TTI_SFPSWAP(0, p_sfpu::LCONST_0, LB, 1);       /* 4  vB = min(vB,0)   */ \
+    TTI_SFPCAST(4, 6, 0);                          /* 5  kfA -> L6        */ \
+    TTI_SFP_STOCH_RND(0, 0, 0, LB, 7, 2);          /* 6  kB -> L7         */ \
+    TTI_SFPMAD(6, p_sfpu::LCONST_1, LA, 6, 0);     /* 7  uA = kfA + vA    */ \
+    TTI_SFPCAST(7, LA, 0);                         /* 8  kfB -> LA        */ \
+    TTI_SFPSETEXP(0, p_sfpu::LCONST_0, 4, 0);      /* 9  sA in L4         */ \
+    TTI_SFPMAD(LA, p_sfpu::LCONST_1, LB, LA, 0);   /* 10 uB = kfB + vB    */ \
+    TTI_SFPSETEXP(0, p_sfpu::LCONST_0, 7, 0);      /* 11 sB in L7         */ \
+    TTI_SFPMAD(6, p_sfpu::LREG14, p_sfpu::LREG5, LB, 0);   /* 12 p1A -> LB */ \
+    TTI_SFPMAD(LA, p_sfpu::LREG14, p_sfpu::LREG5, LB2, 0); /* 13 p1B -> LB2*/ \
+    TTI_SFPMAD(LB, 6, p_sfpu::LREG13, 6, 0);       /* 14 pA = p1A*uA + c0 */ \
+    TTI_SFPMAD(LB2, LA, p_sfpu::LREG13, LA, 0);    /* 15 pB = p1B*uB + c0 */ \
+    TTI_SFPMAD(6, 4, p_sfpu::LCONST_0, 4, 0);      /* 16 yA = pA*sA -> L4 */ \
+    TTI_SFPMAD(LA, 7, p_sfpu::LCONST_0, 7, 0);     /* 17 yB = pB*sB -> L7 */ \
+    TTI_SFPLOADMACRO(LB2, 0, ADDR_MOD_7, OB2);     /* 18 vB' -> LB2       */ \
+    TTI_SFPSTORE(4, 0, ADDR_MOD_7, OA);            /* 19 store A          */ \
+    TTI_SFPSTORE(7, 0, ADDR_MOD_7, OB)             /* 20 store B          */
+#define EXP_FAST_WIN_LAST(LA, LB, LT, OA, OB)                    \
+    TTI_SFPSWAP(0, p_sfpu::LCONST_0, LA, 1);       /* 1  vA = min(vA,0)   */ \
+    TTI_SFP_STOCH_RND(0, 0, 0, LA, 4, 2);          /* 3  kA -> L4         */ \
+    TTI_SFPSWAP(0, p_sfpu::LCONST_0, LB, 1);       /* 4  vB = min(vB,0)   */ \
+    TTI_SFPCAST(4, 6, 0);                          /* 5  kfA -> L6        */ \
+    TTI_SFP_STOCH_RND(0, 0, 0, LB, 7, 2);          /* 6  kB -> L7         */ \
+    TTI_SFPMAD(6, p_sfpu::LCONST_1, LA, 6, 0);     /* 7  uA = kfA + vA    */ \
+    TTI_SFPCAST(7, LA, 0);                         /* 8  kfB -> LA        */ \
+    TTI_SFPSETEXP(0, p_sfpu::LCONST_0, 4, 0);      /* 9  sA in L4         */ \
+    TTI_SFPMAD(LA, p_sfpu::LCONST_1, LB, LA, 0);   /* 10 uB = kfB + vB    */ \
+    TTI_SFPSETEXP(0, p_sfpu::LCONST_0, 7, 0);      /* 11 sB in L7         */ \
+    TTI_SFPMAD(6, p_sfpu::LREG14, p_sfpu::LREG5, LB, 0);   /* 12 p1A -> LB */ \
+    TTI_SFPMAD(LA, p_sfpu::LREG14, p_sfpu::LREG5, LT, 0); /* 13 p1B -> LT*/ \
+    TTI_SFPMAD(LB, 6, p_sfpu::LREG13, 6, 0);       /* 14 pA = p1A*uA + c0 */ \
+    TTI_SFPMAD(LT, LA, p_sfpu::LREG13, LA, 0);    /* 15 pB = p1B*uB + c0 */ \
+    TTI_SFPMAD(6, 4, p_sfpu::LCONST_0, 4, 0);      /* 16 yA = pA*sA -> L4 */ \
+    TTI_SFPMAD(LA, 7, p_sfpu::LCONST_0, 7, 0);     /* 17 yB = pB*sB -> L7 */ \
+    TTI_SFPSTORE(4, 0, ADDR_MOD_7, OA);            /* 19 store A          */ \
+    TTI_SFPSTORE(7, 0, ADDR_MOD_7, OB)             /* 20 store B          */
+// clang-format on
+
+inline void _calculate_exponential_bf16_fast_() {
+    // negc1 -> L5 (plain LREG, hence per call rather than per init; see the note above).
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATA, 0xBBF5);
+    TTI_SFPLOADMACRO(0, 0, ADDR_MOD_7, 0);  // v0 -> L0
+    TTI_SFPLOADMACRO(1, 0, ADDR_MOD_7, 2);  // v1 -> L1
+    TTI_SFPNOP;
+    EXP_FAST_WIN(0, 1, 2, 3, 0, 2, 4, 6);
+    EXP_FAST_WIN(2, 3, 0, 1, 4, 6, 8, 10);
+    EXP_FAST_WIN(0, 1, 2, 3, 8, 10, 12, 14);
+    EXP_FAST_WIN_LAST(2, 3, 1, 12, 14);
+}
+
+#undef EXP_FAST_WIN
+#undef EXP_FAST_WIN_LAST
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -493,6 +641,17 @@ template <
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
+#ifndef DISABLE_SFPLOADMACRO
+            if constexpr (!SCALE_EN && ITERATIONS == 8) {
+                // Fast bf16 kernel (see _calculate_exponential_bf16_fast_ above); its constants were
+                // programmed by exp_init<false, scale, CLAMP_NEGATIVE, false>.
+                _calculate_exponential_bf16_fast_();
+                return;
+            }
+            // exp_init is not templated on SCALE_EN / ITERATIONS and programmed the fast kernel's LREG11..14
+            // instead of the exp_21f constants: re-arm LREG12 / LREG13 / ADDR_MOD_6 before falling back.
+            _init_exponential_tti_bf16_constants_();
+#endif
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
             // CLAMP_NEGATIVE is forwarded for API symmetry with the WH kernel,
             // but on BH the negative-input handling is applied unconditionally
@@ -723,6 +882,52 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
+// Re-derived Schraudolph constants for the bf16 approximate, non-clamping exp -- the SDPA softmax path:
+//   exp_tile_init<true, 0x3F800000, InputClamping::None>(); exp_tile<true, false, InputClamping::None, 8|32>(...)
+// Origin: llk-bench exp_fast_neg_acc (LLM-agent-written kernel, claude-fable-5, 2026-08). The instruction stream
+// (macro templates, macro sequence register 0, the recorded 32-instruction LOADMACRO/SFPSHFT2 replay pattern and the
+// ITERATIONS = 8 / 32 calculate bodies below) is identical to the production kernel -- 77.09 vs 77.08 cycles/tile
+// on p150b (tt-metal v0.76.0 baseline) -- so only the three programmable constants change:
+//   LREG12 = A = (128/ln2)*(1+7.6e-6) = 0x4338AA97     (production: 256/ln2   = 0x43B8AA3B)
+//   LREG13 = B = 16256 - 5.02          = 0x467DEBEC     (production: 32500.818 = 0x46FDE9A3)
+//   LREG14 = 16 (SFPSHFT2 shift amount)                (production: 15)
+//  1. Scale 128/ln2 with shift 16 (instead of 256/ln2 with shift 15): the rounded int16 IS the bf16 output
+//     pattern, so the round-to-nearest of SFPSTOCHRND lands exactly on the bf16 grid. Production's extra
+//     fraction bit was truncated by the bf16 store anyway (a systematic -0.5 ULP floor bias); here the
+//     quantization is a true round-to-nearest.
+//  2. Re-centred constants: production ships a one-sided ~ -6 ULP bias (mean 5.72 ULP). Centring the
+//     linear-interpolation sawtooth halves the worst-case headroom usage and cuts the mean to 4.83 ULP while
+//     keeping max ULP <= 6 on all bf16 inputs in [-88.5, 0] (exhaustive on-silicon sweep).
+//     t = A*x + B ; i = smag16(t) (round nearest, ties away; clamps to +-32767; |t| < 0.5 -> +0)
+//     z = (i & 0x7fff) << 16 (bf16 pattern in fp32 position, sign via SETSGN) ; bf16 store (truncation exact:
+//     only the top 16 bits are nonzero; denormal patterns flush to zero).
+// Deep-negative contract (packer ReLU) is intact: x < -88.02 makes t negative, so the sign-magnitude round +
+// SETSGN produce a negative output; x in (-88.5, -88.02] gives |i| < 128, whose shifted pattern is a denormal
+// that flushes to +-0 -- matching golden exp(x), which is denormal there. Inputs above 0 saturate as before.
+// NOTE: this changes SDPA softmax numerics slightly (more accurate; it removes the systematic -0.5 ULP
+// truncation bias of the old constants). Installed only for bf16 dest and scale == 1.0f on SFPLOADMACRO builds.
+// exp_init is not templated on ITERATIONS, so both the 8- and the 32-iteration approximate calculate bodies
+// consume these constants (their per-element instruction sequence is identical).
+constexpr float EXP_FAST_NEG_ACC_A = __builtin_bit_cast(float, 0x4338AA97u);  // (128/ln2)*(1+7.6e-6)
+constexpr float EXP_FAST_NEG_ACC_B = __builtin_bit_cast(float, 0x467DEBECu);  // 16256 - 5.02
+
+inline void _init_exponential_approx_bf16_acc_constants_() {
+    // LREG[12] = A
+    TTI_SFPLOADI(0, 0xA, lo16(EXP_FAST_NEG_ACC_A));
+    TTI_SFPLOADI(0, 0x8, hi16(EXP_FAST_NEG_ACC_A));
+    TTI_SFPCONFIG(0, 12, 0);
+
+    // LREG[13] = B
+    TTI_SFPLOADI(0, 0xA, lo16(EXP_FAST_NEG_ACC_B));
+    TTI_SFPLOADI(0, 0x8, hi16(EXP_FAST_NEG_ACC_B));
+    TTI_SFPCONFIG(0, 13, 0);
+
+    // LREG[14] = 16 (shift amount consumed by SFPSHFT2 mode 5 via VC)
+    TTI_SFPLOADI(0, 0xA, 16);
+    TTI_SFPLOADI(0, 0x8, 0);
+    TTI_SFPCONFIG(0, 14, 0);
+}
+
 template <
     bool APPROXIMATION_MODE,
     uint32_t scale,
@@ -932,28 +1137,39 @@ void exp_init() {
         //
         // =======================================================================
 
-        constexpr float LN2_RECIP = 1.4426950408889634f;
-        constexpr float A = 256.0f * LN2_RECIP;
-        constexpr float B_minus_C = 32500.818359375f;
+#ifndef DISABLE_SFPLOADMACRO
+        // bf16 dest at scale 1.0: the re-derived, more accurate constants (see
+        // _init_exponential_approx_bf16_acc_constants_ above). Everything else keeps the original constants.
+        constexpr bool use_bf16_acc_constants = !is_fp32_dest_acc_en && scale == 0x3F800000u;
+#else
+        constexpr bool use_bf16_acc_constants = false;
+#endif
+        if constexpr (use_bf16_acc_constants) {
+            _init_exponential_approx_bf16_acc_constants_();
+        } else {
+            constexpr float LN2_RECIP = 1.4426950408889634f;
+            constexpr float A = 256.0f * LN2_RECIP;
+            constexpr float B_minus_C = 32500.818359375f;
 
-        constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
-        constexpr float A_scaled = A * scale_fp32;
+            constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+            constexpr float A_scaled = A * scale_fp32;
 
-        // Load constant A into LREG[12]
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
-        TTI_SFPCONFIG(0, 12, 0);
+            // Load constant A into LREG[12]
+            TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
+            TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+            TTI_SFPCONFIG(0, 12, 0);
 
-        // Load constant (B-C) into LREG[13]
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
-        TTI_SFPCONFIG(0, 13, 0);
+            // Load constant (B-C) into LREG[13]
+            TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
+            TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+            TTI_SFPCONFIG(0, 13, 0);
 
-        // Load shift amount (15) into LREG[14] for SFPSHFT2
-        // SFPSHFT2 mode 5 reads shift amount from VC register
-        TTI_SFPLOADI(0, 0xA, 15);  // Lower 16 bits = 15
-        TTI_SFPLOADI(0, 0x8, 0);   // Upper 16 bits = 0
-        TTI_SFPCONFIG(0, 14, 0);   // Store in LREG[14]
+            // Load shift amount (15) into LREG[14] for SFPSHFT2
+            // SFPSHFT2 mode 5 reads shift amount from VC register
+            TTI_SFPLOADI(0, 0xA, 15);  // Lower 16 bits = 15
+            TTI_SFPLOADI(0, 0x8, 0);   // Upper 16 bits = 0
+            TTI_SFPCONFIG(0, 14, 0);   // Store in LREG[14]
+        }
 
 #ifndef DISABLE_SFPLOADMACRO
         // ===================================================================
@@ -1053,24 +1269,15 @@ void exp_init() {
 #endif
     } else {
         if constexpr (!is_fp32_dest_acc_en) {
-            // _calculate_exponential_tti_bf16_() path:
-            // Auto-increment Dest on ADDR_MOD_6
-            addr_mod_t{
-                .srca = {.incr = 0},
-                .srcb = {.incr = 0},
-                .dest = {.incr = 2},
-            }
-                .set(ADDR_MOD_6);
-
-            // LREG12 = 1/ln2
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
-            TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-
-            // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
-            TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+#ifndef DISABLE_SFPLOADMACRO
+            // Fast bf16 kernel (_calculate_exponential_bf16_fast_): LREG11..14 + macro sequence 0. This init is
+            // not templated on SCALE_EN / ITERATIONS, so it is selected for every bf16 non-approx init;
+            // calculate_exponential re-arms the exp_21f TTI constants itself when it has to fall back.
+            _init_exponential_bf16_fast_();
+#else
+            // _sfpu_exp_21f_bf16_tti_() path: ADDR_MOD_6 + LREG12/LREG13.
+            _init_exponential_tti_bf16_constants_();
+#endif
         } else {
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
             // reciprocal LLK for negative inputs, so its constants must be

@@ -149,9 +149,14 @@ struct Matmul {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
                     PACK(SFPU_UNARY_INIT_FN(
-                        sigmoid, ckernel::sfpu::sigmoid_init, (CTArgs::fused_activation_approx_mode)));
+                        sigmoid,
+                        ckernel::sfpu::sigmoid_init,
+                        (CTArgs::fused_activation_approx_mode, false /*is_fp32_dest_acc_en*/)));
                 } else {
-                    PACK(SFPU_UNARY_INIT_FN(silu, ckernel::sfpu::silu_init, (CTArgs::fused_activation_approx_mode)));
+                    PACK(SFPU_UNARY_INIT_FN(
+                        silu,
+                        ckernel::sfpu::silu_init,
+                        (CTArgs::fused_activation_approx_mode, false /*is_fp32_dest_acc_en*/)));
                 }
 
                 // Per-tile: matmul -> activation on PACK -> pack

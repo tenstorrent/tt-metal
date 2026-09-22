@@ -25,11 +25,12 @@ inline void calculate_rsqrt() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool legacy_compat>
+// is_fp32_dest_acc_en mirrors the Blackhole signature (selects the bf16 fast kernel there); unused on Wormhole.
+template <bool APPROXIMATION_MODE, bool legacy_compat, bool is_fp32_dest_acc_en /* unused on Wormhole */>
 void rsqrt_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!legacy_compat) {
-        sqrt_init<APPROXIMATION_MODE>();
+        sqrt_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     }
 }
 

@@ -783,7 +783,9 @@ inline void calculate_sinh() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en is unused on Quasar; it matches the Blackhole signature, which uses it to select
+// the fast bf16 kernel, so the shared compute API can pass it on every arch.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void sine_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // P2 and P3 of four-part Cody-Waite reduction by PI.
@@ -793,7 +795,9 @@ void sine_init() {
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en is unused on Quasar; it matches the Blackhole signature, which uses it to select
+// the fast bf16 kernel, so the shared compute API can pass it on every arch.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosine_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
@@ -803,7 +807,9 @@ void cosine_init() {
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 }
 
-template <bool APPROXIMATION_MODE>
+// is_fp32_dest_acc_en is unused on Quasar; it matches the Blackhole signature, which uses it to select
+// the fast bf16 kernel, so the shared compute API can pass it on every arch.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void tangent_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // P2 and P3 of four-part Cody-Waite reduction by PI/2.
@@ -1196,9 +1202,9 @@ inline void init_trigonometry() {
         "init_trigonometry: OPERATION must be a trigonometry SfpuType (sine/cosine/acosh/asinh/atanh)");
 
     if constexpr (OPERATION == SfpuType::sine) {
-        sine_init<false /* APPROXIMATION_MODE */>();
+        sine_init<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
     } else if constexpr (OPERATION == SfpuType::cosine) {
-        cosine_init<false /* APPROXIMATION_MODE */>();
+        cosine_init<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
     } else if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh) {
         init_inverse_hyperbolic<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>();
     } else if constexpr (OPERATION == SfpuType::atanh) {
