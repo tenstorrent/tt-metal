@@ -47,6 +47,7 @@ struct CaptureContext {
         // Per core, in `core_xy` order: eth wall tick minus that core's wall tick, measured by the pusher at arm.
         // Every tile keeps its own wall clock on the one AICLK, so each is one integer for the capture; eth cores 0.
         std::vector<int64_t> tile_offset;
+        int64_t drainer_offset = 0;  // eth wall tick minus the drainer's: its anchors into the pusher's wall domain
     };
     std::vector<Device> devices;
     // A link of the sync: the sender on device index dev_a, the receiver on dev_b, each end's eth core as the decoder

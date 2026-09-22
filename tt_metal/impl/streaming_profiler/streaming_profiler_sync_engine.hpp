@@ -37,8 +37,8 @@ struct ClockSample {
     uint32_t role;
     uint64_t value;
     uint64_t ts;
-    uint64_t ref = 0;    // link records: the refclk read with ts
-    uint32_t spins = 0;  // link records: the bracketed read's spins to the caught refclk update, plus one
+    uint64_t ref = 0;    // link and anchor records: the refclk read with ts
+    uint32_t spins = 0;  // link and anchor records: the bracketed read's spins to the caught refclk update, plus one
 };
 
 // A chip's clock as the pusher describes it: instants (its refclk tick, its eth wall tick) in refclk order, the wall
@@ -138,6 +138,56 @@ public:
 };
 
 constexpr double kNsPerRefclk = 1e9 / kernel_profiler::kEthRefclkHz;
+
+// A signed error distribution in ns, in kBinsPerNs bins over +-kRangeNs; beyond the range only counted and the worst
+// kept.
+struct ErrorHistogram {
+    static constexpr int kBinsPerNs = 16;
+    static constexpr int kRangeNs = 256;
+    static constexpr int kBins = 2 * kRangeNs * kBinsPerNs;
+    std::vector<double> bins = std::vector<double>(kBins, 0.0);
+    double n = 0.0, sum = 0.0, sumsq = 0.0, worst = 0.0, beyond = 0.0;
+
+    static int bin_of(double ns) { return static_cast<int>(std::floor(ns * kBinsPerNs)) + kRangeNs * kBinsPerNs; }
+    static double ns_of(int b) { return (b - kRangeNs * kBinsPerNs + 0.5) / kBinsPerNs; }
+    void add(double ns, double weight = 1.0) {
+        n += weight;
+        sum += weight * ns;
+        sumsq += weight * ns * ns;
+        worst = std::max(worst, std::abs(ns));
+        const int b = bin_of(ns);
+        if (b < 0 || b >= kBins) {
+            beyond += weight;
+            return;
+        }
+        bins[b] += weight;
+    }
+    double mean() const { return n > 0.0 ? sum / n : 0.0; }
+    double rms() const { return n > 0.0 ? std::sqrt(sumsq / n) : 0.0; }
+    // The q-quantile of |error|, those beyond the range counted at the top.
+    double abs_quantile(double q) const;
+    // The distribution of x + y (sign -1: x - y) for independent x ~ *this and y ~ other, normalised to one.
+    ErrorHistogram convolve(const ErrorHistogram& other, int sign) const;
+};
+
+// A chip's model audited against anchors: the chip's eth wall clock read at a refclk update by a core that builds no
+// model (the drainer), each held until the model is final past it, then its distance from the model in ns, apart
+// for anchors on a line and inside a transition. The refclk reaches the eth cores at different times (up to ~1 ns
+// earlier at the die centre than at its edges), so the audit carries the drainer's and the pusher's difference.
+struct AnchorAudit {
+    struct Pending {
+        double r, w;
+    };
+    std::deque<Pending> pending;
+    ErrorHistogram line, glide;
+    double worst_r = 0.0, worst_ns = 0.0;
+    uint64_t before_model = 0;  // anchors before the model's first instant: nothing places them
+    uint64_t past_model = 0;    // anchors after its last, at capture end
+    ErrorHistogram both() const;
+
+    // Checks every pending anchor the model is final past; `final` checks the rest up to its frontier.
+    void settle(const LocalClockModel& m, bool final);
+};
 
 // A device's refclk onto the root chip's: root_refclk = scale * dev_refclk + shift.
 struct RootXf {
@@ -439,6 +489,8 @@ private:
     ClockMap map_;
     CaptureContext ctx_;
     std::map<uint32_t, LocalClockModel> local_;  // device index -> local fit
+    std::map<uint32_t, AnchorAudit> audit_;      // device index -> its model's audit
+    void log_audit() const;
     LinkSolver links_;
     SeriesPublisher series_;
     // The composed root transforms as of the newest accepted link solution.

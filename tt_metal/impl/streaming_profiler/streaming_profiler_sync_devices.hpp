@@ -16,6 +16,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -184,6 +185,7 @@ public:
         std::vector<CoreCoords>
             eth;  // the idle eth cores, the pusher first: the origin the tile offsets are solved against
         std::vector<CoreCoords> linked;  // the active eth cores the pusher drains, in their roster order
+        std::optional<CoreCoords> drainer;  // the idle eth core whose anchors audit the pusher's clock model
         double frequency_ghz = 0.0;
     };
 

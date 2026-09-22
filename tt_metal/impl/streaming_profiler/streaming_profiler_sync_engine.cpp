@@ -348,9 +348,109 @@ int64_t ClockMap::place_host(uint32_t chip_id, int64_t wall) const noexcept {
     return std::llround(k.value);
 }
 
+double ErrorHistogram::abs_quantile(double q) const {
+    if (n <= 0.0) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    std::vector<std::pair<double, double>> v;
+    for (int b = 0; b < kBins; b++) {
+        if (bins[b] != 0.0) {
+            v.emplace_back(std::abs(ns_of(b)), bins[b]);
+        }
+    }
+    std::sort(v.begin(), v.end());
+    double acc = 0.0;
+    for (const auto& [ns, w] : v) {
+        acc += w;
+        if (acc >= q * n) {
+            return ns;
+        }
+    }
+    return worst;
+}
+
+ErrorHistogram ErrorHistogram::convolve(const ErrorHistogram& other, int sign) const {
+    ErrorHistogram out;
+    if (n <= 0.0 || other.n <= 0.0) {
+        return out;
+    }
+    std::vector<int> mine, theirs;
+    for (int b = 0; b < kBins; b++) {
+        if (bins[b] != 0.0) {
+            mine.push_back(b);
+        }
+        if (other.bins[b] != 0.0) {
+            theirs.push_back(b);
+        }
+    }
+    const double norm = 1.0 / (n * other.n);
+    for (const int i : mine) {
+        for (const int j : theirs) {
+            const int b = bin_of(ns_of(i) + sign * ns_of(j));
+            if (b >= 0 && b < kBins) {
+                out.bins[b] += bins[i] * other.bins[j] * norm;
+            } else {
+                out.beyond += bins[i] * other.bins[j] * norm;
+            }
+        }
+    }
+    out.beyond += (beyond * other.n + n * other.beyond - beyond * other.beyond) * norm;
+    out.n = 1.0;
+    out.sum = mean() + sign * other.mean();
+    out.sumsq = sumsq / n + other.sumsq / other.n + 2.0 * sign * mean() * other.mean();
+    out.worst = worst + other.worst;
+    return out;
+}
+
+ErrorHistogram AnchorAudit::both() const {
+    ErrorHistogram h = line;
+    for (int b = 0; b < ErrorHistogram::kBins; b++) {
+        h.bins[b] += glide.bins[b];
+    }
+    h.n += glide.n;
+    h.sum += glide.sum;
+    h.sumsq += glide.sumsq;
+    h.beyond += glide.beyond;
+    h.worst = std::max(h.worst, glide.worst);
+    return h;
+}
+
+// An anchor is checked once the model's instants around it can no longer change: the curve between two instants
+// needs the one after them.
+void AnchorAudit::settle(const LocalClockModel& m, bool final) {
+    const auto& pts = m.pts;
+    if (pts.size() < 3 && !final) {
+        return;
+    }
+    const double until = final ? m.frontier() : pts[pts.size() - 2].r;
+    while (!pending.empty() && pending.front().r < until) {
+        const Pending a = pending.front();
+        pending.pop_front();
+        if (a.r < pts.front().r) {
+            before_model++;
+            continue;
+        }
+        const double w = m.wall_at(a.r);
+        const double ns = (a.w - w) * kNsPerRefclk / (m.wall_at(a.r + 1.0) - w);
+        const auto hi = std::lower_bound(
+            pts.begin(), pts.end(), a.r, [](const LocalClockModel::Instant& p, double x) { return p.r < x; });
+        const bool in_glide = hi != pts.end() && hi != pts.begin() && hi->k8 == 0 && (hi - 1)->k8 == 0;
+        (in_glide ? glide : line).add(ns);
+        if (std::abs(ns) > std::abs(worst_ns)) {
+            worst_ns = ns;
+            worst_r = a.r;
+        }
+    }
+    if (final) {
+        past_model += pending.size();
+        pending.clear();
+    }
+}
+
 void SyncEngine::on_attach(const CaptureContext& ctx) {
     ctx_ = ctx;
     local_.clear();
+    audit_.clear();
     links_.reset(ctx_);
     series_.reset();
     to_root_gen_ = ~0ull;
@@ -380,6 +480,12 @@ void SyncEngine::on_attach(const CaptureContext& ctx) {
 }
 
 void SyncEngine::on_clock(const ClockSample& s) {
+    if (s.kind == kernel_profiler::kSyncKindAnchor) {
+        const int64_t off = s.dev < ctx_.devices.size() ? ctx_.devices[s.dev].drainer_offset : 0;
+        audit_[s.dev].pending.push_back(
+            AnchorAudit::Pending{static_cast<double>(s.ref), static_cast<double>(s.ts) + static_cast<double>(off)});
+        return;
+    }
     if (s.kind != kernel_profiler::kSyncKindLocal) {
         links_.on_stamp(s);
         return;
@@ -391,6 +497,9 @@ void SyncEngine::on_clock(const ClockSample& s) {
         s.round >> 8,
         s.role == kernel_profiler::kSyncLocalClose,
         static_cast<uint32_t>(s.ref));
+    if (const auto a = audit_.find(s.dev); a != audit_.end()) {
+        a->second.settle(local_[s.dev], /*final=*/false);
+    }
     if (publish_dev(s.dev)) {
         service().wake_consumers();
     }
@@ -1445,6 +1554,100 @@ void SyncEngine::publish_error_plots() {
     }
 }
 
+// The drainer's anchors against each chip's model, and per link what a record of either chip is off the other's:
+// the link and map term of each round with both models' errors, the chips' clocks being independent processes.
+void SyncEngine::log_audit() const {
+    const auto parts = [](const ErrorHistogram& h) {
+        return fmt::format(
+            "{:.0f} (mean {:+.2f}, rms {:.2f}, |err| p50 {:.2f}, p99 {:.2f}, p99.9 {:.2f}, worst {:.2f} ns)",
+            h.n,
+            h.mean(),
+            h.rms(),
+            h.abs_quantile(0.5),
+            h.abs_quantile(0.99),
+            h.abs_quantile(0.999),
+            h.worst);
+    };
+    std::map<uint32_t, AnchorAudit> audit = audit_;
+    for (auto& [dev, a] : audit) {
+        const auto m = local_.find(dev);
+        if (m != local_.end()) {
+            a.settle(m->second, /*final=*/true);
+        }
+        const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] sync audit chip {}: the drainer's anchors against the clock model, on lines {}; "
+            "inside transitions {}; worst at refclk {:.0f}; {} before the model, {} past it",
+            chip,
+            parts(a.line),
+            parts(a.glide),
+            a.worst_r,
+            a.before_model,
+            a.past_model);
+    }
+    ErrorHistogram pooled;
+    double bound = 0.0;
+    size_t links = 0;
+    for (size_t li = 0; li < ctx_.links.size(); li++) {
+        const CaptureContext::Link& L = ctx_.links[li];
+        const auto aa = audit.find(L.dev_a), ab = audit.find(L.dev_b);
+        if (aa == audit.end() || ab == audit.end() || links_.rounds(li).empty()) {
+            continue;
+        }
+        const LinkErrors em = link_errors(li, /*anchored=*/false);
+        if (em.pts.empty()) {
+            continue;
+        }
+        ErrorHistogram lh;
+        for (const PlotPoint& p : em.pts) {
+            lh.add(p.value);
+        }
+        const ErrorHistogram ea = aa->second.both(), eb = ab->second.both();
+        if (ea.n <= 0.0 || eb.n <= 0.0) {
+            continue;
+        }
+        const ErrorHistogram total = lh.convolve(eb, 1).convolve(ea, -1);
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] sync audit chip {} vs chip {} eth({},{}): a record of one against one of the other, "
+            "|err| p50 {:.2f}, p99 {:.2f}, p99.9 {:.2f} ns, mean {:+.2f} ns; bound {:.2f} ns (link worst {:.2f} + "
+            "models {:.2f} + {:.2f})",
+            L.chip_b,
+            L.chip_a,
+            L.eth_a.x,
+            L.eth_a.y,
+            total.abs_quantile(0.5),
+            total.abs_quantile(0.99),
+            total.abs_quantile(0.999),
+            total.mean(),
+            total.worst,
+            lh.worst,
+            eb.worst,
+            ea.worst);
+        for (int b = 0; b < ErrorHistogram::kBins; b++) {
+            pooled.bins[b] += total.bins[b];
+        }
+        pooled.n += 1.0;
+        pooled.sum += total.sum;
+        pooled.sumsq += total.sumsq;
+        pooled.beyond += total.beyond;
+        bound = std::max(bound, total.worst);
+        links++;
+    }
+    if (links != 0) {
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] sync audit over {} links: a record against one on a linked chip, |err| p50 {:.2f}, "
+            "p99 {:.2f}, p99.9 {:.2f} ns; bound {:.2f} ns",
+            links,
+            pooled.abs_quantile(0.5),
+            pooled.abs_quantile(0.99),
+            pooled.abs_quantile(0.999),
+            bound);
+    }
+}
+
 void SyncEngine::publish_clock_plots() {
     for (const auto& [dev, fit] : local_) {
         if (!series_.has_nodes(dev) || dev >= ctx_.devices.size()) {
@@ -1483,6 +1686,7 @@ void SyncEngine::on_capture_end(const CaptureContext& ctx) {
     publish_error_plots();
     publish_clock_plots();
     log_summary();
+    log_audit();
     // The published corrections stay for the sinks that write at process end; the next attach starts fresh.
     local_.clear();
 }

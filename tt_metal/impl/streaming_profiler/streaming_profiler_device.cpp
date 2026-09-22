@@ -368,6 +368,9 @@ bool Devices::boot_device(
     if (ctx.pusher) {
         sd.linked.assign(ctx.producers.begin() + ctx.n_workers + 1, ctx.producers.end());
     }
+    if (ctx.eth_drainer) {
+        sd.drainer = ctx.eth_drainer->core;
+    }
     const uint32_t si = sync_->add_device(std::move(sd));
     ctx.out.ctx.tile_offset.assign(ctx.out.ctx.core_xy.size(), 0);
     if (ctx.pusher) {

@@ -153,13 +153,14 @@ enum SyncRecordWord : std::uint32_t {
     SYNC_VALUE_HI,
     SYNC_WALL_LO,
     SYNC_WALL_HI,
-    SYNC_REF_LO,  // link records: the refclk read together with the wall clock above
+    SYNC_REF_LO,  // link and anchor records: the refclk read together with the wall clock above
     SYNC_REF_HI,
 };
 static_assert(SYNC_REF_HI < kSyncRecordWords);
 // LOCAL: a point of the chip's clock model, value the refclk, wall its line there, round = k8 | n << 8. LINK: a
-// round's 1588 stamp average in kLinkSyncStampUnitsPerNs per ns.
-static constexpr std::uint32_t kSyncKindLocal = 0, kSyncKindLink = 1;
+// round's 1588 stamp average in kLinkSyncStampUnitsPerNs per ns. ANCHOR: the drainer's (wall, refclk) pair at a
+// refclk update, taken independently of the pusher's samples; value and round unused.
+static constexpr std::uint32_t kSyncKindLocal = 0, kSyncKindLink = 1, kSyncKindAnchor = 2;
 static constexpr std::uint32_t kSyncLocalPoint = 0, kSyncLocalClose = 1;
 static constexpr std::uint32_t kSyncRoleT0 = 0, kSyncRoleT1 = 1, kSyncRoleT1B = 2, kSyncRoleT2 = 3;
 static constexpr std::uint32_t kLinkSyncRingOffset = 544;

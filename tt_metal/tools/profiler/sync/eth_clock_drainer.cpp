@@ -60,7 +60,10 @@ constexpr uint32_t kLinkRingBytes = kp::kLinkSyncRingRecords * kRecordBytes;
 constexpr uint32_t kSliceScratch = kLinkScratch + kLinkRingBytes;
 constexpr uint32_t kSliceBytes = kp::kSyncFrameRecords * kRecordBytes;
 constexpr uint32_t kPusherCtrlScratch = (kSliceScratch + kSliceBytes + 63u) & ~63u;
-static_assert(kPusherCtrlScratch + 64 <= kScratchAddr + 6144, "the host carves 6144 B of scratch");
+constexpr uint32_t kAnchorRecords = 8;
+constexpr uint32_t kAnchorScratch = kPusherCtrlScratch + 64;
+static_assert(
+    kAnchorScratch + kAnchorRecords * kRecordBytes <= kScratchAddr + 6144, "the host carves 6144 B of scratch");
 
 inline void write_to_host(const SocketSenderInterface& s, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
@@ -339,6 +342,34 @@ void kernel_main() {
         }
     };
 
+    // Anchors: this core's own (wall, refclk) pair at a refclk update, once per poll, against which the host checks
+    // the pusher's model.
+    uint32_t anchors = 0;
+    const auto anchor = [&]() __attribute__((noinline)) {
+        const eth_ptp::Instant t = eth_ptp::read_bracketed();
+        volatile tt_l1_ptr uint32_t* r =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch + anchors * kRecordBytes);
+        r[kp::SYNC_META] = ((t.spins < 0xFFFFu ? t.spins : 0xFFFFu) << 16) | (kp::kSyncKindAnchor << 8);
+        r[kp::SYNC_ROUND] = 0;
+        r[kp::SYNC_VALUE_LO] = 0;
+        r[kp::SYNC_VALUE_HI] = 0;
+        r[kp::SYNC_WALL_LO] = t.wall_lo;
+        r[kp::SYNC_WALL_HI] = t.wall_hi;
+        r[kp::SYNC_REF_LO] = static_cast<uint32_t>(t.refclk);
+        r[kp::SYNC_REF_HI] = static_cast<uint32_t>(t.refclk >> 32);
+        if (++anchors == kAnchorRecords) {
+            ship(
+                sync_sender,
+                pack_sync_frame(
+                    kPusherXy,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kAnchorScratch),
+                    0,
+                    anchors,
+                    kAnchorRecords));
+            anchors = 0;
+        }
+    };
+
     // Shipping waits for the host's go word, written once the receiver's ingest threads drain these sockets.
     while (*go == 0u && *stop == 0u) {
         (*hb)++;
@@ -359,6 +390,7 @@ void kernel_main() {
         if (*stop != 0u) {
             break;
         }
+        anchor();
         for (uint32_t d = 0; d < kPollCycles; d++) {
             asm volatile("nop");
         }

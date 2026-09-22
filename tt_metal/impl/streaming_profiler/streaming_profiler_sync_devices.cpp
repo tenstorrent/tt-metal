@@ -552,6 +552,11 @@ void SyncDevices::measure_tiles(uint32_t di, CaptureContext::Device& cap) {
         place(CoreType::ETH, c.logical);
     }
     TT_FATAL(i == cap.tile_offset.size(), "streaming profiler: device {} roster and tile offsets disagree", d.chip_id);
+    if (d.drainer) {
+        const TileClock* t = clocks->find(CoreType::ETH, d.drainer->logical);
+        cap.drainer_offset = t == nullptr ? 0 : pusher->offset - t->offset;
+        missing += t == nullptr;
+    }
     if (missing != 0) {
         log_warning(
             tt::LogMetal,
