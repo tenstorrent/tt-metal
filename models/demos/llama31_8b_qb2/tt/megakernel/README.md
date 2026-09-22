@@ -2,7 +2,7 @@
 
 `decode_token` is a **hardware-qualified batch-one token-to-logits prototype**
 with embedding, a 32-layer device loop, and final norm/head in one four-chip
-program. Real-model checks pass at contexts 128 and 2048.
+program. Real-model checks pass at contexts 128, 2048 and 8192.
 See [PROGRESS.md](PROGRESS.md) for exact checkpoints, results and recovery state.
 No measured variant is faster than the original traced model.
 
@@ -25,18 +25,25 @@ head. Prefill stays in the original implementation. Batch one only.
 | `decoder_loop` | one device program loops over the layer weight/KV table | Real layers 0/31, inactive warmup/remap/replay |
 | `decoder_loop_embedding` | token embedding and the device layer loop | Components verified inside decode_token |
 | `decoder_loop_head` | embedding/layer loop, then native AG and fused final norm/head | Separate composition unqualified; head alone exact |
-| `decode_token` | embedding,32-layer loop, final AG/norm/head in one program | Real full model, contexts 128/2048 |
+| `decode_token` | embedding,32-layer loop, final AG/norm/head in one program | Real full model, contexts 128/2048/8192 |
 
 Full-model-qualified modes produce bitwise-identical teacher logits and all64 KV tensors,
 32/32 matching greedy outputs and stable repeated generations at B1/context128.
+Additional full-model tests pass context8192 and256-output generation from
+context128 (positions128→383), with bitwise logits/KV and256/256matching tokens.
 Page tests migrate physical pages, mutate the captured page table in place,
 cross positions127/128 and255/256, and replay repeatedly. Real MLP intermediates
 also match for distinct layers0/31. Host medians: baseline8.785510ms/token,
 MLP9.246204, MLP+RS9.161502, MLP+RS/add9.133671, norm+tail9.336578.
 Full `decode_token` with NoC scratch clearing at context128 is 9.221568ms/token
-versus 8.785510 baseline; context2048 is 9.639827 versus 9.219413 baseline. Both contexts
+versus a refreshed8.788292 baseline; context2048 is9.639827 versus9.220867.
+Context8192 is10.299342 versus9.834495. All three contexts
 match all teacher logits/KV bitwise and all 32 greedy outputs. These are medians
 of three 31-step warmed generations, not device-profiler or serving latency.
+
+Full-model KV comparisons cover all request-touched pages in all64 caches,
+including padded rows; they do not read the entire reserved cache arena. Focused
+layer/loop checks also compare every allocated page and unused sentinels.
 
 BF16 Hugging Face diagnostics are separate from the matched quantized TT
 comparison: baseline and exact prototypes both have logitPCC0.977533 and100%
@@ -84,6 +91,18 @@ python -m models.demos.llama31_8b_qb2.tests.benchmark_megakernel \
     --output /outside/repo/prototype
 ```
 
+To install the complete body in a batch-one generator before any warmup or
+trace capture:
+
+```python
+from models.demos.llama31_8b_qb2.tt.megakernel.decoder import enable_experimental_decode
+
+enable_experimental_decode(generator.model, mode="decode_token", kv_cache=generator.kv_cache)
+```
+
+Release existing traces before switching implementations. The caller retains
+KV allocation ownership; addresses must remain stable for the captured loop.
+
 Use `reference_megakernel --context 128 --tokens 32 --output ...` to prepare the
 CPU HF reference, then pass its `reference.pt` with `--hf-reference` to both TT
 runs. The harness verifies matched prompt/checkpoint/precision/sampling/teacher
@@ -105,8 +124,17 @@ complete windows/all four devices. Device3 median firmware span9.393458ms
 baseline versus9.853521ms GU16 MLP+RS. Kernel durations overlap with waits; do
 not sum phase durations or firmware operation durations into latency. Profiler
 zones include MLP, attention/concat, paged KV and loop barriers. The first complete token profile has35ops/device/window versus999 baseline;
-optimized timings and hardware DRAM-addressed NoC payload results are being
-recorded in PROGRESS.md and the external REPORT.md.
+optimized timings and measured DRAM-addressed NoC payloads are recorded in
+PROGRESS.md and the external REPORT.md. Matched8192 profiles also have complete
+three-window/four-chip coverage (use16000-op support to retain warmup records).
+
+For complete global-barrier accounting, add `TT_METAL_PROFILER_SUM=1` to a
+separate profile process. The loop exports every interval and its sum through
+unused state words; the harness reads them outside signposts and checks all
+86 workers, 64 barriers and four chips on every replay. This avoids optional
+marker-buffer truncation. The intervals include waiting for other workers and
+exclude cross-RISC waits/CB reset; they are not isolated synchronization overhead.
+Do not add them to model latency. Unprofiled execution omits this instrumentation.
 
 Optional `reuse_scratch=True` aliases projection input/weight/partial storage,
 using one weight block to coexist with native prefill allocations. It passes
@@ -161,3 +189,10 @@ full-model context128/2048 checks pass. Generator warmup deliberately uses posit
 all three TRISCs, avoiding divergent branches; the native cache arithmetic runs
 only for active positions. Inactive attention scratch is zeroed and existing KV
 pages remain the test's required invariant. This is not a serving qualification.
+
+
+Long-running replay limit: the current global barrier accumulates32-bit arrivals
+(86 increments per barrier,64 barriers per full token). It can wrap after about
+780,000 full-token invocations of one loop instance, including warmup. This was
+identified by source review, not stress-tested. A bounded or safely resettable
+barrier is required before indefinite serving; this prototype makes no such claim.
