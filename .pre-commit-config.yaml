@@ -156,6 +156,12 @@ repos:
       args: ["--fix", "--quiet"]
       files: ^tt_metal/tt-llk/.*\.(cpp|cc|h|hpp|py)$
       exclude: tensix\.h$
+    - id: llk-check-arch-config
+      name: "llk: keep ckernel_arch_config.h the only reader of generated project macros"
+      entry: python3 tt_metal/tt-llk/infra/check_arch_config.py
+      language: system
+      pass_filenames: true
+      files: ^tt_metal/tt-llk/tt_llk_quasar/.*\.(cpp|cc|h|hpp)$
 - repo: https://github.com/PyCQA/autoflake
   rev: v2.3.1
   hooks:

@@ -38,6 +38,92 @@ inline void _llk_math_transpose_dest_addrmod_()
         .set(ADDR_MOD_2);
 }
 
+// Bands of ELTWISE_MATH_ROWS rows needed to cover one face, and the replay entries one face costs.
+// In 32-bit dest the hi16 plane (DEST_NORM) and the lo16 plane (DEST_32B_LOW) are each covered by their
+// own set of bands, so a face costs twice as many entries as in 16-bit dest.
+constexpr std::uint32_t TRANSPOSE_BANDS_PER_FACE = ckernel::FACE_R_DIM / ELTWISE_MATH_ROWS;
+
+template <bool EN_32BIT_DEST>
+constexpr std::uint32_t transpose_face_replay_len()
+{
+    return (EN_32BIT_DEST ? 4U : 2U) * TRANSPOSE_BANDS_PER_FACE;
+}
+
+/**
+ * @brief Reads one face from DEST into SrcB, transposed, one FPU row band per MOVD2B.
+ *
+ * @tparam EN_32BIT_DEST: Set to true if the destination register is in 32-bit mode
+ * @tparam SRCB_ROW_BASE: First SrcB row this face occupies
+ * @tparam DEST_ROW_BASE: First DEST row this face occupies
+ * @tparam LO_FINAL_ADDR_MOD: Addrmod for the final band, which carries any dest jump to the next face
+ */
+template <bool EN_32BIT_DEST, std::uint32_t SRCB_ROW_BASE, std::uint32_t DEST_ROW_BASE, std::uint8_t LO_FINAL_ADDR_MOD = ADDR_MOD_1>
+inline void _llk_math_transpose_dest_emit_face_read_()
+{
+    constexpr std::uint32_t LAST_BAND = ckernel::FACE_R_DIM - ELTWISE_MATH_ROWS;
+
+    emit_row_bands(
+        [](auto band)
+        {
+            constexpr std::uint32_t ROW      = decltype(band)::value;
+            constexpr std::uint8_t ADDR_MODE = (!EN_32BIT_DEST && ROW == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
+            TTI_MOVD2B(p_mov::DEST_NORM, SRCB_ROW_BASE + ROW, ADDR_MODE, ckernel::arch::mov_fpu_rows, p_movd2b::TRANSPOSE_ON, DEST_ROW_BASE + ROW);
+        });
+
+    if constexpr (EN_32BIT_DEST)
+    {
+        emit_row_bands(
+            [](auto band)
+            {
+                constexpr std::uint32_t ROW      = decltype(band)::value;
+                constexpr std::uint8_t ADDR_MODE = (ROW == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
+                TTI_MOVD2B(
+                    p_mov::DEST_32B_LOW,
+                    SRCB_ROW_BASE + ckernel::FACE_R_DIM + ROW,
+                    ADDR_MODE,
+                    ckernel::arch::mov_fpu_rows,
+                    p_movd2b::TRANSPOSE_ON,
+                    DEST_ROW_BASE + ROW);
+            });
+    }
+}
+
+/**
+ * @brief Writes one transposed face back to DEST from SrcB, one FPU row band per MOVB2D.
+ *
+ * Template parameters mirror @ref _llk_math_transpose_dest_emit_face_read_.
+ */
+template <bool EN_32BIT_DEST, std::uint32_t SRCB_ROW_BASE, std::uint32_t DEST_ROW_BASE, std::uint8_t LO_FINAL_ADDR_MOD = ADDR_MOD_1>
+inline void _llk_math_transpose_dest_emit_face_write_()
+{
+    constexpr std::uint32_t LAST_BAND = ckernel::FACE_R_DIM - ELTWISE_MATH_ROWS;
+
+    emit_row_bands(
+        [](auto band)
+        {
+            constexpr std::uint32_t ROW      = decltype(band)::value;
+            constexpr std::uint8_t ADDR_MODE = (!EN_32BIT_DEST && ROW == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
+            TTI_MOVB2D(p_mov::DEST_NORM, SRCB_ROW_BASE + ROW, ADDR_MODE, ckernel::arch::mov_fpu_rows, p_movb2d::BCAST_OFF, DEST_ROW_BASE + ROW);
+        });
+
+    if constexpr (EN_32BIT_DEST)
+    {
+        emit_row_bands(
+            [](auto band)
+            {
+                constexpr std::uint32_t ROW      = decltype(band)::value;
+                constexpr std::uint8_t ADDR_MODE = (ROW == LAST_BAND) ? LO_FINAL_ADDR_MOD : ADDR_MOD_1;
+                TTI_MOVB2D(
+                    p_mov::DEST_32B_LOW,
+                    SRCB_ROW_BASE + ckernel::FACE_R_DIM + ROW,
+                    ADDR_MODE,
+                    ckernel::arch::mov_fpu_rows,
+                    p_movb2d::BCAST_OFF,
+                    DEST_ROW_BASE + ROW);
+            });
+    }
+}
+
 /**
  * @brief Sets up mop config for transpose dest operations.
  *
@@ -47,82 +133,42 @@ inline void _llk_math_transpose_dest_addrmod_()
 template <bool TRANSPOSE_OF_FACES, bool EN_32BIT_DEST>
 inline void _llk_math_transpose_dest_mop_config_()
 {
+    constexpr std::uint32_t FACE_LEN = transpose_face_replay_len<EN_32BIT_DEST>();
+    constexpr std::uint32_t F        = ckernel::FACE_R_DIM;
     if constexpr (EN_32BIT_DEST)
     {
         if constexpr (TRANSPOSE_OF_FACES)
         {
-            constexpr std::uint32_t replay_buf_len = 24;
+            constexpr std::uint32_t replay_buf_len = 3 * FACE_LEN;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-                    // --- Instructions[0..7]: Simple within face transpose (reused for F0 and F3) ---
+                    // --- Simple within face transpose (reused for F0 and F3) ---
+                    _llk_math_transpose_dest_emit_face_read_<true, 0, 0>();
+                    _llk_math_transpose_dest_emit_face_write_<true, 0, 0, ADDR_MOD_0>(); // dst += 16
 
-                    // Read hi16 from DEST → SrcB[0:15] (transposed)
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
-                    // Read lo16 from DEST → SrcB[16:31] (transposed)
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
+                    // --- F1+F2 within face transpose and swap: read both faces, write back swapped ---
+                    _llk_math_transpose_dest_emit_face_read_<true, 0, 0, ADDR_MOD_0>();     // dst += 16 → F2
+                    _llk_math_transpose_dest_emit_face_read_<true, 2 * F, 0, ADDR_MOD_2>(); // dst -= 16 → F1
 
-                    // Write hi16 to DEST from SrcB[0:15]
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
-                    // Write lo16 to DEST from SrcB[16:31]
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // dst += 16
-
-                    // --- Instructions[8..23]: F1+F2 within face transpose and swap: read both faces, write back swapped ---
-
-                    // Read F1 hi16 → SrcB[0:15] (transposed)
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
-                    // Read F1 lo16 → SrcB[16:31] (transposed)
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_0, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8); // dst += 16 → F2
-
-                    // Read F2 hi16 → SrcB[32:47] (transposed)
-                    TTI_MOVD2B(p_mov::DEST_NORM, 32, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 40, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
-                    // Read F2 lo16 → SrcB[48:63] (transposed)
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 48, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 56, ADDR_MOD_2, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8); // dst -= 16 → F1
-
-                    // Write F2^T SrcB[32:63] → DEST[F1 slot]
-                    TTI_MOVB2D(p_mov::DEST_NORM, 32, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 40, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 48, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 56, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // dst += 16 → F2
-
-                    // Write F1^T SrcB[0..31] → DEST[F2 slot]
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // dst += 16 → F3
+                    // Write F2^T → DEST[F1 slot], then F1^T → DEST[F2 slot]
+                    _llk_math_transpose_dest_emit_face_write_<true, 2 * F, 0, ADDR_MOD_0>(); // dst += 16 → F2
+                    _llk_math_transpose_dest_emit_face_write_<true, 0, 0, ADDR_MOD_0>();     // dst += 16 → F3
                 });
-            ckernel_template temp(1, 1, TT_OP_REPLAY(8, replay_buf_len - 8, 0, 0, 0, 0));
-            temp.set_start_op(TT_OP_REPLAY(0, 8, 0, 0, 0, 0));
-            temp.set_end_ops(TT_OP_REPLAY(0, 8, 0, 0, 0, 0), TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
+            ckernel_template temp(1, 1, TT_OP_REPLAY(FACE_LEN, replay_buf_len - FACE_LEN, 0, 0, 0, 0));
+            temp.set_start_op(TT_OP_REPLAY(0, FACE_LEN, 0, 0, 0, 0));
+            temp.set_end_ops(TT_OP_REPLAY(0, FACE_LEN, 0, 0, 0, 0), TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
             temp.program_bank0_sw_cntl(instrn_buffer);
         }
         else
         {
-            constexpr std::uint32_t replay_buf_len = 8;
+            constexpr std::uint32_t replay_buf_len = FACE_LEN;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-                    // --- Instructions[0..3]: Read one face from DEST → SrcB (transposed) ---
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
-
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
-
-                    // --- Instructions[4..7]: Write one transposed face to DEST from SrcB ---
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
-
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // dst += 16
+                    // Read one face from DEST → SrcB (transposed), then write it back
+                    _llk_math_transpose_dest_emit_face_read_<true, 0, 0>();
+                    _llk_math_transpose_dest_emit_face_write_<true, 0, 0, ADDR_MOD_0>(); // dst += 16
                 });
             // Loop 4 times to transpose all 4 faces
             ckernel_template temp(1 /* mop_outer_loop */, 4 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -134,29 +180,20 @@ inline void _llk_math_transpose_dest_mop_config_()
     {
         if constexpr (TRANSPOSE_OF_FACES)
         {
-            constexpr std::uint32_t replay_buf_len = 16;
+            constexpr std::uint32_t replay_buf_len = 4 * FACE_LEN;
             load_replay_buf<0, replay_buf_len>(
                 []
-                {   // --- Instructions[0..7]: Read from DEST → SrcB (transposed) ---
-                    // Transpose all 8 half-faces in place, then write back with faces 1<->2 swapped.
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 16);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 24);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 32, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 32);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 40, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 40);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 48, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 48);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 56, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 56);
+                {
+                    // Transpose all four faces in place, then write back with faces 1<->2 swapped.
+                    _llk_math_transpose_dest_emit_face_read_<false, 0, 0>();
+                    _llk_math_transpose_dest_emit_face_read_<false, F, F>();
+                    _llk_math_transpose_dest_emit_face_read_<false, 2 * F, 2 * F>();
+                    _llk_math_transpose_dest_emit_face_read_<false, 3 * F, 3 * F>();
 
-                    // --- Instructions[8..15]: Write to DEST from SrcB with faces 1<->2 swapped ---
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 32, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 16);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 40, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 24);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 48, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 48);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 56, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 56);
+                    _llk_math_transpose_dest_emit_face_write_<false, 0, 0>();
+                    _llk_math_transpose_dest_emit_face_write_<false, F, 2 * F>();
+                    _llk_math_transpose_dest_emit_face_write_<false, 2 * F, F>();
+                    _llk_math_transpose_dest_emit_face_write_<false, 3 * F, 3 * F>();
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 1 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -165,17 +202,13 @@ inline void _llk_math_transpose_dest_mop_config_()
         }
         else
         {
-            constexpr std::uint32_t replay_buf_len = 4;
+            constexpr std::uint32_t replay_buf_len = FACE_LEN;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
-                    // --- Instructions[0..1]: Read one face from DEST → SrcB (transposed) ---
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
-
-                    // --- Instructions[2..3]: Write one transposed face to DEST from SrcB ---
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // dst += 16
+                    // Read one face from DEST → SrcB (transposed), then write it back
+                    _llk_math_transpose_dest_emit_face_read_<false, 0, 0>();
+                    _llk_math_transpose_dest_emit_face_write_<false, 0, 0, ADDR_MOD_0>(); // dst += 16
                 });
             // Loop 4 times to transpose all 4 faces
             ckernel_template temp(1 /* mop_outer_loop */, 4 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));

@@ -26,9 +26,10 @@ struct _llk_pack_matmul_tile_layout_t
  */
 inline _llk_pack_matmul_tile_layout_t _llk_pack_matmul_tile_layout_(const TensorShape tensor_shape)
 {
-    const std::uint32_t num_faces       = tensor_shape.total_num_faces();
-    const bool full_tile                = num_faces == NUM_FACES;
-    const std::uint32_t src_face_stride = full_tile || tensor_shape.face_r_dim >= MAX_FPU_ROWS ? 1 : MAX_FPU_ROWS / tensor_shape.face_r_dim;
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    const bool full_tile          = num_faces == NUM_FACES;
+    const std::uint32_t src_face_stride =
+        full_tile || tensor_shape.face_r_dim >= ckernel::arch::dest_row_group ? 1 : ckernel::arch::dest_row_group / tensor_shape.face_r_dim;
     return {num_faces, full_tile, src_face_stride};
 }
 

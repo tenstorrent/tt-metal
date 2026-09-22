@@ -120,9 +120,10 @@ inline std::uint32_t _llk_unpack_matmul_load_tile_replay_(
     static_assert(UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B, "Matmul operands must unpack to SrcA or SrcB");
     static_assert(!TRANSPOSE_EN || UNP_SEL == p_unpacr::UNP_A, "Only SrcA can be transposed");
 
-    const std::uint32_t num_hw_tiles    = _llk_unpack_matmul_src_tile_scale_(tensor_shape);
-    const bool needs_src_clear          = tensor_shape.face_r_dim < MAX_FPU_ROWS;
-    const std::uint32_t dst_face_stride = tensor_shape.face_r_dim <= MAX_FPU_ROWS ? (MAX_FPU_ROWS / tensor_shape.face_r_dim) : 1;
+    const std::uint32_t num_hw_tiles = _llk_unpack_matmul_src_tile_scale_(tensor_shape);
+    const bool needs_src_clear       = tensor_shape.face_r_dim < ckernel::arch::dest_row_group;
+    const std::uint32_t dst_face_stride =
+        tensor_shape.face_r_dim <= ckernel::arch::dest_row_group ? (ckernel::arch::dest_row_group / tensor_shape.face_r_dim) : 1;
 
     const std::uint32_t replay_len = TRANSPOSE_EN ? 1 + NUM_FACES + advance_to_next_tile : 1 + needs_src_clear + num_hw_tiles;
 

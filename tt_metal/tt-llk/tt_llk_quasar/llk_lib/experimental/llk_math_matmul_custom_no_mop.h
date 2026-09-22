@@ -40,7 +40,12 @@ template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = fals
 inline void _llk_math_matmul_run_no_mop_(const bool reuse_a)
 {
     constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
-    constexpr std::uint32_t replay_buf_len  = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
+
+    // Mirrors the selection in _llk_math_matmul_init_: on a part without the non-DI MXFP4_2x image,
+    // 2x runs through direct indexing, so the image to replay is the direct-indexing one.
+    constexpr bool USE_DI_IMAGE = ENABLE_2X_FORMAT && !ckernel::arch::has_mxfp4_2x_replay;
+    constexpr std::uint32_t replay_buf_len =
+        USE_DI_IMAGE ? _llk_math_matmul_di_replay_buf_len_<ENABLE_2X_FORMAT>() : _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
     constexpr std::uint8_t fidelity_phase_completion_addr_mod = ADDR_MOD_4;
     constexpr std::uint8_t tile_completion_addr_mod           = ADDR_MOD_5;

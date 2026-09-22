@@ -30,7 +30,7 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import ChipArchitecture, get_chip_architecture, is_4row_arch
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
@@ -312,6 +312,7 @@ class TestConfig:
     @staticmethod
     def setup_arch():
         TestConfig.CHIP_ARCH = get_chip_architecture()
+        TestConfig.ARCH_SPECIFIC_OPTIONS = ""
         match TestConfig.CHIP_ARCH:
             case ChipArchitecture.WORMHOLE:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-wh"
@@ -333,6 +334,8 @@ class TestConfig:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
+                math_rows = 4 if is_4row_arch() else 8
+                TestConfig.ARCH_SPECIFIC_OPTIONS = f"-DMATH_ROWS={math_rows}"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
@@ -553,12 +556,7 @@ class TestConfig:
             [
                 "-Isfpi/include",
                 # Relative to tests/ (compile cwd), not pytest's cwd.
-                *[
-                    f"-I{p}"
-                    for p in TestConfig.llk_tree_include_roots(
-                        Path("..") / TestConfig.ARCH_LLK_ROOT
-                    )
-                ],
+                *[f"-I{p}" for p in TestConfig.configured_llk_include_roots()],
                 "-I../common",
                 "-I../tools/include",
                 "-I../../hw/inc",
@@ -717,6 +715,11 @@ class TestConfig:
             root / "common" / "inc",
             root / "common" / "inc" / "sfpu",
         ]
+
+    @staticmethod
+    def configured_llk_include_roots() -> List[Path]:
+        arch_root = Path("..") / TestConfig.ARCH_LLK_ROOT
+        return TestConfig.llk_tree_include_roots(arch_root)
 
     @staticmethod
     def add_include_dirs(*dirs, prepend: bool = True) -> None:

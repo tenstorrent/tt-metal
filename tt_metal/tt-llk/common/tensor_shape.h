@@ -23,6 +23,9 @@ constexpr std::uint8_t MAX_NUM_FACES_R_DIM = 2;
 constexpr std::uint8_t MAX_NUM_FACES_C_DIM = 2;
 constexpr std::uint8_t MAX_NUM_FACES       = MAX_NUM_FACES_R_DIM * MAX_NUM_FACES_C_DIM;
 
+// Rows one FPU issue covers on an eight-row FPU, which is also the granularity of the dest/src row
+// layout. Those are two different things and only coincide where the FPU is eight rows wide; on
+// Quasar use ckernel::arch::fpu_rows and ckernel::arch::dest_row_group instead (ckernel_arch_config.h).
 constexpr std::uint8_t MAX_FPU_ROWS           = 8;
 constexpr std::uint8_t MAX_FPU_ROWS_LOG2      = 3;
 constexpr std::uint8_t MAX_TILES_IN_HALF_DEST = 8;

@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     PackGolden,
@@ -46,6 +47,10 @@ from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
 TILE_DIMENSIONS = [32, 32]
+_MX_FORMATS = (
+    [] if is_4row_arch() else [DataFormat.MxInt8, DataFormat.MxInt4, DataFormat.MxInt2]
+)
+
 # Complete list of formats that are supported with L1 accumulation as the
 # OUTPUT format. MX formats (MxInt8) are allowed only as INPUT — accumulation
 # happens on the packed output in L1, and MX formats do not support L1 acc.
@@ -57,9 +62,7 @@ PACK_L1_ACC_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
+        *_MX_FORMATS,
     ]
 )
 

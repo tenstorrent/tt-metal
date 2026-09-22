@@ -4,16 +4,66 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
 #include "ckernel_trisc_common.h"
 
 namespace ckernel::math
 {
 
-// Number of rows for MATH functions
-constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for quasar automotive
+// Number of rows for MATH functions. Sourced from ckernel::arch so that the raw
+// project macro has exactly one reader (ckernel_arch_config.h).
+constexpr static std::uint32_t ELTWISE_MATH_ROWS = ckernel::arch::fpu_rows;
 constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
 constexpr static unsigned int SFP_ROWS           = 2;
+
+namespace detail
+{
+template <std::uint32_t SCALE, typename EmitOne, std::size_t... I>
+inline void emit_unrolled_impl(EmitOne&& emit, std::index_sequence<I...>)
+{
+    (emit(std::integral_constant<std::uint32_t, static_cast<std::uint32_t>(I) * SCALE> {}), ...);
+}
+} // namespace detail
+
+/**
+ * @brief Emits COUNT instructions, passing each iteration index as a compile-time constant.
+ *
+ * Use this wherever an instruction count follows an architecture parameter. Expanding a pack is what
+ * makes the index a constant expression at the TTI_* call: INSTRUCTION_WORD uses the @c "n" asm
+ * constraint, which rejects any operand the compiler cannot fold, so a plain @c for loop compiles only
+ * as long as the optimiser happens to unroll it and breaks at -O0.
+ *
+ * @tparam COUNT: Number of instructions to emit.
+ * @tparam SCALE: Multiplier applied to the index before it is handed to @p emit. Defaults to 1.
+ */
+template <std::uint32_t COUNT, std::uint32_t SCALE = 1, typename EmitOne>
+inline void emit_unrolled(EmitOne&& emit)
+{
+    detail::emit_unrolled_impl<SCALE>(std::forward<EmitOne>(emit), std::make_index_sequence<COUNT> {});
+}
+
+/**
+ * @brief Emits one instruction per FPU row band over a span of NUM_ROWS rows.
+ *
+ * An FPU issue (MVMUL) and a MOV* both cover ELTWISE_MATH_ROWS rows, so covering a 16-row face takes
+ * two instructions on the base part and four on a narrow-FPU part. Expressing that as a count keeps a
+ * single body correct at any width, instead of one hand-unrolled instruction list per part.
+ *
+ * @p emit is called once per band with the band's first row as a @c std::integral_constant. The band
+ * index has to reach TTI_* as a compile-time constant: INSTRUCTION_WORD uses the @c "n" asm constraint,
+ * which rejects any operand the compiler cannot fold. Expanding a pack makes that a language guarantee;
+ * a plain @c for loop only survives because @c -O3 happens to unroll it, and fails to build at -O0.
+ *
+ * @tparam NUM_ROWS: Rows to cover. Defaults to one face.
+ */
+template <std::uint32_t NUM_ROWS = ckernel::FACE_R_DIM, typename EmitOne>
+inline void emit_row_bands(EmitOne&& emit)
+{
+    static_assert(NUM_ROWS % ELTWISE_MATH_ROWS == 0, "an FPU row band must divide the row span it covers");
+    emit_unrolled<NUM_ROWS / ELTWISE_MATH_ROWS, ELTWISE_MATH_ROWS>(std::forward<EmitOne>(emit));
+}
 
 // SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
 constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
@@ -191,26 +241,34 @@ inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
 
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
-    // MOVD2A src is relative to dest_section_base + dest_counter.
-    // Use fixed offsets (0, 8) — the dest counter handles face progression.
+    // MOVD2A src is relative to dest_section_base + dest_counter. One MOV covers one FPU row band, so
+    // a 16-row face takes FACE_R_DIM / ELTWISE_MATH_ROWS of them. The dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCA_VLD tests the bank that MOVD2A will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCA_VLD);
-    TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_8_ROWS, 0);
-    TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_8_ROWS, 8);
+    emit_row_bands(
+        [addrmod](auto band)
+        {
+            constexpr std::uint32_t ROW = decltype(band)::value;
+            TTI_MOVD2A(0, ROW, addrmod, ckernel::arch::mov_fpu_rows, ROW);
+        });
 }
 
 inline void move_d2b_fixed_face(const std::uint8_t addrmod)
 {
-    // MOVD2B src is relative to dest_section_base + dest_counter.
-    // Use fixed offsets (0, 8) — the dest counter handles face progression.
+    // MOVD2B src is relative to dest_section_base + dest_counter. One MOV covers one FPU row band, so
+    // a 16-row face takes FACE_R_DIM / ELTWISE_MATH_ROWS of them. The dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCB_VLD tests the bank that MOVD2B will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
-    TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_8_ROWS, 0, 0);
-    TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_8_ROWS, 0, 8);
+    emit_row_bands(
+        [addrmod](auto band)
+        {
+            constexpr std::uint32_t ROW = decltype(band)::value;
+            TTI_MOVD2B(0, ROW, addrmod, ckernel::arch::mov_fpu_rows, 0, ROW);
+        });
 }
 
 template <EltwiseBinaryReuseDestType binary_reuse_dest>

@@ -49,10 +49,14 @@ jobs:
       fail-fast: false
       matrix:
         test_group: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
+        # Every Quasar part builds from one set of LLK sources, parameterised on the FPU width
+        # (ckernel::arch::fpu_rows). Compile both widths so a change that only holds at one of them
+        # cannot merge. A new part with a different width adds an entry here.
+        fpu_rows: [8, 4]
     container:
       image: ${{ inputs.docker_image }}
 
-    name: "🦄 Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
+    name: "🦄 Compile for Quasar (${{ matrix.fpu_rows }}-row, group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
@@ -71,6 +75,7 @@ jobs:
         shell: bash
         env:
           TEST_SPLITS: ${{ inputs.test_splits }}
+          TT_METAL_QUASAR_FOUR_ROW: ${{ matrix.fpu_rows == 4 && '1' || '0' }}
         run: |
           CHIP_ARCH=quasar
           export CHIP_ARCH
@@ -91,7 +96,7 @@ jobs:
         with:
           name: >-
             ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
-                && 'perf-' || '' }}junit-report-quasar-${{ matrix.test_group }}-compile
+                && 'perf-' || '' }}junit-report-quasar-${{ matrix.fpu_rows }}row-${{ matrix.test_group }}-compile
           path: tests/python_tests/pytest-report-quasar-compile.xml
 
       # Step 5: Publish Test Results
@@ -100,7 +105,7 @@ jobs:
         uses: mikepenz/action-junit-report@v5
         with:
           report_paths: tests/python_tests/pytest-report-quasar-compile.xml
-          check_name: Quasar Compile Tests
+          check_name: Quasar Compile Tests (${{ matrix.fpu_rows }}-row)
           detailed_summary: true
           include_passed: true
           fail_on_failure: false

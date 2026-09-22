@@ -79,12 +79,13 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
     // Two faces make up one face-row; a full 32x32 tile has two of them, a 16x32 tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
 
-    static_assert(
-        ELTWISE_MATH_ROWS == 8, "custom sub bcast-col path hardcodes a 4-op face-row walk and a +24 face-row jump, both valid only for MATH_ROWS == 8");
-
-    constexpr std::uint8_t SRCB_STEP      = ELTWISE_MATH_ROWS; // +8: second half of the current face
-    constexpr std::uint8_t SRCB_REWIND    = static_cast<std::uint8_t>(0x3F & -static_cast<std::int32_t>(ELTWISE_MATH_ROWS)); // -8 in 6-bit two's complement
-    constexpr std::uint8_t SRCB_NEXT_FROW = 3 * ELTWISE_MATH_ROWS;                                                           // +24: skip the unused odd face
+    // One ELWSUB covers one FPU row band, so a face takes FACE_R_DIM / ELTWISE_MATH_ROWS of them and
+    // the rewind has to undo exactly the bands already walked.
+    constexpr std::uint8_t SRCB_STEP = ELTWISE_MATH_ROWS; // next band of the current face
+    // Back to the start of the current SrcB face, in 6-bit two's complement.
+    constexpr std::uint8_t SRCB_REWIND = static_cast<std::uint8_t>(0x3F & -static_cast<std::int32_t>(MAX_FACE_R_DIM - ELTWISE_MATH_ROWS));
+    // On from the last band to the next face-row, skipping the unused odd face.
+    constexpr std::uint8_t SRCB_NEXT_FROW = MAX_FACE_R_DIM + ELTWISE_MATH_ROWS;
 
     // Programmed here rather than in the init so the ELWSUBs below cannot pick up a slot some other
     // math-thread init reprogrammed in between: ADDR_MOD_7 in particular is zeroed by
@@ -116,12 +117,20 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
 
         for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
         {
-            // Even dest face: consume this SrcB face, then rewind so the odd face rereads it.
-            TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 8
-            TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0); // SrcB 8 -> 0
+            // Even dest face: consume this SrcB face a band at a time, then rewind so the odd face rereads it.
+            emit_row_bands(
+                [](auto band)
+                {
+                    constexpr std::uint8_t ADDR_MODE = (decltype(band)::value == MAX_FACE_R_DIM - ELTWISE_MATH_ROWS) ? ADDR_MOD_5 : ADDR_MOD_7;
+                    TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MODE, 0);
+                });
             // Odd dest face: same SrcB face again, then jump to the next face-row.
-            TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // SrcB 0 -> 8
-            TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0); // SrcB 8 -> 32
+            emit_row_bands(
+                [](auto band)
+                {
+                    constexpr std::uint8_t ADDR_MODE = (decltype(band)::value == MAX_FACE_R_DIM - ELTWISE_MATH_ROWS) ? ADDR_MOD_6 : ADDR_MOD_7;
+                    TTI_ELWSUB(p_elwise::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MODE, 0);
+                });
         }
 
         // Release this column's SrcA tile and rewind both read counters; KEEP the held SrcB.

@@ -95,33 +95,72 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 {
     static_assert(BROADCAST_TYPE != BroadcastType::NONE, "Broadcast type cannot be NONE");
 
+    // One MOV covers one FPU row band, so every fixed replay image below is a band count rather than a
+    // hand-unrolled instruction list: the same source serves any FPU width.
+    constexpr std::uint32_t MOV_FPU_ROWS    = ckernel::arch::mov_fpu_rows;
+    constexpr std::uint32_t BANDS_PER_FACE  = ckernel::FACE_R_DIM / ELTWISE_MATH_ROWS;
+    constexpr std::uint32_t BANDS_PER_GROUP = ckernel::arch::dest_row_group / ELTWISE_MATH_ROWS;
+    // SrcB rows holding the lo16 plane, and the dest offset of the far face of the pair.
+    constexpr std::uint32_t LO16_SRC = ckernel::FACE_R_DIM;
+    constexpr std::uint32_t FAR_FACE = ckernel::FACE_R_DIM;
+    // ADDR_MOD_3 carries the dest jump and belongs on the final band of a pass.
+    constexpr std::uint32_t LAST_BAND = ckernel::FACE_R_DIM - ELTWISE_MATH_ROWS;
+
     if constexpr (unpack_to_dest)
     {
         if constexpr (BROADCAST_TYPE == BroadcastType::COL)
         {
-            constexpr std::uint32_t replay_buf_len = 12;
+            // Six passes over one face: two reads (hi16, lo16) and four writes (hi16 and lo16, each to
+            // the near and far face). One instruction per FPU row band in each pass.
+            constexpr std::uint32_t replay_buf_len = 6 * BANDS_PER_FACE;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
                     // Read F0/F2 hi16 from DEST → SrcB[0:15]
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                    TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVD2B(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
+                        });
 
                     // Read F0/F2 lo16 from DEST → SrcB[16:31]
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 8);
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVD2B(p_mov::DEST_32B_LOW, LO16_SRC + ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
+                        });
 
                     // Write hi16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24);
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVB2D(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, ROW);
+                        });
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVB2D(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, FAR_FACE + ROW);
+                        });
 
                     // Write lo16 to DEST F0,F1/F2,F3 from SrcB[0:31] (column broadcast ON)
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 8);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 16);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 24); // dst += 2* face_r_dim, F0 → F2
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVB2D(p_mov::DEST_32B_LOW, LO16_SRC + ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, ROW);
+                        });
+                    // dst += 2 * face_r_dim on the last band, F0 → F2
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW      = decltype(band)::value;
+                            constexpr std::uint8_t ADDR_MODE = ROW == LAST_BAND ? ADDR_MOD_3 : ADDR_MOD_4;
+                            TTI_MOVB2D(p_mov::DEST_32B_LOW, LO16_SRC + ROW, ADDR_MODE, MOV_FPU_ROWS, p_movb2d::BCAST_ON, FAR_FACE + ROW);
+                        });
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -130,25 +169,57 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
         }
         else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
         {
-            constexpr std::uint32_t replay_buf_len = 10;
+            // Two reads covering one dest row group, then one broadcast write per band across each of
+            // the two face columns (near face at 0, far face at 32).
+            constexpr std::uint32_t replay_buf_len = 2 * BANDS_PER_GROUP + 4 * BANDS_PER_FACE;
+            constexpr std::uint32_t COL_FACE       = 2 * ckernel::FACE_R_DIM;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
                     // Read F0/F1 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
+                    emit_row_bands<ckernel::arch::dest_row_group>(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVD2B(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
+                        });
+                    emit_row_bands<ckernel::arch::dest_row_group>(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVD2B(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group + ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
+                        });
 
-                    // Write hi16 to DEST F0,F2/F1,F3 from SrcB[0:7] (row broadcast ON)
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1);
+                    // Write hi16 to DEST F0,F2/F1,F3 from SrcB[0:7] (row broadcast ON).
+                    // The source row stays put: a row broadcast replays the same SrcB row into every dest row.
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, ROW + 1);
+                        });
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, COL_FACE + ROW + 1);
+                        });
 
                     // Write lo16 to DEST F0,F2/F1,F3 from SrcB[8:15] (row broadcast ON)
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0 + 1);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8 + 1);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 32 + 1);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 40 + 1); // dst += face_r_dim, F0 → F1
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVB2D(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, ROW + 1);
+                        });
+                    // dst += face_r_dim on the last band, F0 → F1
+                    emit_row_bands(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW      = decltype(band)::value;
+                            constexpr std::uint8_t ADDR_MODE = ROW == LAST_BAND ? ADDR_MOD_3 : ADDR_MOD_4;
+                            TTI_MOVB2D(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group, ADDR_MODE, MOV_FPU_ROWS, p_movb2d::BCAST_OFF, COL_FACE + ROW + 1);
+                        });
                 });
 
             ckernel_template temp(1 /* mop_outer_loop */, 2 /* mop_inner_loop */, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
@@ -157,21 +228,36 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
         }
         else // BroadcastType::SCALAR
         {
-            constexpr std::uint32_t replay_buf_len = 4;
+            // The reads cover one dest row group; the two writes then broadcast that group over the
+            // whole dest, one band at a time, driven by the MOP inner loop.
+            constexpr std::uint32_t read_len       = 2 * BANDS_PER_GROUP;
+            constexpr std::uint32_t replay_buf_len = read_len + 2;
+            constexpr std::uint32_t dest_bands     = (ckernel::FACE_R_DIM * NUM_FACES) / ELTWISE_MATH_ROWS;
             load_replay_buf<0, replay_buf_len>(
                 []
                 {
                     // Read F0 rows[0:7] hi16 and lo16 from DEST → SrcB[0:15]
-                    TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
-                    TTI_MOVD2B(p_mov::DEST_32B_LOW, 8, ADDR_MOD_4, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_OFF, 0);
+                    emit_row_bands<ckernel::arch::dest_row_group>(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVD2B(p_mov::DEST_NORM, ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
+                        });
+                    emit_row_bands<ckernel::arch::dest_row_group>(
+                        [](auto band)
+                        {
+                            constexpr std::uint32_t ROW = decltype(band)::value;
+                            TTI_MOVD2B(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group + ROW, ADDR_MOD_4, MOV_FPU_ROWS, p_movd2b::TRANSPOSE_OFF, ROW);
+                        });
 
                     // Write hi16 and lo16 to DEST[0:63] from SrcB[0:15] (row and column broadcast ON)
-                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1);
-                    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_3, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_ON, 0 + 1); // dst += 8
+                    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_4, MOV_FPU_ROWS, p_movb2d::BCAST_ON, 0 + 1);
+                    // dst += one FPU row band
+                    TTI_MOVB2D(p_mov::DEST_32B_LOW, ckernel::arch::dest_row_group, ADDR_MOD_3, MOV_FPU_ROWS, p_movb2d::BCAST_ON, 0 + 1);
                 });
 
-            ckernel_template temp(1 /* mop_outer_loop */, 8 /* mop_inner_loop */, TT_OP_REPLAY(2, 2, 0, 0, 0, 0));
-            temp.set_start_op(TT_OP_REPLAY(0, 2, 0, 0, 0, 0));
+            ckernel_template temp(1 /* mop_outer_loop */, dest_bands /* mop_inner_loop */, TT_OP_REPLAY(read_len, 2, 0, 0, 0, 0));
+            temp.set_start_op(TT_OP_REPLAY(0, read_len, 0, 0, 0, 0));
             temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
             temp.program_bank0_sw_cntl(instrn_buffer);
         }
@@ -206,7 +292,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             constexpr std::uint32_t bcast_row = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
             constexpr std::uint32_t bcast_col = (BROADCAST_TYPE != BroadcastType::ROW) ? 1U : 0U;
             const auto movb2d                 = [bcast_col, bcast_row](std::uint8_t addr_mod)
-            { return TT_OP_MOVB2D(0, 0, addr_mod, p_mov_src_to_dest::MOV_8_ROWS, bcast_col, bcast_row); }; // dst_addr += 1 enables row broadcast
+            { return TT_OP_MOVB2D(0, 0, addr_mod, MOV_FPU_ROWS, bcast_col, bcast_row); }; // dst_addr += 1 enables row broadcast
 
             ckernel_template temp(outer, inner, movb2d(ADDR_MOD_0));
             temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
