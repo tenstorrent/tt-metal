@@ -24,10 +24,33 @@ from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, log_timing_table, ru
 
 NUM_INFERENCE_STEPS = 5
 EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
-SEED = 0
+# MINIMAX_H3_SEED overrides it, so a sweep can move off seed 0 -- the audio a seed produces is part of the
+# generation, not the decoder, so comparing decoder configurations does not require keeping it.
+SEED = int(os.environ.get("MINIMAX_H3_SEED", "0"))
+# MINIMAX_H3_PROMPT swaps the prompt. The calibrated one is what the timing numbers were taken on, so a
+# different prompt is for listening to or looking at a clip, not for comparing against those numbers.
+PROMPT = os.environ.get("MINIMAX_H3_PROMPT") or CALIBRATED_FOX_PROMPT
 ASPECT_RATIO = (16, 9)
 DURATIONS_S = [5, 10, 15]
 VSA_SPARSITY = 0.9
+
+
+def _write_frame_crcs(video, height: int, path: str) -> None:
+    """One line per frame: crc32 of the planar frame, then of the four row bands of its Y plane (the
+    strip stitch's mesh rows), so two runs compare at the raw level and a difference has a location."""
+    import zlib
+
+    import numpy as np
+
+    frames = np.asarray(video)
+    band = height // 4
+    with open(path, "w") as handle:
+        for index, frame in enumerate(frames):
+            luma = frame[:height]
+            bands = " ".join(
+                f"{zlib.crc32(np.ascontiguousarray(luma[r : r + band]).tobytes()):08x}" for r in range(0, height, band)
+            )
+            handle.write(f"{index} {zlib.crc32(np.ascontiguousarray(frame).tobytes()):08x} {bands}\n")
 
 
 @pytest.mark.timeout(5400)
@@ -40,7 +63,7 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
 
     # MINIMAX_H3_VAE_PHASES synchronizes between the decode's phases to separate them, which also
     # serializes them: the stage total it reports is inflated and only the shares are readable.
-    stitch = os.environ.get("MINIMAX_H3_VAE_STITCH", "gather")
+    stitch = os.environ.get("MINIMAX_H3_VAE_STITCH")  # unset: the pipeline's default
     profile_phases = bool(int(os.environ.get("MINIMAX_H3_VAE_PHASES", "0")))
 
     height, width = resolve_canvas_size(*ASPECT_RATIO)
@@ -53,13 +76,14 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
         lora_strength=float(os.environ.get("FASTH3_LORA_STRENGTH", 1.0)),
         vsa_config=MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY),
         vae_output_type="yuv420",
-        vae_stitch_exchange=stitch,
         vae_profile=profile_phases,
+        **({"vae_stitch_exchange": stitch} if stitch else {}),
     )
+    stitch = pipeline.vae_stitch_exchange
 
     output = run_warm_generation(
         pipeline,
-        CALIBRATED_FOX_PROMPT,
+        PROMPT,
         num_frames=num_frames,
         height=height,
         width=width,
@@ -67,6 +91,12 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
         seed=SEED,
     )
     assert output.video_format == "yuv420", f"asked for yuv420 but the pipeline returned {output.video_format}"
+    if os.environ.get("MINIMAX_H3_FRAME_CRC"):
+        _write_frame_crcs(output.video, height, os.environ["MINIMAX_H3_FRAME_CRC"])
+    if os.environ.get("MINIMAX_H3_FRAME_DUMP"):
+        import numpy as np
+
+        np.save(os.environ["MINIMAX_H3_FRAME_DUMP"], np.asarray(output.video))
 
     report = pipeline._lora_report
     assert report is not None and report.bound, "the transformer was built without an adapter bound"

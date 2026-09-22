@@ -307,7 +307,7 @@ class MiniMaxH3Pipeline:
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
         vae_output_type: str = "float",
-        vae_stitch_exchange: str = "gather",
+        vae_stitch_exchange: str = "strips",
         vae_profile: bool = False,
     ) -> None:
         # VSA (video sparse attention, VSA_SCOPE.md): None (default) leaves the dense paths
@@ -411,10 +411,9 @@ class MiniMaxH3Pipeline:
         if vae_output_type not in ("float", "uint8", "yuv420"):
             raise ValueError(f"vae_output_type must be 'float', 'uint8' or 'yuv420', got {vae_output_type!r}")
         self.vae_output_type = vae_output_type
-        # How a device-stitched wave shares tiles: `"gather"` all-gathers the wave to every device
-        # and blends whole canvases; `"neighbor"` exchanges only the overlap strips. See
-        # `MiniMaxH3Vae`. `vae_profile` serializes the decode's phases so they are separable, which
-        # inflates the stage -- diagnostics only, never a measurement configuration.
+        # How a device-stitched wave shares tiles: `"strips"` (default, falls back to `"gather"` where the grid does not fit
+        # the mesh), `"gather"` or `"neighbor"`; see `MiniMaxH3Vae`. `vae_profile` serializes the decode's phases so they
+        # are separable, which inflates the stage -- diagnostics only, never a measurement configuration.
         self.vae_stitch_exchange = vae_stitch_exchange
         self.vae_profile = bool(vae_profile)
         self._video_processor = None
@@ -457,7 +456,7 @@ class MiniMaxH3Pipeline:
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
         vae_output_type: str = "float",
-        vae_stitch_exchange: str = "gather",
+        vae_stitch_exchange: str = "strips",
         vae_profile: bool = False,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
