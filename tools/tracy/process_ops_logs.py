@@ -680,10 +680,28 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # A host-recorded DNN op can legitimately have no row in the C++
+                # device report: ops executed only during trace capture, or whose
+                # device data is attributed to the enclosing trace, show up host
+                # side with no standalone device record. Aborting the whole report
+                # over one such op loses every other op's data, which is why two
+                # in-repo harnesses describe this assert as a tool bug
+                # (models/tt_dit/.../tracy_decode_harness.py,
+                #  models/experimental/hunyuan_image_3_0/tests/perf/test_encoder_perf_tracy.py).
+                # Skip it, keep the rest, and say so. Set
+                # TT_METAL_PROFILER_STRICT_DEVICE_MATCH=1 to restore the assert.
+                if os.environ.get("TT_METAL_PROFILER_STRICT_DEVICE_MATCH", "0") == "1":
+                    raise AssertionError(
+                        f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                        f"for device {device_id} (trace_id={host_trace_id})"
+                    )
+                logger.warning(
+                    f"Device data missing: Op {op_id} ({host_op.get('name', '?')}) not present in "
+                    f"{PROFILER_CPP_DEVICE_PERF_REPORT} for device {device_id} (trace_id={host_trace_id}); "
+                    f"skipping this op and keeping the rest of the report"
+                )
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:

@@ -1897,6 +1897,12 @@ class ModelArgs:
             and os.getenv("QWEN_SDPA_BIG_CHUNK_BS1", "0") == "1"
         ):
             short_seq_chunk = 128
+        # Direct override so the chunk can be swept per model. The 128 above was
+        # chosen on 0.6B (head_dim 128, 16 q heads); 4B has 32 q heads over the
+        # same head_dim, so the per-chunk work and the SDPA grid balance differ.
+        _sdpa_chunk_env = os.getenv("QWEN_SDPA_CHUNK")
+        if _sdpa_chunk_env:
+            short_seq_chunk = int(_sdpa_chunk_env)
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
@@ -2092,8 +2098,14 @@ class ModelArgs:
                 # short prefill batch was already only utilizing 64 cores in
                 # practice (M=16 doesn't divide 10), so the (8,8) explicit cap is
                 # not a regression and unlocks proper block-w / subblock-w.
-                qkv_grid_y = 8
-                qkv_grid_x = 8
+                # NOTE: the (8,8) rationale above is derived from 0.6B, where
+                # K=dim=1024 -> 32 K-tiles and grid_y=10 gives a non-integer 3.2.
+                # It does not hold for every model in this family: 4B has
+                # dim=2560 -> 80 K-tiles, so grid_y=10 divides cleanly (8 per
+                # row). QWEN_QKV_GRID_Y / QWEN_QKV_GRID_X allow the wider grid
+                # to be swept where the divisibility works out.
+                qkv_grid_y = int(os.getenv("QWEN_QKV_GRID_Y", 8))
+                qkv_grid_x = int(os.getenv("QWEN_QKV_GRID_X", 8))
                 qkv_per_core_M = (
                     7
                     if self.device_name == "P100"
@@ -4109,9 +4121,13 @@ class ModelArgs:
         """Find a grid such that the number of row tiles evenly divides into the number
         of rows and the number of column tiles evenly divides into the number of columns
         """
-        max_rows = 8
-        max_cols = 8
-        # TODO Improve configuration for BH (higher core grid than WH)
+        # The 8x8 cap is a Wormhole-era default; Blackhole P150 exposes up to
+        # 12x10=120 worker cores, so the stock caps leave ~half the device idle
+        # on prefill matmuls (tt-perf-report shows 64 cores used on a 120-core
+        # part). QWEN_PREFILL_GRID_MAX_{ROWS,COLS} let the caps be swept per
+        # model; the divisibility loops below still pick a legal grid.
+        max_rows = int(os.getenv("QWEN_PREFILL_GRID_MAX_ROWS", 8))
+        max_cols = int(os.getenv("QWEN_PREFILL_GRID_MAX_COLS", 8))
 
         # Find number of cols that evenly divides into the number of columns
         cols = None
@@ -4445,8 +4461,14 @@ class ModelArgs:
         # an axis if the tile counts can't be split cleanly. Bigger grids don't
         # pay off for LN since the per-tile work is tiny and reduction overhead
         # grows with core count.
-        gx_max = 8
-        gy_max = 8
+        # The 8x8 aim is inherited from BGE-M3 / 0.6B, where k_tiles=32 gives
+        # block_w=4 and the per-core tile cap below is satisfied. It silently
+        # disables this path on wider models: 4B has k_tiles=80, so gx=8 gives
+        # block_w=10 and block_h*block_w=20 > 16 -> return None. gx=10 divides 80
+        # and lands exactly on the cap. Let the caps be swept rather than pinned
+        # to the narrow model's shape.
+        gx_max = int(os.getenv("QWEN_LN_GRID_MAX_X", 8))
+        gy_max = int(os.getenv("QWEN_LN_GRID_MAX_Y", 8))
         gx = min(gx_max, k_tiles)
         while gx > 0 and k_tiles % gx != 0:
             gx -= 1
@@ -4470,7 +4492,7 @@ class ModelArgs:
         # tiles per core (~192 KB) avoids clashes with dynamic L1 buffers.
         # bs=8 ISL=512 batched (block_h=16, block_w=4 -> 64) hit a CB clash
         # precisely at this regime; bs=1 ISL=512 (2*4 = 8) runs cleanly.
-        if block_h * block_w > 16:
+        if block_h * block_w > int(os.getenv("QWEN_LN_MAX_TILES_PER_CORE", 16)):
             return None
         # subblock_w must divide block_w and be in [1, 4] (kernel constraint).
         subblock_w = min(4, block_w)
