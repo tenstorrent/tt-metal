@@ -56,9 +56,14 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // while an addressed operand is read in LOGICAL order; for a height shard those coincide,
     // but for a width or block shard they do not, and the operands end up misaligned -- silently,
     // measured at PCC 0.25 and 0.50 before this rule existed.
+    // is_sharded() is also true for ND_SHARDED, and an ND distribution that has no legacy
+    // equivalent (CONTIGUOUS_1D) deliberately carries no legacy shard_spec at all -- see
+    // TensorSpec::populate_legacy_shard_spec_from_nd. So every use of the legacy spec has to be
+    // guarded: a tensor without one can only take the addressing path.
     const auto shard_of = [](const Tensor& t) { return t.memory_config().shard_spec(); };
-    const auto is_uneven_shard = [](const Tensor& t) {
-        if (!t.is_sharded()) {
+    const auto has_legacy_shard = [&](const Tensor& t) { return t.is_sharded() && shard_of(t).has_value(); };
+    const auto is_uneven_shard = [&](const Tensor& t) {
+        if (!has_legacy_shard(t)) {
             return false;
         }
         const auto& shape = t.padded_shape();
@@ -69,8 +74,8 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         }
         return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
     };
-    const auto is_l1_sharded = [](const Tensor& t) {
-        return t.is_sharded() && t.memory_config().buffer_type() == BufferType::L1;
+    const auto is_l1_sharded = [&](const Tensor& t) {
+        return has_legacy_shard(t) && t.memory_config().buffer_type() == BufferType::L1;
     };
 
     const bool can_alias_shards = [&]() {
@@ -85,7 +90,12 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         const auto a = *shard_of(grad_output);
         const auto b = *shard_of(input);
         const auto c = *shard_of(output);
-        return a.grid == b.grid && b.grid == c.grid && a.shape == b.shape && b.shape == c.shape;
+        // The WHOLE ShardSpec must match, orientation included. Orientation decides which
+        // logical shard lands on which core, and the runtime-argument enumeration below reads
+        // one operand's orientation for all of them -- so aliasing specs that agree on grid and
+        // shape but differ in orientation pairs up different logical shards and computes
+        // finite, misordered gradients.
+        return a == b && b == c;
     }();
 
     const bool grad_output_sharded = can_alias_shards;

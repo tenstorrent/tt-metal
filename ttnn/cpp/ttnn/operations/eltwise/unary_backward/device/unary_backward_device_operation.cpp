@@ -48,12 +48,17 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         op_name,
         name);
 
-    // Sharded operands are supported: a sharded tensor's circular buffer is bound to its own
-    // buffer and the dataflow kernels skip the copy for it. What is NOT supported is a shard
-    // spec whose shard is not a whole number of tiles, because the program is one-to-one on
-    // physical tiles.
-    if (tensor.is_sharded()) {
-        const auto& shard_shape = tensor.memory_config().shard_spec()->shape;
+    // Sharded operands are supported: the factory either aliases each circular buffer to its
+    // tensor's shard or addresses every operand through TensorAccessor. What is NOT supported
+    // is a legacy shard spec whose shard is not a whole number of tiles, because the program is
+    // one-to-one on physical tiles.
+    //
+    // Guarded on the optional rather than on is_sharded(): that is also true for ND_SHARDED,
+    // and an ND distribution with no legacy equivalent (CONTIGUOUS_1D) carries no legacy shard
+    // spec -- see TensorSpec::populate_legacy_shard_spec_from_nd. Such a tensor has no 2D shard
+    // shape to check and takes the addressing path.
+    if (const auto shard_spec = tensor.memory_config().shard_spec(); shard_spec.has_value()) {
+        const auto& shard_shape = shard_spec->shape;
         TT_FATAL(
             shard_shape[0] % tt::constants::TILE_HEIGHT == 0 && shard_shape[1] % tt::constants::TILE_WIDTH == 0,
             "{} operation requires a shard shape that is a whole number of tiles, but {} has a {}x{} shard.",
