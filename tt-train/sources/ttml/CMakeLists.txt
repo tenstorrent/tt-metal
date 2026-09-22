@@ -422,7 +422,7 @@ if(COMMAND tt_configure_ccache_for_pch)
     tt_configure_ccache_for_pch(ttml_pch)
 endif()
 
-target_precompile_headers(ttml REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(ttml ttml_pch)
 
 if(ENABLE_LIBCXX)
     target_link_libraries(

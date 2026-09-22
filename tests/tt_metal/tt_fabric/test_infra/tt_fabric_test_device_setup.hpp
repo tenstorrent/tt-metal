@@ -35,14 +35,10 @@ using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
 namespace tt::tt_fabric::fabric_tests {
 
-// ConnectionKey identifies a unique physical fabric connection from this src device.
-// (direction, link_idx) maps 1:1 to a specific eth channel (eth_chan); we store eth_chan
-// directly to make the dedup intent explicit. The first-hop neighbor through this link is
-// stored on the Connection (Connection::next_hop_dst), not on the key. Multiple traffic
-// configs whose final destinations all route through the same eth chan + VC dedup to one
-// ConnectionKey here (e.g. Z-link sub-torus all-to-all). Multi-Z disambiguation between
-// neighbor meshes is preserved naturally because separate Z eth chans have distinct
-// (link_idx, eth_chan) values.
+// Maximum E/W/N/S/Z outputs from one multicast root.
+inline constexpr std::size_t MAX_MCAST_INJECTIONS = 5;
+
+// Identifies one physical first-hop fabric connection.
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
@@ -78,10 +74,7 @@ struct ConnectionKeyHash {
 enum class TestWorkerType : uint8_t { SENDER, RECEIVER, SYNC, MUX };
 
 struct Connection {
-    // Representative first-hop neighbor through this fabric connection. Used as the dst
-    // when calling append_fabric_(vc2_)connection_rt_args / mux rt-args. For NESW this is
-    // the direction's unique neighbor; for Z this is the actual peer chip on the other end
-    // of the eth chan (resolved via the control plane).
+    // Peer used to build this connection's runtime arguments.
     FabricNodeId next_hop_dst{MeshId{0}, 0};
 
     std::set<tt::tt_metal::CoreCoord> sender_cores;           // Data senders (full-size channels)
@@ -224,6 +217,7 @@ public:
         const std::vector<uint32_t>& rt_args,
         const std::vector<uint32_t>& local_args,
         uint32_t local_args_address,
+        uint32_t local_args_capacity_bytes,
         const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
         tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default) const;
     void collect_results();
@@ -244,15 +238,16 @@ public:
     void add_config(TestTrafficSenderConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    const std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>>& get_configs() const { return configs_; }
+    const std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>>& get_configs() const {
+        return configs_;
+    }
 
     // Accessors for progress monitoring
     tt::tt_metal::CoreCoord get_core() const { return logical_core_; }
     uint64_t get_total_packets() const;  // Defined out-of-line
 
-    // stores traffic config and the corresponding fabric connection key
-    // Managed by TestDevice::connection_manager_
-    std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>> configs_;
+    // Multi-output 2D multicast configs carry one key per canonical root output.
+    std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>> configs_;
 };
 
 struct TestReceiver : TestWorker {
@@ -272,9 +267,7 @@ public:
     void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    // stores traffic config and the corresponding fabric connection key
-    // Managed by TestDevice::sync_connection_manager_
-    std::vector<std::pair<TestTrafficSyncConfig, ConnectionKey>> configs_;
+    std::vector<std::pair<TestTrafficSyncConfig, std::vector<ConnectionKey>>> configs_;
 };
 
 struct TestMux : TestWorker {
@@ -416,12 +409,7 @@ private:
     void create_sync_kernel();
     void create_mux_kernels();
 
-    // Helper: Common connection registration logic for senders and receivers.
-    // Registers a fabric connection for the specified direction, link, and VC. The eth chan
-    // and the first-hop neighbor (used as the dst when calling the fabric API later) are
-    // derived internally from (src, direction, link_idx) — the caller's final dst is not
-    // part of the dedup key, so multiple traffic configs with different final dsts that
-    // share the same physical link collapse to one ConnectionKey.
+    // Registers a connection and resolves its physical channel and peer.
     ConnectionKey register_fabric_connection(
         tt::tt_metal::CoreCoord logical_core,
         TestWorkerType worker_type,

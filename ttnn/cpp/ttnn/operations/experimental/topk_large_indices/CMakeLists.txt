@@ -7,7 +7,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_topk_large_indices ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::TopkLargeIndices ALIAS ttnn_op_experimental_topk_large_indices)
 
-target_precompile_headers(ttnn_op_experimental_topk_large_indices REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_topk_large_indices TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_topk_large_indices)
 
 set_target_properties(

@@ -369,6 +369,14 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
+class SFPU_TYPED_BF16_STORE(TemplateParameter):
+    typed_bf16_store: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_TYPED_BF16_STORE = {str(self.typed_bf16_store).lower()};"
+
+
+@dataclass
 class SFPU_FAST_APPROX(TemplateParameter):
     """The sqrt/rsqrt family's ``FAST_APPROX`` template argument.
 
@@ -882,6 +890,10 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
     b2d_base: int = 0
     sections: int = 1
     sigmoid: bool = False
+    transpose_of_faces: bool = True
+    do_extra_scale: bool = False
+    extra_scale: int = 0x3F800000
+    output_tiles: int = 3
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -913,6 +925,10 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
             f"constexpr std::uint32_t GMG_B2D_BASE = {self.b2d_base};",
             f"constexpr std::uint32_t GMG_SECTIONS = {self.sections};",
             f"constexpr bool GMG_SIGMOID = {str(self.sigmoid).lower()};",
+            f"constexpr bool GMG_TRANSPOSE_OF_FACES = {str(self.transpose_of_faces).lower()};",
+            f"constexpr bool GMG_DO_EXTRA_SCALE = {str(self.do_extra_scale).lower()};",
+            f"constexpr std::uint32_t GMG_EXTRA_SCALE = {self.extra_scale};",
+            f"constexpr std::uint32_t GMG_OUTPUT_TILES = {self.output_tiles};",
         ]
         return "\n".join(lines)
 
@@ -964,11 +980,17 @@ class ROPE(TemplateParameter):
     cos_base: int = 64
     sin_base: int = 128
     cs_stride: int = 64
+    fused_cos_sin: bool = False
+    tile_h: int = 1
+    cos_sin_per_row: bool = False
     has_scale: bool = False
     scale_fp32: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
+            f"constexpr bool ROPE_FUSED_COS_SIN = {str(self.fused_cos_sin).lower()};",
+            f"constexpr std::uint32_t ROPE_TILE_H = {self.tile_h};",
+            f"constexpr bool ROPE_COS_SIN_PER_ROW = {str(self.cos_sin_per_row).lower()};",
             f"constexpr std::uint32_t ROPE_HT = {self.ht};",
             f"constexpr std::uint32_t ROPE_WT = {self.wt};",
             f"constexpr std::uint32_t ROPE_X_BASE = {self.x_base};",
@@ -1001,6 +1023,7 @@ class TOPK_XL(TemplateParameter):
     sort_mode: TopKXLSortMode = TopKXLSortMode.Dispatch
     lsb_row_major: bool = False
     reinit_after_copy: bool = False
+    blaze_compat: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1022,6 +1045,8 @@ class TOPK_XL(TemplateParameter):
             f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
             f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
         ]
+        if self.blaze_compat:
+            lines.append("#define TOPK_XL_BLAZE_COMPAT 1")
         return "\n".join(lines)
 
 
@@ -1957,26 +1982,6 @@ class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t CHUNK_SIZE;", "I"
-
-
-@dataclass
-class MULSCALARHIFI_HIFI_INIT(TemplateParameter):
-    """Select the REVERTED HiFi general-init path in eltwise_mul_scalar_hifi_test.cpp.
-
-    Emits ``#define HIFI_GENERAL_INIT`` when ``enabled`` so the C++ reproduces
-    ``deepseek_binary_dest_reuse_tiles_init``'s HiFi branch verbatim: the general
-    ``_llk_math_eltwise_binary_init_<ELWMUL, NONE, MATH_FIDELITY, DEST_TO_SRCA>``
-    called with a hard-coded ``ckernel::DEFAULT_TENSOR_SHAPE`` instead of the
-    kernel's real tile shape (api/compute/experimental/eltwise_mul_scalar.h:74-88).
-    That mis-specialization hangs the device on silicon (tt-blaze #1760); the
-    Python test is marked xfail. When disabled, the C++ falls through to the
-    non-reverted control path (general init with the correct tensor_shape).
-    """
-
-    enabled: bool = True
-
-    def convert_to_cpp(self) -> str:
-        return "#define HIFI_GENERAL_INIT" if self.enabled else ""
 
 
 @dataclass
