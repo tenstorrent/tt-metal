@@ -24,6 +24,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -31,7 +32,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <internal/graph_function_abort.hpp>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 using namespace tt::tt_metal;
@@ -521,29 +524,37 @@ void GraphProcessor::track_sub_device_manager(
     graph[current_op_id.top()].connections.push_back(counter);
 }
 
+bool GraphProcessor::should_warn_unresolved_placement() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !std::exchange(warned_unresolved_placement, true);
+}
+
 void GraphProcessor::track_program_execution(const ProgramExecutionPlacement& placement) {
     const std::lock_guard<std::mutex> lock(mutex);
     if (current_op_id.empty()) {
         return;
     }
 
-    nlohmann::json ranges = core_range_set_to_json(placement.worker_core_ranges);
+    std::unordered_map<std::string, std::string> params{
+        {kDeviceId, std::to_string(placement.device_id)},
+        {kPhysicalDeviceId, std::to_string(placement.physical_device_id)},
+        {kSubDeviceManagerId, std::to_string(placement.sub_device_manager_id)},
+        {kRuntimeId, std::to_string(placement.runtime_id)},
+        {kGlobalCallCount, std::to_string(placement.global_call_count)},
+        {kCommandQueueId, std::to_string(placement.command_queue_id)},
+    };
+    // Omitted rather than defaulted when the placement is unknown, so a consumer cannot mistake a
+    // failed resolution for a genuine placement on sub-device 0.
+    if (placement.sub_device_id.has_value()) {
+        params[kSubDeviceId] = std::to_string(*placement.sub_device_id);
+        params[kWorkerCoreRanges] = core_range_set_to_json(placement.worker_core_ranges).dump();
+    }
 
     const node_id counter = graph.size();
     graph.push_back(Vertex{
         .counter = counter,
         .node_type = kNodeProgramExecution,
-        .params =
-            {
-                {kDeviceId, std::to_string(placement.device_id)},
-                {kPhysicalDeviceId, std::to_string(placement.physical_device_id)},
-                {kSubDeviceManagerId, std::to_string(placement.sub_device_manager_id)},
-                {kSubDeviceId, std::to_string(placement.sub_device_id)},
-                {kWorkerCoreRanges, ranges.dump()},
-                {kRuntimeId, std::to_string(placement.runtime_id)},
-                {kGlobalCallCount, std::to_string(placement.global_call_count)},
-                {kCommandQueueId, std::to_string(placement.command_queue_id)},
-            },
+        .params = std::move(params),
         // Leaf node: the parent op links to it, it links to nothing. Pointing back at the parent
         // would round-trip into the report's `edges` table as an op <-> execution cycle.
         .connections = {},
@@ -552,41 +563,75 @@ void GraphProcessor::track_program_execution(const ProgramExecutionPlacement& pl
 }
 
 namespace {
-// Resolves the sub-devices a program occupies using only the public Metalium surface.
+// Stands in for the worker cores of a program capture could not place.
+const tt::tt_metal::CoreRangeSet kNoWorkerCores{};
+
+// The sub-device a program occupies, or why capture could not tell.
+struct ProgramPlacement {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    // Set only when sub_device_id is empty: a short, stable phrase for the one-shot diagnostic.
+    std::string_view unresolved_reason;
+};
+
+// True when the program runs kernels on a core type this resolver cannot place.
+//
+// KernelMeta is the only public view of a program's core types, and it carries no core ranges, so
+// non-Tensix work can be detected but not intersected against a sub-device. Called only on the
+// failure path, where it turns "we found nothing" into a reason worth printing.
+bool has_non_tensix_kernels(const tt::tt_metal::Program& program) {
+    for (const auto& kernel : tt::tt_metal::detail::collect_kernel_meta(program, /*device=*/nullptr)) {
+        if (kernel.programmable_core_type != tt::tt_metal::HalProgrammableCoreType::TENSIX) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Places a program on a sub-device using only the public Metalium surface.
 //
 // detail::ProgramImpl::determine_sub_device_ids is the authority for this, but it lives in a
 // private header that TTNN cannot include: tt_metal exports only api/, so pulling in
 // program_impl.hpp drags llrt/hal.hpp and the rest of Metalium's private include roots with it.
-// Rather than widen that boundary for a reporting feature, capture re-derives the answer the same
-// way Metalium does, and is honest about resolving nothing when it cannot.
+// Rather than widen that boundary for a reporting feature, capture re-derives the answer and is
+// explicit about the cases it cannot.
 //
-// Two cases, mirroring ProgramImpl:
-//   * Default manager -- the whole grid is one sub-device, so the answer is unconditionally 0 and
-//     no program inspection is needed. This is what ProgramImpl short-circuits to as well.
-//   * Otherwise -- intersect the program's circular buffers against each sub-device's worker
-//     cores. ProgramImpl intersects kernel-group core ranges, which are private; circular buffers
-//     are the public proxy for the same compute cores. A program that allocates no circular
-//     buffers resolves to nothing and its execution goes unrecorded.
-std::unordered_set<tt::tt_metal::SubDeviceId> resolve_program_sub_device_ids(
-    const tt::tt_metal::Program& program, tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    if (mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id()) {
-        return {tt::tt_metal::SubDeviceId{0}};
-    }
-
+// ProgramImpl intersects kernel-group core ranges, which are private; circular buffers are the
+// public proxy for the same compute cores. Dispatch has already enforced that every core of the
+// program belongs to one sub-device by the time capture runs, so a single Tensix match settles the
+// whole program -- including any eth cores it also uses.
+//
+// Two cases resolve to nothing, and both report it rather than guessing:
+//   * A program with no circular buffers on any sub-device's Tensix cores -- an eth-only program,
+//     most likely a CCL op.
+//   * A program whose circular buffers straddle sub-devices, which contradicts the dispatch
+//     invariant and so means the proxy has diverged from kernel groups.
+//
+// The caller records the execution either way; only the placement is dropped.
+ProgramPlacement resolve_program_placement(
+    const tt::tt_metal::Program& program, const std::vector<tt::tt_metal::CoreRangeSet>& tensix_cores_by_sub_device) {
+    // circular_buffers() returns by value, so it is built once rather than per sub-device.
     const auto circular_buffers = program.circular_buffers();
-    std::unordered_set<tt::tt_metal::SubDeviceId> sub_device_ids;
-    for (uint32_t index = 0; index < mesh_device->num_sub_devices(); ++index) {
-        const auto sub_device_id = tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)};
-        const auto sub_device_cores =
-            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
+    std::optional<tt::tt_metal::SubDeviceId> match;
+    for (uint32_t index = 0; index < tensix_cores_by_sub_device.size(); ++index) {
+        const auto& sub_device_cores = tensix_cores_by_sub_device[index];
         for (const auto& circular_buffer : circular_buffers) {
-            if (!sub_device_cores.intersection(circular_buffer->core_ranges()).empty()) {
-                sub_device_ids.insert(sub_device_id);
-                break;
+            if (sub_device_cores.intersection(circular_buffer->core_ranges()).empty()) {
+                continue;
             }
+            if (match.has_value()) {
+                return {std::nullopt, "its circular buffers straddle more than one sub-device"};
+            }
+            match = tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)};
+            break;
         }
     }
-    return sub_device_ids;
+    if (match.has_value()) {
+        return {match, {}};
+    }
+    return {
+        std::nullopt,
+        has_non_tensix_kernels(program) ? "it runs only on non-Tensix cores"
+                                        : "it allocates no circular buffers to match against"};
 }
 }  // namespace
 
@@ -614,6 +659,18 @@ void track_mesh_workload_execution(
     const auto manager_id = *mesh_device->get_active_sub_device_manager_id();
     const auto command_queue_id = static_cast<uint8_t>(mesh_device->mesh_command_queue().id());
     const auto mesh_device_id = static_cast<uint32_t>(mesh_device->id());
+    const bool default_manager =
+        mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id();
+
+    // Each worker_cores() call builds a CoreRangeSet, so gather them once and share them between
+    // the manager snapshot and the per-program placement below.
+    const auto num_sub_devices = mesh_device->num_sub_devices();
+    std::vector<tt::tt_metal::CoreRangeSet> tensix_cores_by_sub_device;
+    tensix_cores_by_sub_device.reserve(num_sub_devices);
+    for (uint32_t index = 0; index < num_sub_devices; ++index) {
+        tensix_cores_by_sub_device.push_back(mesh_device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)}));
+    }
 
     // Snapshot the active manager's whole partition the first time a capture sees it. Deriving
     // topology from executions alone would omit any sub-device that never ran an operation, and
@@ -625,51 +682,53 @@ void track_mesh_workload_execution(
         }
     }
     if (!awaiting_snapshot.empty()) {
-        const auto num_sub_devices = mesh_device->num_sub_devices();
         std::vector<SubDeviceTopology> sub_devices;
         sub_devices.reserve(num_sub_devices);
         for (uint32_t index = 0; index < num_sub_devices; ++index) {
-            const auto id = tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)};
             sub_devices.push_back(SubDeviceTopology{
-                .sub_device_id = static_cast<uint8_t>(index),
-                .worker_core_ranges =
-                    mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, id)});
+                .sub_device_id = static_cast<uint8_t>(index), .worker_core_ranges = tensix_cores_by_sub_device[index]});
         }
         for (auto* processor : awaiting_snapshot) {
             processor->track_sub_device_manager(mesh_device_id, manager_id, sub_devices);
         }
     }
 
-    // Union across the workload's programs, the way MeshWorkloadImpl does.
-    std::unordered_set<tt::tt_metal::SubDeviceId> sub_device_ids;
-    for (const auto& program_entry : workload.get_programs()) {
-        const auto program_sub_device_ids = resolve_program_sub_device_ids(program_entry.second, mesh_device);
-        sub_device_ids.insert(program_sub_device_ids.begin(), program_sub_device_ids.end());
-    }
+    for (const auto& [coordinate_range, program] : workload.get_programs()) {
+        // The default manager makes the whole grid one sub-device, so the answer is 0 with no
+        // program inspection at all. This is both the common case and the one ProgramImpl itself
+        // short-circuits, which keeps the proxy in resolve_program_placement off the path that
+        // almost every capture takes.
+        ProgramPlacement placement = default_manager ? ProgramPlacement{tt::tt_metal::SubDeviceId{0}, {}}
+                                                     : resolve_program_placement(program, tensix_cores_by_sub_device);
 
-    // Dispatch enforces the single-sub-device invariant before this point, so a workload that
-    // resolves to anything else here means capture could not re-derive the placement -- a program
-    // with no circular buffers to match on, most likely. Capture is passive observation, so it
-    // declines to record the execution rather than guessing or aborting the caller's run. The
-    // manager topology recorded above still stands.
-    if (sub_device_ids.size() != 1) {
-        log_warning(
-            tt::LogAlways,
-            "Graph capture skipped a workload execution: could not resolve it to a single sub-device (resolved {}).",
-            sub_device_ids.size());
-        return;
-    }
-    const auto sub_device_id = *sub_device_ids.begin();
-    const auto worker_core_ranges =
-        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
+        if (!placement.sub_device_id.has_value()) {
+            // Once per capture: on a whole-model capture an unplaceable op recurs every iteration,
+            // and the second line onwards says nothing the first did not.
+            for (auto* processor : processors) {
+                if (processor->should_warn_unresolved_placement()) {
+                    log_warning(
+                        tt::LogAlways,
+                        "Graph capture recorded a program execution without a sub-device placement because {}. "
+                        "Further occurrences in this capture are not logged.",
+                        placement.unresolved_reason);
+                    break;
+                }
+            }
+        }
 
-    for (const auto& program_entry : workload.get_programs()) {
-        for (const auto* physical_device : mesh_device->get_view().get_devices(program_entry.first)) {
-            const ProgramExecutionPlacement placement{
+        std::optional<uint8_t> sub_device_id_value;
+        if (placement.sub_device_id.has_value()) {
+            sub_device_id_value = **placement.sub_device_id;
+        }
+        const auto& worker_core_ranges =
+            sub_device_id_value.has_value() ? tensix_cores_by_sub_device[*sub_device_id_value] : kNoWorkerCores;
+
+        for (const auto* physical_device : mesh_device->get_view().get_devices(coordinate_range)) {
+            const ProgramExecutionPlacement execution{
                 .device_id = mesh_device_id,
                 .physical_device_id = static_cast<uint32_t>(physical_device->id()),
                 .sub_device_manager_id = manager_id,
-                .sub_device_id = *sub_device_id,
+                .sub_device_id = sub_device_id_value,
                 .worker_core_ranges = worker_core_ranges,
                 .runtime_id = runtime_id,
                 .global_call_count = tt::tt_metal::detail::EncodePerDeviceProgramID(
@@ -677,7 +736,7 @@ void track_mesh_workload_execution(
                 .command_queue_id = command_queue_id,
             };
             for (auto* processor : processors) {
-                processor->track_program_execution(placement);
+                processor->track_program_execution(execution);
             }
         }
     }

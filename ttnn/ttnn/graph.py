@@ -747,7 +747,10 @@ def pretty_format(captured_graph):
         elif node["node_type"] == "sub_device_manager":
             node_string = format_string.format("Sub-Device Manager: " + str(node["params"]["sub_device_manager_id"]))
         elif node["node_type"] == "program_execution":
-            node_string = format_string.format("Program Execution: sub-device " + str(node["params"]["sub_device_id"]))
+            sub_device_id = node["params"].get("sub_device_id")
+            node_string = format_string.format(
+                "Program Execution: sub-device " + (str(sub_device_id) if sub_device_id is not None else "unresolved")
+            )
         else:
             raise ValueError(f"Unknown node type: {node['node_type']}")
 

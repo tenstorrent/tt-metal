@@ -660,6 +660,109 @@ class TestTensorLifetime:
 class TestImportGraphUnit:
     """Pure unit tests for import_graph function - no device required."""
 
+    def test_unplaced_program_execution_is_still_recorded(self, tmp_path):
+        """A program_execution with no sub_device_id keeps its row, minus the sub-device link.
+
+        Capture omits sub_device_id when it cannot place a program (an eth-only op, say). Which
+        chip ran the operation is still worth reporting, so the execution must survive import; only
+        the execution_sub_devices link is dropped, so the placement reads as unknown rather than as
+        a spurious sub-device 0.
+        """
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::all_gather", "inputs": "0"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "program_execution",
+                "params": {
+                    "device_id": 0,
+                    "physical_device_id": 3,
+                    "sub_device_manager_id": 77,
+                    "runtime_id": 5,
+                    "global_call_count": 5123,
+                    "command_queue_id": 0,
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::all_gather"},
+                "connections": [],
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        conn, cursor = _import_to_db(_make_report(mock_graph, devices=[{"device_id": 0}]), tmp_path)
+
+        cursor.execute("SELECT physical_device_id, global_call_count FROM operation_executions")
+        assert cursor.fetchall() == [(3, 5123)]
+        cursor.execute("SELECT COUNT(*) FROM execution_sub_devices")
+        assert cursor.fetchone()[0] == 0, "an unplaced execution must not claim a sub-device"
+        conn.close()
+
+    def test_placed_and_unplaced_executions_coexist_under_one_operation(self, tmp_path):
+        """Dropping one program's placement must not drop its siblings'."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": "0"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "program_execution",
+                "params": {
+                    "device_id": 0,
+                    "physical_device_id": 0,
+                    "sub_device_manager_id": 77,
+                    "sub_device_id": 1,
+                    "runtime_id": 5,
+                    "global_call_count": 5120,
+                    "command_queue_id": 0,
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "program_execution",
+                "params": {
+                    "device_id": 0,
+                    "physical_device_id": 1,
+                    "sub_device_manager_id": 77,
+                    "runtime_id": 5,
+                    "global_call_count": 5121,
+                    "command_queue_id": 0,
+                },
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        conn, cursor = _import_to_db(_make_report(mock_graph, devices=[{"device_id": 0}]), tmp_path)
+
+        cursor.execute("SELECT physical_device_id FROM operation_executions ORDER BY physical_device_id")
+        assert cursor.fetchall() == [(0,), (1,)]
+        cursor.execute(
+            "SELECT e.physical_device_id, x.sub_device_id FROM operation_executions e "
+            "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank"
+        )
+        assert cursor.fetchall() == [(0, 1)], "only the placed execution should link to a sub-device"
+        conn.close()
+
     def test_output_tensors_extracted_from_function_end(self, tmp_path):
         """Test that output tensors are extracted from function_end connections."""
         mock_graph = [
@@ -3200,6 +3303,7 @@ class TestGraphReportImport:
         assert db_path.exists()
         assert db_path.name == "db.sqlite"
 
+    @skip_for_slow_dispatch()
     @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_loudbox")], indirect=True)
     def test_import_normalizes_buffer_chunk_device_ids_from_submesh_capture(self, mesh_device, tmp_report_dir):
         report_path = tmp_report_dir / "submesh_report.json"

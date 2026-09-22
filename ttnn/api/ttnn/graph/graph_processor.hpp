@@ -42,11 +42,16 @@ struct SubDeviceTopology {
 
 // Where one program of a MeshWorkload actually ran. `device_id` is the MeshDevice id so it joins
 // the report's `devices` table; `physical_device_id` is the chip the program landed on.
+//
+// `sub_device_id` is empty when capture could not place the program (see resolve_program_placement).
+// The execution is still recorded: which chip ran the operation is worth reporting on its own, and
+// an absent placement is more useful to a report consumer than a missing row. `worker_core_ranges`
+// is the placed sub-device's cores and is empty for the same reason.
 struct ProgramExecutionPlacement {
     uint32_t device_id = 0;
     uint32_t physical_device_id = 0;
     uint64_t sub_device_manager_id = 0;
-    uint8_t sub_device_id = 0;
+    std::optional<uint8_t> sub_device_id;
     tt::tt_metal::CoreRangeSet worker_core_ranges;
     uint64_t runtime_id = 0;
     uint32_t global_call_count = 0;
@@ -131,6 +136,11 @@ public:
     void track_sub_device_manager(
         uint32_t device_id, uint64_t sub_device_manager_id, const std::vector<SubDeviceTopology>& sub_devices);
 
+    // True the first time this capture sees a program it could not place on a sub-device, false
+    // afterwards. Keeps the diagnostic to one line per capture instead of one per enqueue, which
+    // on a whole-model capture is the difference between a hint and thousands of identical lines.
+    bool should_warn_unresolved_placement();
+
     void track_function_start(
         std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) override;
 
@@ -177,6 +187,8 @@ private:
     std::unordered_map<uint32_t, nlohmann::json> captured_device_info;
     // (device_id, sub_device_manager_id) pairs whose partition this capture has already recorded
     std::set<std::pair<uint32_t, uint64_t>> captured_sub_device_managers;
+    // Whether this capture has already warned about a program it could not place
+    bool warned_unresolved_placement = false;
     // Device pointers for buffer pages (only valid during capture)
     std::vector<tt::tt_metal::distributed::MeshDevice*> captured_mesh_devices;
     // Per-operation buffer snapshots (function_start counter -> buffers)

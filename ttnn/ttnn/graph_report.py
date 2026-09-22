@@ -1460,7 +1460,11 @@ def import_graph(
                 device_id = int(execution_params["device_id"])
                 physical_device_id = int(execution_params.get("physical_device_id", device_id))
                 manager_id = int(execution_params["sub_device_manager_id"])
-                sub_device_id = int(execution_params["sub_device_id"])
+                # Absent when capture could not place the program on a sub-device. The execution
+                # still gets its operation_executions row -- which chip ran the operation is worth
+                # reporting on its own -- and only the execution_sub_devices link is omitted, so
+                # an unplaced execution reads as unknown rather than as sub-device 0.
+                raw_sub_device_id = execution_params.get("sub_device_id")
 
                 operation_executions_batch.append(
                     (
@@ -1474,7 +1478,10 @@ def import_graph(
                         rank,
                     )
                 )
-                execution_sub_devices_batch.append((execution_id, device_id, manager_id, sub_device_id, rank))
+                if raw_sub_device_id is not None:
+                    execution_sub_devices_batch.append(
+                        (execution_id, device_id, manager_id, int(raw_sub_device_id), rank)
+                    )
 
             if start_node:
                 graph_counter_to_op_id[start_node["counter"]] = operation_id
