@@ -229,10 +229,47 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 
+    // Q for timestep t: reserve its slot (unless the prefetch did), take it
+    // from the previous consumer or from DRAM, hand it to the compute kernel.
+    // Called for t + 1 as soon as the compute kernel has finished t, before
+    // this timestep's state is forwarded: the next Q has been in L1 since
+    // the predecessor forwarded it a timestep ago, and the compute kernel's
+    // scores and block maxima need nothing else, so the state's forward and
+    // the relay's latency run under them instead of ahead of them.
+    const auto receive_query = [&](uint32_t t, uint32_t g, bool prefetched) {
+        const uint32_t slot = g % 2u;
+        if (!prefetched) {
+            cb_reserve_back(cb_query, row_tiles);
+        }
+        const auto producer = sched.producer(my_core, t);
+        if (producer.internal) {
+            DeviceZoneScopedN("RECV-IMM");
+            WAYPOINT("RDYW");
+            do {
+                invalidate_l1_cache();
+            } while ((*ready_imm_sem[slot]) < g + 1u);
+            WAYPOINT("RDYD");
+        } else {
+            DeviceZoneScopedN("LOAD-IMM-DRAM");
+            if (!prefetched) {
+                const uint32_t qs = base_query + slot * stride_query;
+                const uint32_t i = sched.pair(my_core, t).i;
+                for (uint32_t k = 0; k < row_tiles; ++k) {
+                    noc_async_read_page(row_base + (i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
+                }
+            }
+            noc_async_read_barrier();
+        }
+        cb_push_back(cb_query, row_tiles);
+    };
+
     bool prefetched_next = false;
+    bool query_pushed_next = false;
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const bool prefetched = prefetched_next;
         prefetched_next = false;
+        const bool query_pushed = query_pushed_next;
+        query_pushed_next = false;
         DeviceZoneScopedN("RELAY-READER-STEP");
         const auto pair_t = sched.pair(my_core, t);
         const uint32_t i = pair_t.i;
@@ -252,9 +289,6 @@ void kernel_main() {
         // ---- reserve this timestep's slot in every packet buffer.
         {
             DeviceZoneScopedN("SLOT-RESERVE");
-            if (!prefetched) {
-                cb_reserve_back(cb_query, row_tiles);
-            }
             cb_reserve_back(cb_max_seed, Bt);
             cb_reserve_back(cb_max_plain, Bt);
             cb_reserve_back(cb_sum_seed, Bt);
@@ -266,25 +300,13 @@ void kernel_main() {
         const uint32_t ms = base_max + slot * stride_stat;
         const uint32_t ls = base_sum + slot * stride_stat;
 
-        // ---- Q: from the previous consumer, or from DRAM at a streak start.
+        // ---- Q: from the previous consumer, or from DRAM at a streak start
+        // (already done at the end of the previous timestep, except for the
+        // first timestep of a slice).
         const auto producer = sched.producer(my_core, t);
-        if (producer.internal) {
-            DeviceZoneScopedN("RECV-IMM");
-            WAYPOINT("RDYW");
-            do {
-                invalidate_l1_cache();
-            } while ((*ready_imm_sem[slot]) < g + 1u);
-            WAYPOINT("RDYD");
-        } else {
-            DeviceZoneScopedN("LOAD-IMM-DRAM");
-            if (!prefetched) {
-                for (uint32_t k = 0; k < row_tiles; ++k) {
-                    noc_async_read_page(row_base + (i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
-                }
-            }
-            noc_async_read_barrier();
+        if (!query_pushed) {
+            receive_query(t, g, prefetched);
         }
-        cb_push_back(cb_query, row_tiles);
 
         // ---- forward Q straight away.
         const uint32_t receiver = sched.next_consumer(i, t);
@@ -385,6 +407,12 @@ void kernel_main() {
             cb_wait_front(cb_out_out, row_tiles);
             cb_wait_front(cb_max_out, Bt);
             cb_wait_front(cb_sum_out, Bt);
+        }
+        // ---- the next timestep's Q to the compute kernel first (see
+        // receive_query); its slot was popped at the end of t - 1.
+        if (t + 1u < kTimesteps) {
+            receive_query(t + 1u, g + 1u, prefetched_next);
+            query_pushed_next = true;
         }
         {
             DeviceZoneScopedN("SEND-STATE");
