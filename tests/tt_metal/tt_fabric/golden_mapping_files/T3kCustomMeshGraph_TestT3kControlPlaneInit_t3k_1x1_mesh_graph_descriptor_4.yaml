@@ -6,7 +6,7 @@ asic_to_fabric_node_mapping:
         - chips:
             - umd_chip_id: 4
               asic_position:
-                tray_id: 0
+                tray_id: 1
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
@@ -16,7 +16,7 @@ asic_to_fabric_node_mapping:
         - chips:
             - umd_chip_id: 0
               asic_position:
-                tray_id: 0
+                tray_id: 1
                 asic_location: 0
               fabric_node_id:
                 mesh_id: 1
@@ -26,7 +26,7 @@ asic_to_fabric_node_mapping:
         - chips:
             - umd_chip_id: 2
               asic_position:
-                tray_id: 0
+                tray_id: 3
                 asic_location: 0
               fabric_node_id:
                 mesh_id: 2
@@ -36,7 +36,7 @@ asic_to_fabric_node_mapping:
         - chips:
             - umd_chip_id: 6
               asic_position:
-                tray_id: 0
+                tray_id: 3
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 3
@@ -46,7 +46,7 @@ asic_to_fabric_node_mapping:
         - chips:
             - umd_chip_id: 5
               asic_position:
-                tray_id: 0
+                tray_id: 2
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 4
@@ -56,7 +56,7 @@ asic_to_fabric_node_mapping:
         - chips:
             - umd_chip_id: 1
               asic_position:
-                tray_id: 0
+                tray_id: 2
                 asic_location: 0
               fabric_node_id:
                 mesh_id: 5
@@ -66,7 +66,7 @@ asic_to_fabric_node_mapping:
         - chips:
             - umd_chip_id: 3
               asic_position:
-                tray_id: 0
+                tray_id: 4
                 asic_location: 0
               fabric_node_id:
                 mesh_id: 6
@@ -76,7 +76,7 @@ asic_to_fabric_node_mapping:
         - chips:
             - umd_chip_id: 7
               asic_position:
-                tray_id: 0
+                tray_id: 4
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 7
