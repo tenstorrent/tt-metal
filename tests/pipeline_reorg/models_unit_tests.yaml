@@ -1204,7 +1204,7 @@
 # Same three test files as the bh_quietbox_2 leg above, on the 4x8 galaxy instead of 2x2.
 - name: TT-DiT Flux.2-dev multihost unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
