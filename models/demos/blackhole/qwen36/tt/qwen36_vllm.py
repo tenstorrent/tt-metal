@@ -127,12 +127,13 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     def begin_export(self, block_ids, num_tokens, sinks):
         return self.kv_transfer.begin_export(block_ids, num_tokens, sinks)
 
-    def end_export(self):
-        return self.kv_transfer.end_export()
+    def end_export(self, sinks=None):
+        return self.kv_transfer.end_export(sinks)
 
-    def set_kv_transfer_pump(self, fn):
-        """Worker callback run at every prefill chunk boundary (the claim-gated sends' mid-prefill clock)."""
-        return self.kv_transfer.set_chunk_pump(fn)
+    def set_kv_transfer_pump(self, fn, wants=None):
+        """Worker callback run at every prefill chunk boundary (the claim-gated sends' mid-prefill clock); ``wants()``
+        (host-only) says whether it could send anything now and gates the per-chunk device sync."""
+        return self.kv_transfer.set_chunk_pump(fn, wants)
 
     def _validate_device_sampling_request(self, requested):
         if not requested:

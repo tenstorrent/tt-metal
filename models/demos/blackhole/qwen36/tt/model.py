@@ -285,6 +285,7 @@ class Qwen36Model:
         # long-prompt loop otherwise runs the host up to 8 chunks ahead of the device).
         self._prefill_chunk_observer = None
         self._prefill_chunk_sync = False
+        self._prefill_chunk_needs_sync = None
         # DFlash2 drafter: 5-tap capture from the verify (layers [5,19,33,47,61]). GATED — set True
         # BEFORE capture_verify_trace to bake the tap copies into the trace; default OFF so the
         # native-MTP verify trace is byte-identical.
@@ -3860,19 +3861,24 @@ class Qwen36Model:
             ttnn.deallocate(csi_tensor)
         return x
 
-    def set_prefill_chunk_observer(self, fn, sync_each_chunk=False):
+    def set_prefill_chunk_observer(self, fn, sync_each_chunk=False, needs_sync=None):
         """PD producer seam: ``fn(chunk_start=, n_tokens=, final=)`` runs on the engine thread right after every
         prefill chunk was issued (traced replay or eager forward); ``sync_each_chunk`` synchronizes the device before
-        the call for the chunks that are not already synchronized. ``None`` removes the observer."""
+        the call for the chunks that are not already synchronized -- only when ``needs_sync()`` (host-only, optional)
+        returns True, so a prefill with nothing pending keeps the traced loop's QWEN36_PREFILL_OVERLAP pipelining.
+        ``None`` removes the observer."""
         self._prefill_chunk_observer = fn
         self._prefill_chunk_sync = bool(sync_each_chunk)
+        self._prefill_chunk_needs_sync = needs_sync
 
     def _notify_prefill_chunk(self, chunk_start, n_tokens, final, synced=False):
         fn = self._prefill_chunk_observer
         if fn is None:
             return
         if self._prefill_chunk_sync and not synced:
-            ttnn.synchronize_device(self.device)
+            needs = self._prefill_chunk_needs_sync
+            if needs is None or needs():
+                ttnn.synchronize_device(self.device)
         fn(chunk_start=int(chunk_start), n_tokens=int(n_tokens), final=bool(final))
 
     def prefill_masked_bucket(

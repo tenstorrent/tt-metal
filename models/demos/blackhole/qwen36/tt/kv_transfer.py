@@ -46,7 +46,12 @@ bisect only), ``TT_PD_CHECKSUM`` (1: check ``Source.crc32c()`` in ``validate_gdn
 per-call timing line), ``TT_PD_TAPS_WRITE`` (``update_cache`` | ``write_index``), ``TT_PD_TAPS_SPLIT`` (width slabs of
 the tap-row view, default 40 -> 256 columns each; ``update_cache`` stages ``32 x slab`` tiles per core),
 ``TT_PD_EXPORT_MIRROR`` (0: never bind the staging; the export gathers from the paged cache as before),
-``TT_PD_CHUNK_SYNC`` (1: the chunk observer sees every chunk complete on the device; 0: host-time boundaries only).
+``TT_PD_CHUNK_SYNC`` (1: before a chunk boundary at which the pump could send -- a published export is waiting for
+its claim -- the observer synchronizes the device, so the sends follow a FINISHED chunk; a request with no pending
+handoff keeps QWEN36_PREFILL_OVERLAP's host/device pipelining. 0: no per-chunk sync and therefore NO chunk-boundary
+pump: the traced loop runs the host up to 8 replays (~14 s) ahead of the device, so a send marker written at a
+host-time boundary would make the consumer post recvs that park its cq behind the producer's queued replays; the
+mirror copies stay, the claim-gated sends wait for the step-begin hold / step end as before).
 """
 
 import os
@@ -198,6 +203,8 @@ class Qwen36KVTransfer:
         self._export_staging = {}  # part name -> [1, heads, chunk_tokens, head_dim] cache-dtype device tensor
         self._active_export = None  # _ActiveExport between begin_export and export_request_state / end_export
         self._chunk_pump = None  # worker callback run at every prefill chunk boundary (claim-gated sends' clock)
+        self._pump_wanted = None  # host-only callable: could the pump send something now? (published-unsent exports)
+        self._chunk_sync = False  # the observer synchronizes the device before a boundary the pump may use
         self._observer_installed = False
         self.export_mirror = os.environ.get("TT_PD_EXPORT_MIRROR", "1") != "0"
         # consumer: all tap rows of one install as ONE compact ROW_MAJOR upload + device tilize, each row written with
@@ -628,33 +635,60 @@ class Qwen36KVTransfer:
             a._pd_export_k = self._export_staging[f"kv.L{i}.k"]
             a._pd_export_v = self._export_staging[f"kv.L{i}.v"]
         # every fill width the traces produce: the full chunk and each masked bucket (rows [0, S) of the staging)
+        # Warm fill_cache(staging <- [1, heads, S, hd]) for EVERY fill width the attention layer can produce: the full
+        # chunk and each bucket (the traced replays) AND every 64-token multiple below the chunk -- the eager masked
+        # forward of an un-traced bucket (QWEN36_PREFILL_BUCKET_TRACE naming a subset) fills page_len = blocks x 64
+        # (model._warmup_paged_fill_widths sweeps the same widths for paged_fill_cache). A width missed here would
+        # compile inside the model forward after the traces are parked (the compile-clobbers-trace hang class; outside
+        # any _guard). fill_cache hashes on both tensor specs incl. the memory config, so the input is built in the
+        # layer's prefill memory config (_pf_mc: DRAM at TP=1), exactly as forward_prefill_paged's k_fill.
+        pf_mc = getattr(self.attn_layers[0], "_pf_mc", ttnn.DRAM_MEMORY_CONFIG)
+        bs = g["block_size"]
+        widths = sorted(set(buckets) | {ct} | {w * bs for w in range(1, ct // bs + 1)})
         st0 = self._export_staging[kv[0][0]]
-        for S in sorted(set(buckets) | {ct}):
+        t_w = time.perf_counter()
+        for S in widths:
             x = ttnn.from_torch(
                 torch.zeros(1, g["heads"], S, g["head_dim"], dtype=torch.bfloat16),
                 dtype=cache_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=pf_mc,
                 mesh_mapper=rep,
             )
             self._note_shape("fill_cache_export", (st_shape, S, dtype_name(cache_dtype)))
             ttnn.fill_cache(st0, x, 0)
             ttnn.deallocate(x)
+        ttnn.synchronize_device(self.mesh)
         self._install_observer()
         logger.info(
             f"[PD] export mirror bound: {len(self._export_staging)} staging tensors {st_shape} "
             f"({len(self._export_staging) * tile_nbytes(st_shape, dtype_name(cache_dtype)) / 2**20:.0f} MiB), "
-            f"fill widths {sorted(set(buckets) | {ct})}"
+            f"{len(widths)} fill widths ({widths[0]}..{widths[-1]}, every {bs}) warmed in "
+            f"{1e3 * (time.perf_counter() - t_w):.0f} ms"
         )
 
     def _install_observer(self) -> None:
         if self._observer_installed:
             return
-        sync = os.environ.get("TT_PD_CHUNK_SYNC", "1") != "0"
-        self.model.set_prefill_chunk_observer(self._on_prefill_chunk, sync_each_chunk=sync)
+        self._chunk_sync = os.environ.get("TT_PD_CHUNK_SYNC", "1") != "0"
+        self.model.set_prefill_chunk_observer(
+            self._on_prefill_chunk, sync_each_chunk=self._chunk_sync, needs_sync=self._needs_chunk_sync
+        )
         self._observer_installed = True
-        logger.info(f"[PD] prefill chunk observer installed (sync_each_chunk={sync})")
+        logger.info(
+            f"[PD] prefill chunk observer installed (sync_each_chunk={self._chunk_sync}, "
+            f"chunk pump {'on' if self._chunk_sync else 'OFF (needs the sync)'})"
+        )
+
+    def _needs_chunk_sync(self) -> bool:
+        """Model callback before a chunk boundary: synchronize the device first? Only when the boundary pump could
+        send something (a published export is waiting for its claim, ``_pump_wanted``); the mirror copies need no
+        sync (in-order cq), so a request without a pending handoff keeps the traced loop's pipelining."""
+        if self._chunk_pump is None or not self._chunk_sync:
+            return False
+        wants = self._pump_wanted
+        return True if wants is None else bool(wants())
 
     def begin_export(self, block_ids, num_tokens: int, sinks) -> bool:
         """Producer step BEGIN (before the prefill of this request runs): remember the open export so the chunk
@@ -664,18 +698,33 @@ class Qwen36KVTransfer:
         nblk = cdiv(int(num_tokens), g["block_size"])
         ids = [int(b) for b in block_ids[:nblk]]
         assert len(ids) == nblk, f"{len(block_ids)} blocks for {num_tokens} tokens (need {nblk})"
+        prev = self._active_export
+        if prev is not None and prev.sinks is not sinks:
+            # one export window at a time (the prefill rank runs one request per step): the stale window is dropped;
+            # its export then gathers and, if any chunk was already mirrored into its sinks, FAILS on the sink's
+            # write-twice check -> the consumer recomputes (never a wrong K/V)
+            logger.warning(
+                f"PD: begin_export while an export window is open ({prev.num_tokens} tokens, "
+                f"{len(prev.written)}/{prev.nchunks} chunks mirrored): replacing it"
+            )
         self._active_export = _ActiveExport(
             ids, int(num_tokens), nblk, cdiv(nblk, self._bpc()), sinks, set(), time.perf_counter()
         )
         return bool(self._export_staging)
 
-    def end_export(self) -> None:
-        self._active_export = None
+    def end_export(self, sinks=None) -> None:
+        """Close the export window; with ``sinks`` only when it is the open window's (a stale close never drops a
+        newer window)."""
+        if sinks is None or (self._active_export is not None and self._active_export.sinks is sinks):
+            self._active_export = None
 
-    def set_chunk_pump(self, fn) -> None:
+    def set_chunk_pump(self, fn, wants=None) -> None:
         """``fn()`` runs on the engine thread at every non-final prefill chunk boundary (the worker's transport pump:
-        the claim-gated sends of an earlier export go out mid-prefill instead of at the step's end)."""
+        the claim-gated sends of an earlier export go out mid-prefill instead of at the step's end) -- only while the
+        per-chunk device sync is on (``TT_PD_CHUNK_SYNC``, see the module docstring). ``wants()`` (host-only, optional)
+        says whether the pump could send anything now; it gates the per-chunk sync (``_needs_chunk_sync``)."""
         self._chunk_pump = fn
+        self._pump_wanted = wants
 
     def _on_prefill_chunk(self, *, chunk_start: int, n_tokens: int, final: bool) -> None:
         """Model chunk observer (engine thread; device ops). Copies the mirrored chunk into the open export's pool
@@ -686,6 +735,10 @@ class Qwen36KVTransfer:
             ct = self._chunk_tokens
             c = chunk_start // ct
             if chunk_start % ct == 0 and c < exp.nchunks and c not in exp.written:
+                # The whole staging is copied. Rows past the request's last real block are stale filler (the previous
+                # chunk's or request's K/V) that the consumer's chunk page table maps to its pad block, never to a
+                # real block; unlike the gather path's zero filler the wire bytes are therefore not identical across
+                # two exports of one prompt (only a byte-level comparison of the wire would notice).
                 t0 = time.perf_counter()
                 try:
                     with self._guard("mirror_chunk"):
@@ -703,7 +756,9 @@ class Qwen36KVTransfer:
                     # fails the export (write twice) and the consumer recomputes -- never a wrong K/V
                     logger.exception(f"PD: mirror copy of chunk {c} failed; export_request_state gathers it")
         pump = self._chunk_pump
-        if pump is not None and not final:
+        if pump is not None and not final and self._chunk_sync:
+            # only with the per-chunk sync: the marker the pump writes must follow sends that run right after THIS
+            # finished chunk, not behind the replays the host queued ahead (TT_PD_CHUNK_SYNC, module docstring)
             try:
                 pump()
             except Exception:
@@ -739,6 +794,11 @@ class Qwen36KVTransfer:
         assert (
             NS >= 1 and D % NS == 0 and (D // NS) % 32 == 0
         ), f"TT_PD_TAPS_SPLIT={NS} must split D={D} into tile-aligned slabs"
+        # update_cache stages input_rows x slab tiles per core: measured on chip 0 (laneB/mb_view*.log) slab 256
+        # (NS=40) 0.5 MiB OK, 512 (NS=20) OK, 1280 (NS=8) 3.4 MiB and the unsplit 10240-wide row 26 MiB overflow L1
+        assert (
+            D // NS <= 512
+        ), f"TT_PD_TAPS_SPLIT={NS}: slab {D // NS} > 512 columns overflows the core's L1 in update_cache"
         R32 = cdiv(n_layers * K, 32) * 32
         self._taps_stage_rm = ttnn.from_torch(
             torch.zeros(1, 1, R32, D, dtype=torch.bfloat16),
@@ -784,6 +844,10 @@ class Qwen36KVTransfer:
             for m in range(dn.K):
                 r = j * dn.K + m
                 conv = dn.conv_states[m]
+                # the width-split view keeps the linear tile order only while every slot row lives in ONE tile row
+                assert (
+                    int(conv.shape[1]) <= 32
+                ), f"conv_states rows {int(conv.shape[1])} > 32: the width-split view would interleave tile rows"
                 cache = ttnn.experimental.view(conv, (1, NS, int(conv.shape[1]), WS))
                 self._note_shape("update_cache_tap", (tuple(int(d) for d in cache.shape), slot))
                 ttnn.update_cache(cache, views[r // 32], slot, batch_offset=r % 32)
