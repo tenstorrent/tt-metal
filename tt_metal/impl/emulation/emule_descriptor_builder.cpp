@@ -10,6 +10,7 @@
 #include "emule_descriptor_builder.hpp"
 
 #include <set>
+#include <tuple>
 #include <type_traits>
 
 #include "impl/buffers/circular_buffer.hpp"
@@ -21,6 +22,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
 #include "emule_tile_geometry.hpp"           // resolve_tile_geometry, ResolvedTileGeometry
+#include "host_sanitizers.hpp"               // emule_asan_enabled (host ASAN master switch)
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
 #include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
@@ -144,18 +146,32 @@ SocView build_soc_view(IDevice* device, Program& program) {
 }
 
 // ── EmuleProgramDescriptor: mirrors collect_kernels / init_core_* / semaphores reads.
+// CB and DFB geometry resolve to the same 7 POD fields; one converter keeps them identical so a field
+// added to one and not the other can't give CBs and DFBs different EMULE_TILE_* values (one-home rule).
+static ResolvedGeom to_resolved_geom(const tt::tt_metal::emule::ResolvedTileGeometry& g, tt::DataFormat fmt) {
+    return ResolvedGeom{
+        g.tile.get_tile_size(fmt),
+        g.tile.get_height(),
+        g.tile.get_width(),
+        g.face_r_dim,
+        g.num_faces,
+        g.partial_face,
+        g.narrow_tile};
+}
+
 EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
     (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
 
     EmuleProgramDescriptor pd;
-    pd.config.program_id = static_cast<uint64_t>(impl.get_id());
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
+    pd.config.asan_enabled = tt::tt_metal::emule::emule_asan_enabled();
 
-    // Per (logical core) -> the kernels placed there with resolved launch offsets + unique RTA;
-    // stitched into each CoreDescriptor below. Keyed by (logical_x, logical_y).
-    std::map<std::pair<uint32_t, uint32_t>, std::vector<CoreKernel>> core_kernels;
+    // Per (programmable core type, logical core) -> the kernels placed there with resolved launch
+    // offsets + unique RTA; stitched into each CoreDescriptor below. pct is part of the key because a
+    // worker and an ethernet core can share a logical (x,y) and must not merge their kernels.
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<CoreKernel>> core_kernels;
 
     const uint32_t pct_count = hw.get_programmable_core_type_count();
     for (uint32_t pct = 0; pct < pct_count; ++pct) {
@@ -172,8 +188,6 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             kd.named_compile_time_args = k.named_compile_time_args();
             kd.common_runtime_args = k.common_runtime_args();
             kd.programmable_core_type = static_cast<uint32_t>(k.get_kernel_programmable_core_type());
-            kd.processor_class = static_cast<uint32_t>(k.get_kernel_processor_class());
-            kd.processor_type = static_cast<uint32_t>(k.get_kernel_processor_type(0));
 
             // source (raw KernelSource; path resolution stays in the consumer)
             const auto& ksrc = k.kernel_source();
@@ -327,8 +341,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                             const auto& ra = k.runtime_args(lc);
                             ck.unique_rt_args.assign(ra.begin(), ra.end());
                         }
-                        core_kernels[std::make_pair(static_cast<uint32_t>(x), static_cast<uint32_t>(y))].push_back(
-                            std::move(ck));
+                        core_kernels[std::make_tuple(pct, static_cast<uint32_t>(x), static_cast<uint32_t>(y))]
+                            .push_back(std::move(ck));
                     }
                 }
             }
@@ -336,9 +350,12 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     }
 
     // Per-core CB / DFB / semaphore setup (init_core_cb_sync / allocate_dfbs_on_core / init_core_semaphores).
-    for (const auto& core_vec : impl.logical_cores()) {
-        for (const tt::tt_metal::CoreCoord& core : core_vec) {
+    // logical_cores() returns one vector per programmable core type; the outer index IS the pct.
+    const auto logical_cores = impl.logical_cores();
+    for (uint32_t pct = 0; pct < logical_cores.size(); ++pct) {
+        for (const tt::tt_metal::CoreCoord& core : logical_cores[pct]) {
             CoreDescriptor cs;
+            cs.programmable_core_type = pct;
             cs.logical_x = core.x;
             cs.logical_y = core.y;
 
@@ -361,14 +378,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     // the POD carries only the resolved primitives. Mirrors build_kernel_defines.
                     const tt::tt_metal::emule::ResolvedTileGeometry g =
                         tt::tt_metal::emule::resolve_tile_geometry(cb->tile(idx), cb->unpack_face_geometry(idx));
-                    b.geom = ResolvedGeom{
-                        g.tile.get_tile_size(fmt),
-                        g.tile.get_height(),
-                        g.tile.get_width(),
-                        g.face_r_dim,
-                        g.num_faces,
-                        g.partial_face,
-                        g.narrow_tile};
+                    b.geom = to_resolved_geom(g, fmt);
                     cd.buffers.push_back(std::move(b));
                 }
                 cs.cbs.push_back(std::move(cd));
@@ -393,14 +403,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 if (c.data_format != tt::DataFormat::Invalid) {
                     const tt::tt_metal::emule::ResolvedTileGeometry g =
                         tt::tt_metal::emule::resolve_tile_geometry(c.tile, c.unpack_face_geometry);
-                    dd.geom = ResolvedGeom{
-                        g.tile.get_tile_size(c.data_format),
-                        g.tile.get_height(),
-                        g.tile.get_width(),
-                        g.face_r_dim,
-                        g.num_faces,
-                        g.partial_face,
-                        g.narrow_tile};
+                    dd.geom = to_resolved_geom(g, c.data_format);
                 }
                 auto cl = dfb->core_lookup_.find(core);
                 dd.has_finalize = (cl != dfb->core_lookup_.end());
@@ -414,7 +417,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             }
             auto ck_it =
-                core_kernels.find(std::make_pair(static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)));
+                core_kernels.find(std::make_tuple(pct, static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)));
             if (ck_it != core_kernels.end()) {
                 cs.kernels = std::move(ck_it->second);
             }
