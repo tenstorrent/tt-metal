@@ -1591,7 +1591,7 @@
 # (bh_glx and nl2, not wh_glx and nl4), so the commands cannot be shared with the Wormhole entries.
 - name: TT-DiT Wan2.2-T2V-A14B unit tests (single BH galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
