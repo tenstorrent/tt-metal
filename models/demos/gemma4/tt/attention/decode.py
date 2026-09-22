@@ -993,8 +993,8 @@ def packed_decode_forward(
     # rescale-count theory of the packed long-S_k greedy drift was TESTED and
     # FALSIFIED: k_chunk=128 diverges at exactly the same token as 64 (char 165
     # at 128k) with the same acceptance, and k_chunk=256 TT_THROWs at program
-    # build. The drift is inherent packed-vs-decode path numerics; it is handled
-    # by the ISL tier gate in spec_decode._fused_packed_enabled, not here.
+    # build. Packed-vs-decode numerics are opted out with
+    # GEMMA4_SPEC_FUSED_PACKED=0, not by changing k_chunk here.
     _k_chunk = int(os.environ.get("GEMMA4_PV_K_CHUNK", "64"))
     # The flash cross-core reduction CBs scale with PNHt * cores_per_head_batch.
     # At PNHt<=2 (<=64 packed query rows) 16 cores fit L1; at PNHt=4 (the B>1

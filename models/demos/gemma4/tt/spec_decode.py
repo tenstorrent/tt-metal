@@ -1868,26 +1868,15 @@ class SpeculativeDecoder:
         return verify_x, vidx, vhidden, h_rows, accept
 
     def _fused_packed_enabled(self):
-        """Packed verify inside the fused trace. Auto: ON for BOUNDED targets in
-        the 256k tier (max_seq_len > 131072), shift seed mode only.
+        """Packed verify inside the fused trace. Default on (shift-seed only).
 
-        Measured (31B, greedy K=5, packed vs batch-dim verify, tok/s/u):
-          32k  44.79 (2.28/5) vs 42.23 (2.40/5)  -- packed wins slightly
-          128k 32.93 (1.70/5) vs 36.06 (2.78/5)  -- packed LOSES: its non-causal
-               long-S_k softmax drifts off greedy (~tok 41) with the mesh op
-               default; fp32 dest acc on mesh makes it far worse (0.06/5)
-          256k 23.16 (1.63/5) vs 16.35 (1.70/5)  -- packed turns the datapoint
-               positive vs the 16.97 baseline (KV re-read dominates batch-dim)
-        So auto only enables where the KV amortization outweighs the acceptance
-        cost. Reseed mode is excluded structurally: its seed forward writes the
-        anchor KV around the staging, and the staged hot block goes stale.
-        GEMMA4_SPEC_FUSED_PACKED=1/0 overrides."""
-        env = os.environ.get("GEMMA4_SPEC_FUSED_PACKED")
-        if env in ("0", "1"):
-            return env == "1" and not self._fused_reseed
-        bounded = bool(getattr(self.target, "bounded_sliding_kv_cache", False))
-        max_seq = int(getattr(self.target, "max_seq_len", 0) or 0)
-        return bounded and max_seq > 131072 and not self._fused_reseed
+        Reseed is excluded: its seed forward writes the anchor KV around the
+        staging, and the staged hot block goes stale.
+        ``GEMMA4_SPEC_FUSED_PACKED=0`` restores batch-dim verify.
+        """
+        if os.environ.get("GEMMA4_SPEC_FUSED_PACKED", "1").lower() in ("0", "false", "no", "off"):
+            return False
+        return not self._fused_reseed
 
     def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos, max_new_tokens=None):
         """Capture ONE fused iteration at the real first-call inputs.
