@@ -297,18 +297,21 @@ UnifiedMatmulPlan plan_unified_matmul(
                                         attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1);
     const bool C_shard_borrowable = C_shard_matches && one_C_slice_per_core_no_batch;
 
-    // A candidate is viable when it voids no achievable borrow (padding an operand forces its copy
-    // path, never a win) and its DFBs fit L1, sized at the K chunk the search below bottoms out at, so
-    // an accepted candidate is guaranteed to fit. C borrowing needs subblock_N == C_slice_N, which only
-    // the sharded-C branch below can satisfy, so it never constrains the chooser.
+    // A candidate is viable when it voids no achievable borrow and its DFBs fit L1, sized at the K
+    // chunk the search below bottoms out at, so an accepted candidate is guaranteed to fit.
     const uint32_t K_chunk_floor = config.K_chunk_tiles == 0 ? 1 : config.K_chunk_tiles;
     const auto subblock_viable = [&](uint32_t subblock_M_tiles, uint32_t subblock_N_tiles) {
         UnifiedMatmulPlan candidate = plan;
         candidate.C_slice_M_padded_tiles = tt::round_up(plan.C_slice_M_tiles, subblock_M_tiles);
         candidate.C_slice_N_padded_tiles = tt::round_up(plan.C_slice_N_tiles, subblock_N_tiles);
-        const bool M_unpadded = candidate.C_slice_M_padded_tiles == plan.C_slice_M_tiles;
-        const bool N_unpadded = candidate.C_slice_N_padded_tiles == plan.C_slice_N_tiles;
-        if ((A_shard_borrowable && !M_unpadded) || (B_shard_borrowable && !N_unpadded)) {
+        const bool M_padded = candidate.C_slice_M_padded_tiles != plan.C_slice_M_tiles;
+        const bool N_padded = candidate.C_slice_N_padded_tiles != plan.C_slice_N_tiles;
+        // A borrowed shard holds only the true slice dims, so padding a borrowable operand's dim would
+        // void its borrow: never trade a borrow for subblock volume. (C never constrains this: its
+        // borrow needs subblock_N == C_slice_N, and only the sharded-output "if" below produces that.)
+        const bool voids_A_borrow = A_shard_borrowable && M_padded;
+        const bool voids_B_borrow = B_shard_borrowable && N_padded;
+        if (voids_A_borrow || voids_B_borrow) {
             return false;
         }
         return size_dfbs(
@@ -316,9 +319,9 @@ UnifiedMatmulPlan plan_unified_matmul(
                    K_chunk_floor,
                    fp32_dest_acc_en,
                    packer_l1_acc,
-                   A_shard_borrowable && M_unpadded,
-                   B_shard_borrowable && N_unpadded,
-                   C_shard_borrowable && M_unpadded && subblock_N_tiles == plan.C_slice_N_tiles)
+                   /*A_borrowable=*/A_shard_borrowable,
+                   /*B_borrowable=*/B_shard_borrowable,
+                   /*C_borrowable=*/C_shard_borrowable && !M_padded && subblock_N_tiles == plan.C_slice_N_tiles)
             .fits(l1_budget);
     };
 
