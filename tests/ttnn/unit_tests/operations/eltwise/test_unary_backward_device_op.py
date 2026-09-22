@@ -265,6 +265,47 @@ def test_sigmoid_bw_sharded_keeps_working(shard_inputs, device):
     assert_with_pcc(_torch_sigmoid_bw(torch_grad, torch_input), ttnn.to_torch(output), 0.999)
 
 
+def test_sigmoid_bw_preserves_input_physical_padding(device):
+    """An input padded beyond tile alignment must get an output allocated to the same padded
+    shape. This is a one-to-one physical-tile kernel -- the factory emits
+    input.physical_volume() / TILE_HW pages -- so an output spec that recomputes only the
+    minimum tile padding from the logical shape is too small and the writer runs past its end.
+    Here a logical 40x40 sits in a 96x96 padded shape (9 tiles) while tile-padding the logical
+    shape alone would give 64x64 (4 tiles)."""
+    torch.manual_seed(0)
+    padded_shape = [1, 1, 96, 96]
+
+    row_major_input = ttnn.from_torch(
+        torch.randn((1, 1, 40, 40), dtype=torch.float32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    row_major_grad = ttnn.from_torch(
+        torch.randn((1, 1, 40, 40), dtype=torch.float32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    input_tensor = ttnn.tilize_with_val_padding(row_major_input, padded_shape, 0.0)
+    grad_tensor = ttnn.tilize_with_val_padding(row_major_grad, padded_shape, 0.0)
+    assert list(input_tensor.padded_shape) == padded_shape, "test setup did not produce extra padding"
+
+    output = ttnn.sigmoid_bw(grad_tensor, input_tensor)[0]
+
+    assert list(output.padded_shape) == list(input_tensor.padded_shape), (
+        f"output padded shape {output.padded_shape} does not match the input's "
+        f"{input_tensor.padded_shape}; the writer emits one page per input tile, so a smaller "
+        "allocation is written past its end"
+    )
+
+    # The logical region must still be correct, not merely allocated.
+    quantised_input = ttnn.to_torch(input_tensor).float()[..., :40, :40]
+    quantised_grad = ttnn.to_torch(grad_tensor).float()[..., :40, :40]
+    expected = _torch_sigmoid_bw(quantised_grad, quantised_input)
+    torch.testing.assert_close(ttnn.to_torch(output).float()[..., :40, :40], expected, rtol=8e-3, atol=1e-4)
+
+
 def test_sigmoid_bw_rejects_row_major(device, expect_error):
     """The shared validation guards the cache-key holes the factory has: layout reaches the
     kernels as a compile-time page size, so a ROW_MAJOR operand must be rejected outright."""

@@ -162,6 +162,14 @@ void UnaryBackwardDeviceOperation::validate_on_program_cache_miss(
             op_name,
             input.padded_shape(),
             preallocated.padded_shape());
+        // The same-device rule the operands get above applies to the output too: it is bound as
+        // the writer's destination, so a preallocated tensor from another device would become an
+        // invalid address in a program dispatched on this one. gelu_bw enforces the same
+        // invariant for its own preallocated output.
+        TT_FATAL(
+            preallocated.device() == input.device(),
+            "{} operation requires a preallocated output tensor to be on the same device as the input.",
+            op_name);
     }
 }
 
@@ -174,8 +182,20 @@ UnaryBackwardDeviceOperation::spec_return_value_t UnaryBackwardDeviceOperation::
     const DataType output_dtype =
         args.output_dtype == DataType::INVALID ? tensor_args.input.dtype() : args.output_dtype;
 
+    // Carry the INPUT's padded shape, not just the tile padding implied by the logical shape.
+    // This is a one-to-one physical-tile kernel: the factory emits input.physical_volume() /
+    // TILE_HW pages. An input padded beyond tile alignment -- e.g. from tilize_with_val_padding,
+    // where a logical 40x40 can sit in a 96x96 padded shape (9 tiles) while tile-padding the
+    // logical shape alone yields 64x64 (4 tiles) -- would otherwise get an output buffer smaller
+    // than the page count written into it, and the writer would run past its end.
     return TensorSpec(
-        tensor_args.input.logical_shape(), TensorLayout(output_dtype, Layout::TILE, args.output_memory_config));
+        tensor_args.input.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            output_dtype,
+            PageConfig(Layout::TILE),
+            args.output_memory_config,
+            tensor_args.input.logical_shape(),
+            tensor_args.input.padded_shape()));
 }
 
 UnaryBackwardDeviceOperation::tensor_return_value_t UnaryBackwardDeviceOperation::create_output_tensors(
