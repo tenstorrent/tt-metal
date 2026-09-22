@@ -467,6 +467,10 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
         mm_kernel_defines,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
+    if (in0_mcast_receiver_num_cores == 1) {
+        mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
+    }
+
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
