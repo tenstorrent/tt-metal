@@ -31,6 +31,7 @@ import time
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.assistant.masked_embedding import CmeLogits
 
 
 def _to_probs(logits_row, temperature, top_p, top_k):
@@ -644,11 +645,14 @@ class SpeculativeDecoder:
         # default reseed mode.
         return lh, tr["hidden"]
 
+    def _read_replica(self, tensor):
+        """Read one device tensor to host, selecting replica zero under TP."""
+        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]) if self._tp > 1 else ttnn.to_torch(tensor)
+
     def _logits_to_host(self, logits):
-        if self._tp > 1:
-            t = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
-        else:
-            t = ttnn.to_torch(logits)
+        if isinstance(logits, CmeLogits):
+            return self.assistant.masked_embedding.to_host_full_vocab(logits, self._read_replica)
+        t = self._read_replica(logits)
         return t[..., : self.target.vocab_size]
 
     # ── packed-query verify ──────────────────────────────────────────────
@@ -1215,6 +1219,8 @@ class SpeculativeDecoder:
         chunks: pad each ≤32-row chunk up to 32, run the multicore untilize +
         argmax, slice back, and concat. Net ~1.6 ms/chunk vs ~9-28 ms bare.
         """
+        if isinstance(logits, CmeLogits):
+            return self.assistant.masked_embedding.argmax_token_id(logits, rows)
         R32 = 32
         if rows > R32:
             # Batched packed verify (B*P > 32): argmax each 32-row tile separately

@@ -191,6 +191,7 @@ HF_MODEL=<path-or-id> pytest models/demos/gemma4/demo/text_demo.py::test_demo_si
   - Optional `K=V` tying on global layers and KV-sharing across layer groups.
   - Sparse MoE block on 26B-A4B and 31B; dense MLP on E2B/E4B.
 - **Pre/post-processing:** tokenization via the upstream HF tokenizer on host; logit softcapping (`final_logit_softcapping=30.0`) applied on device.
+- **E2B assistant head:** checkpoints with `use_ordered_embeddings` use the centroid masked embedding head. It keeps selected FP32 candidate scores and tiled uint32 token IDs on device for greedy drafting, and reconstructs the masked full-vocabulary row on host when sampling needs it.
 
 ## Notes
 
