@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import signal
+import time
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -860,8 +861,25 @@ def pytest_runtest_makereport(item, call):
 _reset_simulator_pending = False
 
 
+def _log_core_for_test(item):
+    """Append nodeid, core, worker and finish time; one file per worker."""
+    path = os.environ.get("PERF_CORE_LOG")
+    if not path:
+        return
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    try:
+        with open(f"{path}.{worker}.tsv", "a") as fh:
+            fh.write(
+                f"{item.nodeid}\t{TestConfig.TENSIX_LOCATION}\t"
+                f"{worker}\t{time.time():.3f}\n"
+            )
+    except OSError:
+        pass
+
+
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
+    _log_core_for_test(item)
     if not TestConfig.TEST_TARGET.reset_simulator_per_test:
         return
     if nextitem is None:

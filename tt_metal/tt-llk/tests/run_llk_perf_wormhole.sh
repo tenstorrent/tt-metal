@@ -1,45 +1,32 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
-#
-# SPDX-License-Identifier: Apache-2.0
-# Wormhole LLK perf runner, shared by the 5 wh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
-#
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
+# TEST 1 -- matmul only. One kind of test on the card, so no two cores can be
+# running different tests. Everything else is the production runner.
 set -euo pipefail
-
-GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
+GROUP="${1:?}"; N_GROUPS="${2:?}"
+SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-false}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
-
 case "$SPEED_OF_LIGHT" in
-  true)
-    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
-    ;;
-  false)
-    SPEED_OF_LIGHT_ARGS=()
-    ;;
-  *)
-    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
-    exit 2
-    ;;
+  true) SPEED_OF_LIGHT_ARGS=(--speed-of-light) ;;
+  false) SPEED_OF_LIGHT_ARGS=() ;;
+  *) echo "SPEED_OF_LIGHT must be true or false" >&2; exit 2 ;;
 esac
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR/python_tests"
 mkdir -p perf_data
+PQ="-q --override-ini=log_cli=false"
+M="perf and not accuracy"
+TARGET=perf_math_matmul.py
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
+echo "===== matmul-only, shard $GROUP/$N_GROUPS  $(date -u +%H:%M:%S)"
+pytest $PQ "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "$M" \
+  --timeout=60 --splits "$N_GROUPS" --group "$GROUP" "$TARGET" \
+  --junitxml="pytest-report-blackhole-${GROUP}-compile.xml"
+echo "===== measure  $(date -u +%H:%M:%S)"
+PERF_CORE_LOG=/tmp/corelog \
+pytest $PQ "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 15 -m "$M" \
+  --timeout=60 --splits "$N_GROUPS" --group "$GROUP" "$TARGET" \
+  --junitxml="pytest-report-blackhole-${GROUP}-run.xml"
+D="$LLK_ROOT/perf_data/runs/corelog-$GROUP"; mkdir -p "$D"
+cat /tmp/corelog.*.tsv > "$D/cores.tsv" 2>/dev/null || true
+echo "  core log lines: $(wc -l < "$D/cores.tsv" 2>/dev/null || echo 0)"
