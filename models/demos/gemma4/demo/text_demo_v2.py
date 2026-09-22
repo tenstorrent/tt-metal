@@ -300,50 +300,6 @@ def run_demo_text(
         enable_trace = _decode_trace.lower() in ("1", "true", "yes")
         logger.info(f"GEMMA4_DECODE_TRACE override: enable_trace={enable_trace}")
 
-    # ── Speculative-decoding dispatch ────────────────────────────────────────
-    # `--speculative` reroutes the demo through the it-assistant drafter +
-    # target verifier path. Delegated to _run_spec_decode, which builds its own
-    # target+drafter, so we return before this test loads a model.
-    if request.config.getoption("--speculative"):
-        draft_len = request.config.getoption("--spec-draft-len")
-        if draft_len is None:
-            # auto-K: the optimum depends on available context (see
-            # spec_decode.auto_draft_len). Prompt length is known below, so
-            # defer to the resolver at call time.
-            draft_len = None
-        if batch_size != 1:
-            # Batched (B>1) spec-decode: drafts each user at batch=1 and runs ONE
-            # batched packed verify over all users (KV-amortization win). Greedy,
-            # ragged per-user acceptance. Currently UNTRACED (host-dispatch bound).
-            prompts = load_inputs(input_prompts, batch_size, instruct)
-            _run_spec_decode_batched(
-                prompts=prompts,
-                instruct=instruct,
-                max_seq_len=max_seq_len,
-                max_generated_tokens=max_generated_tokens,
-                page_params=page_params,
-                sampling_params=sampling_params,
-                mesh_device=mesh_device,
-                enable_trace=enable_trace,
-                draft_len=draft_len,
-                num_layers=num_layers,
-            )
-            return
-        prompt = load_inputs(input_prompts, 1, instruct)[0]
-        _run_spec_decode(
-            prompt=prompt,
-            instruct=instruct,
-            max_seq_len=max_seq_len,
-            max_generated_tokens=max_generated_tokens,
-            page_params=page_params,
-            sampling_params=sampling_params,
-            mesh_device=mesh_device,
-            enable_trace=enable_trace,
-            draft_len=draft_len,
-            num_layers=num_layers,
-        )
-        return
-
     model_path = _model_path()
     temperature = sampling_params.get("temperature", 0)
     top_p = sampling_params.get("top_p", 1.0)
