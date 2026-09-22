@@ -20,6 +20,8 @@ namespace tt::tt_metal {
 class Hal;
 
 class SimpleTraceAllocator {
+    // The fixture intentionally has a protected virtual destructor; clang-tidy diagnoses this declaration.
+    // NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor)
     friend class SimpleTraceAllocatorFixture;
     friend class SimpleTraceAllocatorDeviceFixture;
 
@@ -31,7 +33,7 @@ public:
 
     explicit SimpleTraceAllocator(const std::vector<RingbufferConfig>& ringbuffer_configs) {
         region_allocators_.reserve(ringbuffer_configs.size());
-        for (auto& config : ringbuffer_configs) {
+        for (const auto& config : ringbuffer_configs) {
             region_allocators_.emplace_back(config.size, extra_data_);
             ringbuffer_starts_.push_back(config.start);
         }
