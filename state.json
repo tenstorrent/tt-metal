@@ -1,1711 +1,1722 @@
 {
- "last_run": {
+  "last_run": {
+    "run_id": "35767666005",
+    "timestamp": "2026-09-22T18:34:00Z"
+  },
   "run_id": "35728067639",
-  "timestamp": "2026-09-22T12:38:00Z"
- },
- "run_id": "35728067639",
- "open_prs": {
-  "52106": {
-   "issue": 51660,
-   "status": "checks green; reviewer-blocked (CodeOwners pending); pinged 2026-08-12 (human blozano-tt), no re-ping needed per Task5 scope"
-  },
-  "51868": {
-   "issue": 51866,
-   "status": "MAINTAINER FLAGGED 2.1x PERF REGRESSION 2026-09-22 (mateusznowakTT) on current version ca350a3. Posted honest response acknowledging likely lane-masking cost of Cody-Waite exp tail (matches prior Copilot review point); cannot benchmark on HW, left rework to maintainer. Do NOT push another unverified numeric change here without HW measurement."
-  },
-  "53113": {
-   "issue": 53106,
-   "status": "reviewer-blocked (CodeOwners pending, 2 groups: blackhole/wormhole LLK owners); /codeowners ping by blozano-tt 2026-08-14; agentic-threat-detected label is a known tooling-failure false positive, not a real finding"
-  },
-  "53655_moe_stallwait": {
-   "issue": 53655,
-   "branch": "repo-assist/fix-issue-53655-blackhole-moe-stallwait-math",
-   "status": "opened this run; adds p_stall::MATH to STALLWAIT masks in 3 confirmed files (4th file from issue text not found in current main, flagged in PR/comment); CI triggered, outcome unknown yet, check next run"
-  },
-  "53690": {
-   "issue": 53655,
-   "status": "CI green, all reviewer objections resolved (ncvetkovicTT/pmilenkovicTT/nvelickovicTT); awaiting nvelickovicTT manual Sanity/L2/BH-e2e run results + maintainer merge decision; re-verified 2026-08-31, no new activity",
-   "ci_status_2026-09-08": "5/5 checks green, mergeable_state unknown, unchanged, still awaiting maintainer decision"
-  },
-  "54223_pad_float32": {
-   "issue": 54223,
-   "status": "opened this run (fix PR, branch repo-assist/fix-issue-54223-pad-float32-pack); adds missing FLOAT32 case (std::bit_cast) to pad_tile_program_factory.cpp, mirrors already-correct multicore factory; CI triggered, outcome unknown yet, check next run"
-  },
-  "54246": {
-   "issue": 54223,
-   "status": "CI green (all check runs success incl PR Gate Status); awaiting maintainer review",
-   "note": "DUPLICATE FIX ALERT: external PR #54375 (rafaio1) fixes same issue #54223 with same root cause/fix. Flagged in monthly summary for maintainer to pick one. Do not close either unilaterally."
-  },
-  "54666": {
-   "title": "fix(ttnn): guard matmul per_core_M/N against zero to avoid SIGFPE",
-   "closes": 54639,
-   "status": "CI green (PR-Gate success), unchanged",
-   "branch": "repo-assist/fix-issue-54639-matmul-per-core-divzero-af452bb681e00eeb"
-  },
-  "54770": {
-   "issue": 54770,
-   "branch": "repo-assist/fix-issue-54770-expm1-cw-clamp-upper-bound",
-   "title": "clamp expm1_cw_clamped upper bound to prevent setexp wraparound",
-   "status": "opened 2026-08-28, CI triggered via pr-gate.yaml, outcome unknown, check next run",
-   "labels": [
-    "bug"
-   ]
-  },
-  "54792": {
-   "title": "fix(llk): clamp expm1_cw_clamped upper bound",
-   "status": "updated - pushed correction per reviewer (naufalfx805-source) feedback: upper clamp changed 87.0f -> 88.7228f (128*ln2)",
-   "date": "2026-09-02T18:41:19Z",
-   "ci_status_2026-09-08": "5/5 checks green (RTL Sim CI success)"
-  },
-  "54901_softshrink": "PR#54901 closed_by_maintainer (mateusznowakTT): softshrink undefined for negative lambda, no further action",
-  "54932_hardsigmoid_fp32": {
-   "issue": 54897,
-   "status": "Open, mergeable_state=behind. No update since 2026-09-02, 2 comments. Low activity - candidate for stale-PR watch next round."
-  },
-  "54862_ttsim_md": "PR#54862 open, skip-ci docs-only, awaiting maintainer review",
-  "55434_fix_pr": {
-   "issue": 55434,
-   "title": "Fix WH pack_untilize narrow_row row-stride offset",
-   "branch": "repo-assist/fix-issue-55434-wh-narrow-row-stride",
-   "status": "RTL Sim CI test shows failure conclusion, but its details_url is a broken/placeholder link (github.com/tenstorrernt, a typo domain) suggesting this check result may be infra noise rather than a real regression; overall PR Gate workflow run still action_required (blocked on maintainer approval), so build-artifact.yaml has not executed; needs another look once gate is approved",
-   "run_id": "33845189301"
-  },
-  "55424_clamp_output_tensor": {
-   "issue": 55334,
-   "status": "MERGED 2026-09-08 by mateusznowakTT. Remove from active tracking."
-  },
-  "55435": {
-   "ci_status_2026-09-07": "RTL Sim CI test FAILING (~14min run, unusual vs ~1s passes); other 4 Cycode checks green; job log 404 - could not self-diagnose; posted comment flagging for maintainer",
-   "ci_status_2026-09-08": "RTL Sim CI test now conclusion=success (previously failing 09-07); all 5 checks green; mergeable_state=behind"
-  },
-  "55605_alias": {
-   "issue": 55605,
-   "pr": 55670,
-   "status": "CI failure investigated 2026-09-19: 3 unrelated pre-existing failures (tilize program-cache flake x2, glm5 perf-band check); posted breakdown comment; still CodeOwners-pending 2 groups"
-  },
-  "55681_docfix": {
-   "issue": 55681,
-   "pr": 55688,
-   "status": "CI pre-checks 5/5 green, mergeable_state=behind, no build-artifact.yaml run found yet; comment-only change so low risk; checked 2026-09-08"
-  },
-  "54932": {
-   "ci_status_2026-09-08": "5/5 checks green (RTL Sim CI success)"
-  },
-  "aw_55819": {
-   "issue": 55819,
-   "branch": "repo-assist/fix-issue-55819-gather-clamp-tile-idx",
-   "title": "clamp gather codegen readers tile_idx to prevent L1 OOB device hang",
-   "status": "opened this run; CI triggered via pr-gate.yaml, outcome unknown, check next run; docker unavailable in sandbox so unverified locally"
-  },
-  "55847_gather_clamp": {
-   "issue": 55819,
-   "status": "Open. 5/5 pre-checks green (RTL Sim CI + 4 Cycode). Awaiting reviewer action / full PR-Gate not yet triggered. mergeable_state=behind. No action needed this run."
-  },
-  "55293_softplus_bias": {
-   "status": "MERGED 2026-09-09T11:24:16Z"
-  },
-  "54792_expm1_upper_clamp": {
-   "issue": 54770,
-   "status": "Open, mergeable_state=behind (main has moved on). Labeled bug/p0/high-risk. No new comments since 2026-09-03. Consider rebase note only if still stale next run."
-  },
-  "55435_wh_narrow_row": {
-   "issue": 55434,
-   "status": "Open, mergeable_state=behind, labeled bug/p1/high-risk/medium-complexity. No update since 2026-09-07, 1 comment. Monitor."
-  },
-  "56348_dispatch_log_fix": {
-   "issue": 56348,
-   "branch": "repo-assist/fix-issue-56348-dispatch-log-alignment-mem-type",
-   "title": "fix(dispatch): log correct L1 alignment in pinned-memory alignment check",
-   "status": "opened this run; single-line log_info format-arg fix (HalMemType::HOST -> HalMemType::L1); verified root cause against current source tt_metal/impl/buffers/dispatch.cpp; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
-  },
-  "56195_quasar_stride_pack": {
-   "issue": 56194,
-   "branch": "repo-assist/fix-issue-56194-quasar-strided-pack-tile-index",
-   "title": "fix(llk): scale strided-pack per-tile index by stride_size_tiles on Quasar",
-   "status": "opened this run; verified root cause against current source (llk_pack_tile_api.h, dataflow_buffer_interface.h, llk_io.h, cb_api.h all match issue's citations exactly); scaled per-tile step by stride_size_tiles in both out-of-order and in-order branches of get_output_tile_index(); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally",
-   "note_correction": "PR that fixes issue 56194 is actually numbered 56195, not 56194; corrected 2026-09-13"
-  },
-  "56383": "fix for issue #56383 (pow_bw ltz vs lez mismatch), opened 2026-09-13",
-  "56424": {
-   "issue": 56424,
-   "branch": "repo-assist/fix-issue-56424-quantize-per-tensor-scale-dtype",
-   "status": "opened this run; fixes reshape_per_channel_arg to cast per-tensor Tensor scale/zero-point to out_dtype (was only done for per-channel/axis path); verified root cause against current quantization.cpp; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
-  },
-  "56428": {
-   "issue": 56424,
-   "status": "CI green; APPROVED by mcw-anasuya 2026-09-22, ready to merge"
-  },
-  "56520_logical_not": {
-   "issue": 56520,
-   "pr": 56529,
-   "status": "CI green (5/5 checks); posted confirmation comment 2026-09-15; maintainer ncvetkovicTT asked 2026-09-15 whether other PRs solve the same issue - searched PRs referencing logical_not/56520, found none, replied with search results on the PR"
-  },
-  "56598": {
-   "issue": 56521,
-   "status": "opened prior run (isclose_init fix), CI green 5/5, no reviews yet - newly discovered via PR listing, was missing from memory tracking"
-  },
-  "56396": {
-   "issue": 56383,
-   "status": "reviewer feedback (mateusznowakTT) addressed 2026-09-18: replaced compare_pcc with assert_with_ulp(ulp_threshold=2) in test_bw_pow_zero_input_finite_gradient per /repo-assist request; pushed commit + comment; awaiting re-review"
-  },
-  "56532_fft_bf16_rne": {
-   "issue": 56532,
-   "branch": "repo-assist/fix-issue-56532-fft-bf16-rne-writers",
-   "status": "opened this run; adds fft_f32_bits_to_bf16_rne() RNE helper to batch_fft_common.h, replaces >> 16 truncation in all three writer kernels (batch_fft_writer.cpp, radix_pass_writer.cpp, apply_twiddles_writer.cpp); scoped to proposal (1) from the issue only (RNE rounding), proposal (2) (fp32 intermediates end-to-end) left for a future PR per issue's own scoping; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
-  },
-  "56714_binary_ng_width_stride": {
-   "issue": 56707,
-   "status": "CI green (RTL Sim CI + 4x Cycode all success) as of this run; PR number is 56714, not 56707 (56707 is the issue number - prior memory entry '56707_binary_ng_width_stride' had a numbering confusion, corrected here)"
-  },
-  "55688": {
-   "issue": 55681,
-   "status": "open, behind main, doc-only low-risk fix, unchanged"
-  },
-  "56808_typecast_int32_negative": "opened this run (test-only fix, branch repo-assist/fix-issue-56808-typecast-int32-negative-stimuli); adds test_eltwise_unary_typecast_int32_negative parametrized over Int32-input typecast pairs, sampling [-255,255] (or [-15,15] w/ block-float output) packed via pack_int32's sign-magnitude default; verified against current ckernel_sfpu_typecast.h (WH/BH/Quasar) that Int32 typecast kernels expect sign-magnitude Dest, matching the issue's own diagnosis. CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally.",
-  "56817": {
-   "issue": 56808,
-   "status": "REGRESSION FOUND AND FIXED: Repo Assist's prior kernel change (d65278e93a, switching WH/BH Int32 typecast SFPABS from MOD1_INT to MOD1_FLOAT) was itself wrong -- contradicted #56808's own diagnosis and disproven by maintainer AJ0070's on-device N150 measurement (switching to MOD1_FLOAT corrupts every negative case; original two's-complement kernels were correct). Reverted that commit and instead fixed the real bug: test harness packed Int32 negative stimuli as sign-magnitude via pack_int32's default -- now passes twos_complement=True through StimuliConfig for test_eltwise_unary_typecast_int32_negative, matching #56808's own suggested fix. Verified SFPLOAD INT32 load-mode and SFPABS mod1 semantics against tt-isa-documentation via DeepWiki before making the change. Pushed 2 commits + posted PR comment. CI run pending check next run."
-  },
-  "56827_concat_width": {
-   "issue": 56827,
-   "branch": "repo-assist/fix-issue-56827-concat-block-sharded-width-ragged",
-   "status": "opened this run; mirrors #56603 height-fix on width axis of ConcatBlockShardedProgramFactory (use padded_shape[-1] instead of shard capacity, clip out_col_end); CI triggered, outcome unknown yet, check next run",
-   "title": "[repo-assist] fix(ttnn): use real width, not shard capacity, in block-sharded width concat"
-  },
-  "56896_scatter_zero_volume": {
-   "issue": 56881,
-   "branch": "repo-assist/fix-issue-56881-scatter-zero-volume-sigfpe",
-   "title": "fix(ttnn): return input unchanged for zero-volume scatter to avoid SIGFPE",
-   "status": "opened this run; adds logical_volume()==0 early-return in ttnn::scatter next to existing rank-0 Shape{} check, per issue authors own primary suggestion; added regression test test_scatter_zero_volume_last_dim covering [0]/[2,3,0]/[2,0,3]; unverified locally, CI triggered via PR-gate"
-  },
-  "56938_unary_int32_reject": {
-   "issue": 56938,
-   "branch": "repo-assist/fix-issue-56938-unary-int32-reject-float-only",
-   "title": "fix(ttnn): reject INT32 input for unary ops with no integer SFPU kernel",
-   "status": "opened this run; TT_FATAL rejects INT32 input for 28 unary op types with no integer SFPU kernel (sqrt/sigmoid/exp/log/sign/reciprocal/rsqrt/sin/cos/tanh/erf/erfc/silu/softplus/gelu/hardsigmoid/hardswish/hardtanh/softsign/softshrink/tanhshrink/isnan/atan/celu/elu/selu/frac/ceil); added parametrized regression test; CI triggered, outcome unknown yet, check next run"
-  },
-  "56949_gpt_oss_fused_router_bh": {
-   "issue": 56949,
-   "branch": "repo-assist/fix-issue-56949-gpt-oss-fused-router-blackhole",
-   "title": "fix(models): disable fused topk_router_gpt on Blackhole (needs 12 DRAM banks, Blackhole has 8)",
-   "status": "opened this run; gates use_fused_op on not ttnn.device.is_blackhole(mesh_device) in both models/demos/gpt_oss/tt/topk.py and its models/experimental/ops/quasar duplicate; Python-only, no build required; CI outcome unknown yet, check next run"
-  },
-  "56864": {
-   "issue": 56827,
-   "status": "CLOSED without merge by CI automation (closed_by github-actions[bot], no comments, no failing checks visible via get_check_runs -- 5/5 green). Root cause of closure unclear from API; #56827 remains open. A fresh fix PR is needed next run."
-  },
-  "56955_welford_groupnorm_stride": {
-   "issue": 56955,
-   "branch": "repo-assist/fix-issue-56955-welford-groupnorm-batch-stride",
-   "title": "fix(ttnn): correct Welford groupnorm sharded kernel batch stride for multi-group cores",
-   "status": "opened this run; reads compile arg 18 (num_tiles_per_batch) instead of arg 9 (block_hw) for tile_id stride at both loop entries in welford_groupnorm_sharded_v2.cpp; added regression test test_group_norm_welford_multi_batch_per_core_sub_tile_groups; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
-  },
-  "56998_prefill_docs": {
-   "issue": 56998,
-   "branch": "repo-assist/fix-issue-56998-prefill-runner-docs-capture-trace",
-   "status": "opened this run (docs-only, [skip ci]); added capture_trace optional hook to ADDING_A_PREFILL_MODEL.md's PrefillRuntime contract, verified against prefill_runner.py:793 getattr-gated call and tt_prefill_runtime.py:433 implementation; no CI needed"
-  },
-  "56880_gather_rank": {
-   "issue": 56880,
-   "status": "investigated for fixability 2026-09-19; too architecturally risky for quick auto-fix (4 program factories + codegen route, TILE-layout slicing, transpose reorders fold order vs scatter's simpler ROW_MAJOR-only fix in #56875); labeled bug only, no PR opened"
-  },
-  "57088_prefill_producer_num_layers": {
-   "issue": 57088,
-   "branch": "repo-assist/fix-issue-57088-prefill-producer-num-layers-default",
-   "status": "opened this run; default NUM_LAYERS from ADAPTER.model_config.NUM_LAYERS mirroring prefill_runner.py's existing pattern instead of a hardcoded 61; Python-only, no build needed"
-  },
-  "57090_dedupe_mgd": {
-   "issue": 57090,
-   "branch": "repo-assist/fix-issue-57090-dedupe-mesh-graph-descriptors",
-   "status": "opened this run, [skip ci] docs/config-only; collapsed glm52/kimi27 mgd textprotos (verified byte-identical) to shared sc1_mgd/sc4_mgd, updated run_multirank_pcc.sh + RUN_COMMANDS.md"
-  },
-  "56827_concat_width_retry": {
-   "issue": 56827,
-   "branch": "repo-assist/fix-issue-56827-concat-block-sharded-width-ragged",
-   "status": "SUPERSEDED: issue #56827 fixed and closed via external PR #57100 on 2026-09-21; this repo-assist retry is moot"
-  },
-  "57099": {
-   "issue": 56827,
-   "status": "auto-closed unmerged (unexplained, same pattern as prior #56864); external draft PR #57100 (VirdhatchaniKN) now also targets same issue with a broader 2-defect fix; flagged for maintainer consolidation in monthly summary, no new repo-assist attempt opened"
-  },
-  "57110_kda_state_dedupe": {
-   "issue": 57110,
-   "branch": "repo-assist/fix-issue-57110-kda-state-dedupe-zeros",
-   "title": "drop KdaState._zeros duplicate carry cache in kimi_k3",
-   "status": "opened this run; removed shadow _zeros cache, reset() now uses ttnn.fill(state,0,output_tensor=state) in place; Python-only, no build needed; CI n/a for docs/py-only"
-  },
-  "57111_shutdown_sentinel_device_alloc": {
-   "issue": 57111,
-   "branch": "repo-assist/fix-issue-57111-shutdown-sentinel-device-alloc",
-   "title": "allocate shutdown sentinel payload directly on device",
-   "status": "opened this run; switched torch.zeros+from_torch to ttnn.zeros(device=dev,...); Python-only, no build needed"
-  },
-  "57213_squared_difference": {
-   "issue": 57213,
-   "branch": "repo-assist/fix-issue-57213-squared-difference-golden-scalar-dtype",
-   "title": "fix(ttnn): key squared_difference golden dtype branch off tensor operand",
-   "status": "opened this run; reuses _tensor_operand/_matched_operands/_integer_path_scalars helpers already used by add/subtract/multiply/divide goldens (#55722); adds regression test; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
-  },
-  "57244": {
-   "issue": 57213,
-   "status": "CI green (5/5), unchanged"
-  },
-  "57311": {
-   "issue": 57286,
-   "status": "CI green (5/5); MetalEnv mesh-device context-leak guard fix"
-  },
-  "57288": {
-   "issue": 57270,
-   "status": "CI green (5/5); tracy perf-report drop-unreplayed-ops fix"
-  },
-  "57322": {
-   "issue": 57322,
-   "branch": "repo-assist/fix-issue-57322-ternary-tanhbw-alignment-hash",
-   "title": "fix(ttnn): hash Alignment/Tile in ternary and tanh_bw program-cache keys",
-   "status": "opened this run; follow-up to #55702, verified root cause against current ternary_device_operation.cpp and tanh_bw_device_operation.cpp; CI triggered, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
-  }
- },
- "issues_labeled": [
-  "52178:bug",
-  "52174:bug",
-  "52233:bug",
-  "52203:bug",
-  "52390:bug,ci-bug",
-  "52376:bug",
-  "52614:bug,community",
-  "52607:bug",
-  "53046:bug",
-  "53060:performance monitoring",
-  "53389:bug",
-  "53379:bug",
-  "53432:bug",
-  "53435:bug",
-  "53429:feature-request",
-  "53439:feature-request",
-  "53512:bug",
-  "53510:bug",
-  "53604:bug",
-  "53649:bug",
-  "53781:bug",
-  "53763:performance monitoring",
-  "53764:feature-request",
-  "53780:feature-request",
-  "53815:bug",
-  "53823:bug",
-  "53984:bug",
-  "53981:bug",
-  "53978:bug",
-  "53975:bug",
-  "53973:bug",
-  "53971:bug",
-  "53969:bug",
-  "53963:bug",
-  "53908:bug",
-  "54017:bug",
-  "53999:bug",
-  "54016:feature-request",
-  "54495:bug",
-  "54695:bug",
-  "54654:bug",
-  "54706:performance monitoring",
-  "54707:performance monitoring",
-  "54708:performance monitoring",
-  "54709:performance monitoring",
-  "54705:performance monitoring",
-  "54724:bug",
-  "54725:bug",
-  "54798:bug",
-  "54883:bug",
-  "54882:bug",
-  "54897:bug",
-  "54910:bug",
-  "55017:bug",
-  "54968:bug",
-  "55052:bug",
-  "54968:bug",
-  "55105:bug",
-  "55106:bug",
-  "55114:feature-request",
-  "55393:bug",
-  "55392:bug",
-  "55599:bug",
-  "55622:bug",
-  "55735:bug",
-  "55733:bug",
-  "56056:bug",
-  {
-   "number": 56248,
-   "label": "bug",
-   "date": "2026-09-11"
-  },
-  {
-   "number": 56283,
-   "label": "bug",
-   "date": "2026-09-11"
-  },
-  {
-   "number": 56254,
-   "label": "bug",
-   "date": "2026-09-11"
-  },
-  {
-   "number": 56281,
-   "label": "bug",
-   "date": "2026-09-11"
-  },
-  {
-   "number": 56238,
-   "label": "bug",
-   "date": "2026-09-11"
-  },
-  {
-   "number": 56263,
-   "label": "bug",
-   "date": "2026-09-11"
-  },
-  "55378:bug,ci-bug",
-  "56385:bug",
-  "56371:bug",
-  "56324:bug",
-  {
-   "number": 56626,
-   "label": "bug",
-   "date": "2026-09-15"
-  }
- ],
- "covered_no_duplicate": {
-  "52131": "PR #52136 already closes it",
-  "52233": "fix in open PR #52237",
-  "52612": "fix in open PR #52613",
-  "52614": "fix in open PR #52615",
-  "52607": "fix in open PR #52608",
-  "52901": "fix in open PR #52902",
-  "53046": "fix already in open PR #53047 (lgamma bridge-guard <= fix); overlaps in-flight #51991, needs coordination per PR body -- do not open duplicate",
-  "53078": "fix in draft PR #53103 (AI-assisted LLK triage board)",
-  "53106": "fix opened by repo-assist this run, see new PR (reciprocal Newton seed 0x1.554p0f)",
-  "52671": "TWO maintainer PRs exist (#52789 full fix, #52790 assert-only) superseding repo-assist's own #52673 -- do not act further, just monitor for closure",
-  "53282": "PR #53478 MERGED 2026-08-26T08:10:22Z by mateusznowakTT (addcmul composite-fallback fix) - closed out, remove from open_prs tracking",
-  "53649": "commented with bisect confirmation citing #53419 diff; labeled bug; already assigned to jmitrovicTT, no PR opened (root cause not independently verified)",
-  "53655": "PR opened this run (repo-assist), no other open PR found",
-  "53786": "fix in open PR #53767 (reporter's own)",
-  "53765": "fix in open PR #53766 (reporter's own)",
-  "53760": "fix in open PR #53761 (reporter's own)",
-  "53782": "fix in open PR #53783 (reporter's own)",
-  "53770": "fix in open PR #53771 (reporter's own)",
-  "53781": "commented with isolation lead (suspect strict-inequality-gated CB credit in sort/select); labeled bug; no PR opened, needs hw access",
-  "53823": "fixed by open PR #53654 (TT-NOP-Injector eltwise_binary race)",
-  "53787": "fixed by open PR #53810 (log_sigmoid fp32 accuracy)",
-  "53846": {
-   "fix_pr": 53858,
-   "date": "2026-08-21",
-   "note": "groupnorm inexact group mean, fixed by PR #53858"
-  },
-  "53803": {
-   "fix_pr": 53858,
-   "date": "2026-08-21",
-   "note": "groupnorm sub-tile group corruption, fixed by PR #53858"
-  },
-  "53874": "fixed by #53899 (not repo-assist); repo-assist's own #53898 closed as superseded",
-  "53890": "fix in open PR #53891 (reporter kinginu, ttnn.where composite fallback)",
-  "53862": "fix in open PR #53863 (reporter kinginu, is_odd 3-dispatch perf)",
-  "53984": "fix in open PR #53985 (reporter kinginu, multiply block-float fast_and_approximate_mode)",
-  "53981": "fix in open PR #53982 (reporter kinginu, complex div_bw single reciprocal)",
-  "53978": "fix in open PR #53980 (reporter kinginu, div output_dtype passthrough)",
-  "53975": "fix in open PR #53976 (reporter kinginu, sqrt/rsqrt -0.0 domain)",
-  "53973": "fix in open PR #53974 (reporter kinginu, rsqrt_bw zero-gradient sign)",
-  "53971": "fix in open PR #53972 (reporter kinginu, tril/triu dtype mask)",
-  "53969": "fix in open PR #53970 (reporter kinginu, backward ops memory_config passthrough)",
-  "53963": "fix in open PR #53965 (reporter kinginu, unary program cache key dtype)",
-  "53908": "fix in open PR #53909 (reporter kinginu, unary SFPU comparisons)",
-  "53699": "fixed by merged PR #53749 (repo-assist); issue closed, no further action",
-  "54241": "fix in open PR #54240 (reporter's own, atan2 IEEE-754)",
-  "54234": "fix in open PR #54237 (metal2 borrowed-DFB sharded size-check skip)",
-  "54223": "fix in open PR #54246 (repo-assist, opened prior run), CI green",
-  "54300": "fix in open draft PR #54301 (quasar pool face geometry)",
-  "54326": {
-   "fix_pr": 54327,
-   "date": "2026-08-25",
-   "note": "reporter gundi61 opened fix PR; verified root cause + fix quality, no duplicate needed"
-  },
-  "54309": "2026-08-25: ttnn.sort ROW_MAJOR CrossCoreDataExchange bug, already labeled bug+data_movement, well-documented repro, no fix PR found, left for maintainer/future run - not independently confirmed against source this run",
-  "54439": {
-   "fix_pr": 54440,
-   "author": "kinginu",
-   "note": "pow_bw +inf bug, confirmed correct fix, no duplicate needed"
-  },
-  "54639": "verified no existing PR before opening #54664",
-  "54695": "labeled+commented this run, no fix PR opened (root cause confirmed, fix approach suggested, no HW needed but left for follow-up PR)",
-  "54654": "labeled bug, needs HW/device access to root-cause slow-dispatch hang, no fix PR",
-  "54779": "has open community fix PR #54780, no duplicate needed",
-  "54868": "has open fix PR #54871 (tzh476) - reflection-identity fix for FP32 gelu_bw saturation",
-  "54878": "linked PR #54776 already open",
-  "54877": "linked PR #54675 already open",
-  "54899": "PR #54905 already fixes it",
-  "54950": "fix PR #54958 already open (perf-counter fidelity metrics tied off in hw); part of mvlahovicTT refactor cluster #54949-54953, do not touch",
-  "54953": "maintainer architectural refactor plan (perf-counter metric commonization); landing order #54949->54950->54951->54952->54953; not for repo-assist",
-  "55032": "open fix PR #55031 exists",
-  "55043": "fix PR #55044 open, verified 2026-09-01",
-  "55124": {
-   "checked": "2026-09-02",
-   "result": "no open PR found (search is:pr is:open <n> in:body)",
-   "note": "reporter singhharsh1708 intends to fix via bounty program; do not open competing PR"
-  },
-  "55128": {
-   "checked": "2026-09-02",
-   "result": "no open PR found (search is:pr is:open <n> in:body)",
-   "note": "reporter singhharsh1708 intends to fix via bounty program; do not open competing PR"
-  },
-  "55129": {
-   "checked": "2026-09-02",
-   "result": "no open PR found (search is:pr is:open <n> in:body)",
-   "note": "reporter singhharsh1708 intends to fix via bounty program; do not open competing PR"
-  },
-  "55125": {
-   "checked": "2026-09-02",
-   "result": "no open PR found (search is:pr is:open <n> in:body)",
-   "note": "reporter singhharsh1708 intends to fix via bounty program; do not open competing PR"
-  },
-  "55430": "has open PR #55431",
-  "55379": "has open PR #55380",
-  "55371": "has open PR #55296",
-  "55438": "covered by open PR #55440 (Bessel's correction for batch_var), confirmed 2026-09-04",
-  "55551": "fix PR #55552 by amahmudTT already open and adequate (deepseek_prefill NoC ordering race); no repo-assist duplicate needed",
-  "55576": "PR #55575 (repeat_interleave DRAM-sharded fix) - reconfirmed",
-  "55588": "PR #55589 (multi-batch GPT-OSS decode/prefill)",
-  "55571": "PR #55554 (H3 audio encoder)",
-  "55502": "3 open community PRs: #55506, #55515, #55522 (bounty INT_MIN)",
-  "55616": "fix in open PR #55613 (quasar outer memory_config)",
-  "55605": "fix in open PR #55606 (metal 2.0 program cache aliased tensor mis-bind)",
-  "55881": "Open fix PR #55882 already exists - confirmed via search, no duplicate needed.",
-  "55817": "Open fix PR #55821 already exists - confirmed via search, no duplicate needed.",
-  "55823": "Open fix PR #55824 already exists - confirmed via search, no duplicate needed.",
-  "56021": "fix in open PR #56025 (binary_ng fused activation dtype define)",
-  "56008": "fix in open PR #56012 (all_gather scatter-write state)",
-  "56073": "fix in open PR #54157 (LLK perf matmul coverage)",
-  "55744": "already fixed and MERGED via PR #55938 (llk_wait_tiles block-until-resolved fix); remove from active tracking",
-  "55996": "fix in open PR #55997 (moe_compute tilize total_chunks single consumer)",
-  "56068": "fix in open PR #56198 (ttnn.reshape ND shard spec normalized-to-2D input and ND output)",
-  "56324": "already fixed via open PR #55589 (tt_transformers prefill page table fix included), no dup needed",
-  "56290": "bounty issue, multiple community PRs already open (56296/56301/56309/56325/56326/56327), no repo-assist action",
-  "56281": "already labeled bug, tracking issue referencing 54630, no action",
-  "56277": "bounty feature request, already labeled, no action",
-  "56385": "already labeled bug/community; open external fix PR #56394 (MyDude92), no repo-assist dup needed",
-  "56371": "already labeled bug/community; open external fix PR #56386, no repo-assist dup needed",
-  "56375_dispatch_log": "confirmed this run: issue #56348 already closed by merged PR #56676 (same fix, log correct alignment); repo-assist's own open PR #56375 is now redundant/superseded -- flagged in monthly summary for maintainer to close, not closed unilaterally.",
-  "56853": "fix in open PR #56860 (ttnn.pow integer exponent bit-reinterpret bug)",
-  "56881": "confirmed no existing open PR fixes this before opening #56896 (checked search_pull_requests + issue thread + PR #56875 notes, which explicitly calls out 56881 as NOT fixed there)",
-  "56945": "confirmed still covered by open PR #56932 (2026-09-19 re-check)",
-  "56954": "confirmed still covered by open PR #56953 (2026-09-19 re-check)",
-  "56738": "fix in open PR #56850 (binary_ng fused-activation SrcA format restoration)",
-  "56876": "fix in open PR #56875 (scatter rank>4 fold fix)",
-  "57213": "verified 0 open PRs reference #57213 before opening fix; repo-assist PR for squared_difference golden scalar-dtype fix opened this run"
- },
- "dropped_fix_targets": {
-  "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
-  "53055": "reporter (maintainer ncvetkovicTT) deliberately deferred fix pending directed test -- filed as documentation, not an action item",
-  "54235": "ternary Metal2.0 cache-key analysis, too architectural, needs ops-team decision",
-  "54232": "TensorParameterRelaxation, too architectural",
-  "54897": "hardsigmoid FP32 cancellation near x=-3 - deferred to next run, not yet fixed",
-  "54848": "closed by mateusznowakTT: perf objection, recommends divide-kernel+fused-post-activation instead of composite op; broader binary-infra rework out of scope"
- },
- "watch_prs": {
-  "52237": "fixes #52233, watch for merge",
-  "45709": "approved+CodeOwners complete but stuck action_required repo-side gate since 2026-06, needs maintainer manual re-enable",
-  "53047": "fixes #53046 lgamma bridge guards <= fix; overlaps #51991, needs coordination before merge",
-  "53103": "draft PR fixing #53078 matmul unpacker miscompares; AI-generated, needs human review before ready-for-review",
-  "53690": "test-coverage objection from ncvetkovicTT resolved 2026-08-21 by nvelickovicTT (OK if CI passes); awaiting CI re-run results (Sanity/L2/BH e2e triggered by nvelickovicTT)",
-  "51868": "reviewer kanapitsas (2026-08-22) confirmed Ring Joint SDPA logsigmoid_sub shares same bug; repo-assist replied confirming + asked maintainer to add boundary test (no HW access to verify numerics); PR still open, mergeable_state=behind",
-  "54690": "Now has 4 approvals (bbradelTT, wenbinlyuTT, mcw-anasuya, vtsilytskyiTT). CI green (217 checks). Need to confirm 4th approval covers previously-missing metalium-developers-ttnn-core CodeOwners group. Checked 2026-08-31.",
-  "54932": "replied to contributor naufalfx805-source's test-coverage follow-up analysis; endorsed separate follow-up PR",
-  "55435": "RTL Sim CI still failure but parent workflow run 33846253050 conclusion is action_required (not failure) - likely gating/approval issue not code issue; job logs still 404; mergeable_state now behind; needs maintainer, no fix pushed",
-  "55933": "confirmed bug, awaiting fix PR (community reporter has branch)",
-  "56195": "RTL Sim CI test failing since 2026-09-11 (job log retrieval 404s in this sandbox via get_job_logs/actions_get - endpoints return 404 for both run_id and job_id); needs maintainer to inspect directly. Other checks (Cycode x4) green.",
-  "56538": "external PR fixing #56522 (ttnn.where -0.0 predicate float32 path); no repo-assist duplicate needed",
-  "56375": "SUPERSEDED: issue #56348 was fixed and closed via a different PR #56676 (merged); this repo-assist PR is now redundant, flagged in a comment on the PR and in monthly summary for maintainer to close; checked 2026-09-16"
- },
- "sfpu_clamp_family": {
-  "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991.",
-  "54883": "gelu_bw Mills-ratio tail, confirmed 2026-08-31, no fix PR (needs HW-validated refit)",
-  "54882": "tanh_bw sech2 tail denominator drop, confirmed 2026-08-31, no fix PR (needs HW-validated reciprocal)"
- },
- "no_fix_needed_investigated": {
-  "53029": "K3 AttnRes segmented-batch silent correctness bug -- deep hw-specific investigation, root cause unknown, left for owning team (pjosipovic)",
-  "53069": "Quasar perf-test coverage issue, PR-derived tracking issue, not a defect",
-  "53079": "assigned to maintainer ebanerjeeTT, tracked scope item, no repo-assist action needed",
-  "53631": "LLK MOVD2B handoff investigation, reporter self-driving with own follow-up comment, not a confirmed bug",
-  "53600": "covered by existing PR #53601",
-  "53640": "assigned to ndivnicTT, thin perf-test investigation task",
-  "53613": "maintainer KalaivaniMCW test-infra restructuring proposal, not a bug",
-  "53568": "Metal 2.0 port architectural blocker by maintainer gajanan-choudhary, too complex for repo-assist",
-  "53561": "AI-flagged LLK dedup/refactor follow-up, requires careful mutation-testing, not safe for repo-assist",
-  "53769": "argmax multicore correctness gaps, already assigned iwroszTT, 5 distinct sub-issues, too broad for a single surgical repo-assist PR",
-  "53778": "graph tracer timeout for llama pytest, reporter already has own workaround branch + comment, needs graph-tracing expert (dgomezTT/aliaksei-sala already tagged)",
-  "53763": "LLK perf-gate noise/threshold measurement tracking issue (collaborator-authored), labeled performance monitoring, no action needed",
-  "53764": "multi-chip CI sweep follow-up to #38316, already assigned fbuticTT, labeled feature-request",
-  "53802": {
-   "date": "2026-08-21",
-   "note": "vLLM seed salting regression, already assigned/labeled"
-  },
-  "53844": {
-   "date": "2026-08-21",
-   "note": "GDN kernel optimization, already assigned"
-  },
-  "53840": {
-   "date": "2026-08-21",
-   "note": "l2 nightly reduction, assigned, has parent issue"
-  },
-  "53796": {
-   "date": "2026-08-21",
-   "note": "SFPI deprecated features, assigned"
-  },
-  "53849": {
-   "date": "2026-08-21",
-   "note": "operation timeout doesn't cover socket waits, already labeled bug+runtime, assigned"
-  },
-  "53830": {
-   "date": "2026-08-21",
-   "note": "sfpwriteconfig, already labeled sfpi, assigned"
-  },
-  "53962": {
-   "date": "2026-08-22",
-   "note": "Resnet e2e hang via env vars; already assigned to reporter shengxiangjiTT with repro steps"
-  },
-  "54485": {
-   "date": "2026-08-27",
-   "note": "log spam Task issue, already has 4 comments + assignee riverwuTT context, not a confirmed bug requiring label"
-  },
-  "54450": {
-   "date": "2026-08-27",
-   "note": "Metal2.0 O3 opt-level follow-up, already has open fix PR #54454, no dup needed"
-  },
-  "54495_watch": {
-   "date": "2026-08-27",
-   "note": "labeled bug; watcher segfault in Fabric init, no fix PR opened - requires HW to reproduce/fix"
-  },
-  "54655": "Clang23 -Wunused-template build failure: confirmed plausible defect but 12+ symbols across multiple headers (some ttnn/api/) - too broad for single surgical repo-assist PR without local build verification; left for maintainer",
-  "54797": "fabric topology resolver architectural change request, tracked by tt-blaze#3571, not a repo-assist scope item (2026-08-29)",
-  "54794": "ttsim simulator gap, owned by ttsim team per issue text, not tt-metal fixable (2026-08-29)",
-  "54768": "parent tracking issue for #54766, no confirmed defect, assigned kgrujcic-tt (2026-08-29)",
-  "54766": "Phase 3 handle-inconsistencies tracking task, assigned kgrujcic-tt, no confirmed defect (2026-08-29)",
-  "54807": "already labeled bug + assigned sidnadTT, Quasar HW-specific fix, out of repo-assist scope (2026-08-29)",
-  "54742": "already covered by open PR #54743, already labeled bug (2026-08-29)",
-  "54813": "KDA prepare_chunk_recurrence t_inv precision bug for Kimi-K3; maintainer kgrujcic-tt already root-caused, assigned, fix pushed to feature/kimi-k3-modules & feature/kimi-k3-prefill; no repo-assist action",
-  "54814": "Workarounds tracking/parent issue, assigned kgrujcic-tt, not a standalone confirmed defect; no repo-assist action",
-  "54899": "copy_dest_values FP16B subnormal flush - complex arch-dependent LLK fix, issue itself flags open questions; too risky for surgical repo-assist fix, left for maintainer",
-  "55017": "confirmed TT_FATAL at grid_sample_device_operation.cpp accepts FLOAT32; root cause likely in grid_sample_reader_common.hpp stick-size/stride handling (not fully confirmed); reporter explicitly wants bounty assignment, no repo-assist PR",
-  "55102": {
-   "date": "2026-09-02",
-   "note": "Gemma4/Wormhole garbled long-context output; complex HW/model-dependent bug, needs device access; no label/comment applied"
-  },
-  "55332_55334_55323_55378": "bounty-program batch / bot-filed, already labeled, no repo-assist action 2026-09-03",
-  "55414": "architectural: binary_ng program-cache key missing Alignment/Tile, blocks Metal2.0 port; assigned bbradelTT/dchenTT, P1; maintainer-owned, confirmed 2026-09-04",
-  "55609": "LLK/BH tilize-init comment ISA-semantics inaccuracy, well-researched, needs LLK-team review, not a repo-assist fix (2026-09-07)",
-  "55838": {
-   "date": "2026-09-09T06:30:00Z",
-   "note": "Quasar NOC_V2_WR_RESP_VC->NOC_OVERLAY_WR_RESP_VC rename issue. Verified against current main (HEAD b7b582aa): grepped noc_nonblocking_api_v2.h and noc_atomic_ops_probe.cpp - zero remaining NOC_V2_WR_RESP_VC references, all call sites correctly use NOC_OVERLAY_WR_RESP_VC. Already fixed by a commit after the issue's cited SHA (likely #55399). No fix PR opened; no comment posted (avoid noise on an issue a maintainer will notice is stale/auto-resolved)."
-  },
-  "55918_55917": "shield_prefill deadlock/race issues, both fixed via linked PR #55741 (acvejicTT), no repo-assist action",
-  "55965": "Quasar STALLWAIT math-drain, already bug-labeled + assigned amahmudTT, statically-audited findings for Quasar owner",
-  "55920": "eltwise perf-test alignment BH/QSR, already assigned ndivnicTT, tracking issue",
-  "55913": "LLK Sanitizer epic/tracker, assigned sstanisicTT, no action needed",
-  "56056": "ttnn.softmax NaN/inf handling - confirmed all-(-inf)-row mechanism (exp SFPU CLAMP_NEGATIVE sanitize) against current source; labeled bug + commented; no fix attempted, shared hand-tuned HW kernel needs careful review beyond repo-assist scope",
-  "55988": "2026-09-12: investigated BH tilize tall-narrow cliff-row assert (tilize_multi_core_block_program_factory.cpp:295); traced split_blocks_for_tilize_wh/compute_ncores_wh_sb path in work_split_tilize.hpp and buffer_set_for_core in common.cpp but could not conclusively identify the exact core/width mismatch for the specific (1,1,4096,32) uint8 shape on Blackhole's grid without hardware/sim access; left unlabeled/uncommented, revisit with more time budget",
-  "56414": "BF16 trunc/floor/ceil/frac return +-inf instead of NaN (_trunc_body_ in ckernel_sfpu_rounding_ops.h has no NaN/inf guard before bit-mask path); confirmed root cause against current source, labeled bug + commented, but explicitly deferred fix to maintainer - raw SFPU intrinsic kernel (SFPEXEXP/SFPIADD/SFPSHFT2/SFPAND) shared by 3+ other LLKs, no sfpi.h vendored in this checkout to safely verify a bit-level change; 2026-09-13",
-  "56776": "2026-09-19: Quasar V2 posted multicast dword-write loss on emulator; already labeled bug, self-driving reporter with candidate hypotheses listed, needs emulator/HW access",
-  "56701": "2026-09-19: Quasar trace-capture DFB config snapshot missing (0 vs N payloads), already labeled bug, needs dispatch/serialization expertise",
-  "56702": "2026-09-19: Quasar cached-program re-enqueue doesn't refresh DFB configs (WH/BH-only refresh), already labeled bug, needs dispatch/serialization expertise, sibling of 56701",
-  "57055": "CMake TT::Metalium::Private refactor -- genuine, 47 occurrences/32 files, too large/architectural for a surgical repo-assist fix",
-  "57003": "T3K dispatch pipeline retirement -- gated to on-or-after 31 October 2026, not actionable yet",
-  "57042": "resnet-on-quasar REDUCE_DIM macro collision: already fixed on main (param renamed to reduce_dim); verified 2026-09-20; safe to close, flagged in monthly summary",
-  "56945": "32-bit unpack-to-dest wrong-DST-tile: already has open external fix PR #56932 (awliu-TT); verified 2026-09-20, no duplicate",
-  "56986": "hf_rope decode PCC fail on BH: already has open external fix PR #57035; verified 2026-09-20, no duplicate"
- },
- "stale_pr_nudges": {
-  "34933": {
-   "last_ping": "2026-08-21",
-   "type": "author_checkin"
-  },
-  "21584": {
-   "last_ping": "2026-09-02",
-   "type": "codeowners",
-   "note": "re-pinged, approved but still pending required CODEOWNERS"
-  },
-  "45516": "2026-08-12: author nudge (behind main, no reviews yet)",
-  "49658": {
-   "last_ping": "2026-09-02",
-   "type": "codeowners",
-   "note": "re-pinged, approved by mgajewskiTT but still pending required CODEOWNERS"
-  },
-  "46419": "2026-08-19: author nudge (approved but blocked mergeable_state, stale ~5wk, checked_state)",
-  "50131": {
-   "last_ping": "2026-09-19",
-   "type": "re-ping",
-   "note": "still dirty/behind, no author response since 2026-08-19"
-  },
-  "30797": "2026-08-20: author nudge (unresolved reviewer question from philei-tt re: zero-init padding assumptions, ~4mo stale)",
-  "50150": {
-   "last_ping": "2026-09-19",
-   "type": "re-ping",
-   "note": "still behind, no author response since 2026-08-20"
-  },
-  "50149": {
-   "last_ping": "2026-09-19",
-   "type": "re-ping",
-   "note": "still blocked, no author response since 2026-08-20"
-  },
-  "50411": {
-   "date": "2026-08-21",
-   "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
-  },
-  "50443": {
-   "date": "2026-09-14",
-   "type": "author_checkin",
-   "note": "LLK 2's complement sfpu shift on BH, dirty mergeable_state, never previously nudged"
-  },
-  "49768": {
-   "date": "2026-08-21",
-   "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
-  },
-  "49800": {
-   "last_ping": "2026-09-12",
-   "type": "author_checkin",
-   "note": "approved x2 (mgajewskiTT, gsarabandoTT) but dirty mergeable_state, needs rebase"
-  },
-  "51004": {
-   "last_ping": "2026-08-23",
-   "type": "codeowners"
-  },
-  "51129": {
-   "last_ping": "2026-08-23",
-   "type": "author_checkin"
-  },
-  "51155": {
-   "last_ping": "2026-08-23",
-   "type": "author_checkin"
-  },
-  "51084": {
-   "last_ping": "2026-08-24",
-   "type": "author_checkin"
-  },
-  "51119": {
-   "last_ping": "2026-08-24",
-   "type": "author_checkin"
-  },
-  "51120": {
-   "last_ping": "2026-08-24",
-   "type": "author_checkin"
-  },
-  "45949": {
-   "last_ping": "2026-08-24",
-   "type": "behind_main_author_action"
-  },
-  "51311": {
-   "last_ping": "2026-08-24",
-   "type": "dirty_no_review_author_action"
-  },
-  "49787": {
-   "last_ping": "2026-08-24",
-   "type": "approved_but_dirty_author_action"
-  },
-  "49317": {
-   "last_ping": "2026-09-22",
-   "type": "re-ping",
-   "note": "still blocked ~2mo, no author action since 08-25 checkin"
-  },
-  "50993": {
-   "last_ping": "2026-09-22",
-   "type": "re-ping",
-   "note": "still blocked ~1mo, no author action since 08-25 checkin"
-  },
-  "50519": {
-   "last_ping": "2026-08-25",
-   "type": "author_checkin",
-   "note": "blocked mergeable_state, ~1mo stale"
-  },
-  "28787": {
-   "date": "2026-09-14",
-   "type": "author_checkin",
-   "note": "old syntax-error PR, dirty mergeable_state, never previously nudged"
-  },
-  "47426": {
-   "date": "2026-08-25",
-   "note": "author nudge (dirty mergeable_state, ~1mo stale, LTX LoRA load/fuse/unload)"
-  },
-  "38639": {
-   "date": "2026-08-25",
-   "note": "author nudge (dirty mergeable_state, ~1mo stale, ttnn.slice L1 OOM fix)"
-  },
-  "50661": {
-   "last_ping": "2026-08-25",
-   "type": "author_nudge",
-   "note": "CI failures ttnn ops fast unit tests + ttnn reduce group, mergeable_state blocked"
-  },
-  "51507": {
-   "last_ping": "2026-08-25",
-   "type": "codeowners_ping",
-   "note": "pending CodeOwners group approval (tests/tt_metal/tt_metal/deployment/), [skip ci] prefix"
-  },
-  "38627": "2026-08-26 author nudge - mergeable_state=dirty, PR Gate Status failing, stale since 2026-07-30",
-  "36120": {
-   "last_ping": "2026-09-12",
-   "type": "codeowners",
-   "note": "re-pinged, approved by yieldthought, others pending"
-  },
-  "36267": {
-   "date": "2026-08-26",
-   "type": "author"
-  },
-  "39293": {
-   "date": "2026-08-26",
-   "type": "codeowners_ping"
-  },
-  "36184": {
-   "last_ping": "2026-09-12",
-   "type": "codeowners",
-   "note": "re-pinged, no reviews yet, 6 requested reviewers"
-  },
-  "50277": {
-   "date": "2026-08-26",
-   "type": "author_nudge",
-   "note": "dirty mergeable_state (conflict), detailed review from scardozaTT since 2026-07-27 unaddressed"
-  },
-  "42536": {
-   "date": "2026-09-05",
-   "type": "codeowners",
-   "reason": "re-ping, ~10 days since last ping, still dirty, no human reviewer approval"
-  },
-  "51544": {
-   "date": "2026-08-26",
-   "type": "codeowners_ping",
-   "note": "codeowners ping, Quasar exp overflow/underflow guard restore, stale since 2026-07-30"
-  },
-  "51567": {
-   "last_ping": "2026-09-12",
-   "type": "author_checkin",
-   "note": "unresolved review comment from abhullar-tt (09-08) re per-SKU golden gating, plus dirty mergeable_state"
-  },
-  "51558": {
-   "last_ping": "2026-09-12",
-   "type": "author_checkin",
-   "note": "approved by tdowdallTT but dirty mergeable_state, needs rebase"
-  },
-  "51487": {
-   "last_ping": "2026-08-27",
-   "type": "author_checkin",
-   "note": "required CI (PR Gate Status, Clang Tidy) failing since 2026-07-29"
-  },
-  "45435": {
-   "date": "2026-08-27",
-   "note": "author nudge (dirty mergeable_state since May, discussion settled per dgomezTT, no revert needed)"
-  },
-  "36251": {
-   "date": "2026-08-27",
-   "note": "author nudge (quiet since Feb reviews, mergeable_state unknown)"
-  },
-  "49627": {
-   "date": "2026-08-28",
-   "note": "codeowners ping (reviewer-blocked, 2 groups pending since 2026-07-15, author already very active with own pings)"
-  },
-  "51895": {
-   "date": "2026-08-29",
-   "type": "codeowners",
-   "note": "first repo-assist ping, zero reviewer activity since 2026-08-03, well-documented fmod quotient guard fix"
-  },
-  "50827": {
-   "date": "2026-08-29",
-   "type": "codeowners",
-   "note": "re-ping, 3 CodeOwners groups pending since 2026-07-24 (prior ping 2026-07-24 was from author, not repo-assist)"
-  },
-  "51761": {
-   "date": "2026-08-29",
-   "type": "author_checkin",
-   "note": "behind main, no reviews since 2026-07-31, test-dispatch reuse-build-run-id"
-  },
-  "50764": {
-   "date": "2026-08-31",
-   "type": "author_checkin",
-   "note": "op-to-op latency tools, mergeable_state dirty, quiet since 2026-08-04"
-  },
-  "48031": {
-   "date": "2026-08-31",
-   "type": "author_checkin",
-   "note": "Buffer::shard_spec() const-ref, mergeable_state behind, quiet since 2026-08-04"
-  },
-  "40858": {
-   "date": "2026-08-31",
-   "type": "author_checkin",
-   "note": "GLM4.7 Flash Model, dirty mergeable_state despite 2 approvals (uaydonat, mtairum), quiet since March"
-  },
-  "36582": {
-   "date": "2026-08-31",
-   "type": "author_checkin",
-   "note": "Llama3.3-70b perf unit tests, 5 approvals but PR Gate Status failing, quiet since Feb"
-  },
-  "35578": {
-   "date": "2026-08-31",
-   "type": "author_checkin",
-   "note": "bank-to-DRAM tables uniqueness, unaddressed perf regression concern from msudumbrekar-TT since March"
-  },
-  "34371": {
-   "date": "2026-09-02",
-   "note": "author nudge (dirty mergeable_state, only Copilot auto-review, no human review yet)"
-  },
-  "38008": {
-   "last_ping": "2026-09-05",
-   "type": "reviewer-blocked",
-   "note": "no human review since Feb 2026, nudged for maintainer attention"
-  },
-  "23230": {
-   "date": "2026-09-05",
-   "type": "author_checkin",
-   "reason": "no reviewer activity, failing RTL Sim CI test, mergeable_state unknown"
-  },
-  "22706": {
-   "date": "2026-09-06",
-   "type": "codeowners_ping",
-   "note": "5 requested reviewers pending since May 2025, mergeable_state unknown, review-ready"
-  },
-  "36227": {
-   "date": "2026-09-06",
-   "type": "codeowners_ping",
-   "note": "docs-only readme update, 2 requested reviewers pending since Jan 2026"
-  },
-  "35249": {
-   "date": "2026-09-06",
-   "type": "author_checkin",
-   "note": "mergeable_state behind, matmul transpose_a fix (fork developerfred), asked to rebase or hand off"
-  },
-  "24164": {
-   "last_ping": "2026-09-12",
-   "type": "codeowners",
-   "note": "re-pinged, approved by bbradelTT, other reviewers still pending"
-  },
-  "44398": {
-   "date": "2026-09-06",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state despite approvals, conflicts w/ main"
-  },
-  "47587": {
-   "last_ping": "2026-09-08",
-   "type": "stale_p0_since_review"
-  },
-  "46578": {
-   "last_ping": "2026-09-08",
-   "type": "stale_approved_needs_rebase"
-  },
-  "35274": {
-   "date": "2026-09-09",
-   "type": "author_checkin",
-   "note": "merge-conflict (dirty), never previously nudged"
-  },
-  "35279": {
-   "date": "2026-09-09",
-   "type": "author_checkin",
-   "note": "merge-conflict (dirty), never previously nudged"
-  },
-  "35334": {
-   "date": "2026-09-09",
-   "type": "author_checkin",
-   "note": "merge-conflict (dirty), never previously nudged"
-  },
-  "35515": {
-   "date": "2026-09-10",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state despite approval, BankManager BEST-fit allocator"
-  },
-  "38036": {
-   "date": "2026-09-10",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state + unaddressed CHANGES_REQUESTED from mtairum, Qwen2.5 VL Optimizations"
-  },
-  "43247": {
-   "date": "2026-09-10",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state despite 5 approvals, CI Node20 actions upgrade"
-  },
-  "24233": {
-   "last_ping": "2026-09-10",
-   "type": "author_checkin",
-   "note": "approved but Simulator CI test failing"
-  },
-  "35241": {
-   "last_ping": "2026-09-10",
-   "type": "author_checkin",
-   "note": "approved but multiple ttnn-unit-tests/ops-unit-tests checks failing"
-  },
-  "44421": {
-   "last_ping": "2026-09-10",
-   "type": "author_checkin",
-   "note": "unaddressed CHANGES_REQUESTED from philei-tt since 2026-07-01"
-  },
-  "23234": {
-   "date": "2026-09-11",
-   "type": "codeowners_ping",
-   "note": "29 pending requested reviewers, several approvals already in, no author-side blocker"
-  },
-  "44787": {
-   "date": "2026-09-11",
-   "type": "author_checkin",
-   "note": "mergeable_state=behind, no unresolved reviews, needs rebase"
-  },
-  "44765": {
-   "date": "2026-09-11",
-   "type": "author_checkin",
-   "note": "mergeable_state=behind, no unresolved reviews, needs rebase"
-  },
-  "46265": {
-   "date": "2026-09-11",
-   "type": "codeowners",
-   "note": "re-pinged, approved by ruizhangTT since 2026-08-11 but blocked on CODEOWNERS, prior ping from that date not in memory"
-  },
-  "46248": {
-   "date": "2026-09-11",
-   "type": "author_checkin",
-   "note": "CHANGES_REQUESTED review from bbradelTT unanswered since June (overlap with merged #46112), dirty mergeable_state"
-  },
-  "45631": {
-   "last_ping": "2026-09-22",
-   "type": "re-ping",
-   "note": "still dirty (needs rebase), threads resolved but no author action since 09-12 checkin"
-  },
-  "46054": {
-   "date": "2026-09-12",
-   "note": "open review comments from fvranicTT since June, mergeable_state=dirty, never previously nudged",
-   "type": "author_checkin"
-  },
-  "46842": {
-   "date": "2026-09-12",
-   "note": "approved by ndivnicTT but ongoing discussion from peter941221/ncvetkovicTT/amahmudTT through July, mergeable_state=dirty, never previously nudged",
-   "type": "author_checkin"
-  },
-  "47521": {
-   "date": "2026-09-12",
-   "type": "author_checkin",
-   "note": "approved x2 (mtairum, akerteszTT) but dirty mergeable_state, needs rebase"
-  },
-  "47819": {
-   "date": "2026-09-12",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state, stale since Jul/Aug, needs rebase"
-  },
-  "49694": {
-   "date": "2026-09-12",
-   "type": "author_checkin",
-   "note": "approved by mstaletovicTT (Jul 29) but dirty mergeable_state, needs rebase"
-  },
-  "35483": {
-   "last_ping": "2026-09-13",
-   "type": "codeowners",
-   "note": "ASan wheel PR-gate consolidation, 1 approval (ruizhangTT) but 4 more requested reviewers pending, never previously pinged"
-  },
-  "36485": {
-   "last_ping": "2026-09-13",
-   "type": "codeowners",
-   "note": "DeepSeek V3 synthetic weights PR, approved by yieldthought 'to unblock' but flagged pending codex review comments, never previously pinged"
-  },
-  "49194": {
-   "last_ping": "2026-09-13",
-   "type": "author_checkin",
-   "note": "[Quasar] migrate fill into unified unary test, mergeable_state=dirty, never previously nudged"
-  },
-  "49104": {
-   "date": "2026-09-13",
-   "type": "author_checkin",
-   "note": "blocked mergeable_state, pending pre-commit review feedback since early Sept, never previously nudged"
-  },
-  "49724": {
-   "date": "2026-09-13",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state, needs rebase, never previously nudged"
-  },
-  "49827": {
-   "date": "2026-09-13",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state, needs rebase, never previously nudged"
-  },
-  "50802": {
-   "last_ping": "2026-09-13",
-   "type": "codeowners",
-   "note": "clean+1 approval (cglagovichTT), 2 requested reviewers pending (yieldthought, uaydonat); prior comment had typo '/codeowner ping' (missing s)"
-  },
-  "50472": {
-   "last_ping": "2026-09-13",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state, no activity since 2026-08-05, embedding tilized-index NoC over-read fix"
-  },
-  "50699": {
-   "last_ping": "2026-09-13",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state, quiet since 2026-08-27, codegen-port pad DeviceOperation+ProgramFactory"
-  },
-  "49170": {
-   "date": "2026-09-13",
-   "type": "codeowners_ping",
-   "note": "MOP/replay optimizer tech report, approved by amahmudTT but 7 requested reviewers still pending, never previously pinged"
-  },
-  "52145": {
-   "date": "2026-09-13",
-   "type": "codeowners_ping",
-   "note": "tril/triu NaN fix, dirty->behind mergeable_state, no codeowners bot comment posted before this ping"
-  },
-  "52149": {
-   "date": "2026-09-13",
-   "type": "codeowners_ping",
-   "note": "xlogy fix, 9 requested reviewers pending, zero reviews, never previously pinged"
-  },
-  "49659": {
-   "last_ping": "2026-09-14",
-   "type": "author_checkin",
-   "note": "behind main, 5 pending reviewers, 2 stale COMMENTED reviews"
-  },
-  "49699": {
-   "last_ping": "2026-09-14",
-   "type": "author_checkin",
-   "note": "CHANGES_REQUESTED outstanding, mixed reviews, blocked mergeable_state"
-  },
-  "50358": {
-   "last_ping": "2026-09-14",
-   "type": "author_checkin",
-   "note": "dirty/conflicting, ci-experiment PR"
-  },
-  "50452": {
-   "date": "2026-09-14",
-   "type": "author_checkin",
-   "note": "cosmos3-i2v experimental TT port, dirty mergeable_state, never previously nudged"
-  },
-  "51979": {
-   "date": "2026-09-14",
-   "type": "codeowners",
-   "note": "reviewer-blocked, 9 requested reviewers, no reviews yet, CI green, never previously pinged"
-  },
-  "52151": {
-   "date": "2026-09-14",
-   "type": "codeowners",
-   "note": "reviewer-blocked, no reviews yet, CI green, never previously pinged"
-  },
-  "52202": {
-   "date": "2026-09-14",
-   "type": "codeowners",
-   "note": "reviewer-blocked, 9 requested reviewers, no reviews yet, CI green, never previously pinged"
-  },
-  "51421": {
-   "date": "2026-09-14",
-   "type": "codeowners_ping",
-   "note": "fused_rms_minimal cross-device stats fix, fully approved+CI green, blocked on 3 pending required reviewers, never previously pinged"
-  },
-  "51467": {
-   "date": "2026-09-14",
-   "type": "author_checkin",
-   "note": "ttnn.move dangling MemoryConfig fix, approved but dirty mergeable_state since Aug, never previously nudged"
-  },
-  "51656": {
-   "date": "2026-09-14",
-   "type": "author_checkin",
-   "note": "custom-Alignment API split, 4 approvals but dirty mergeable_state, unanswered reviewer question re L2/perf, never previously nudged"
-  },
-  "50852": {
-   "date": "2026-09-15",
-   "type": "author_checkin",
-   "note": "llk:performance p1/high-risk, dirty mergeable_state, 3 failing checks (PR Gate Status, Clang Tidy Full, ASan build), never previously nudged"
-  },
-  "51675": {
-   "date": "2026-09-15",
-   "type": "author_checkin",
-   "note": "transformers uplift, approved by mtairum but 1 failing check (ttnn reduce group wh_n300_civ2), never previously nudged"
-  },
-  "50905": {
-   "date": "2026-09-15",
-   "type": "author_checkin",
-   "note": "pytorch/torchvision/jupyterlab uplift, pr-risk-high, 9 failing checks across p100/ops-unit-tests groups, never previously nudged"
-  },
-  "50782": {
-   "date": "2026-09-15",
-   "note": "CCL graph-capture recording fix; CHANGES_REQUESTED by riverwuTT 2026-08-13 unresolved, dirty mergeable_state, never previously nudged",
-   "type": "author_checkin"
-  },
-  "51086": {
-   "date": "2026-09-15",
-   "note": "metal_2.0 fast_reduce_nc port; CI green (15/15), 0 requested reviewers, blocked mergeable_state, never previously pinged",
-   "type": "codeowners_ping"
-  },
-  "51844": {
-   "date": "2026-09-17",
-   "type": "codeowners_ping",
-   "note": "MoE tilize/matmul chunk overlap fix; CI green, mergeable_state blocked, 1 pending reviewer (jonathansuTT) no review yet, never previously pinged"
-  },
-  "51875": {
-   "date": "2026-09-17",
-   "type": "codeowners_ping",
-   "note": "Time Series Transformer bring-up; CI green, mergeable_state blocked, reviewed COMMENTED by yieldthought (not approve/changes-requested) 2026-08-19, never previously pinged"
-  },
-  "51915": {
-   "date": "2026-09-17",
-   "type": "author_checkin",
-   "note": "[skip ci] C++ vector allocation perf rule; mergeable_state dirty since 2026-09-02, never previously nudged"
-  },
-  "51533": {
-   "last_ping": "2026-09-18",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state, never previously nudged"
-  },
-  "51991": {
-   "last_ping": "2026-09-18",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state, never previously nudged"
-  },
-  "52367": {
-   "last_ping": "2026-09-19",
-   "type": "codeowners",
-   "note": "re-pinged, pending since 2026-08-11, 2 groups"
-  },
-  "52340": {
-   "last_ping": "2026-09-19",
-   "type": "author_checkin",
-   "note": "dirty, unaddressed EazyHood review comment (duplicated else-if constexpr DIV guard) since 2026-08-08, never previously nudged"
-  },
-  "52326": {
-   "last_ping": "2026-09-19",
-   "type": "author_checkin",
-   "note": "dirty, no reviewer activity, flagged overlap with repo-assist's own #54246 (FLOAT32 pad fix), never previously nudged"
-  },
-  "52375": {
-   "last_ping": "2026-09-20",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state since 2026-09-02, no reviews yet"
-  },
-  "50598": {
-   "last_ping": "2026-09-20",
-   "type": "author_checkin",
-   "note": "dirty despite 2 approvals; asked to reconfirm earlier CHANGES_REQUESTED from mateusznowakTT is resolved"
-  },
-  "51447": {
-   "last_ping": "2026-09-20",
-   "type": "author_checkin",
-   "note": "dirty mergeable_state, no substantive human review since opened 2026-07-29"
-  }
- },
- "backlog_cursor": {
-  "task1_task2_latest": "2026-09-22 run: reviewed newest ~30 open issues (57345 down through 57259); most are internal team-tracking issues (assignees set, no public body) e.g. shield_prefill/MoE-block tasks -- not triage candidates. Verified and labeled #57322 (ternary/tanh_bw program-cache key omits Alignment/Tile, follow-up to #55702) `bug`, opened fix PR. Continue below #57259 next run.",
-  "task6_latest": "2026-09-22: re-pinged 3 stale PRs previously nudged with no author response: #45631, #49317, #50993 (3-action cap reached). Candidates further down oldest-updated list not yet re-checked this run: #51119, #51120, #51129, #51155, #45435, #47426, #38627, #38639, #39293, #40858 (all previously nudged in Aug, worth re-ping when cap allows)."
- },
- "labeled_issues": {
-  "53866": {
-   "label": "bug",
-   "date": "2026-08-21",
-   "note": "Mixtral 8x7B L1 CB overflow on Blackhole; too complex/hardware-specific for surgical fix, no PR attempted"
-  },
-  "53815": {
-   "label": "bug",
-   "date": "2026-08-21",
-   "note": "GPT-OSS prefill LayerAck race condition"
-  },
-  "54032": {
-   "label": "bug",
-   "date": "2026-08-22",
-   "note": "trace-replay silent hang allocating device buffers during active trace"
-  },
-  "53999": {
-   "label": "bug",
-   "date": "2026-08-22",
-   "note": "KV-cache remount final-chunk write exceeds max_seq_len"
-  },
-  "54045": "bug",
-  "54048": "bug",
-  "54047": "ci-bug",
-  "54044": "bug",
-  "54110": "performance monitoring",
-  "54104": "feature-request",
-  "54138": {
-   "labeled": "bug",
-   "date": "2026-08-24",
-   "note": "binary_ng program-cache correctness writeup (Claude analysis for Metal 2.0 porting); assignee bbradelTT; confidence MEDIUM - findings need ops team vetting per issue body itself"
-  },
-  "54223": {
-   "label": "bug",
-   "date": "2026-08-25",
-   "note": "ttnn.pad FLOAT32 packed as two bfloat16s in single-core TILE factory; fix already open in PR #54246 (CI green)"
-  },
-  "54220": {
-   "label": "performance monitoring",
-   "date": "2026-08-25",
-   "note": "Kimi-K2.6-1T traced chunked prefill perf-gate baseline stale, op got faster than baseline"
-  },
-  "54326": "2026-08-25: labeled bug (confirmed div int32 INT32_MIN signed-comparison defect; open fix PR #54327 by reporter gundi61)",
-  "54439": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-08-26"
-  },
-  "54430": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-08-26"
-  },
-  "54447": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-08-26"
-  },
-  "54524": "bug",
-  "54513": "bug",
-  "54562": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-08-27",
-   "note": "confirmed root cause against current main (_min_or_max_bw subtract+gtz/eqz/ltz); reporter kanapitsas already has fix ready & awaiting assignment, no comment needed"
-  },
-  "54551": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-08-27",
-   "note": "confirmed root cause against current main (prod_bw reciprocal(input) -> inf at zero); reporter kanapitsas already has fix ready & awaiting assignment, no comment needed"
-  },
-  "54605": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-08-27",
-   "note": "Slow dispatch DFB slot mismatch WH/BH; already assigned to abhullar-tt, well-documented repro, labeled bug for triage clarity"
-  },
-  "54670": "bug",
-  "54673": "bug",
-  "54749": "performance monitoring",
-  "54779": "bug",
-  "54759": "bug (layernorm FUSED_PRE_ADD typo, confirmed 2026-08-29)",
-  "54828": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54827": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54826": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54825": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54823": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54822": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54821": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54820": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54819": {
-   "label": "performance monitoring",
-   "date": "2026-08-29",
-   "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
-  },
-  "54824": {
-   "label": "feature-request",
-   "date": "2026-08-29",
-   "note": "AJ0070: add are_required_outputs to addcdiv_bw/addcmul_bw/lerp_bw for parity with binary_bw/where_bw"
-  },
-  "54855": "bug",
-  "54853": "docs",
-  "54854": "infra-ci",
-  "54969": "bug (LLK perf-counter semaphore reuse assert)",
-  "54968": {
-   "label": "bug",
-   "date": "2026-09-01",
-   "note": "ND sanity failure in untilize/codegen kernels, reproducible per issue body"
-  },
-  "55014": "bug - tt_dit Module.load() drops non-Parameter state (confirmed against module.py)",
-  "54987": "bug - argmax hardcodes ROW_MAJOR output layout, confirmed against argmax_device_operation.cpp",
-  "54962": "bug - KDA valid-length/SP carry order, sub-issue of #54955",
-  "55009": "bug - cold-cache JIT storm; has fix PR #55010",
-  "55013": "bug - topology solver SAT enumeration gap",
-  "55017": {
-   "label": "bug",
-   "date": "2026-09-01",
-   "note": "grid_sample FLOAT32 wrong values; confirmed TT_FATAL validation site accepts FLOAT32; reporter (AJ0070) holding for bounty assignment, no fix PR by repo-assist"
-  },
-  "55088": "bug (2026-09-01)",
-  "55064": "bug (2026-09-01)",
-  "55124": {
-   "label": "bug",
-   "date": "2026-09-02",
-   "run_id": "33600125785"
-  },
-  "55128": {
-   "label": "bug",
-   "date": "2026-09-02",
-   "run_id": "33600125785"
-  },
-  "55129": {
-   "label": "bug",
-   "date": "2026-09-02",
-   "run_id": "33600125785"
-  },
-  "55125": {
-   "label": "bug",
-   "date": "2026-09-02",
-   "run_id": "33600125785"
-  },
-  "55159": "bug - rms_norm/layer_norm/var/std fp32 sum-of-squares overflow, confirmed against reporter repro numbers",
-  "55248": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-09-02T18:41:19Z",
-   "note": "confirmed defect via reporter code-cited static analysis; no hardware repro"
-  },
-  "55237": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-09-02T18:41:19Z",
-   "note": "confirmed defect via reporter code-cited static analysis; no hardware repro"
-  },
-  "55227": {
-   "labels": [
-    "bug"
-   ],
-   "date": "2026-09-02T18:41:19Z",
-   "note": "confirmed defect via reporter code-cited static analysis; no hardware repro"
-  },
-  "55434": {
-   "labels": [
-    "bug"
-   ],
-   "run_id": "33845189301"
-  },
-  "55471": {
-   "label": "bug",
-   "date": "2026-09-04",
-   "note": "ttnn.slice TILE_LAYOUT padding read past logical shape"
-  },
-  "55545": {
-   "label": "bug",
-   "date": "2026-09-05",
-   "note": "conv1d prepared-vs-raw weight mismatch, Wormhole, input_length 8193-8704"
-  },
-  "55542": {
-   "label": "bug",
-   "date": "2026-09-05",
-   "note": "cumsum fp32 accuracy T^1.5 + single-core parallelism bug"
-  },
-  "55553": "performance monitoring (2026-09-05) - community MoE decode sparse_matmul perf report, not a confirmed bug",
-  "55509": {
-   "date": "2026-09-07",
-   "labels": [
-    "performance monitoring"
-   ],
-   "note": "Wan2.2 BH galaxy perf regression bisect, assigned jamesleeTT"
-  },
-  "55585": {
-   "label": "bug",
-   "date": "2026-09-06",
-   "note": "moreh_norm_backward NaN for all-zero reduced slices; confirmed power_and_recip_tile_to_cb has no zero-guard in moreh_common.hpp"
-  },
-  "55587": {
-   "label": "bug",
-   "date": "2026-09-06"
-  },
-  "55588": {
-   "date": "2026-09-07",
-   "labels": [
-    "feature-request"
-   ],
-   "note": "GPT-OSS multi-batch request; already has impl PR #55589"
-  },
-  "55633": "bug (2026-09-07)",
-  "55609": "docs (2026-09-07)",
-  "55900": {
-   "label": "bug",
-   "date": "2026-09-09",
-   "note": "DM_DYNAMIC_NOC multicast+read hang on Blackhole (kinginu), reproducible 3/3, mechanism not established, no fix PR - needs device profiling"
-  },
-  "56248": {
-   "label": "bug",
-   "date": "2026-09-11",
-   "note": "moreh_norm_backward p=+/-inf UB, root cause confirmed against current source"
-  },
-  "56323": "bug (front-padding silently ignored in single-core row-major pad factory, confirmed against pad_rm_reader_writer_program_factory.cpp)",
-  "55541": "infra-ci",
-  "56824": {
-   "date": "2026-09-17",
-   "label": "bug",
-   "note": "ConcatS2SMultiProgramFactory >16-input batching path broken for width/height sharded concat; confirmed root cause read against current source; too large/risky for a quick auto-fix, left for maintainer/human follow-up"
-  },
-  "56827": {
-   "date": "2026-09-17",
-   "label": "bug",
-   "note": "concat block-sharded width ragged-tail bug; fixed this run, see open_prs.56827_concat_width"
-  },
-  "56938": {
-   "label": "bug",
-   "date": "2026-09-18",
-   "note": "unary elementwise silent float-bitpattern-in-int32-tensor bug, confirmed against current unary_op_utils.cpp, fixed this run via TT_FATAL validation + test"
-  },
-  "57088": "bug",
-  "57090": "bug",
-  "56976": {
-   "label": "performance monitoring",
-   "date": "2026-09-20",
-   "note": "matmul ~4x slower with L1 operand/output; verified all_dram_interleaved gate against current matmul_program_config.cpp (L1129-1133, L1183); commented with citations; no fix attempted"
-  },
-  "57139": "bug",
-  "57135": "bug",
-  "57122": "performance monitoring",
-  "57119": "ci-bug",
-  "57117": "performance monitoring",
-  "57112": "bug",
-  "57103": "performance monitoring",
-  "57102": "bug",
-  "57095": "bug",
-  "57162": {
-   "label": "bug",
-   "date": "2026-09-21",
-   "note": "SDPA perf-table test deadlocks other-session device lock, confirmed against current test code"
-  },
-  "57165": {
-   "label": "performance monitoring",
-   "date": "2026-09-21",
-   "note": "indexer_score math-util band board-variance report"
-  },
-  "57178": {
-   "label": "performance monitoring",
-   "date": "2026-09-21",
-   "note": "streaming SDPA fp32 DEST rescale regression at 8q/1kv bfp8"
-  },
-  "57055": {
-   "label": "infra-ci",
-   "date": "2026-09-21"
-  },
-  "57003": {
-   "label": "infra-ci",
-   "date": "2026-09-21"
-  },
-  "56914": {
-   "label": "feature",
-   "date": "2026-09-21"
-  },
-  "56913": {
-   "label": "performance monitoring",
-   "date": "2026-09-21"
-  },
-  "57011": {
-   "label": "feature",
-   "date": "2026-09-21"
-  }
- },
- "issues_commented": {
-  "53922": {
-   "commented": "2026-08-21",
-   "labeled": [
-    "bug"
-   ],
-   "note": "confirmed root cause vs current main; fix has open perf tradeoff, left for maintainer"
-  },
-  "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43",
-  "54798": "2026-08-29 - matmul silent output-block drop, confirmed bug",
-  "54883": "2026-08-31: labeled bug, commented confirming gelu_bw Mills-ratio tail FP32 defect",
-  "54882": "2026-08-31: labeled bug, commented confirming tanh_bw sech2 tail denominator FP32 defect",
-  "54969": "2026-08-31T18:34Z - confirmed pattern plausible, deferred fix choice to maintainer",
-  "54987": "2026-09-01: confirmed root cause against current compute_output_specs (ROW_MAJOR hardcode)",
-  "55105": "2026-09-02: confirmed root-cause mechanism (scale applied after accumulation causes fp32 subnormal flush) against current ckernel_sfpu_polygamma.h; no fix PR, reporter pursuing via bounty program",
-  "55124": {
-   "date": "2026-09-02",
-   "run_id": "33600125785",
-   "note": "confirmed atan2 reciprocal underflow root cause against current source"
-  },
-  "54792-pr-review": {
-   "date": "2026-09-02T18:41:19Z",
-   "note": "acknowledged reviewer correction on PR, pushed fix (88.7228f clamp instead of 87.0f)"
-  },
-  "55393": "2026-09-03T18:35:00Z",
-  "55392": "2026-09-03T18:35:00Z",
-  "55471": "2026-09-04: confirmed root cause vs current main (common.cpp wrap_index), noted fix scope/risk",
-  "55457": "follow-up comment posted 2026-09-04 (run 33905953169) acknowledging kanapitsas verification of PR #54080",
-  "55585": "2026-09-06: confirmed root cause against current moreh_norm_backward_kernel.cpp + moreh_common.hpp (power_and_recip_tile_to_cb unconditional recip on y^p); noted open questions on SFPU NaN/inf handling for p=+-inf, unverified without hardware",
-  "55587": {
-   "date": "2026-09-06"
-  },
-  "55643": "2026-09-07 - relu_min vInt sign+magnitude bug, root cause confirmed against current code, left fix to maintainer",
-  "56248": {
-   "date": "2026-09-11",
-   "note": "confirming comment posted with source citations"
-  },
-  "56323": "2026-09-12: confirmed root cause, noted contributor Kaustubh1235 already volunteered to fix, no dup PR opened",
-  "56827": {
-   "date": "2026-09-20",
-   "note": "commented linking new fix PR (re-attempt after #56864 auto-closed)"
-  },
-  "56938": {
-   "date": "2026-09-18",
-   "note": "confirmed root cause, linked fix PR (branch repo-assist/fix-issue-56938-unary-int32-reject-float-only)"
-  },
-  "56941": {
-   "date": "2026-09-19T01:15:00Z",
-   "note": "confirmed AI-suggested fix snippet is stale vs current main -- current dataflow_buffer.inl already has an additional read_acked/ctxn_id_loop_cnt_ guard before the occupancy check that wasn't in the quoted snippet; couldn't determine equivalence without HW access, asked reporter to re-verify repro against current main"
-  },
-  "56616": {
-   "date": "2026-09-19T01:15:00Z",
-   "note": "confirmed via merged PR #56338 that this is a misattribution (torch fp32 golden cancellation at x=-5.34375, not a device defect); fix already merged (float64 golden), suggested closing"
-  },
-  "56526": {
-   "date": "2026-09-19T01:15:00Z",
-   "note": "confirmed root cause (Int32 output routed through FP32_TO_INT8, 7-bit sign-magnitude, saturates at +-127) against current ckernel_sfpu_quant.h on both WH/BH; reporter's linked gist patch is a non-trivial SFPU replay-buffer rewrite, too risky to apply blind without HW access -- encouraged reporter to submit their own PR"
-  },
-  "56967": {
-   "date": "2026-09-20",
-   "note": "confirmed LO16 vs UINT16 naming discrepancy against current llk_defs.h, no bug label"
-  },
-  "57162": {
-   "date": "2026-09-21",
-   "note": "confirmed device-lock deadlock root cause against current test file, attributed analysis to reporter"
-  },
-  "57213": {
-   "date": "2026-09-21",
-   "note": "confirmed root cause against current main, opened fix PR"
-  },
-  "57212": {
-   "date": "2026-09-21",
-   "note": "confirmed against existing xfail(strict=True) marker, no fix attempted (grading-infra change, broader scope)"
-  }
- },
- "run_history": [
-  {
-   "run_id": "35638744281",
-   "date": "2026-09-21T18:36:21Z",
-   "summary": "Task5: checked CI via get_check_runs on all 24 currently open [repo-assist] PRs (57131/57146/57130/56817/55435/57145/56529/56375/56428/56943/56598/56396/55688/54932/51868/54792/54666/53113/56195/56714/53690/54246/54862/52106) -- all green except the 3 previously-flagged infra-noise cases (#55435/#51868/#56195 RTL Sim CI details_url is broken placeholder domain 'github.com/tenstorrernt', unchanged from prior runs). Task1: labeled 5 unlabeled fresh open issues found by paging through newest-open-issues search below the prior cursor: #57055 (Metalium include-path CMake refactor, 47 occurrences across 32 files) infra-ci, #57003 ([CI] retire T3K dispatch tests pipeline 31-Oct-2026) infra-ci, #56914 (load weights to device via sockets) feature, #56913 (optimize slow dispatch weight upload perf) performance monitoring, #57011 (some SFPU insns have restricted-range results, useful for 32-bit-correct comparison logic) feature. Task2: verified against current main and commented on 2 fresh issues from iklemenskiTT with zero prior repo-assist engagement: #57213 (squared_difference golden reads input_tensor_a.dtype positionally at binary.py:796, breaking scalar-first calls -- confirmed the sibling add/subtract/multiply/divide goldens already use _tensor_operand/_matched_operands, this one didn't) and #57212 (comparison mode never grades scalar-first div -- confirmed test_binary_scalar.py:832 already carries xfail(strict=True) recording exactly this gap). Task3: opened ready-for-review fix PR for #57213 (branch repo-assist/fix-issue-57213-squared-difference-golden-scalar-dtype) after confirming no existing open PR references #57213 (search_pull_requests returned 0 hits); the fix reuses the _tensor_operand/_matched_operands/_integer_path_scalars helpers #55722 already introduced for the sibling arithmetic goldens in the same file, plus a new regression test (test_squared_difference_scalar_tensor_golden_matches_device) mirroring the existing scalar-first golden test for add/subtract/multiply/div. Verified the diff applies cleanly against the working tree (same commit as a shallow clone used for local inspection); unverified via CI build in this sandbox (no local build capability), CI triggered via pr-gate.yaml on PR open, outcome unknown yet -- check next run. Task6/Task7 skipped this cycle: Task6 last ran 2026-09-20 (still within 3-day cadence, no new nudge needed); Task7 found no fresh 24h issues/PRs with a qualifying new-contributor history this run. Task8: rewrote monthly summary #55015 (body had regrown with duplicated/stale sections again), trimmed to canonical current-state format with the new #57213 PR added to Suggested Actions."
-  },
-  {
-   "run_id": "35600280323",
-   "date": "2026-09-21T12:36:23Z",
-   "summary": "Task5: checked CI on 26 open repo-assist PRs (57145/57146/57131/57130/56817/56997/56956/56943/56714/56598/56529/56428/56396/56375/56195/55670/55688/55435/54932/54792/54666/54246/54862/52106/55670/53113/53690/51868) via get_check_runs -- all green except 3 previously-flagged, unchanged infra-noise cases (#51868 and #56195/#55435 RTL Sim CI broken-placeholder details_url domain 'github.com/tenstorrernt'; #55670's 3 failures already root-caused in a prior run as pre-existing tilize/glm5-perf issues, unrelated to the PR's tensor-aliasing fix). Re-verified via get_job_logs that #55670's flagged run genuinely has 0 failed jobs by the job-logs API despite 3 non-success check runs (consistent with the prior root-cause). Confirmed issue #56827 (concat block-sharded width ragged-tail) is now CLOSED, fixed by external PR #57100 -- removed the stale 'fresh fix needed' suggested-action item; no new repo-assist attempt needed (superseded prior repo-assist retries #56864/#57099, both already closed/unmerged). Task1/2: reviewed newest ~50 open issues (#57186 down through #57001); most already labeled or are maintainer-authored perf/infra notes. Found and verified 3 fresh, well-documented reports from mvlahovicTT (SDPA integration sweep on Blackhole p100a): #57162 (test_sdpa_create_perf_table deadlocks other-session device lock) -- confirmed against current tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py (missing device fixture at line 281, CI-only skipif at lines 190/275, subprocess-based tracy profiler invocation matches reporter's exact mechanism); labeled bug and commented with root-cause confirmation (attributed to reporter, not independently derived). #57165 (indexer_score math-utilization band board-variance) and #57178 (streaming SDPA fp32 DEST rescale slower than legacy at 8q/1kv bfp8) -- both credible perf-board reports with detailed measurement tables, labeled performance monitoring, no comment (reporter's own numbers, not independently verifiable, no additional insight to add beyond labeling). Did not comment on 57165/57178 to avoid restating unverified reporter benchmark numbers as fact. Task6: skipped (last run 2026-09-21 06:53, well under 3-day cadence). Task8: rewrote monthly summary #55015 with this run's entries, removed the resolved #56827 item, added new #57162 comment entry."
-  },
-  {
-   "run_id": "35549609194",
-   "date": "2026-09-20T18:57:00Z",
-   "summary": "Task2/3: investigated fresh issue #57042 (resnet-on-quasar REDUCE_DIM macro-collision compile failure) -- verified against current tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_reduce.h that it is ALREADY FIXED on main (param renamed to lowercase reduce_dim, with explanatory comment about the -DREDUCE_DIM=... macro collision), matching the reporter's own suggested fix; flagged as closeable in monthly summary, no PR needed. Investigated #56945 (32-bit unpack-to-dest wrong-DST-tile bug) and #56986 (hf_rope decode PCC fail on BH) -- both already have open non-repo-assist fix PRs (#56932 awliu-TT, #57035) per the required existing-fix check; no duplicates opened. Fixed and opened ready-for-review PRs for two fresh, well-scoped 'found by review of #54850' bug reports: #57111 (_forward_shutdown building a plane-scaled host torch.zeros, up to ~513MB, at teardown -- switched to ttnn.zeros(device=dev) for direct on-device alloc) and #57110 (KdaState._zeros duplicate carry cache doubling KDA carry memory -- removed the shadow cache, reset() now zeroes in place via ttnn.fill(state, 0, output_tensor=state), verified ttnn.fill's output_tensor kwarg writes to a preallocated address so it preserves the class's documented trace-safety invariant). Both Python-only, no build needed. Left #57108/#57109 (Kimi-K3 weight-cache dtype gap, AttnRes plane-count triple-derivation) labeled bug but unfixed this run. Task5: spot-checked CI on newest PRs #57131/#57130 (green) and re-verified no new maintainer requests on previously-flagged PRs (#51868/#53690/#56396/#54932/#52106/#53113, all quiet). Task6: skipped -- ran last cycle (2026-09-20T06:38), too soon for the 3-day re-ping cadence. Task8: rewrote monthly summary #55015 with this run's entries and refreshed suggested-actions list."
-  },
-  {
-   "run_id": "35494639210",
-   "date": "2026-09-20T06:38:00Z",
-   "summary": "Task1/2: reviewed newest ~50 open issues (#57103 down through #56904); confirmed #56976 (ttnn.matmul/linear ~4x slower with L1-interleaved operand/output on default program config) as a fresh, well-documented defect -- verified the reported root cause line-by-line against current ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.cpp (all_dram_interleaved gate at L1129-1133 requires DRAM on all three buffers; the spread-blocking branch at L1183 is keyed on that flag), labeled performance monitoring, commented with citations (did not restate reporter's own perf numbers as independently confirmed -- no HW access). Checked #56827 (concat block-sharded width ragged-tail) for existing fixes before considering a new attempt: found repo-assist's own PR #57099 (opened last run) was auto-closed unmerged despite 5/5 green checks -- same unexplained pattern as prior #56864 -- and discovered a new external draft PR #57100 (VirdhatchaniKN) claiming a broader two-defect fix (cursor arithmetic + an alignment-boundary rejection); flagged both for maintainer consolidation in the monthly summary rather than opening a third repo-assist PR. Re-verified CI on #57092/#57093 (opened previous run) -- both 5/5 green. Task6: nudged 3 never-previously-touched stale PRs from the oldest-updated, non-repo-assist list: #52375 (author checkin, dirty since 2026-09-02), #50598 (author checkin, dirty despite 2 approvals, asked to reconfirm an earlier CHANGES_REQUESTED is resolved), #51447 (author checkin, dirty, no substantive review since opened 2026-07-29). Hit the 3-action cap; noted #41596/#40339 (aarch64/Gentoo support, both behind main and untouched since spring 2026) as likely-abandoned candidates for a future closure discussion rather than another nudge. Task8: rewrote monthly summary #55015 with this run's entry, added the #56827 three-way-fix-conflict item and #56976 investigate item, added the 3 new stale-PR author-followup items."
-  },
-  {
-   "run_id": "35480399102",
-   "date": "2026-09-20T01:06:00Z",
-   "summary": "Task5: checked CI on 14 open repo-assist PRs pending outcome (53690/54246/54792/55847/56375/56195/56428/56790/56817/56864-closed/56943/56956/56997) -- all green except #56195 (RTL Sim CI failure but details_url is the same known broken placeholder domain already flagged as infra noise elsewhere, not a real code defect). Task1/2: reviewed ~100 newest open issues (cursor #57096 down through #56755) -- most already labeled/assigned to humans with active fix PRs; confirmed #56865 (vLLM sampling regression) assigned to iwroszTT with draft PR #56467 already addressing it, #56824/#56781/#56769/#56776 assigned to reporters, #57095/#57028/#57011/#56802/#56801/#56803/#56792/#56783 are maintainer-authored perf/infra notes needing no action. Commented on #56967 (LO16 vs tt-isa-documentation UINT16 naming discrepancy in tt-llk) after verifying current llk_defs.h on Blackhole+Wormhole match reporter's citations exactly (LO16=6, no value-9 entry) -- naming-clarity only, not labeled bug. Task3: investigated #56827 (concat block-sharded width ragged-tail corruption) -- confirmed still open, no other PR fixes it (only #56603 fixes the height mirror, itself unmerged), prior repo-assist PR #56864 was auto-closed without merge/comment despite 5/5 green checks for unclear reasons; re-implemented the fix on a fresh branch (real padded_shape()[-1] instead of shard capacity for the per-input cursor, output range clipped via std::min), added a parametrized regression test (2/3 inputs x row/col orientation) adapted from the issue's own repro; opened new ready-for-review PR, commented on issue linking it. Task8: refreshed monthly summary #55015 (added #57092/#57093 PR items, replaced stale #56827/#56864 closed-PR suggested-action with the new PR)."
-  }
- ],
- "no_action_reviewed": [
-  "54000: API contracts tracking issue, no confirmed defect, unlabeled left as-is (2026-08-22)",
-  "54006/54005: already labeled+assigned (2026-08-22)",
-  "reviewed ~15 fresh community bug issues (53975,53971,53984,53981,53978,53973,53969,53963 etc) 2026-08-22: all already have open linked fix PRs from reporting contributor; no duplicate PR/comment needed",
-  "54144: argmax SFPU feature request, already labeled feature/community, no action needed (2026-08-24)",
-  "54133: sub-issue of #53060, already covered by open PR #53837 (2026-08-24)",
-  "54264/54221/54215/54294/54261: collaborator-authored coverage/perf/bounty tracking issues, no confirmed defect, left unlabeled (2026-08-25)",
-  "54926: branch-specific test failure on uvelimirovic/4row_arch, already assigned to uvelimirovicTT (2026-08-31)",
-  "54910: confirmed genuine defect (bug label applied) but root cause is architectural SFPU init path; no fix PR attempted, too risky (2026-08-31)",
-  "55060: labeled sfpi, self-assigned reporter",
-  "55013: labeled bug, active human investigation (Riddy21)",
-  55539,
-  55526,
-  55511,
-  55529,
-  55519,
-  "22706: 2026-09-05 already nudged 2026-08-05, author (jbedichekTT) still hasnt addressed changes-requested review; no new activity, skip re-nudge",
-  "36227: 2026-09-05 approved by yieldthought 2026-05-05, mergeable_state unknown, low priority docs PR, no action needed",
-  "35515: 2026-09-05 already nudged 2026-08-09 for rebase (behind main), still dirty; independent repro comment posted 2026-08-15 supporting fix; not yet 3+ days new signal, monitor next run",
-  "2026-09-08: reviewed fresh eltwise-family bugs 55735/55733/55725/55724/55723/55722/55721/55711/55710/55709/55684/55683/55673 - all already have reporter-opened fix PRs (55601,55734,55728,55727,55726,55714,55713,55712,55680,55687,55620); no duplicate PRs opened",
-  {
-   "issue": 55834,
-   "note": "qwen36 missing accuracy gate - feature/test-infra request, no existing fix PR. Left unlabeled/no comment this run pending deeper eval next round; not a quick win."
-  },
-  {
-   "issue": 55827,
-   "note": "ttnn.sign NaN handling - well-researched report but flags a genuine unresolved design question (sign(NaN)=0 per golden vs NaN per repo philosophy, 3 refs disagree). Repo-assist should not unilaterally resolve; deferred to a future run for label+comment acknowledging the open question without asserting a fix."
-  },
-  {
-   "issue": 55825,
-   "note": "ttnn.from_torch integer dtype UB (static_cast x86_64 vs aarch64) - large body, not fully analyzed yet this run; carry to next run's backlog."
-  },
-  "56973: Wormhole Galaxy device hangs since 2026-09-17, fleet/infra issue (NoC/DRAM/ETH health), not a tt-metal code defect repo-assist can fix; flagged in monthly summary (2026-09-18)",
-  "56880: gather rank>4 independent-fold silent-wrong-data bug, sibling of fixed #56876/PR#56875; confirmed genuine but issue's own scoping notes gather's fix needs checking multiple program factories (SingleRowSingleCore/SingleRowMultiCore/wide-Wt) + codegen route for hard 4D assumptions, more invasive than scatter's fix; deferred, flagged in monthly summary (2026-09-18)",
-  "56945: fix PR #56932 already merged/open, closes issue (2026-09-19)",
-  "56976: matmul L1-interleaved 4x slowdown, unlabeled, confirmed root cause (create_simple_matmul_program_config all_dram_interleaved gate) but architectural perf issue, too risky for quick fix, left for maintainer (2026-09-19)",
-  "57081/57066/57055/57042/57028: newest issues all from established maintainers (rtawfik01, blozano-tt, bbradelTT, nathan-TT), no welcome needed, already labeled or maintainer-tracked (2026-09-19)",
-  "57083 (labeled performance monitoring + commented root cause; left fix to maintainer, architectural fabric config change)",
-  "2026-09-20: reviewed ~100 newest issues (#57096-#56755): #56865 vLLM sampling regression assigned+draft-PR-linked (#56467), #56824/#56781/#56769/#56776 assigned to reporters with active investigation, #57095/#57028/#57011/#56802/#56801/#56803/#56792/#56783 maintainer-authored perf/infra notes, no repo-assist action needed on any"
- ],
- "resolved": {
-  "52673": {
-   "date": "2026-08-22",
-   "note": "closed by maintainer blozano-tt; superseded by #52789/#52790"
-  },
-  "54690": "merged by vtsilytskyiTT 2026-08-31",
-  "54858": {
-   "status": "merged",
-   "merged_by": "fvranicTT",
-   "merged_at": "2026-09-03T20:46:55Z"
-  },
-  "55591": "closed - superseded by community PR #55583 (mouliraj-mcw), narrower scope, HW-verified",
-  "55847_ci_checked": "2026-09-09: build-artifact ran, 2 tilize test failures unrelated to gather change, commented on PR",
-  "55293": {
-   "status": "merged",
-   "merged_at": "2026-09-09T11:24:16Z",
-   "note": "softplus bias fix (was PR for issues 55266/55263)"
-  },
-  "56827": {
-   "date": "2026-09-21",
-   "note": "fixed and closed via external PR #57100; repo-assist retries #56864/#57099 both stale/closed, no further action"
-  }
- },
- "monthly_summary_issue": 55015,
- "welcomed_contributors": {
-  "luciademoja-lab": {
-   "date": "2026-09-14",
-   "issue": 56424,
-   "note": "verified 0 prior issues/PRs/comments"
-  },
-  "heroxcreed_excluded": {
-   "date": "2026-09-14",
-   "note": "has 8+ prior issues, not new, excluded from welcome"
-  },
-  "Lanochu_excluded": {
-   "date": "2026-09-14",
-   "note": "has 12+ prior issues, not new, excluded from welcome"
-  },
-  "Tinmc189623": {
-   "date": "2026-09-19",
-   "issue": 57084,
-   "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
-  }
- },
- "task8_last_update": "2026-09-22T12:38:00Z",
- "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
- "lessons_learned": [
-  "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning.",
-  "2026-09-22: PR #51868 (softplus negative-tail fix) got a real maintainer-measured 2.1x perf regression report from mateusznowakTT. Reinforces the earlier #56817 lesson: always weight device-measured maintainer feedback over any prior confident fix, even our own; do not push further numeric/perf-sensitive kernel changes without hardware validation -- acknowledge and defer to maintainer rework instead."
- ]
+  "open_prs": {
+    "52106": {
+      "issue": 51660,
+      "status": "checks green; reviewer-blocked (CodeOwners pending); pinged 2026-08-12 (human blozano-tt), no re-ping needed per Task5 scope"
+    },
+    "51868": {
+      "issue": 51866,
+      "status": "MAINTAINER FLAGGED 2.1x PERF REGRESSION 2026-09-22 (mateusznowakTT) on current version ca350a3. Posted honest response acknowledging likely lane-masking cost of Cody-Waite exp tail (matches prior Copilot review point); cannot benchmark on HW, left rework to maintainer. Do NOT push another unverified numeric change here without HW measurement."
+    },
+    "53113": {
+      "issue": 53106,
+      "status": "reviewer-blocked (CodeOwners pending, 2 groups: blackhole/wormhole LLK owners); /codeowners ping by blozano-tt 2026-08-14; agentic-threat-detected label is a known tooling-failure false positive, not a real finding"
+    },
+    "53655_moe_stallwait": {
+      "issue": 53655,
+      "branch": "repo-assist/fix-issue-53655-blackhole-moe-stallwait-math",
+      "status": "opened this run; adds p_stall::MATH to STALLWAIT masks in 3 confirmed files (4th file from issue text not found in current main, flagged in PR/comment); CI triggered, outcome unknown yet, check next run"
+    },
+    "53690": {
+      "issue": 53655,
+      "status": "CI green, all reviewer objections resolved (ncvetkovicTT/pmilenkovicTT/nvelickovicTT); awaiting nvelickovicTT manual Sanity/L2/BH-e2e run results + maintainer merge decision; re-verified 2026-08-31, no new activity",
+      "ci_status_2026-09-08": "5/5 checks green, mergeable_state unknown, unchanged, still awaiting maintainer decision"
+    },
+    "54223_pad_float32": {
+      "issue": 54223,
+      "status": "opened this run (fix PR, branch repo-assist/fix-issue-54223-pad-float32-pack); adds missing FLOAT32 case (std::bit_cast) to pad_tile_program_factory.cpp, mirrors already-correct multicore factory; CI triggered, outcome unknown yet, check next run"
+    },
+    "54246": {
+      "issue": 54223,
+      "status": "CI green (all check runs success incl PR Gate Status); awaiting maintainer review",
+      "note": "DUPLICATE FIX ALERT: external PR #54375 (rafaio1) fixes same issue #54223 with same root cause/fix. Flagged in monthly summary for maintainer to pick one. Do not close either unilaterally."
+    },
+    "54666": {
+      "title": "fix(ttnn): guard matmul per_core_M/N against zero to avoid SIGFPE",
+      "closes": 54639,
+      "status": "CI green (PR-Gate success), unchanged",
+      "branch": "repo-assist/fix-issue-54639-matmul-per-core-divzero-af452bb681e00eeb"
+    },
+    "54770": {
+      "issue": 54770,
+      "branch": "repo-assist/fix-issue-54770-expm1-cw-clamp-upper-bound",
+      "title": "clamp expm1_cw_clamped upper bound to prevent setexp wraparound",
+      "status": "opened 2026-08-28, CI triggered via pr-gate.yaml, outcome unknown, check next run",
+      "labels": [
+        "bug"
+      ]
+    },
+    "54792": {
+      "title": "fix(llk): clamp expm1_cw_clamped upper bound",
+      "status": "updated - pushed correction per reviewer (naufalfx805-source) feedback: upper clamp changed 87.0f -> 88.7228f (128*ln2)",
+      "date": "2026-09-02T18:41:19Z",
+      "ci_status_2026-09-08": "5/5 checks green (RTL Sim CI success)"
+    },
+    "54901_softshrink": "PR#54901 closed_by_maintainer (mateusznowakTT): softshrink undefined for negative lambda, no further action",
+    "54932_hardsigmoid_fp32": {
+      "issue": 54897,
+      "status": "Open, mergeable_state=behind. No update since 2026-09-02, 2 comments. Low activity - candidate for stale-PR watch next round."
+    },
+    "54862_ttsim_md": "PR#54862 open, skip-ci docs-only, awaiting maintainer review",
+    "55434_fix_pr": {
+      "issue": 55434,
+      "title": "Fix WH pack_untilize narrow_row row-stride offset",
+      "branch": "repo-assist/fix-issue-55434-wh-narrow-row-stride",
+      "status": "RTL Sim CI test shows failure conclusion, but its details_url is a broken/placeholder link (github.com/tenstorrernt, a typo domain) suggesting this check result may be infra noise rather than a real regression; overall PR Gate workflow run still action_required (blocked on maintainer approval), so build-artifact.yaml has not executed; needs another look once gate is approved",
+      "run_id": "33845189301"
+    },
+    "55424_clamp_output_tensor": {
+      "issue": 55334,
+      "status": "MERGED 2026-09-08 by mateusznowakTT. Remove from active tracking."
+    },
+    "55435": {
+      "ci_status_2026-09-07": "RTL Sim CI test FAILING (~14min run, unusual vs ~1s passes); other 4 Cycode checks green; job log 404 - could not self-diagnose; posted comment flagging for maintainer",
+      "ci_status_2026-09-08": "RTL Sim CI test now conclusion=success (previously failing 09-07); all 5 checks green; mergeable_state=behind"
+    },
+    "55605_alias": {
+      "issue": 55605,
+      "pr": 55670,
+      "status": "CI failure investigated 2026-09-19: 3 unrelated pre-existing failures (tilize program-cache flake x2, glm5 perf-band check); posted breakdown comment; still CodeOwners-pending 2 groups"
+    },
+    "55681_docfix": {
+      "issue": 55681,
+      "pr": 55688,
+      "status": "CI pre-checks 5/5 green, mergeable_state=behind, no build-artifact.yaml run found yet; comment-only change so low risk; checked 2026-09-08"
+    },
+    "54932": {
+      "ci_status_2026-09-08": "5/5 checks green (RTL Sim CI success)"
+    },
+    "aw_55819": {
+      "issue": 55819,
+      "branch": "repo-assist/fix-issue-55819-gather-clamp-tile-idx",
+      "title": "clamp gather codegen readers tile_idx to prevent L1 OOB device hang",
+      "status": "opened this run; CI triggered via pr-gate.yaml, outcome unknown, check next run; docker unavailable in sandbox so unverified locally"
+    },
+    "55847_gather_clamp": {
+      "issue": 55819,
+      "status": "Open. 5/5 pre-checks green (RTL Sim CI + 4 Cycode). Awaiting reviewer action / full PR-Gate not yet triggered. mergeable_state=behind. No action needed this run."
+    },
+    "55293_softplus_bias": {
+      "status": "MERGED 2026-09-09T11:24:16Z"
+    },
+    "54792_expm1_upper_clamp": {
+      "issue": 54770,
+      "status": "Open, mergeable_state=behind (main has moved on). Labeled bug/p0/high-risk. No new comments since 2026-09-03. Consider rebase note only if still stale next run."
+    },
+    "55435_wh_narrow_row": {
+      "issue": 55434,
+      "status": "Open, mergeable_state=behind, labeled bug/p1/high-risk/medium-complexity. No update since 2026-09-07, 1 comment. Monitor."
+    },
+    "56348_dispatch_log_fix": {
+      "issue": 56348,
+      "branch": "repo-assist/fix-issue-56348-dispatch-log-alignment-mem-type",
+      "title": "fix(dispatch): log correct L1 alignment in pinned-memory alignment check",
+      "status": "opened this run; single-line log_info format-arg fix (HalMemType::HOST -> HalMemType::L1); verified root cause against current source tt_metal/impl/buffers/dispatch.cpp; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
+    },
+    "56195_quasar_stride_pack": {
+      "issue": 56194,
+      "branch": "repo-assist/fix-issue-56194-quasar-strided-pack-tile-index",
+      "title": "fix(llk): scale strided-pack per-tile index by stride_size_tiles on Quasar",
+      "status": "opened this run; verified root cause against current source (llk_pack_tile_api.h, dataflow_buffer_interface.h, llk_io.h, cb_api.h all match issue's citations exactly); scaled per-tile step by stride_size_tiles in both out-of-order and in-order branches of get_output_tile_index(); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally",
+      "note_correction": "PR that fixes issue 56194 is actually numbered 56195, not 56194; corrected 2026-09-13"
+    },
+    "56383": "fix for issue #56383 (pow_bw ltz vs lez mismatch), opened 2026-09-13",
+    "56424": {
+      "issue": 56424,
+      "branch": "repo-assist/fix-issue-56424-quantize-per-tensor-scale-dtype",
+      "status": "opened this run; fixes reshape_per_channel_arg to cast per-tensor Tensor scale/zero-point to out_dtype (was only done for per-channel/axis path); verified root cause against current quantization.cpp; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
+    },
+    "56428": {
+      "issue": 56424,
+      "status": "CI green; APPROVED by mcw-anasuya 2026-09-22, ready to merge"
+    },
+    "56520_logical_not": {
+      "issue": 56520,
+      "pr": 56529,
+      "status": "CI green (5/5 checks); posted confirmation comment 2026-09-15; maintainer ncvetkovicTT asked 2026-09-15 whether other PRs solve the same issue - searched PRs referencing logical_not/56520, found none, replied with search results on the PR"
+    },
+    "56598": {
+      "issue": 56521,
+      "status": "opened prior run (isclose_init fix), CI green 5/5, no reviews yet - newly discovered via PR listing, was missing from memory tracking"
+    },
+    "56396": {
+      "issue": 56383,
+      "status": "reviewer feedback (mateusznowakTT) addressed 2026-09-18: replaced compare_pcc with assert_with_ulp(ulp_threshold=2) in test_bw_pow_zero_input_finite_gradient per /repo-assist request; pushed commit + comment; awaiting re-review"
+    },
+    "56532_fft_bf16_rne": {
+      "issue": 56532,
+      "branch": "repo-assist/fix-issue-56532-fft-bf16-rne-writers",
+      "status": "opened this run; adds fft_f32_bits_to_bf16_rne() RNE helper to batch_fft_common.h, replaces >> 16 truncation in all three writer kernels (batch_fft_writer.cpp, radix_pass_writer.cpp, apply_twiddles_writer.cpp); scoped to proposal (1) from the issue only (RNE rounding), proposal (2) (fp32 intermediates end-to-end) left for a future PR per issue's own scoping; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
+    },
+    "56714_binary_ng_width_stride": {
+      "issue": 56707,
+      "status": "CI green (RTL Sim CI + 4x Cycode all success) as of this run; PR number is 56714, not 56707 (56707 is the issue number - prior memory entry '56707_binary_ng_width_stride' had a numbering confusion, corrected here)"
+    },
+    "55688": {
+      "issue": 55681,
+      "status": "open, behind main, doc-only low-risk fix, unchanged"
+    },
+    "56808_typecast_int32_negative": "opened this run (test-only fix, branch repo-assist/fix-issue-56808-typecast-int32-negative-stimuli); adds test_eltwise_unary_typecast_int32_negative parametrized over Int32-input typecast pairs, sampling [-255,255] (or [-15,15] w/ block-float output) packed via pack_int32's sign-magnitude default; verified against current ckernel_sfpu_typecast.h (WH/BH/Quasar) that Int32 typecast kernels expect sign-magnitude Dest, matching the issue's own diagnosis. CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally.",
+    "56817": {
+      "issue": 56808,
+      "status": "REGRESSION FOUND AND FIXED: Repo Assist's prior kernel change (d65278e93a, switching WH/BH Int32 typecast SFPABS from MOD1_INT to MOD1_FLOAT) was itself wrong -- contradicted #56808's own diagnosis and disproven by maintainer AJ0070's on-device N150 measurement (switching to MOD1_FLOAT corrupts every negative case; original two's-complement kernels were correct). Reverted that commit and instead fixed the real bug: test harness packed Int32 negative stimuli as sign-magnitude via pack_int32's default -- now passes twos_complement=True through StimuliConfig for test_eltwise_unary_typecast_int32_negative, matching #56808's own suggested fix. Verified SFPLOAD INT32 load-mode and SFPABS mod1 semantics against tt-isa-documentation via DeepWiki before making the change. Pushed 2 commits + posted PR comment. CI run pending check next run."
+    },
+    "56827_concat_width": {
+      "issue": 56827,
+      "branch": "repo-assist/fix-issue-56827-concat-block-sharded-width-ragged",
+      "status": "opened this run; mirrors #56603 height-fix on width axis of ConcatBlockShardedProgramFactory (use padded_shape[-1] instead of shard capacity, clip out_col_end); CI triggered, outcome unknown yet, check next run",
+      "title": "[repo-assist] fix(ttnn): use real width, not shard capacity, in block-sharded width concat"
+    },
+    "56896_scatter_zero_volume": {
+      "issue": 56881,
+      "branch": "repo-assist/fix-issue-56881-scatter-zero-volume-sigfpe",
+      "title": "fix(ttnn): return input unchanged for zero-volume scatter to avoid SIGFPE",
+      "status": "opened this run; adds logical_volume()==0 early-return in ttnn::scatter next to existing rank-0 Shape{} check, per issue authors own primary suggestion; added regression test test_scatter_zero_volume_last_dim covering [0]/[2,3,0]/[2,0,3]; unverified locally, CI triggered via PR-gate"
+    },
+    "56938_unary_int32_reject": {
+      "issue": 56938,
+      "branch": "repo-assist/fix-issue-56938-unary-int32-reject-float-only",
+      "title": "fix(ttnn): reject INT32 input for unary ops with no integer SFPU kernel",
+      "status": "opened this run; TT_FATAL rejects INT32 input for 28 unary op types with no integer SFPU kernel (sqrt/sigmoid/exp/log/sign/reciprocal/rsqrt/sin/cos/tanh/erf/erfc/silu/softplus/gelu/hardsigmoid/hardswish/hardtanh/softsign/softshrink/tanhshrink/isnan/atan/celu/elu/selu/frac/ceil); added parametrized regression test; CI triggered, outcome unknown yet, check next run"
+    },
+    "56949_gpt_oss_fused_router_bh": {
+      "issue": 56949,
+      "branch": "repo-assist/fix-issue-56949-gpt-oss-fused-router-blackhole",
+      "title": "fix(models): disable fused topk_router_gpt on Blackhole (needs 12 DRAM banks, Blackhole has 8)",
+      "status": "opened this run; gates use_fused_op on not ttnn.device.is_blackhole(mesh_device) in both models/demos/gpt_oss/tt/topk.py and its models/experimental/ops/quasar duplicate; Python-only, no build required; CI outcome unknown yet, check next run"
+    },
+    "56864": {
+      "issue": 56827,
+      "status": "CLOSED without merge by CI automation (closed_by github-actions[bot], no comments, no failing checks visible via get_check_runs -- 5/5 green). Root cause of closure unclear from API; #56827 remains open. A fresh fix PR is needed next run."
+    },
+    "56955_welford_groupnorm_stride": {
+      "issue": 56955,
+      "branch": "repo-assist/fix-issue-56955-welford-groupnorm-batch-stride",
+      "title": "fix(ttnn): correct Welford groupnorm sharded kernel batch stride for multi-group cores",
+      "status": "opened this run; reads compile arg 18 (num_tiles_per_batch) instead of arg 9 (block_hw) for tile_id stride at both loop entries in welford_groupnorm_sharded_v2.cpp; added regression test test_group_norm_welford_multi_batch_per_core_sub_tile_groups; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
+    },
+    "56998_prefill_docs": {
+      "issue": 56998,
+      "branch": "repo-assist/fix-issue-56998-prefill-runner-docs-capture-trace",
+      "status": "opened this run (docs-only, [skip ci]); added capture_trace optional hook to ADDING_A_PREFILL_MODEL.md's PrefillRuntime contract, verified against prefill_runner.py:793 getattr-gated call and tt_prefill_runtime.py:433 implementation; no CI needed"
+    },
+    "56880_gather_rank": {
+      "issue": 56880,
+      "status": "investigated for fixability 2026-09-19; too architecturally risky for quick auto-fix (4 program factories + codegen route, TILE-layout slicing, transpose reorders fold order vs scatter's simpler ROW_MAJOR-only fix in #56875); labeled bug only, no PR opened"
+    },
+    "57088_prefill_producer_num_layers": {
+      "issue": 57088,
+      "branch": "repo-assist/fix-issue-57088-prefill-producer-num-layers-default",
+      "status": "opened this run; default NUM_LAYERS from ADAPTER.model_config.NUM_LAYERS mirroring prefill_runner.py's existing pattern instead of a hardcoded 61; Python-only, no build needed"
+    },
+    "57090_dedupe_mgd": {
+      "issue": 57090,
+      "branch": "repo-assist/fix-issue-57090-dedupe-mesh-graph-descriptors",
+      "status": "opened this run, [skip ci] docs/config-only; collapsed glm52/kimi27 mgd textprotos (verified byte-identical) to shared sc1_mgd/sc4_mgd, updated run_multirank_pcc.sh + RUN_COMMANDS.md"
+    },
+    "56827_concat_width_retry": {
+      "issue": 56827,
+      "branch": "repo-assist/fix-issue-56827-concat-block-sharded-width-ragged",
+      "status": "SUPERSEDED: issue #56827 fixed and closed via external PR #57100 on 2026-09-21; this repo-assist retry is moot"
+    },
+    "57099": {
+      "issue": 56827,
+      "status": "auto-closed unmerged (unexplained, same pattern as prior #56864); external draft PR #57100 (VirdhatchaniKN) now also targets same issue with a broader 2-defect fix; flagged for maintainer consolidation in monthly summary, no new repo-assist attempt opened"
+    },
+    "57110_kda_state_dedupe": {
+      "issue": 57110,
+      "branch": "repo-assist/fix-issue-57110-kda-state-dedupe-zeros",
+      "title": "drop KdaState._zeros duplicate carry cache in kimi_k3",
+      "status": "opened this run; removed shadow _zeros cache, reset() now uses ttnn.fill(state,0,output_tensor=state) in place; Python-only, no build needed; CI n/a for docs/py-only"
+    },
+    "57111_shutdown_sentinel_device_alloc": {
+      "issue": 57111,
+      "branch": "repo-assist/fix-issue-57111-shutdown-sentinel-device-alloc",
+      "title": "allocate shutdown sentinel payload directly on device",
+      "status": "opened this run; switched torch.zeros+from_torch to ttnn.zeros(device=dev,...); Python-only, no build needed"
+    },
+    "57213_squared_difference": {
+      "issue": 57213,
+      "branch": "repo-assist/fix-issue-57213-squared-difference-golden-scalar-dtype",
+      "title": "fix(ttnn): key squared_difference golden dtype branch off tensor operand",
+      "status": "opened this run; reuses _tensor_operand/_matched_operands/_integer_path_scalars helpers already used by add/subtract/multiply/divide goldens (#55722); adds regression test; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
+    },
+    "57244": {
+      "issue": 57213,
+      "status": "CI green (5/5), unchanged"
+    },
+    "57311": {
+      "issue": 57286,
+      "status": "CI green (5/5); MetalEnv mesh-device context-leak guard fix"
+    },
+    "57288": {
+      "issue": 57270,
+      "status": "CI green (5/5); tracy perf-report drop-unreplayed-ops fix"
+    },
+    "57322": {
+      "issue": 57322,
+      "branch": "repo-assist/fix-issue-57322-ternary-tanhbw-alignment-hash",
+      "title": "fix(ttnn): hash Alignment/Tile in ternary and tanh_bw program-cache keys",
+      "status": "opened this run; follow-up to #55702, verified root cause against current ternary_device_operation.cpp and tanh_bw_device_operation.cpp; CI triggered, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
+    },
+    "57413_square_bf16_rne": {
+      "issue": 57408,
+      "branch": "repo-assist/fix-issue-57408-square-bf16-rne-rounding",
+      "title": "fix(sfpu): round ttnn.square to nearest-even instead of truncating to bf16",
+      "status": "opened this run; scoped to square only (WH+BH; Quasar addressing left untouched), adds is_fp32_dest_acc_en template param + float32_to_bf16_rne rounding matching calculate_sfpu_binary_mul; regression test asserts bit-exact match vs ttnn.mul(x,x); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
+    }
+  },
+  "issues_labeled": [
+    "52178:bug",
+    "52174:bug",
+    "52233:bug",
+    "52203:bug",
+    "52390:bug,ci-bug",
+    "52376:bug",
+    "52614:bug,community",
+    "52607:bug",
+    "53046:bug",
+    "53060:performance monitoring",
+    "53389:bug",
+    "53379:bug",
+    "53432:bug",
+    "53435:bug",
+    "53429:feature-request",
+    "53439:feature-request",
+    "53512:bug",
+    "53510:bug",
+    "53604:bug",
+    "53649:bug",
+    "53781:bug",
+    "53763:performance monitoring",
+    "53764:feature-request",
+    "53780:feature-request",
+    "53815:bug",
+    "53823:bug",
+    "53984:bug",
+    "53981:bug",
+    "53978:bug",
+    "53975:bug",
+    "53973:bug",
+    "53971:bug",
+    "53969:bug",
+    "53963:bug",
+    "53908:bug",
+    "54017:bug",
+    "53999:bug",
+    "54016:feature-request",
+    "54495:bug",
+    "54695:bug",
+    "54654:bug",
+    "54706:performance monitoring",
+    "54707:performance monitoring",
+    "54708:performance monitoring",
+    "54709:performance monitoring",
+    "54705:performance monitoring",
+    "54724:bug",
+    "54725:bug",
+    "54798:bug",
+    "54883:bug",
+    "54882:bug",
+    "54897:bug",
+    "54910:bug",
+    "55017:bug",
+    "54968:bug",
+    "55052:bug",
+    "54968:bug",
+    "55105:bug",
+    "55106:bug",
+    "55114:feature-request",
+    "55393:bug",
+    "55392:bug",
+    "55599:bug",
+    "55622:bug",
+    "55735:bug",
+    "55733:bug",
+    "56056:bug",
+    {
+      "number": 56248,
+      "label": "bug",
+      "date": "2026-09-11"
+    },
+    {
+      "number": 56283,
+      "label": "bug",
+      "date": "2026-09-11"
+    },
+    {
+      "number": 56254,
+      "label": "bug",
+      "date": "2026-09-11"
+    },
+    {
+      "number": 56281,
+      "label": "bug",
+      "date": "2026-09-11"
+    },
+    {
+      "number": 56238,
+      "label": "bug",
+      "date": "2026-09-11"
+    },
+    {
+      "number": 56263,
+      "label": "bug",
+      "date": "2026-09-11"
+    },
+    "55378:bug,ci-bug",
+    "56385:bug",
+    "56371:bug",
+    "56324:bug",
+    {
+      "number": 56626,
+      "label": "bug",
+      "date": "2026-09-15"
+    }
+  ],
+  "covered_no_duplicate": {
+    "52131": "PR #52136 already closes it",
+    "52233": "fix in open PR #52237",
+    "52612": "fix in open PR #52613",
+    "52614": "fix in open PR #52615",
+    "52607": "fix in open PR #52608",
+    "52901": "fix in open PR #52902",
+    "53046": "fix already in open PR #53047 (lgamma bridge-guard <= fix); overlaps in-flight #51991, needs coordination per PR body -- do not open duplicate",
+    "53078": "fix in draft PR #53103 (AI-assisted LLK triage board)",
+    "53106": "fix opened by repo-assist this run, see new PR (reciprocal Newton seed 0x1.554p0f)",
+    "52671": "TWO maintainer PRs exist (#52789 full fix, #52790 assert-only) superseding repo-assist's own #52673 -- do not act further, just monitor for closure",
+    "53282": "PR #53478 MERGED 2026-08-26T08:10:22Z by mateusznowakTT (addcmul composite-fallback fix) - closed out, remove from open_prs tracking",
+    "53649": "commented with bisect confirmation citing #53419 diff; labeled bug; already assigned to jmitrovicTT, no PR opened (root cause not independently verified)",
+    "53655": "PR opened this run (repo-assist), no other open PR found",
+    "53786": "fix in open PR #53767 (reporter's own)",
+    "53765": "fix in open PR #53766 (reporter's own)",
+    "53760": "fix in open PR #53761 (reporter's own)",
+    "53782": "fix in open PR #53783 (reporter's own)",
+    "53770": "fix in open PR #53771 (reporter's own)",
+    "53781": "commented with isolation lead (suspect strict-inequality-gated CB credit in sort/select); labeled bug; no PR opened, needs hw access",
+    "53823": "fixed by open PR #53654 (TT-NOP-Injector eltwise_binary race)",
+    "53787": "fixed by open PR #53810 (log_sigmoid fp32 accuracy)",
+    "53846": {
+      "fix_pr": 53858,
+      "date": "2026-08-21",
+      "note": "groupnorm inexact group mean, fixed by PR #53858"
+    },
+    "53803": {
+      "fix_pr": 53858,
+      "date": "2026-08-21",
+      "note": "groupnorm sub-tile group corruption, fixed by PR #53858"
+    },
+    "53874": "fixed by #53899 (not repo-assist); repo-assist's own #53898 closed as superseded",
+    "53890": "fix in open PR #53891 (reporter kinginu, ttnn.where composite fallback)",
+    "53862": "fix in open PR #53863 (reporter kinginu, is_odd 3-dispatch perf)",
+    "53984": "fix in open PR #53985 (reporter kinginu, multiply block-float fast_and_approximate_mode)",
+    "53981": "fix in open PR #53982 (reporter kinginu, complex div_bw single reciprocal)",
+    "53978": "fix in open PR #53980 (reporter kinginu, div output_dtype passthrough)",
+    "53975": "fix in open PR #53976 (reporter kinginu, sqrt/rsqrt -0.0 domain)",
+    "53973": "fix in open PR #53974 (reporter kinginu, rsqrt_bw zero-gradient sign)",
+    "53971": "fix in open PR #53972 (reporter kinginu, tril/triu dtype mask)",
+    "53969": "fix in open PR #53970 (reporter kinginu, backward ops memory_config passthrough)",
+    "53963": "fix in open PR #53965 (reporter kinginu, unary program cache key dtype)",
+    "53908": "fix in open PR #53909 (reporter kinginu, unary SFPU comparisons)",
+    "53699": "fixed by merged PR #53749 (repo-assist); issue closed, no further action",
+    "54241": "fix in open PR #54240 (reporter's own, atan2 IEEE-754)",
+    "54234": "fix in open PR #54237 (metal2 borrowed-DFB sharded size-check skip)",
+    "54223": "fix in open PR #54246 (repo-assist, opened prior run), CI green",
+    "54300": "fix in open draft PR #54301 (quasar pool face geometry)",
+    "54326": {
+      "fix_pr": 54327,
+      "date": "2026-08-25",
+      "note": "reporter gundi61 opened fix PR; verified root cause + fix quality, no duplicate needed"
+    },
+    "54309": "2026-08-25: ttnn.sort ROW_MAJOR CrossCoreDataExchange bug, already labeled bug+data_movement, well-documented repro, no fix PR found, left for maintainer/future run - not independently confirmed against source this run",
+    "54439": {
+      "fix_pr": 54440,
+      "author": "kinginu",
+      "note": "pow_bw +inf bug, confirmed correct fix, no duplicate needed"
+    },
+    "54639": "verified no existing PR before opening #54664",
+    "54695": "labeled+commented this run, no fix PR opened (root cause confirmed, fix approach suggested, no HW needed but left for follow-up PR)",
+    "54654": "labeled bug, needs HW/device access to root-cause slow-dispatch hang, no fix PR",
+    "54779": "has open community fix PR #54780, no duplicate needed",
+    "54868": "has open fix PR #54871 (tzh476) - reflection-identity fix for FP32 gelu_bw saturation",
+    "54878": "linked PR #54776 already open",
+    "54877": "linked PR #54675 already open",
+    "54899": "PR #54905 already fixes it",
+    "54950": "fix PR #54958 already open (perf-counter fidelity metrics tied off in hw); part of mvlahovicTT refactor cluster #54949-54953, do not touch",
+    "54953": "maintainer architectural refactor plan (perf-counter metric commonization); landing order #54949->54950->54951->54952->54953; not for repo-assist",
+    "55032": "open fix PR #55031 exists",
+    "55043": "fix PR #55044 open, verified 2026-09-01",
+    "55124": {
+      "checked": "2026-09-02",
+      "result": "no open PR found (search is:pr is:open <n> in:body)",
+      "note": "reporter singhharsh1708 intends to fix via bounty program; do not open competing PR"
+    },
+    "55128": {
+      "checked": "2026-09-02",
+      "result": "no open PR found (search is:pr is:open <n> in:body)",
+      "note": "reporter singhharsh1708 intends to fix via bounty program; do not open competing PR"
+    },
+    "55129": {
+      "checked": "2026-09-02",
+      "result": "no open PR found (search is:pr is:open <n> in:body)",
+      "note": "reporter singhharsh1708 intends to fix via bounty program; do not open competing PR"
+    },
+    "55125": {
+      "checked": "2026-09-02",
+      "result": "no open PR found (search is:pr is:open <n> in:body)",
+      "note": "reporter singhharsh1708 intends to fix via bounty program; do not open competing PR"
+    },
+    "55430": "has open PR #55431",
+    "55379": "has open PR #55380",
+    "55371": "has open PR #55296",
+    "55438": "covered by open PR #55440 (Bessel's correction for batch_var), confirmed 2026-09-04",
+    "55551": "fix PR #55552 by amahmudTT already open and adequate (deepseek_prefill NoC ordering race); no repo-assist duplicate needed",
+    "55576": "PR #55575 (repeat_interleave DRAM-sharded fix) - reconfirmed",
+    "55588": "PR #55589 (multi-batch GPT-OSS decode/prefill)",
+    "55571": "PR #55554 (H3 audio encoder)",
+    "55502": "3 open community PRs: #55506, #55515, #55522 (bounty INT_MIN)",
+    "55616": "fix in open PR #55613 (quasar outer memory_config)",
+    "55605": "fix in open PR #55606 (metal 2.0 program cache aliased tensor mis-bind)",
+    "55881": "Open fix PR #55882 already exists - confirmed via search, no duplicate needed.",
+    "55817": "Open fix PR #55821 already exists - confirmed via search, no duplicate needed.",
+    "55823": "Open fix PR #55824 already exists - confirmed via search, no duplicate needed.",
+    "56021": "fix in open PR #56025 (binary_ng fused activation dtype define)",
+    "56008": "fix in open PR #56012 (all_gather scatter-write state)",
+    "56073": "fix in open PR #54157 (LLK perf matmul coverage)",
+    "55744": "already fixed and MERGED via PR #55938 (llk_wait_tiles block-until-resolved fix); remove from active tracking",
+    "55996": "fix in open PR #55997 (moe_compute tilize total_chunks single consumer)",
+    "56068": "fix in open PR #56198 (ttnn.reshape ND shard spec normalized-to-2D input and ND output)",
+    "56324": "already fixed via open PR #55589 (tt_transformers prefill page table fix included), no dup needed",
+    "56290": "bounty issue, multiple community PRs already open (56296/56301/56309/56325/56326/56327), no repo-assist action",
+    "56281": "already labeled bug, tracking issue referencing 54630, no action",
+    "56277": "bounty feature request, already labeled, no action",
+    "56385": "already labeled bug/community; open external fix PR #56394 (MyDude92), no repo-assist dup needed",
+    "56371": "already labeled bug/community; open external fix PR #56386, no repo-assist dup needed",
+    "56375_dispatch_log": "confirmed this run: issue #56348 already closed by merged PR #56676 (same fix, log correct alignment); repo-assist's own open PR #56375 is now redundant/superseded -- flagged in monthly summary for maintainer to close, not closed unilaterally.",
+    "56853": "fix in open PR #56860 (ttnn.pow integer exponent bit-reinterpret bug)",
+    "56881": "confirmed no existing open PR fixes this before opening #56896 (checked search_pull_requests + issue thread + PR #56875 notes, which explicitly calls out 56881 as NOT fixed there)",
+    "56945": "confirmed still covered by open PR #56932 (2026-09-19 re-check)",
+    "56954": "confirmed still covered by open PR #56953 (2026-09-19 re-check)",
+    "56738": "fix in open PR #56850 (binary_ng fused-activation SrcA format restoration)",
+    "56876": "fix in open PR #56875 (scatter rank>4 fold fix)",
+    "57213": "verified 0 open PRs reference #57213 before opening fix; repo-assist PR for squared_difference golden scalar-dtype fix opened this run"
+  },
+  "dropped_fix_targets": {
+    "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
+    "53055": "reporter (maintainer ncvetkovicTT) deliberately deferred fix pending directed test -- filed as documentation, not an action item",
+    "54235": "ternary Metal2.0 cache-key analysis, too architectural, needs ops-team decision",
+    "54232": "TensorParameterRelaxation, too architectural",
+    "54897": "hardsigmoid FP32 cancellation near x=-3 - deferred to next run, not yet fixed",
+    "54848": "closed by mateusznowakTT: perf objection, recommends divide-kernel+fused-post-activation instead of composite op; broader binary-infra rework out of scope"
+  },
+  "watch_prs": {
+    "52237": "fixes #52233, watch for merge",
+    "45709": "approved+CodeOwners complete but stuck action_required repo-side gate since 2026-06, needs maintainer manual re-enable",
+    "53047": "fixes #53046 lgamma bridge guards <= fix; overlaps #51991, needs coordination before merge",
+    "53103": "draft PR fixing #53078 matmul unpacker miscompares; AI-generated, needs human review before ready-for-review",
+    "53690": "test-coverage objection from ncvetkovicTT resolved 2026-08-21 by nvelickovicTT (OK if CI passes); awaiting CI re-run results (Sanity/L2/BH e2e triggered by nvelickovicTT)",
+    "51868": "reviewer kanapitsas (2026-08-22) confirmed Ring Joint SDPA logsigmoid_sub shares same bug; repo-assist replied confirming + asked maintainer to add boundary test (no HW access to verify numerics); PR still open, mergeable_state=behind",
+    "54690": "Now has 4 approvals (bbradelTT, wenbinlyuTT, mcw-anasuya, vtsilytskyiTT). CI green (217 checks). Need to confirm 4th approval covers previously-missing metalium-developers-ttnn-core CodeOwners group. Checked 2026-08-31.",
+    "54932": "replied to contributor naufalfx805-source's test-coverage follow-up analysis; endorsed separate follow-up PR",
+    "55435": "RTL Sim CI still failure but parent workflow run 33846253050 conclusion is action_required (not failure) - likely gating/approval issue not code issue; job logs still 404; mergeable_state now behind; needs maintainer, no fix pushed",
+    "55933": "confirmed bug, awaiting fix PR (community reporter has branch)",
+    "56195": "RTL Sim CI test failing since 2026-09-11 (job log retrieval 404s in this sandbox via get_job_logs/actions_get - endpoints return 404 for both run_id and job_id); needs maintainer to inspect directly. Other checks (Cycode x4) green.",
+    "56538": "external PR fixing #56522 (ttnn.where -0.0 predicate float32 path); no repo-assist duplicate needed",
+    "56375": "SUPERSEDED: issue #56348 was fixed and closed via a different PR #56676 (merged); this repo-assist PR is now redundant, flagged in a comment on the PR and in monthly summary for maintainer to close; checked 2026-09-16"
+  },
+  "sfpu_clamp_family": {
+    "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991.",
+    "54883": "gelu_bw Mills-ratio tail, confirmed 2026-08-31, no fix PR (needs HW-validated refit)",
+    "54882": "tanh_bw sech2 tail denominator drop, confirmed 2026-08-31, no fix PR (needs HW-validated reciprocal)"
+  },
+  "no_fix_needed_investigated": {
+    "53029": "K3 AttnRes segmented-batch silent correctness bug -- deep hw-specific investigation, root cause unknown, left for owning team (pjosipovic)",
+    "53069": "Quasar perf-test coverage issue, PR-derived tracking issue, not a defect",
+    "53079": "assigned to maintainer ebanerjeeTT, tracked scope item, no repo-assist action needed",
+    "53631": "LLK MOVD2B handoff investigation, reporter self-driving with own follow-up comment, not a confirmed bug",
+    "53600": "covered by existing PR #53601",
+    "53640": "assigned to ndivnicTT, thin perf-test investigation task",
+    "53613": "maintainer KalaivaniMCW test-infra restructuring proposal, not a bug",
+    "53568": "Metal 2.0 port architectural blocker by maintainer gajanan-choudhary, too complex for repo-assist",
+    "53561": "AI-flagged LLK dedup/refactor follow-up, requires careful mutation-testing, not safe for repo-assist",
+    "53769": "argmax multicore correctness gaps, already assigned iwroszTT, 5 distinct sub-issues, too broad for a single surgical repo-assist PR",
+    "53778": "graph tracer timeout for llama pytest, reporter already has own workaround branch + comment, needs graph-tracing expert (dgomezTT/aliaksei-sala already tagged)",
+    "53763": "LLK perf-gate noise/threshold measurement tracking issue (collaborator-authored), labeled performance monitoring, no action needed",
+    "53764": "multi-chip CI sweep follow-up to #38316, already assigned fbuticTT, labeled feature-request",
+    "53802": {
+      "date": "2026-08-21",
+      "note": "vLLM seed salting regression, already assigned/labeled"
+    },
+    "53844": {
+      "date": "2026-08-21",
+      "note": "GDN kernel optimization, already assigned"
+    },
+    "53840": {
+      "date": "2026-08-21",
+      "note": "l2 nightly reduction, assigned, has parent issue"
+    },
+    "53796": {
+      "date": "2026-08-21",
+      "note": "SFPI deprecated features, assigned"
+    },
+    "53849": {
+      "date": "2026-08-21",
+      "note": "operation timeout doesn't cover socket waits, already labeled bug+runtime, assigned"
+    },
+    "53830": {
+      "date": "2026-08-21",
+      "note": "sfpwriteconfig, already labeled sfpi, assigned"
+    },
+    "53962": {
+      "date": "2026-08-22",
+      "note": "Resnet e2e hang via env vars; already assigned to reporter shengxiangjiTT with repro steps"
+    },
+    "54485": {
+      "date": "2026-08-27",
+      "note": "log spam Task issue, already has 4 comments + assignee riverwuTT context, not a confirmed bug requiring label"
+    },
+    "54450": {
+      "date": "2026-08-27",
+      "note": "Metal2.0 O3 opt-level follow-up, already has open fix PR #54454, no dup needed"
+    },
+    "54495_watch": {
+      "date": "2026-08-27",
+      "note": "labeled bug; watcher segfault in Fabric init, no fix PR opened - requires HW to reproduce/fix"
+    },
+    "54655": "Clang23 -Wunused-template build failure: confirmed plausible defect but 12+ symbols across multiple headers (some ttnn/api/) - too broad for single surgical repo-assist PR without local build verification; left for maintainer",
+    "54797": "fabric topology resolver architectural change request, tracked by tt-blaze#3571, not a repo-assist scope item (2026-08-29)",
+    "54794": "ttsim simulator gap, owned by ttsim team per issue text, not tt-metal fixable (2026-08-29)",
+    "54768": "parent tracking issue for #54766, no confirmed defect, assigned kgrujcic-tt (2026-08-29)",
+    "54766": "Phase 3 handle-inconsistencies tracking task, assigned kgrujcic-tt, no confirmed defect (2026-08-29)",
+    "54807": "already labeled bug + assigned sidnadTT, Quasar HW-specific fix, out of repo-assist scope (2026-08-29)",
+    "54742": "already covered by open PR #54743, already labeled bug (2026-08-29)",
+    "54813": "KDA prepare_chunk_recurrence t_inv precision bug for Kimi-K3; maintainer kgrujcic-tt already root-caused, assigned, fix pushed to feature/kimi-k3-modules & feature/kimi-k3-prefill; no repo-assist action",
+    "54814": "Workarounds tracking/parent issue, assigned kgrujcic-tt, not a standalone confirmed defect; no repo-assist action",
+    "54899": "copy_dest_values FP16B subnormal flush - complex arch-dependent LLK fix, issue itself flags open questions; too risky for surgical repo-assist fix, left for maintainer",
+    "55017": "confirmed TT_FATAL at grid_sample_device_operation.cpp accepts FLOAT32; root cause likely in grid_sample_reader_common.hpp stick-size/stride handling (not fully confirmed); reporter explicitly wants bounty assignment, no repo-assist PR",
+    "55102": {
+      "date": "2026-09-02",
+      "note": "Gemma4/Wormhole garbled long-context output; complex HW/model-dependent bug, needs device access; no label/comment applied"
+    },
+    "55332_55334_55323_55378": "bounty-program batch / bot-filed, already labeled, no repo-assist action 2026-09-03",
+    "55414": "architectural: binary_ng program-cache key missing Alignment/Tile, blocks Metal2.0 port; assigned bbradelTT/dchenTT, P1; maintainer-owned, confirmed 2026-09-04",
+    "55609": "LLK/BH tilize-init comment ISA-semantics inaccuracy, well-researched, needs LLK-team review, not a repo-assist fix (2026-09-07)",
+    "55838": {
+      "date": "2026-09-09T06:30:00Z",
+      "note": "Quasar NOC_V2_WR_RESP_VC->NOC_OVERLAY_WR_RESP_VC rename issue. Verified against current main (HEAD b7b582aa): grepped noc_nonblocking_api_v2.h and noc_atomic_ops_probe.cpp - zero remaining NOC_V2_WR_RESP_VC references, all call sites correctly use NOC_OVERLAY_WR_RESP_VC. Already fixed by a commit after the issue's cited SHA (likely #55399). No fix PR opened; no comment posted (avoid noise on an issue a maintainer will notice is stale/auto-resolved)."
+    },
+    "55918_55917": "shield_prefill deadlock/race issues, both fixed via linked PR #55741 (acvejicTT), no repo-assist action",
+    "55965": "Quasar STALLWAIT math-drain, already bug-labeled + assigned amahmudTT, statically-audited findings for Quasar owner",
+    "55920": "eltwise perf-test alignment BH/QSR, already assigned ndivnicTT, tracking issue",
+    "55913": "LLK Sanitizer epic/tracker, assigned sstanisicTT, no action needed",
+    "56056": "ttnn.softmax NaN/inf handling - confirmed all-(-inf)-row mechanism (exp SFPU CLAMP_NEGATIVE sanitize) against current source; labeled bug + commented; no fix attempted, shared hand-tuned HW kernel needs careful review beyond repo-assist scope",
+    "55988": "2026-09-12: investigated BH tilize tall-narrow cliff-row assert (tilize_multi_core_block_program_factory.cpp:295); traced split_blocks_for_tilize_wh/compute_ncores_wh_sb path in work_split_tilize.hpp and buffer_set_for_core in common.cpp but could not conclusively identify the exact core/width mismatch for the specific (1,1,4096,32) uint8 shape on Blackhole's grid without hardware/sim access; left unlabeled/uncommented, revisit with more time budget",
+    "56414": "BF16 trunc/floor/ceil/frac return +-inf instead of NaN (_trunc_body_ in ckernel_sfpu_rounding_ops.h has no NaN/inf guard before bit-mask path); confirmed root cause against current source, labeled bug + commented, but explicitly deferred fix to maintainer - raw SFPU intrinsic kernel (SFPEXEXP/SFPIADD/SFPSHFT2/SFPAND) shared by 3+ other LLKs, no sfpi.h vendored in this checkout to safely verify a bit-level change; 2026-09-13",
+    "56776": "2026-09-19: Quasar V2 posted multicast dword-write loss on emulator; already labeled bug, self-driving reporter with candidate hypotheses listed, needs emulator/HW access",
+    "56701": "2026-09-19: Quasar trace-capture DFB config snapshot missing (0 vs N payloads), already labeled bug, needs dispatch/serialization expertise",
+    "56702": "2026-09-19: Quasar cached-program re-enqueue doesn't refresh DFB configs (WH/BH-only refresh), already labeled bug, needs dispatch/serialization expertise, sibling of 56701",
+    "57055": "CMake TT::Metalium::Private refactor -- genuine, 47 occurrences/32 files, too large/architectural for a surgical repo-assist fix",
+    "57003": "T3K dispatch pipeline retirement -- gated to on-or-after 31 October 2026, not actionable yet",
+    "57042": "resnet-on-quasar REDUCE_DIM macro collision: already fixed on main (param renamed to reduce_dim); verified 2026-09-20; safe to close, flagged in monthly summary",
+    "56945": "32-bit unpack-to-dest wrong-DST-tile: already has open external fix PR #56932 (awliu-TT); verified 2026-09-20, no duplicate",
+    "56986": "hf_rope decode PCC fail on BH: already has open external fix PR #57035; verified 2026-09-20, no duplicate"
+  },
+  "stale_pr_nudges": {
+    "34933": {
+      "last_ping": "2026-08-21",
+      "type": "author_checkin"
+    },
+    "21584": {
+      "last_ping": "2026-09-02",
+      "type": "codeowners",
+      "note": "re-pinged, approved but still pending required CODEOWNERS"
+    },
+    "45516": "2026-08-12: author nudge (behind main, no reviews yet)",
+    "49658": {
+      "last_ping": "2026-09-02",
+      "type": "codeowners",
+      "note": "re-pinged, approved by mgajewskiTT but still pending required CODEOWNERS"
+    },
+    "46419": "2026-08-19: author nudge (approved but blocked mergeable_state, stale ~5wk, checked_state)",
+    "50131": {
+      "last_ping": "2026-09-19",
+      "type": "re-ping",
+      "note": "still dirty/behind, no author response since 2026-08-19"
+    },
+    "30797": "2026-08-20: author nudge (unresolved reviewer question from philei-tt re: zero-init padding assumptions, ~4mo stale)",
+    "50150": {
+      "last_ping": "2026-09-19",
+      "type": "re-ping",
+      "note": "still behind, no author response since 2026-08-20"
+    },
+    "50149": {
+      "last_ping": "2026-09-19",
+      "type": "re-ping",
+      "note": "still blocked, no author response since 2026-08-20"
+    },
+    "50411": {
+      "date": "2026-08-21",
+      "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
+    },
+    "50443": {
+      "date": "2026-09-14",
+      "type": "author_checkin",
+      "note": "LLK 2's complement sfpu shift on BH, dirty mergeable_state, never previously nudged"
+    },
+    "49768": {
+      "date": "2026-08-21",
+      "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
+    },
+    "49800": {
+      "last_ping": "2026-09-12",
+      "type": "author_checkin",
+      "note": "approved x2 (mgajewskiTT, gsarabandoTT) but dirty mergeable_state, needs rebase"
+    },
+    "51004": {
+      "last_ping": "2026-08-23",
+      "type": "codeowners"
+    },
+    "51129": {
+      "last_ping": "2026-08-23",
+      "type": "author_checkin"
+    },
+    "51155": {
+      "last_ping": "2026-08-23",
+      "type": "author_checkin"
+    },
+    "51084": {
+      "last_ping": "2026-08-24",
+      "type": "author_checkin"
+    },
+    "51119": {
+      "last_ping": "2026-08-24",
+      "type": "author_checkin"
+    },
+    "51120": {
+      "last_ping": "2026-08-24",
+      "type": "author_checkin"
+    },
+    "45949": {
+      "last_ping": "2026-08-24",
+      "type": "behind_main_author_action"
+    },
+    "51311": {
+      "last_ping": "2026-08-24",
+      "type": "dirty_no_review_author_action"
+    },
+    "49787": {
+      "last_ping": "2026-08-24",
+      "type": "approved_but_dirty_author_action"
+    },
+    "49317": {
+      "last_ping": "2026-09-22",
+      "type": "re-ping",
+      "note": "still blocked ~2mo, no author action since 08-25 checkin"
+    },
+    "50993": {
+      "last_ping": "2026-09-22",
+      "type": "re-ping",
+      "note": "still blocked ~1mo, no author action since 08-25 checkin"
+    },
+    "50519": {
+      "last_ping": "2026-08-25",
+      "type": "author_checkin",
+      "note": "blocked mergeable_state, ~1mo stale"
+    },
+    "28787": {
+      "date": "2026-09-14",
+      "type": "author_checkin",
+      "note": "old syntax-error PR, dirty mergeable_state, never previously nudged"
+    },
+    "47426": {
+      "date": "2026-08-25",
+      "note": "author nudge (dirty mergeable_state, ~1mo stale, LTX LoRA load/fuse/unload)"
+    },
+    "38639": {
+      "date": "2026-08-25",
+      "note": "author nudge (dirty mergeable_state, ~1mo stale, ttnn.slice L1 OOM fix)"
+    },
+    "50661": {
+      "last_ping": "2026-08-25",
+      "type": "author_nudge",
+      "note": "CI failures ttnn ops fast unit tests + ttnn reduce group, mergeable_state blocked"
+    },
+    "51507": {
+      "last_ping": "2026-08-25",
+      "type": "codeowners_ping",
+      "note": "pending CodeOwners group approval (tests/tt_metal/tt_metal/deployment/), [skip ci] prefix"
+    },
+    "38627": "2026-08-26 author nudge - mergeable_state=dirty, PR Gate Status failing, stale since 2026-07-30",
+    "36120": {
+      "last_ping": "2026-09-12",
+      "type": "codeowners",
+      "note": "re-pinged, approved by yieldthought, others pending"
+    },
+    "36267": {
+      "date": "2026-08-26",
+      "type": "author"
+    },
+    "39293": {
+      "date": "2026-08-26",
+      "type": "codeowners_ping"
+    },
+    "36184": {
+      "last_ping": "2026-09-12",
+      "type": "codeowners",
+      "note": "re-pinged, no reviews yet, 6 requested reviewers"
+    },
+    "50277": {
+      "date": "2026-08-26",
+      "type": "author_nudge",
+      "note": "dirty mergeable_state (conflict), detailed review from scardozaTT since 2026-07-27 unaddressed"
+    },
+    "42536": {
+      "date": "2026-09-05",
+      "type": "codeowners",
+      "reason": "re-ping, ~10 days since last ping, still dirty, no human reviewer approval"
+    },
+    "51544": {
+      "date": "2026-08-26",
+      "type": "codeowners_ping",
+      "note": "codeowners ping, Quasar exp overflow/underflow guard restore, stale since 2026-07-30"
+    },
+    "51567": {
+      "last_ping": "2026-09-12",
+      "type": "author_checkin",
+      "note": "unresolved review comment from abhullar-tt (09-08) re per-SKU golden gating, plus dirty mergeable_state"
+    },
+    "51558": {
+      "last_ping": "2026-09-12",
+      "type": "author_checkin",
+      "note": "approved by tdowdallTT but dirty mergeable_state, needs rebase"
+    },
+    "51487": {
+      "last_ping": "2026-08-27",
+      "type": "author_checkin",
+      "note": "required CI (PR Gate Status, Clang Tidy) failing since 2026-07-29"
+    },
+    "45435": {
+      "date": "2026-08-27",
+      "note": "author nudge (dirty mergeable_state since May, discussion settled per dgomezTT, no revert needed)"
+    },
+    "36251": {
+      "date": "2026-08-27",
+      "note": "author nudge (quiet since Feb reviews, mergeable_state unknown)"
+    },
+    "49627": {
+      "date": "2026-08-28",
+      "note": "codeowners ping (reviewer-blocked, 2 groups pending since 2026-07-15, author already very active with own pings)"
+    },
+    "51895": {
+      "date": "2026-08-29",
+      "type": "codeowners",
+      "note": "first repo-assist ping, zero reviewer activity since 2026-08-03, well-documented fmod quotient guard fix"
+    },
+    "50827": {
+      "date": "2026-08-29",
+      "type": "codeowners",
+      "note": "re-ping, 3 CodeOwners groups pending since 2026-07-24 (prior ping 2026-07-24 was from author, not repo-assist)"
+    },
+    "51761": {
+      "date": "2026-08-29",
+      "type": "author_checkin",
+      "note": "behind main, no reviews since 2026-07-31, test-dispatch reuse-build-run-id"
+    },
+    "50764": {
+      "date": "2026-08-31",
+      "type": "author_checkin",
+      "note": "op-to-op latency tools, mergeable_state dirty, quiet since 2026-08-04"
+    },
+    "48031": {
+      "date": "2026-08-31",
+      "type": "author_checkin",
+      "note": "Buffer::shard_spec() const-ref, mergeable_state behind, quiet since 2026-08-04"
+    },
+    "40858": {
+      "date": "2026-08-31",
+      "type": "author_checkin",
+      "note": "GLM4.7 Flash Model, dirty mergeable_state despite 2 approvals (uaydonat, mtairum), quiet since March"
+    },
+    "36582": {
+      "date": "2026-08-31",
+      "type": "author_checkin",
+      "note": "Llama3.3-70b perf unit tests, 5 approvals but PR Gate Status failing, quiet since Feb"
+    },
+    "35578": {
+      "date": "2026-08-31",
+      "type": "author_checkin",
+      "note": "bank-to-DRAM tables uniqueness, unaddressed perf regression concern from msudumbrekar-TT since March"
+    },
+    "34371": {
+      "date": "2026-09-02",
+      "note": "author nudge (dirty mergeable_state, only Copilot auto-review, no human review yet)"
+    },
+    "38008": {
+      "last_ping": "2026-09-05",
+      "type": "reviewer-blocked",
+      "note": "no human review since Feb 2026, nudged for maintainer attention"
+    },
+    "23230": {
+      "date": "2026-09-05",
+      "type": "author_checkin",
+      "reason": "no reviewer activity, failing RTL Sim CI test, mergeable_state unknown"
+    },
+    "22706": {
+      "date": "2026-09-06",
+      "type": "codeowners_ping",
+      "note": "5 requested reviewers pending since May 2025, mergeable_state unknown, review-ready"
+    },
+    "36227": {
+      "date": "2026-09-06",
+      "type": "codeowners_ping",
+      "note": "docs-only readme update, 2 requested reviewers pending since Jan 2026"
+    },
+    "35249": {
+      "date": "2026-09-06",
+      "type": "author_checkin",
+      "note": "mergeable_state behind, matmul transpose_a fix (fork developerfred), asked to rebase or hand off"
+    },
+    "24164": {
+      "last_ping": "2026-09-12",
+      "type": "codeowners",
+      "note": "re-pinged, approved by bbradelTT, other reviewers still pending"
+    },
+    "44398": {
+      "date": "2026-09-06",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state despite approvals, conflicts w/ main"
+    },
+    "47587": {
+      "last_ping": "2026-09-08",
+      "type": "stale_p0_since_review"
+    },
+    "46578": {
+      "last_ping": "2026-09-08",
+      "type": "stale_approved_needs_rebase"
+    },
+    "35274": {
+      "date": "2026-09-09",
+      "type": "author_checkin",
+      "note": "merge-conflict (dirty), never previously nudged"
+    },
+    "35279": {
+      "date": "2026-09-09",
+      "type": "author_checkin",
+      "note": "merge-conflict (dirty), never previously nudged"
+    },
+    "35334": {
+      "date": "2026-09-09",
+      "type": "author_checkin",
+      "note": "merge-conflict (dirty), never previously nudged"
+    },
+    "35515": {
+      "date": "2026-09-10",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state despite approval, BankManager BEST-fit allocator"
+    },
+    "38036": {
+      "date": "2026-09-10",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state + unaddressed CHANGES_REQUESTED from mtairum, Qwen2.5 VL Optimizations"
+    },
+    "43247": {
+      "date": "2026-09-10",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state despite 5 approvals, CI Node20 actions upgrade"
+    },
+    "24233": {
+      "last_ping": "2026-09-10",
+      "type": "author_checkin",
+      "note": "approved but Simulator CI test failing"
+    },
+    "35241": {
+      "last_ping": "2026-09-10",
+      "type": "author_checkin",
+      "note": "approved but multiple ttnn-unit-tests/ops-unit-tests checks failing"
+    },
+    "44421": {
+      "last_ping": "2026-09-10",
+      "type": "author_checkin",
+      "note": "unaddressed CHANGES_REQUESTED from philei-tt since 2026-07-01"
+    },
+    "23234": {
+      "date": "2026-09-11",
+      "type": "codeowners_ping",
+      "note": "29 pending requested reviewers, several approvals already in, no author-side blocker"
+    },
+    "44787": {
+      "date": "2026-09-11",
+      "type": "author_checkin",
+      "note": "mergeable_state=behind, no unresolved reviews, needs rebase"
+    },
+    "44765": {
+      "date": "2026-09-11",
+      "type": "author_checkin",
+      "note": "mergeable_state=behind, no unresolved reviews, needs rebase"
+    },
+    "46265": {
+      "date": "2026-09-11",
+      "type": "codeowners",
+      "note": "re-pinged, approved by ruizhangTT since 2026-08-11 but blocked on CODEOWNERS, prior ping from that date not in memory"
+    },
+    "46248": {
+      "date": "2026-09-11",
+      "type": "author_checkin",
+      "note": "CHANGES_REQUESTED review from bbradelTT unanswered since June (overlap with merged #46112), dirty mergeable_state"
+    },
+    "45631": {
+      "last_ping": "2026-09-22",
+      "type": "re-ping",
+      "note": "still dirty (needs rebase), threads resolved but no author action since 09-12 checkin"
+    },
+    "46054": {
+      "date": "2026-09-12",
+      "note": "open review comments from fvranicTT since June, mergeable_state=dirty, never previously nudged",
+      "type": "author_checkin"
+    },
+    "46842": {
+      "date": "2026-09-12",
+      "note": "approved by ndivnicTT but ongoing discussion from peter941221/ncvetkovicTT/amahmudTT through July, mergeable_state=dirty, never previously nudged",
+      "type": "author_checkin"
+    },
+    "47521": {
+      "date": "2026-09-12",
+      "type": "author_checkin",
+      "note": "approved x2 (mtairum, akerteszTT) but dirty mergeable_state, needs rebase"
+    },
+    "47819": {
+      "date": "2026-09-12",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, stale since Jul/Aug, needs rebase"
+    },
+    "49694": {
+      "date": "2026-09-12",
+      "type": "author_checkin",
+      "note": "approved by mstaletovicTT (Jul 29) but dirty mergeable_state, needs rebase"
+    },
+    "35483": {
+      "last_ping": "2026-09-13",
+      "type": "codeowners",
+      "note": "ASan wheel PR-gate consolidation, 1 approval (ruizhangTT) but 4 more requested reviewers pending, never previously pinged"
+    },
+    "36485": {
+      "last_ping": "2026-09-13",
+      "type": "codeowners",
+      "note": "DeepSeek V3 synthetic weights PR, approved by yieldthought 'to unblock' but flagged pending codex review comments, never previously pinged"
+    },
+    "49194": {
+      "last_ping": "2026-09-13",
+      "type": "author_checkin",
+      "note": "[Quasar] migrate fill into unified unary test, mergeable_state=dirty, never previously nudged"
+    },
+    "49104": {
+      "date": "2026-09-13",
+      "type": "author_checkin",
+      "note": "blocked mergeable_state, pending pre-commit review feedback since early Sept, never previously nudged"
+    },
+    "49724": {
+      "date": "2026-09-13",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, needs rebase, never previously nudged"
+    },
+    "49827": {
+      "date": "2026-09-13",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, needs rebase, never previously nudged"
+    },
+    "50802": {
+      "last_ping": "2026-09-13",
+      "type": "codeowners",
+      "note": "clean+1 approval (cglagovichTT), 2 requested reviewers pending (yieldthought, uaydonat); prior comment had typo '/codeowner ping' (missing s)"
+    },
+    "50472": {
+      "last_ping": "2026-09-13",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, no activity since 2026-08-05, embedding tilized-index NoC over-read fix"
+    },
+    "50699": {
+      "last_ping": "2026-09-13",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, quiet since 2026-08-27, codegen-port pad DeviceOperation+ProgramFactory"
+    },
+    "49170": {
+      "date": "2026-09-13",
+      "type": "codeowners_ping",
+      "note": "MOP/replay optimizer tech report, approved by amahmudTT but 7 requested reviewers still pending, never previously pinged"
+    },
+    "52145": {
+      "date": "2026-09-13",
+      "type": "codeowners_ping",
+      "note": "tril/triu NaN fix, dirty->behind mergeable_state, no codeowners bot comment posted before this ping"
+    },
+    "52149": {
+      "date": "2026-09-13",
+      "type": "codeowners_ping",
+      "note": "xlogy fix, 9 requested reviewers pending, zero reviews, never previously pinged"
+    },
+    "49659": {
+      "last_ping": "2026-09-14",
+      "type": "author_checkin",
+      "note": "behind main, 5 pending reviewers, 2 stale COMMENTED reviews"
+    },
+    "49699": {
+      "last_ping": "2026-09-14",
+      "type": "author_checkin",
+      "note": "CHANGES_REQUESTED outstanding, mixed reviews, blocked mergeable_state"
+    },
+    "50358": {
+      "last_ping": "2026-09-14",
+      "type": "author_checkin",
+      "note": "dirty/conflicting, ci-experiment PR"
+    },
+    "50452": {
+      "date": "2026-09-14",
+      "type": "author_checkin",
+      "note": "cosmos3-i2v experimental TT port, dirty mergeable_state, never previously nudged"
+    },
+    "51979": {
+      "date": "2026-09-14",
+      "type": "codeowners",
+      "note": "reviewer-blocked, 9 requested reviewers, no reviews yet, CI green, never previously pinged"
+    },
+    "52151": {
+      "date": "2026-09-14",
+      "type": "codeowners",
+      "note": "reviewer-blocked, no reviews yet, CI green, never previously pinged"
+    },
+    "52202": {
+      "date": "2026-09-14",
+      "type": "codeowners",
+      "note": "reviewer-blocked, 9 requested reviewers, no reviews yet, CI green, never previously pinged"
+    },
+    "51421": {
+      "date": "2026-09-14",
+      "type": "codeowners_ping",
+      "note": "fused_rms_minimal cross-device stats fix, fully approved+CI green, blocked on 3 pending required reviewers, never previously pinged"
+    },
+    "51467": {
+      "date": "2026-09-14",
+      "type": "author_checkin",
+      "note": "ttnn.move dangling MemoryConfig fix, approved but dirty mergeable_state since Aug, never previously nudged"
+    },
+    "51656": {
+      "date": "2026-09-14",
+      "type": "author_checkin",
+      "note": "custom-Alignment API split, 4 approvals but dirty mergeable_state, unanswered reviewer question re L2/perf, never previously nudged"
+    },
+    "50852": {
+      "date": "2026-09-15",
+      "type": "author_checkin",
+      "note": "llk:performance p1/high-risk, dirty mergeable_state, 3 failing checks (PR Gate Status, Clang Tidy Full, ASan build), never previously nudged"
+    },
+    "51675": {
+      "date": "2026-09-15",
+      "type": "author_checkin",
+      "note": "transformers uplift, approved by mtairum but 1 failing check (ttnn reduce group wh_n300_civ2), never previously nudged"
+    },
+    "50905": {
+      "date": "2026-09-15",
+      "type": "author_checkin",
+      "note": "pytorch/torchvision/jupyterlab uplift, pr-risk-high, 9 failing checks across p100/ops-unit-tests groups, never previously nudged"
+    },
+    "50782": {
+      "date": "2026-09-15",
+      "note": "CCL graph-capture recording fix; CHANGES_REQUESTED by riverwuTT 2026-08-13 unresolved, dirty mergeable_state, never previously nudged",
+      "type": "author_checkin"
+    },
+    "51086": {
+      "date": "2026-09-15",
+      "note": "metal_2.0 fast_reduce_nc port; CI green (15/15), 0 requested reviewers, blocked mergeable_state, never previously pinged",
+      "type": "codeowners_ping"
+    },
+    "51844": {
+      "date": "2026-09-17",
+      "type": "codeowners_ping",
+      "note": "MoE tilize/matmul chunk overlap fix; CI green, mergeable_state blocked, 1 pending reviewer (jonathansuTT) no review yet, never previously pinged"
+    },
+    "51875": {
+      "date": "2026-09-17",
+      "type": "codeowners_ping",
+      "note": "Time Series Transformer bring-up; CI green, mergeable_state blocked, reviewed COMMENTED by yieldthought (not approve/changes-requested) 2026-08-19, never previously pinged"
+    },
+    "51915": {
+      "date": "2026-09-17",
+      "type": "author_checkin",
+      "note": "[skip ci] C++ vector allocation perf rule; mergeable_state dirty since 2026-09-02, never previously nudged"
+    },
+    "51533": {
+      "last_ping": "2026-09-18",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, never previously nudged"
+    },
+    "51991": {
+      "last_ping": "2026-09-18",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, never previously nudged"
+    },
+    "52367": {
+      "last_ping": "2026-09-19",
+      "type": "codeowners",
+      "note": "re-pinged, pending since 2026-08-11, 2 groups"
+    },
+    "52340": {
+      "last_ping": "2026-09-19",
+      "type": "author_checkin",
+      "note": "dirty, unaddressed EazyHood review comment (duplicated else-if constexpr DIV guard) since 2026-08-08, never previously nudged"
+    },
+    "52326": {
+      "last_ping": "2026-09-19",
+      "type": "author_checkin",
+      "note": "dirty, no reviewer activity, flagged overlap with repo-assist's own #54246 (FLOAT32 pad fix), never previously nudged"
+    },
+    "52375": {
+      "last_ping": "2026-09-20",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state since 2026-09-02, no reviews yet"
+    },
+    "50598": {
+      "last_ping": "2026-09-20",
+      "type": "author_checkin",
+      "note": "dirty despite 2 approvals; asked to reconfirm earlier CHANGES_REQUESTED from mateusznowakTT is resolved"
+    },
+    "51447": {
+      "last_ping": "2026-09-20",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, no substantive human review since opened 2026-07-29"
+    }
+  },
+  "backlog_cursor": {
+    "task1_task2_latest": "2026-09-22 (2nd run today): reviewed newest ~50 open issues (57413 down through 57301); most in the 573xx range below 57345 are internal team-tracking issues or defect-catalog meta-issues (57352-57367, assignees set / broad multi-defect lists, not single-fix candidates). Engaged substantively on #57408 (opened fix PR, see open_prs). Reviewed and passed on #57323 (dup fix PRs exist), #57326 (sfpi feature request, assigned), #57410 (BFP4/BFP2 host/device rounding mismatch -- deep packer change, deferred, candidate for a future dedicated run). Continue below #57301 next run.",
+    "task6_latest": "2026-09-22: re-pinged 3 stale PRs previously nudged with no author response: #45631, #49317, #50993 (3-action cap reached). Candidates further down oldest-updated list not yet re-checked this run: #51119, #51120, #51129, #51155, #45435, #47426, #38627, #38639, #39293, #40858 (all previously nudged in Aug, worth re-ping when cap allows)."
+  },
+  "labeled_issues": {
+    "53866": {
+      "label": "bug",
+      "date": "2026-08-21",
+      "note": "Mixtral 8x7B L1 CB overflow on Blackhole; too complex/hardware-specific for surgical fix, no PR attempted"
+    },
+    "53815": {
+      "label": "bug",
+      "date": "2026-08-21",
+      "note": "GPT-OSS prefill LayerAck race condition"
+    },
+    "54032": {
+      "label": "bug",
+      "date": "2026-08-22",
+      "note": "trace-replay silent hang allocating device buffers during active trace"
+    },
+    "53999": {
+      "label": "bug",
+      "date": "2026-08-22",
+      "note": "KV-cache remount final-chunk write exceeds max_seq_len"
+    },
+    "54045": "bug",
+    "54048": "bug",
+    "54047": "ci-bug",
+    "54044": "bug",
+    "54110": "performance monitoring",
+    "54104": "feature-request",
+    "54138": {
+      "labeled": "bug",
+      "date": "2026-08-24",
+      "note": "binary_ng program-cache correctness writeup (Claude analysis for Metal 2.0 porting); assignee bbradelTT; confidence MEDIUM - findings need ops team vetting per issue body itself"
+    },
+    "54223": {
+      "label": "bug",
+      "date": "2026-08-25",
+      "note": "ttnn.pad FLOAT32 packed as two bfloat16s in single-core TILE factory; fix already open in PR #54246 (CI green)"
+    },
+    "54220": {
+      "label": "performance monitoring",
+      "date": "2026-08-25",
+      "note": "Kimi-K2.6-1T traced chunked prefill perf-gate baseline stale, op got faster than baseline"
+    },
+    "54326": "2026-08-25: labeled bug (confirmed div int32 INT32_MIN signed-comparison defect; open fix PR #54327 by reporter gundi61)",
+    "54439": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-08-26"
+    },
+    "54430": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-08-26"
+    },
+    "54447": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-08-26"
+    },
+    "54524": "bug",
+    "54513": "bug",
+    "54562": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-08-27",
+      "note": "confirmed root cause against current main (_min_or_max_bw subtract+gtz/eqz/ltz); reporter kanapitsas already has fix ready & awaiting assignment, no comment needed"
+    },
+    "54551": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-08-27",
+      "note": "confirmed root cause against current main (prod_bw reciprocal(input) -> inf at zero); reporter kanapitsas already has fix ready & awaiting assignment, no comment needed"
+    },
+    "54605": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-08-27",
+      "note": "Slow dispatch DFB slot mismatch WH/BH; already assigned to abhullar-tt, well-documented repro, labeled bug for triage clarity"
+    },
+    "54670": "bug",
+    "54673": "bug",
+    "54749": "performance monitoring",
+    "54779": "bug",
+    "54759": "bug (layernorm FUSED_PRE_ADD typo, confirmed 2026-08-29)",
+    "54828": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54827": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54826": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54825": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54823": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54822": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54821": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54820": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54819": {
+      "label": "performance monitoring",
+      "date": "2026-08-29",
+      "note": "AJ0070 bounty-program perf report; correct output, no defect; reporter intends own fix PR; numbers unverified/self-reported"
+    },
+    "54824": {
+      "label": "feature-request",
+      "date": "2026-08-29",
+      "note": "AJ0070: add are_required_outputs to addcdiv_bw/addcmul_bw/lerp_bw for parity with binary_bw/where_bw"
+    },
+    "54855": "bug",
+    "54853": "docs",
+    "54854": "infra-ci",
+    "54969": "bug (LLK perf-counter semaphore reuse assert)",
+    "54968": {
+      "label": "bug",
+      "date": "2026-09-01",
+      "note": "ND sanity failure in untilize/codegen kernels, reproducible per issue body"
+    },
+    "55014": "bug - tt_dit Module.load() drops non-Parameter state (confirmed against module.py)",
+    "54987": "bug - argmax hardcodes ROW_MAJOR output layout, confirmed against argmax_device_operation.cpp",
+    "54962": "bug - KDA valid-length/SP carry order, sub-issue of #54955",
+    "55009": "bug - cold-cache JIT storm; has fix PR #55010",
+    "55013": "bug - topology solver SAT enumeration gap",
+    "55017": {
+      "label": "bug",
+      "date": "2026-09-01",
+      "note": "grid_sample FLOAT32 wrong values; confirmed TT_FATAL validation site accepts FLOAT32; reporter (AJ0070) holding for bounty assignment, no fix PR by repo-assist"
+    },
+    "55088": "bug (2026-09-01)",
+    "55064": "bug (2026-09-01)",
+    "55124": {
+      "label": "bug",
+      "date": "2026-09-02",
+      "run_id": "33600125785"
+    },
+    "55128": {
+      "label": "bug",
+      "date": "2026-09-02",
+      "run_id": "33600125785"
+    },
+    "55129": {
+      "label": "bug",
+      "date": "2026-09-02",
+      "run_id": "33600125785"
+    },
+    "55125": {
+      "label": "bug",
+      "date": "2026-09-02",
+      "run_id": "33600125785"
+    },
+    "55159": "bug - rms_norm/layer_norm/var/std fp32 sum-of-squares overflow, confirmed against reporter repro numbers",
+    "55248": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-09-02T18:41:19Z",
+      "note": "confirmed defect via reporter code-cited static analysis; no hardware repro"
+    },
+    "55237": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-09-02T18:41:19Z",
+      "note": "confirmed defect via reporter code-cited static analysis; no hardware repro"
+    },
+    "55227": {
+      "labels": [
+        "bug"
+      ],
+      "date": "2026-09-02T18:41:19Z",
+      "note": "confirmed defect via reporter code-cited static analysis; no hardware repro"
+    },
+    "55434": {
+      "labels": [
+        "bug"
+      ],
+      "run_id": "33845189301"
+    },
+    "55471": {
+      "label": "bug",
+      "date": "2026-09-04",
+      "note": "ttnn.slice TILE_LAYOUT padding read past logical shape"
+    },
+    "55545": {
+      "label": "bug",
+      "date": "2026-09-05",
+      "note": "conv1d prepared-vs-raw weight mismatch, Wormhole, input_length 8193-8704"
+    },
+    "55542": {
+      "label": "bug",
+      "date": "2026-09-05",
+      "note": "cumsum fp32 accuracy T^1.5 + single-core parallelism bug"
+    },
+    "55553": "performance monitoring (2026-09-05) - community MoE decode sparse_matmul perf report, not a confirmed bug",
+    "55509": {
+      "date": "2026-09-07",
+      "labels": [
+        "performance monitoring"
+      ],
+      "note": "Wan2.2 BH galaxy perf regression bisect, assigned jamesleeTT"
+    },
+    "55585": {
+      "label": "bug",
+      "date": "2026-09-06",
+      "note": "moreh_norm_backward NaN for all-zero reduced slices; confirmed power_and_recip_tile_to_cb has no zero-guard in moreh_common.hpp"
+    },
+    "55587": {
+      "label": "bug",
+      "date": "2026-09-06"
+    },
+    "55588": {
+      "date": "2026-09-07",
+      "labels": [
+        "feature-request"
+      ],
+      "note": "GPT-OSS multi-batch request; already has impl PR #55589"
+    },
+    "55633": "bug (2026-09-07)",
+    "55609": "docs (2026-09-07)",
+    "55900": {
+      "label": "bug",
+      "date": "2026-09-09",
+      "note": "DM_DYNAMIC_NOC multicast+read hang on Blackhole (kinginu), reproducible 3/3, mechanism not established, no fix PR - needs device profiling"
+    },
+    "56248": {
+      "label": "bug",
+      "date": "2026-09-11",
+      "note": "moreh_norm_backward p=+/-inf UB, root cause confirmed against current source"
+    },
+    "56323": "bug (front-padding silently ignored in single-core row-major pad factory, confirmed against pad_rm_reader_writer_program_factory.cpp)",
+    "55541": "infra-ci",
+    "56824": {
+      "date": "2026-09-17",
+      "label": "bug",
+      "note": "ConcatS2SMultiProgramFactory >16-input batching path broken for width/height sharded concat; confirmed root cause read against current source; too large/risky for a quick auto-fix, left for maintainer/human follow-up"
+    },
+    "56827": {
+      "date": "2026-09-17",
+      "label": "bug",
+      "note": "concat block-sharded width ragged-tail bug; fixed this run, see open_prs.56827_concat_width"
+    },
+    "56938": {
+      "label": "bug",
+      "date": "2026-09-18",
+      "note": "unary elementwise silent float-bitpattern-in-int32-tensor bug, confirmed against current unary_op_utils.cpp, fixed this run via TT_FATAL validation + test"
+    },
+    "57088": "bug",
+    "57090": "bug",
+    "56976": {
+      "label": "performance monitoring",
+      "date": "2026-09-20",
+      "note": "matmul ~4x slower with L1 operand/output; verified all_dram_interleaved gate against current matmul_program_config.cpp (L1129-1133, L1183); commented with citations; no fix attempted"
+    },
+    "57139": "bug",
+    "57135": "bug",
+    "57122": "performance monitoring",
+    "57119": "ci-bug",
+    "57117": "performance monitoring",
+    "57112": "bug",
+    "57103": "performance monitoring",
+    "57102": "bug",
+    "57095": "bug",
+    "57162": {
+      "label": "bug",
+      "date": "2026-09-21",
+      "note": "SDPA perf-table test deadlocks other-session device lock, confirmed against current test code"
+    },
+    "57165": {
+      "label": "performance monitoring",
+      "date": "2026-09-21",
+      "note": "indexer_score math-util band board-variance report"
+    },
+    "57178": {
+      "label": "performance monitoring",
+      "date": "2026-09-21",
+      "note": "streaming SDPA fp32 DEST rescale regression at 8q/1kv bfp8"
+    },
+    "57055": {
+      "label": "infra-ci",
+      "date": "2026-09-21"
+    },
+    "57003": {
+      "label": "infra-ci",
+      "date": "2026-09-21"
+    },
+    "56914": {
+      "label": "feature",
+      "date": "2026-09-21"
+    },
+    "56913": {
+      "label": "performance monitoring",
+      "date": "2026-09-21"
+    },
+    "57011": {
+      "label": "feature",
+      "date": "2026-09-21"
+    }
+  },
+  "issues_commented": {
+    "53922": {
+      "commented": "2026-08-21",
+      "labeled": [
+        "bug"
+      ],
+      "note": "confirmed root cause vs current main; fix has open perf tradeoff, left for maintainer"
+    },
+    "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43",
+    "54798": "2026-08-29 - matmul silent output-block drop, confirmed bug",
+    "54883": "2026-08-31: labeled bug, commented confirming gelu_bw Mills-ratio tail FP32 defect",
+    "54882": "2026-08-31: labeled bug, commented confirming tanh_bw sech2 tail denominator FP32 defect",
+    "54969": "2026-08-31T18:34Z - confirmed pattern plausible, deferred fix choice to maintainer",
+    "54987": "2026-09-01: confirmed root cause against current compute_output_specs (ROW_MAJOR hardcode)",
+    "55105": "2026-09-02: confirmed root-cause mechanism (scale applied after accumulation causes fp32 subnormal flush) against current ckernel_sfpu_polygamma.h; no fix PR, reporter pursuing via bounty program",
+    "55124": {
+      "date": "2026-09-02",
+      "run_id": "33600125785",
+      "note": "confirmed atan2 reciprocal underflow root cause against current source"
+    },
+    "54792-pr-review": {
+      "date": "2026-09-02T18:41:19Z",
+      "note": "acknowledged reviewer correction on PR, pushed fix (88.7228f clamp instead of 87.0f)"
+    },
+    "55393": "2026-09-03T18:35:00Z",
+    "55392": "2026-09-03T18:35:00Z",
+    "55471": "2026-09-04: confirmed root cause vs current main (common.cpp wrap_index), noted fix scope/risk",
+    "55457": "follow-up comment posted 2026-09-04 (run 33905953169) acknowledging kanapitsas verification of PR #54080",
+    "55585": "2026-09-06: confirmed root cause against current moreh_norm_backward_kernel.cpp + moreh_common.hpp (power_and_recip_tile_to_cb unconditional recip on y^p); noted open questions on SFPU NaN/inf handling for p=+-inf, unverified without hardware",
+    "55587": {
+      "date": "2026-09-06"
+    },
+    "55643": "2026-09-07 - relu_min vInt sign+magnitude bug, root cause confirmed against current code, left fix to maintainer",
+    "56248": {
+      "date": "2026-09-11",
+      "note": "confirming comment posted with source citations"
+    },
+    "56323": "2026-09-12: confirmed root cause, noted contributor Kaustubh1235 already volunteered to fix, no dup PR opened",
+    "56827": {
+      "date": "2026-09-20",
+      "note": "commented linking new fix PR (re-attempt after #56864 auto-closed)"
+    },
+    "56938": {
+      "date": "2026-09-18",
+      "note": "confirmed root cause, linked fix PR (branch repo-assist/fix-issue-56938-unary-int32-reject-float-only)"
+    },
+    "56941": {
+      "date": "2026-09-19T01:15:00Z",
+      "note": "confirmed AI-suggested fix snippet is stale vs current main -- current dataflow_buffer.inl already has an additional read_acked/ctxn_id_loop_cnt_ guard before the occupancy check that wasn't in the quoted snippet; couldn't determine equivalence without HW access, asked reporter to re-verify repro against current main"
+    },
+    "56616": {
+      "date": "2026-09-19T01:15:00Z",
+      "note": "confirmed via merged PR #56338 that this is a misattribution (torch fp32 golden cancellation at x=-5.34375, not a device defect); fix already merged (float64 golden), suggested closing"
+    },
+    "56526": {
+      "date": "2026-09-19T01:15:00Z",
+      "note": "confirmed root cause (Int32 output routed through FP32_TO_INT8, 7-bit sign-magnitude, saturates at +-127) against current ckernel_sfpu_quant.h on both WH/BH; reporter's linked gist patch is a non-trivial SFPU replay-buffer rewrite, too risky to apply blind without HW access -- encouraged reporter to submit their own PR"
+    },
+    "56967": {
+      "date": "2026-09-20",
+      "note": "confirmed LO16 vs UINT16 naming discrepancy against current llk_defs.h, no bug label"
+    },
+    "57162": {
+      "date": "2026-09-21",
+      "note": "confirmed device-lock deadlock root cause against current test file, attributed analysis to reporter"
+    },
+    "57213": {
+      "date": "2026-09-21",
+      "note": "confirmed root cause against current main, opened fix PR"
+    },
+    "57212": {
+      "date": "2026-09-21",
+      "note": "confirmed against existing xfail(strict=True) marker, no fix attempted (grading-infra change, broader scope)"
+    }
+  },
+  "run_history": [
+    {
+      "run_id": "35767666005",
+      "date": "2026-09-22T18:34:00Z",
+      "summary": "Task5: checked CI via get_check_runs on 26 open [repo-assist] PRs (57131/57146/57130/56817/57244/57311/57288/57145/56529/56375/56428/56943/56598/56396/55688/51868/54932/54666/54792/53113/56195/56714/53690/54246/54862/52106) -- all green except the same known infra-noise case on #56195 (RTL Sim CI details_url=github.com/tenstorrernt typo domain, unchanged since 09-11); #53113 shows only the aw workflow scaffolding jobs (no repo build checks present on this PR's head, unchanged). Task2/3: investigated fresh, highly detailed issue #57408 (ttnn.square vs ttnn.mul(x,x) disagree bit-for-bit on bfloat16 output because calculate_square's SFPSTORE truncates instead of rounding to nearest-even like the binary MUL path already does) -- verified the reporter's root cause and proposed diff against current tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h and compute_kernel_api.h::square_tile; confirmed no existing open PR references #57408 (search_pull_requests 0 hits). Opened a scoped fix PR covering square only on WH+BH (added is_fp32_dest_acc_en template param, round via existing float32_to_bf16_rne helper mirroring calculate_sfpu_binary_mul; fixed the one test-harness call site in tt-llk/tests/helpers/include/sfpu_operations.h that needed the extra template arg; added test_square_matches_mul_bit_exact regression test). Left the other affected ops from the issue (rad2deg/deg2rad/softsign/hardsigmoid/prelu) and the Quasar architecture for follow-up PRs -- Quasar's SFPU addressing (ADDR_MOD_6 based calculate_square_sfp_rows) doesn't fit the same if-constexpr pattern without deeper changes, and doing all 5 remaining ops + 3 archs in one PR would be too large to review surgically. Also reviewed #57323 (generalized_moe_gate Blackhole compile failure) -- already has 2 open fix PRs (#57324, #57396), no action needed. Reviewed #57326 (sfpi::lz cannot set CC without v_block) -- assigned to nathan-TT, sfpi compiler-level feature request, not a quick surgical fix, left alone. Reviewed #57410 (host vs device BFP4/BFP2 rounding disagreement) -- well documented but a deeper blockfloat_common.cpp packer algorithm change, deferred as a candidate for a future run given its complexity and cross-cutting host/device correctness implications. Task8: updated monthly summary #55015 with new PR."
+    },
+    {
+      "run_id": "35638744281",
+      "date": "2026-09-21T18:36:21Z",
+      "summary": "Task5: checked CI via get_check_runs on all 24 currently open [repo-assist] PRs (57131/57146/57130/56817/55435/57145/56529/56375/56428/56943/56598/56396/55688/54932/51868/54792/54666/53113/56195/56714/53690/54246/54862/52106) -- all green except the 3 previously-flagged infra-noise cases (#55435/#51868/#56195 RTL Sim CI details_url is broken placeholder domain 'github.com/tenstorrernt', unchanged from prior runs). Task1: labeled 5 unlabeled fresh open issues found by paging through newest-open-issues search below the prior cursor: #57055 (Metalium include-path CMake refactor, 47 occurrences across 32 files) infra-ci, #57003 ([CI] retire T3K dispatch tests pipeline 31-Oct-2026) infra-ci, #56914 (load weights to device via sockets) feature, #56913 (optimize slow dispatch weight upload perf) performance monitoring, #57011 (some SFPU insns have restricted-range results, useful for 32-bit-correct comparison logic) feature. Task2: verified against current main and commented on 2 fresh issues from iklemenskiTT with zero prior repo-assist engagement: #57213 (squared_difference golden reads input_tensor_a.dtype positionally at binary.py:796, breaking scalar-first calls -- confirmed the sibling add/subtract/multiply/divide goldens already use _tensor_operand/_matched_operands, this one didn't) and #57212 (comparison mode never grades scalar-first div -- confirmed test_binary_scalar.py:832 already carries xfail(strict=True) recording exactly this gap). Task3: opened ready-for-review fix PR for #57213 (branch repo-assist/fix-issue-57213-squared-difference-golden-scalar-dtype) after confirming no existing open PR references #57213 (search_pull_requests returned 0 hits); the fix reuses the _tensor_operand/_matched_operands/_integer_path_scalars helpers #55722 already introduced for the sibling arithmetic goldens in the same file, plus a new regression test (test_squared_difference_scalar_tensor_golden_matches_device) mirroring the existing scalar-first golden test for add/subtract/multiply/div. Verified the diff applies cleanly against the working tree (same commit as a shallow clone used for local inspection); unverified via CI build in this sandbox (no local build capability), CI triggered via pr-gate.yaml on PR open, outcome unknown yet -- check next run. Task6/Task7 skipped this cycle: Task6 last ran 2026-09-20 (still within 3-day cadence, no new nudge needed); Task7 found no fresh 24h issues/PRs with a qualifying new-contributor history this run. Task8: rewrote monthly summary #55015 (body had regrown with duplicated/stale sections again), trimmed to canonical current-state format with the new #57213 PR added to Suggested Actions."
+    },
+    {
+      "run_id": "35600280323",
+      "date": "2026-09-21T12:36:23Z",
+      "summary": "Task5: checked CI on 26 open repo-assist PRs (57145/57146/57131/57130/56817/56997/56956/56943/56714/56598/56529/56428/56396/56375/56195/55670/55688/55435/54932/54792/54666/54246/54862/52106/55670/53113/53690/51868) via get_check_runs -- all green except 3 previously-flagged, unchanged infra-noise cases (#51868 and #56195/#55435 RTL Sim CI broken-placeholder details_url domain 'github.com/tenstorrernt'; #55670's 3 failures already root-caused in a prior run as pre-existing tilize/glm5-perf issues, unrelated to the PR's tensor-aliasing fix). Re-verified via get_job_logs that #55670's flagged run genuinely has 0 failed jobs by the job-logs API despite 3 non-success check runs (consistent with the prior root-cause). Confirmed issue #56827 (concat block-sharded width ragged-tail) is now CLOSED, fixed by external PR #57100 -- removed the stale 'fresh fix needed' suggested-action item; no new repo-assist attempt needed (superseded prior repo-assist retries #56864/#57099, both already closed/unmerged). Task1/2: reviewed newest ~50 open issues (#57186 down through #57001); most already labeled or are maintainer-authored perf/infra notes. Found and verified 3 fresh, well-documented reports from mvlahovicTT (SDPA integration sweep on Blackhole p100a): #57162 (test_sdpa_create_perf_table deadlocks other-session device lock) -- confirmed against current tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py (missing device fixture at line 281, CI-only skipif at lines 190/275, subprocess-based tracy profiler invocation matches reporter's exact mechanism); labeled bug and commented with root-cause confirmation (attributed to reporter, not independently derived). #57165 (indexer_score math-utilization band board-variance) and #57178 (streaming SDPA fp32 DEST rescale slower than legacy at 8q/1kv bfp8) -- both credible perf-board reports with detailed measurement tables, labeled performance monitoring, no comment (reporter's own numbers, not independently verifiable, no additional insight to add beyond labeling). Did not comment on 57165/57178 to avoid restating unverified reporter benchmark numbers as fact. Task6: skipped (last run 2026-09-21 06:53, well under 3-day cadence). Task8: rewrote monthly summary #55015 with this run's entries, removed the resolved #56827 item, added new #57162 comment entry."
+    },
+    {
+      "run_id": "35549609194",
+      "date": "2026-09-20T18:57:00Z",
+      "summary": "Task2/3: investigated fresh issue #57042 (resnet-on-quasar REDUCE_DIM macro-collision compile failure) -- verified against current tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_reduce.h that it is ALREADY FIXED on main (param renamed to lowercase reduce_dim, with explanatory comment about the -DREDUCE_DIM=... macro collision), matching the reporter's own suggested fix; flagged as closeable in monthly summary, no PR needed. Investigated #56945 (32-bit unpack-to-dest wrong-DST-tile bug) and #56986 (hf_rope decode PCC fail on BH) -- both already have open non-repo-assist fix PRs (#56932 awliu-TT, #57035) per the required existing-fix check; no duplicates opened. Fixed and opened ready-for-review PRs for two fresh, well-scoped 'found by review of #54850' bug reports: #57111 (_forward_shutdown building a plane-scaled host torch.zeros, up to ~513MB, at teardown -- switched to ttnn.zeros(device=dev) for direct on-device alloc) and #57110 (KdaState._zeros duplicate carry cache doubling KDA carry memory -- removed the shadow cache, reset() now zeroes in place via ttnn.fill(state, 0, output_tensor=state), verified ttnn.fill's output_tensor kwarg writes to a preallocated address so it preserves the class's documented trace-safety invariant). Both Python-only, no build needed. Left #57108/#57109 (Kimi-K3 weight-cache dtype gap, AttnRes plane-count triple-derivation) labeled bug but unfixed this run. Task5: spot-checked CI on newest PRs #57131/#57130 (green) and re-verified no new maintainer requests on previously-flagged PRs (#51868/#53690/#56396/#54932/#52106/#53113, all quiet). Task6: skipped -- ran last cycle (2026-09-20T06:38), too soon for the 3-day re-ping cadence. Task8: rewrote monthly summary #55015 with this run's entries and refreshed suggested-actions list."
+    },
+    {
+      "run_id": "35494639210",
+      "date": "2026-09-20T06:38:00Z",
+      "summary": "Task1/2: reviewed newest ~50 open issues (#57103 down through #56904); confirmed #56976 (ttnn.matmul/linear ~4x slower with L1-interleaved operand/output on default program config) as a fresh, well-documented defect -- verified the reported root cause line-by-line against current ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.cpp (all_dram_interleaved gate at L1129-1133 requires DRAM on all three buffers; the spread-blocking branch at L1183 is keyed on that flag), labeled performance monitoring, commented with citations (did not restate reporter's own perf numbers as independently confirmed -- no HW access). Checked #56827 (concat block-sharded width ragged-tail) for existing fixes before considering a new attempt: found repo-assist's own PR #57099 (opened last run) was auto-closed unmerged despite 5/5 green checks -- same unexplained pattern as prior #56864 -- and discovered a new external draft PR #57100 (VirdhatchaniKN) claiming a broader two-defect fix (cursor arithmetic + an alignment-boundary rejection); flagged both for maintainer consolidation in the monthly summary rather than opening a third repo-assist PR. Re-verified CI on #57092/#57093 (opened previous run) -- both 5/5 green. Task6: nudged 3 never-previously-touched stale PRs from the oldest-updated, non-repo-assist list: #52375 (author checkin, dirty since 2026-09-02), #50598 (author checkin, dirty despite 2 approvals, asked to reconfirm an earlier CHANGES_REQUESTED is resolved), #51447 (author checkin, dirty, no substantive review since opened 2026-07-29). Hit the 3-action cap; noted #41596/#40339 (aarch64/Gentoo support, both behind main and untouched since spring 2026) as likely-abandoned candidates for a future closure discussion rather than another nudge. Task8: rewrote monthly summary #55015 with this run's entry, added the #56827 three-way-fix-conflict item and #56976 investigate item, added the 3 new stale-PR author-followup items."
+    },
+    {
+      "run_id": "35480399102",
+      "date": "2026-09-20T01:06:00Z",
+      "summary": "Task5: checked CI on 14 open repo-assist PRs pending outcome (53690/54246/54792/55847/56375/56195/56428/56790/56817/56864-closed/56943/56956/56997) -- all green except #56195 (RTL Sim CI failure but details_url is the same known broken placeholder domain already flagged as infra noise elsewhere, not a real code defect). Task1/2: reviewed ~100 newest open issues (cursor #57096 down through #56755) -- most already labeled/assigned to humans with active fix PRs; confirmed #56865 (vLLM sampling regression) assigned to iwroszTT with draft PR #56467 already addressing it, #56824/#56781/#56769/#56776 assigned to reporters, #57095/#57028/#57011/#56802/#56801/#56803/#56792/#56783 are maintainer-authored perf/infra notes needing no action. Commented on #56967 (LO16 vs tt-isa-documentation UINT16 naming discrepancy in tt-llk) after verifying current llk_defs.h on Blackhole+Wormhole match reporter's citations exactly (LO16=6, no value-9 entry) -- naming-clarity only, not labeled bug. Task3: investigated #56827 (concat block-sharded width ragged-tail corruption) -- confirmed still open, no other PR fixes it (only #56603 fixes the height mirror, itself unmerged), prior repo-assist PR #56864 was auto-closed without merge/comment despite 5/5 green checks for unclear reasons; re-implemented the fix on a fresh branch (real padded_shape()[-1] instead of shard capacity for the per-input cursor, output range clipped via std::min), added a parametrized regression test (2/3 inputs x row/col orientation) adapted from the issue's own repro; opened new ready-for-review PR, commented on issue linking it. Task8: refreshed monthly summary #55015 (added #57092/#57093 PR items, replaced stale #56827/#56864 closed-PR suggested-action with the new PR)."
+    }
+  ],
+  "no_action_reviewed": [
+    "54000: API contracts tracking issue, no confirmed defect, unlabeled left as-is (2026-08-22)",
+    "54006/54005: already labeled+assigned (2026-08-22)",
+    "reviewed ~15 fresh community bug issues (53975,53971,53984,53981,53978,53973,53969,53963 etc) 2026-08-22: all already have open linked fix PRs from reporting contributor; no duplicate PR/comment needed",
+    "54144: argmax SFPU feature request, already labeled feature/community, no action needed (2026-08-24)",
+    "54133: sub-issue of #53060, already covered by open PR #53837 (2026-08-24)",
+    "54264/54221/54215/54294/54261: collaborator-authored coverage/perf/bounty tracking issues, no confirmed defect, left unlabeled (2026-08-25)",
+    "54926: branch-specific test failure on uvelimirovic/4row_arch, already assigned to uvelimirovicTT (2026-08-31)",
+    "54910: confirmed genuine defect (bug label applied) but root cause is architectural SFPU init path; no fix PR attempted, too risky (2026-08-31)",
+    "55060: labeled sfpi, self-assigned reporter",
+    "55013: labeled bug, active human investigation (Riddy21)",
+    55539,
+    55526,
+    55511,
+    55529,
+    55519,
+    "22706: 2026-09-05 already nudged 2026-08-05, author (jbedichekTT) still hasnt addressed changes-requested review; no new activity, skip re-nudge",
+    "36227: 2026-09-05 approved by yieldthought 2026-05-05, mergeable_state unknown, low priority docs PR, no action needed",
+    "35515: 2026-09-05 already nudged 2026-08-09 for rebase (behind main), still dirty; independent repro comment posted 2026-08-15 supporting fix; not yet 3+ days new signal, monitor next run",
+    "2026-09-08: reviewed fresh eltwise-family bugs 55735/55733/55725/55724/55723/55722/55721/55711/55710/55709/55684/55683/55673 - all already have reporter-opened fix PRs (55601,55734,55728,55727,55726,55714,55713,55712,55680,55687,55620); no duplicate PRs opened",
+    {
+      "issue": 55834,
+      "note": "qwen36 missing accuracy gate - feature/test-infra request, no existing fix PR. Left unlabeled/no comment this run pending deeper eval next round; not a quick win."
+    },
+    {
+      "issue": 55827,
+      "note": "ttnn.sign NaN handling - well-researched report but flags a genuine unresolved design question (sign(NaN)=0 per golden vs NaN per repo philosophy, 3 refs disagree). Repo-assist should not unilaterally resolve; deferred to a future run for label+comment acknowledging the open question without asserting a fix."
+    },
+    {
+      "issue": 55825,
+      "note": "ttnn.from_torch integer dtype UB (static_cast x86_64 vs aarch64) - large body, not fully analyzed yet this run; carry to next run's backlog."
+    },
+    "56973: Wormhole Galaxy device hangs since 2026-09-17, fleet/infra issue (NoC/DRAM/ETH health), not a tt-metal code defect repo-assist can fix; flagged in monthly summary (2026-09-18)",
+    "56880: gather rank>4 independent-fold silent-wrong-data bug, sibling of fixed #56876/PR#56875; confirmed genuine but issue's own scoping notes gather's fix needs checking multiple program factories (SingleRowSingleCore/SingleRowMultiCore/wide-Wt) + codegen route for hard 4D assumptions, more invasive than scatter's fix; deferred, flagged in monthly summary (2026-09-18)",
+    "56945: fix PR #56932 already merged/open, closes issue (2026-09-19)",
+    "56976: matmul L1-interleaved 4x slowdown, unlabeled, confirmed root cause (create_simple_matmul_program_config all_dram_interleaved gate) but architectural perf issue, too risky for quick fix, left for maintainer (2026-09-19)",
+    "57081/57066/57055/57042/57028: newest issues all from established maintainers (rtawfik01, blozano-tt, bbradelTT, nathan-TT), no welcome needed, already labeled or maintainer-tracked (2026-09-19)",
+    "57083 (labeled performance monitoring + commented root cause; left fix to maintainer, architectural fabric config change)",
+    "2026-09-20: reviewed ~100 newest issues (#57096-#56755): #56865 vLLM sampling regression assigned+draft-PR-linked (#56467), #56824/#56781/#56769/#56776 assigned to reporters with active investigation, #57095/#57028/#57011/#56802/#56801/#56803/#56792/#56783 maintainer-authored perf/infra notes, no repo-assist action needed on any"
+  ],
+  "resolved": {
+    "52673": {
+      "date": "2026-08-22",
+      "note": "closed by maintainer blozano-tt; superseded by #52789/#52790"
+    },
+    "54690": "merged by vtsilytskyiTT 2026-08-31",
+    "54858": {
+      "status": "merged",
+      "merged_by": "fvranicTT",
+      "merged_at": "2026-09-03T20:46:55Z"
+    },
+    "55591": "closed - superseded by community PR #55583 (mouliraj-mcw), narrower scope, HW-verified",
+    "55847_ci_checked": "2026-09-09: build-artifact ran, 2 tilize test failures unrelated to gather change, commented on PR",
+    "55293": {
+      "status": "merged",
+      "merged_at": "2026-09-09T11:24:16Z",
+      "note": "softplus bias fix (was PR for issues 55266/55263)"
+    },
+    "56827": {
+      "date": "2026-09-21",
+      "note": "fixed and closed via external PR #57100; repo-assist retries #56864/#57099 both stale/closed, no further action"
+    }
+  },
+  "monthly_summary_issue": 55015,
+  "welcomed_contributors": {
+    "luciademoja-lab": {
+      "date": "2026-09-14",
+      "issue": 56424,
+      "note": "verified 0 prior issues/PRs/comments"
+    },
+    "heroxcreed_excluded": {
+      "date": "2026-09-14",
+      "note": "has 8+ prior issues, not new, excluded from welcome"
+    },
+    "Lanochu_excluded": {
+      "date": "2026-09-14",
+      "note": "has 12+ prior issues, not new, excluded from welcome"
+    },
+    "Tinmc189623": {
+      "date": "2026-09-19",
+      "issue": 57084,
+      "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
+    }
+  },
+  "task8_last_update": "2026-09-22T18:34:00Z",
+  "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
+  "lessons_learned": [
+    "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning.",
+    "2026-09-22: PR #51868 (softplus negative-tail fix) got a real maintainer-measured 2.1x perf regression report from mateusznowakTT. Reinforces the earlier #56817 lesson: always weight device-measured maintainer feedback over any prior confident fix, even our own; do not push further numeric/perf-sensitive kernel changes without hardware validation -- acknowledge and defer to maintainer rework instead."
+  ]
 }
