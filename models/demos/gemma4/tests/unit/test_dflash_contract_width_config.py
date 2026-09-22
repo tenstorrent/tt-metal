@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import _padded_length, _serving_config
 from models.demos.gemma4.tests.unit.test_dflash_width_prepare import Target, _drafter
 from models.demos.gemma4.tests.unit.test_dflash_width_prepare import generator_module as _generator_module_fixture
 from models.demos.gemma4.tests.unit.test_dflash_width_prepare import production as _production_fixture
@@ -38,6 +39,7 @@ def width_config(request, production, monkeypatch):
     monkeypatch.setenv("GEMMA4_DFLASH_DECODER_REUSE", "0")
     generator_import = _generator_module_fixture.__wrapped__(production, monkeypatch)
     module = next(generator_import)
+    monkeypatch.setattr(module, "get_padded_prefill_len", _padded_length)
     checkpoint = {
         "num_hidden_layers": 1,
         "hidden_size": 8,
@@ -84,7 +86,7 @@ def _model(width_config):
 def test_admitted_count_matches_real_decoder_constructor(width_config, construction, monkeypatch):
     from vllm_tt_plugin.spec_decode import SpecPlan
 
-    plan = width_config.cls.spec_plan(SimpleNamespace(), 4, 15)
+    plan = width_config.cls.spec_plan(_serving_config(), 4, 15)
     assert isinstance(plan, SpecPlan)
     assert plan.supports_narrow_decode
     assert plan.effective_k == width_config.expected_verify
@@ -110,7 +112,7 @@ def test_admitted_count_matches_real_decoder_constructor(width_config, construct
 def test_contract_rejects_count_outside_actual_drafter_block(width_config):
     from vllm_tt_plugin.spec_decode import SpecReject
 
-    plan = width_config.cls.spec_plan(SimpleNamespace(), 4, 32)
+    plan = width_config.cls.spec_plan(_serving_config(), 4, 32)
     assert isinstance(plan, SpecReject)
     assert "outside" in plan.reason
     assert f"block_size={width_config.drafter.block_size}" in plan.reason
@@ -132,7 +134,7 @@ def test_contract_rejects_diagnostic_paths_without_preparation(width_config, mon
     from vllm_tt_plugin.spec_decode import SpecReject
 
     monkeypatch.setenv(setting, value)
-    plan = width_config.cls.spec_plan(SimpleNamespace(), 4, 5)
+    plan = width_config.cls.spec_plan(_serving_config(), 4, 5)
     assert isinstance(plan, SpecReject)
     assert f"{setting}=1" in plan.reason
     assert width_config.production.runtime.events == []
@@ -144,7 +146,7 @@ def test_contract_admits_unset_preparation_defaults(width_config, monkeypatch):
 
     for setting in ("GEMMA4_DFLASH_PACKED", "GEMMA4_DFLASH_WIDTH_SET", "GEMMA4_DFLASH_WARMUP_DECODE"):
         monkeypatch.delenv(setting, raising=False)
-    plan = width_config.cls.spec_plan(SimpleNamespace(), 4, 5)
+    plan = width_config.cls.spec_plan(_serving_config(), 4, 5)
     assert isinstance(plan, SpecPlan)
     assert plan.effective_k == 5 and plan.supports_narrow_decode
 
@@ -156,7 +158,7 @@ def test_contract_accepts_runtime_preparation_boolean_values(width_config, monke
 
     monkeypatch.setenv("GEMMA4_DFLASH_WIDTH_SET", value)
     monkeypatch.setenv("GEMMA4_DFLASH_WARMUP_DECODE", value)
-    assert isinstance(width_config.cls.spec_plan(SimpleNamespace(), 4, 5), SpecPlan)
+    assert isinstance(width_config.cls.spec_plan(_serving_config(), 4, 5), SpecPlan)
 
 
 @pytest.mark.parametrize("width_config", [(None, 16, None)], indirect=True)

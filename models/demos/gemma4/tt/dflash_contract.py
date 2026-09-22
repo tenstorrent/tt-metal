@@ -11,6 +11,7 @@ ordinary completion has reached its proposal callback.
 
 import os
 from collections import deque
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 
 import torch
@@ -74,6 +75,23 @@ def _row_tables(value, row):
     return value
 
 
+_ABSENT = object()
+
+
+def _restore_attributes(obj, saved):
+    for name, value in saved.items():
+        if value is _ABSENT:
+            if hasattr(obj, name):
+                delattr(obj, name)
+        else:
+            setattr(obj, name, value)
+
+
+def _save_attributes(stack, obj, names):
+    saved = {name: vars(obj).get(name, _ABSENT) for name in names}
+    stack.callback(_restore_attributes, obj, saved)
+
+
 class DFlashContractMixin:
     """Completion ownership shared by ordinary and speculative decode.
 
@@ -90,6 +108,183 @@ class DFlashContractMixin:
         self._ct_submitted_moves = None
         self._ct_force_reload = False
         self._ct_warmup_depth = 0
+        self._ct_rebuild_storage = None
+
+    def _contract_prepare_rebuild_storage(self, kv_cache):
+        """Allocate reconstruction KV before any serving trace binds addresses."""
+        import ttnn
+        from models.demos.gemma4.tt.attention.operations import effective_block_size
+        from models.tt_transformers.tt.common import get_padded_prefill_len
+
+        if self._ct_rebuild_storage is not None:
+            raise RuntimeError("Gemma4 dFlash reconstruction storage is already prepared")
+        if len(self.model) != 1 or len(kv_cache) != 1:
+            raise ValueError("Gemma4 dFlash reconstruction requires one target submesh")
+        target = self.model[0]
+        capacity = get_padded_prefill_len(int(self.model_args[0].max_seq_len))
+        batches = sorted({1, int(self.model_args[0].max_batch_size)})
+        scratch_layers, host_tables, allocated = [], [], []
+        by_batch = {batch: [] for batch in batches}
+        shared = getattr(target, "kv_shared_layer_map", None) or {}
+        try:
+            for index, layer in enumerate(target.layers):
+                attention = layer.self_attn
+                config = attention.config
+                local_heads = (
+                    1 if attention.weights.kv_replicated else config.num_key_value_heads // (target.mesh_config.tp or 1)
+                )
+                prototype = kv_cache[0][index][0]
+                block_size = int(effective_block_size(prototype, config.head_dim, local_heads))
+                columns = (capacity + block_size - 1) // block_size
+                # Block zero receives padded writes; live scratch history starts at one.
+                host_tables.append(torch.arange(1, columns + 1, dtype=torch.int32).unsqueeze(0))
+                source = shared.get(index)
+                if source is not None:
+                    scratch_layers.append(scratch_layers[source])
+                else:
+                    pair = []
+                    for serving in kv_cache[0][index]:
+                        scratch = ttnn.from_torch(
+                            torch.zeros((columns + 1, *serving.shape[1:]), dtype=torch.bfloat16),
+                            dtype=serving.dtype,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=target.mesh_device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(target.mesh_device),
+                        )
+                        allocated.append(scratch)
+                        pair.append(scratch)
+                    scratch_layers.append(pair)
+                for batch in batches:
+                    device_table = target._page_table_torch_to_ttnn(torch.zeros((batch, columns), dtype=torch.int32))
+                    allocated.append(device_table)
+                    by_batch[batch].append(device_table)
+        except BaseException:
+            with ExitStack() as stack:
+                for tensor in allocated:
+                    stack.callback(tensor.deallocate, True)
+            raise
+        self._ct_rebuild_storage = {
+            "capacity": capacity,
+            "kv_cache": [scratch_layers],
+            "host_tables": host_tables,
+            "by_batch": by_batch,
+            "allocated": allocated,
+        }
+
+    def _contract_release_rebuild_storage(self):
+        storage, self._ct_rebuild_storage = self._ct_rebuild_storage, None
+        if storage is not None:
+            # ExitStack attempts every release even when one device handle fails.
+            with ExitStack() as stack:
+                for tensor in storage["allocated"]:
+                    stack.callback(tensor.deallocate, True)
+
+    def _contract_rebuild_fits(self, position):
+        from models.tt_transformers.tt.common import get_padded_prefill_len
+
+        storage = self._ct_rebuild_storage
+        return storage is not None and get_padded_prefill_len(position) <= storage["capacity"]
+
+    @contextmanager
+    def _contract_rebuild_context(self, position):
+        """Keep reconstruction writes and prefill bookkeeping off serving state."""
+        storage = self._ct_rebuild_storage
+        if not self._contract_rebuild_fits(position):
+            raise RuntimeError("Gemma4 dFlash reconstruction exceeds prepared scratch capacity")
+        target = self.model[0]
+        for layer in target.layers:
+            for name in ("_deferred_bounded_fill", "_deferred_bounded_fill_batched"):
+                if getattr(layer.self_attn.config, name, None) is not None:
+                    raise RuntimeError("Gemma4 dFlash reconstruction cannot consume pending bounded fills")
+
+        with ExitStack() as stack:
+            _save_attributes(
+                stack,
+                self,
+                (
+                    "_bounded_sliding_kv_cache",
+                    "_ct_eager_prefill",
+                    "mode",
+                    "_slots_prefilled_since_decode",
+                    "prev_page_table",
+                    "_perf_decode_tokens",
+                    "_perf_decode_s",
+                ),
+            )
+            self._bounded_sliding_kv_cache = False
+            self._ct_eager_prefill = True
+            self._slots_prefilled_since_decode = set()
+            _save_attributes(
+                stack,
+                target,
+                (
+                    "_persistent_pt_by_batch",
+                    "_persistent_per_layer_page_tables",
+                    "_last_host_pt_by_batch",
+                    "_active_page_tables_per_layer",
+                    "_sequential_batch_page_tables",
+                    "_invalidate_decode_traces_after_page_table_realloc",
+                    "_page_tables_to_ttnn",
+                    "bounded_sliding_kv_cache",
+                    "prefill_valid_len_dev",
+                    "_g4_batched_prefill_consumption",
+                    "_prefill_input_ids_torch",
+                    "_prefill_embeds_torch",
+                    "_prefill_batch_size",
+                    "_prefill_seq_len_per_user",
+                ),
+            )
+            target._persistent_pt_by_batch = storage["by_batch"]
+            target._persistent_per_layer_page_tables = storage["by_batch"][1]
+            target._last_host_pt_by_batch = {}
+            target._active_page_tables_per_layer = None
+            target._sequential_batch_page_tables = None
+            target._invalidate_decode_traces_after_page_table_realloc = False
+            target.bounded_sliding_kv_cache = False
+            target.prefill_valid_len_dev = None
+            original_convert = target._page_tables_to_ttnn
+
+            def checked_convert(tables):
+                if tables is not None:
+                    for index, table in enumerate(tables):
+                        if isinstance(table, torch.Tensor):
+                            batch = int(table.shape[0]) if table.ndim > 1 else 1
+                            prepared = storage["by_batch"].get(batch)
+                            if (
+                                prepared is None
+                                or index >= len(prepared)
+                                or table.shape[-1] > prepared[index].shape[-1]
+                            ):
+                                raise RuntimeError("Gemma4 dFlash scratch page tables were not prepared for this shape")
+                return original_convert(tables)
+
+            target._page_tables_to_ttnn = checked_convert
+            for layer in target.layers:
+                attention = layer.self_attn
+                config = attention.config
+                _save_attributes(
+                    stack, attention, ("_tail_pool", "_tail_pool_map", "_sliding_tails_by_key", "_last_kv")
+                )
+                _save_attributes(
+                    stack,
+                    config,
+                    (
+                        "sliding_prefill_tail_persistent",
+                        "_g4_active_req_key",
+                        "cache_position_modulo",
+                        "prefill_valid_len_dev",
+                    ),
+                )
+                attention._tail_pool = None
+                attention._tail_pool_map = {}
+                attention._sliding_tails_by_key = {}
+                attention._last_kv = None
+                config.sliding_prefill_tail_persistent = None
+                config.cache_position_modulo = None
+                config.prefill_valid_len_dev = None
+                stack.callback(attention._release_sliding_prefill_tail, clear_persistent=True, all_keys=True)
+            yield storage
 
     def warmup_model_prefill(self, *args, **kwargs):
         self._ct_warmup_depth += 1
@@ -148,12 +343,28 @@ class DFlashContractMixin:
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs.get("tokens", args[0] if args else None)
         lengths = kwargs.get("prompt_lens", [tokens.shape[1]] * tokens.shape[0])
+        continuation = False
         if not self._ct_warmup_depth and not kwargs.get("warmup_prefill"):
+            starts = kwargs.get("start_pos")
+            if starts is not None and any(int(start) > 0 for start in starts):
+                if len(starts) != tokens.shape[0] or len(lengths) != tokens.shape[0]:
+                    raise ValueError("Gemma4 dFlash resumed prefill requires one start and length per token row")
+                if any(not 0 <= int(start) <= int(length) <= tokens.shape[1] for start, length in zip(starts, lengths)):
+                    raise ValueError("Gemma4 dFlash resumed prefill requires the complete token prefix")
+                # External chunks can follow a trace that published no request
+                # tail. Recompute each supplied prefix without that tail state.
+                kwargs["start_pos"] = [0] * tokens.shape[0]
+                kwargs["enable_trace"] = False
+                continuation = True
             kwargs["page_table"], page_tables_per_layer = self._contract_prefill_tables(
                 kwargs.get("page_table"), page_tables_per_layer, lengths, kwargs.get("kv_cache")
             )
         self._contract_disarm()
-        out = self._contract_target_prefill(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        with ExitStack() as stack:
+            if continuation:
+                _save_attributes(stack, self, ("_ct_eager_prefill",))
+                self._ct_eager_prefill = True
+            out = self._contract_target_prefill(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         if self._ct_warmup_depth or kwargs.get("warmup_prefill"):
             return out
         slots = kwargs.get("empty_slots", range(tokens.shape[0]))
@@ -357,6 +568,8 @@ class DFlashContractMixin:
         return getattr(decoder, "_prepared_widths", ())
 
     def _contract_covers_position(self, owner, position):
+        if not self._contract_rebuild_fits(position):
+            return False
         decoder = self._spec_decoder
         physical_width = decoder.P_v if decoder is not None else self._SPEC_N
         max_position = int(getattr(self.model_args[0], "max_seq_len", 0))
@@ -366,6 +579,10 @@ class DFlashContractMixin:
             attention = layer.self_attn.config
             ring = attention.cache_position_modulo
             if ring is not None:
+                # Lazy width capture writes zero page tables at position zero.
+                # Bounded slot zero owns those blocks, so capture must precede requests.
+                if self._contract_pending_widths():
+                    return False
                 # Packed writes must not replace history needed by the first query.
                 if ring - attention.sliding_window < physical_width - 1 and position + physical_width > ring:
                     return False
@@ -415,7 +632,8 @@ class DFlashContractMixin:
         if step.verified is not None and self._ct_proposal is not None and self._ct_proposal.owner is step.verified:
             self._ct_proposal = None
         # The plugin drains initial and changed-layout ordinary submissions.
-        # An older steady completion must not rebuild KV over a newer decode.
+        # Wait for queued ordinary completions before reconstructing taps and
+        # verifying the authoritative committed anchor.
         if self._ct_ordinary or len(live_rows) != 1:
             return self._contract_no_drafts(rows, k)
         row = live_rows[0]
@@ -460,35 +678,54 @@ class DFlashContractMixin:
     def _contract_rebuild(self, owner, step, row, position, anchor):
         if len(owner.tokens) != position + 1:
             raise RuntimeError("Gemma4 dFlash anchor does not end the committed prefix")
+        if not self._contract_rebuild_fits(position):
+            raise RuntimeError("Gemma4 dFlash reconstruction exceeds prepared scratch capacity")
+        pending_widths = self._contract_pending_widths()
+        if pending_widths and any(
+            layer.self_attn.config.cache_position_modulo is not None for layer in self.model[0].layers
+        ):
+            raise RuntimeError("Gemma4 dFlash bounded verification requires width capture before serving requests")
         self._contract_synchronize()
         self._contract_disarm()
-        pending_widths = self._contract_pending_widths()
         if pending_widths:
             # Eager-only ordinary execution leaves prepared widths uncaptured.
-            # Capture before reconstructing the request's target KV and taps.
+            # Capture before recomputing drafter taps in scratch target KV.
             self._spec_decoder.capture_widths(pending_widths)
         target = self.model[0]
         drafter = self._spec_get_drafter()
         tables = _row_tables(step.page_table, row)
         per_layer = _row_tables(step.page_tables_per_layer, row)
-        prefill_table, prefill_per_layer = self._contract_prefill_tables(tables, per_layer, [position], step.kv_cache)
-        target.dflash_capture_taps(drafter.target_layer_ids)
-        try:
-            self._contract_target_prefill(
-                tokens=torch.tensor([owner.tokens[:position]], dtype=torch.int32),
-                prompt_lens=[position],
-                start_pos=[0],
-                empty_slots=[owner.slot],
-                page_table=prefill_table,
-                page_tables_per_layer=prefill_per_layer,
-                kv_cache=step.kv_cache,
-                enable_trace=False,
-                sampling_params=None,
-                warmup_prefill=False,
+        with self._contract_rebuild_context(position) as storage:
+            prefill_table, prefill_per_layer = self._contract_prefill_tables(
+                storage["host_tables"][0], storage["host_tables"], [position], storage["kv_cache"]
             )
-        finally:
-            taps = target.pop_dflash_taps()
-            target.dflash_capture_taps(None)
+            target.dflash_capture_taps(drafter.target_layer_ids)
+            completed = False
+            try:
+                self._contract_target_prefill(
+                    tokens=torch.tensor([owner.tokens[:position]], dtype=torch.int32),
+                    prompt_lens=[position],
+                    start_pos=[0],
+                    empty_slots=[0],
+                    page_table=prefill_table,
+                    page_tables_per_layer=prefill_per_layer,
+                    kv_cache=storage["kv_cache"],
+                    enable_trace=False,
+                    sampling_params=None,
+                    warmup_prefill=False,
+                )
+                completed = True
+            finally:
+                try:
+                    taps = target.pop_dflash_taps()
+                finally:
+                    target.dflash_capture_taps(None)
+                if not completed:
+                    with ExitStack() as stack:
+                        for tap in taps:
+                            release = getattr(tap, "deallocate", None)
+                            if release is not None:
+                                stack.callback(release, True)
         self._spec_pending = (taps, position)
         self._spec_pending_owner = owner.identity
         self._spec_owner_slot = owner.slot

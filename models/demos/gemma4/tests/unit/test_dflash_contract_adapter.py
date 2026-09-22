@@ -26,6 +26,35 @@ def _unused(*args, **kwargs):
     raise AssertionError("A host contract test reached an unstubbed device operation")
 
 
+def _padded_length(length):
+    return 128 if length <= 128 else max(1024, 1 << (length - 1).bit_length())
+
+
+def _serving_config():
+    return SimpleNamespace(
+        model_config=SimpleNamespace(
+            max_model_len=4096,
+            hf_config=SimpleNamespace(
+                layer_types=["sliding_attention", "full_attention"], num_key_value_heads=8, head_dim=32
+            ),
+        ),
+        cache_config=SimpleNamespace(block_size=64),
+        parallel_config=SimpleNamespace(tensor_parallel_size=1),
+    )
+
+
+class ScratchTensor:
+    def __init__(self, value):
+        self.value = value.clone()
+        self.shape = self.padded_shape = tuple(value.shape)
+        self.dtype = value.dtype
+        self.releases = 0
+
+    def deallocate(self, force):
+        assert force
+        self.releases += 1
+
+
 def _module(name, **members):
     module = ModuleType(name)
     module.__dict__.update(members)
@@ -71,7 +100,7 @@ def adapter():
                     "warmup_gemma4_model_prefill",
                 )
             },
-            "models.tt_transformers.tt.common": {"get_padded_prefill_len": _unused},
+            "models.tt_transformers.tt.common": {"get_padded_prefill_len": _padded_length},
             "models.tt_transformers.tt.generator": {
                 "SUPPORTED_PREFILL_BATCH_SIZES": (1, 2, 4, 8, 16, 32),
                 "create_submeshes": _unused,
@@ -265,7 +294,7 @@ def model(adapter, decoder_width_for, monkeypatch):
     model._contract_init()
     model.events = []
     model.model = [Target(model.events)]
-    model.model_args = [SimpleNamespace(max_seq_len=1024)]
+    model.model_args = [SimpleNamespace(max_seq_len=1024, max_batch_size=32)]
     model.mesh_device = model.events
     model._spec_decoder = Decoder(model.model[0], model.events)
     model._spec_width_set = True
@@ -284,8 +313,19 @@ def model(adapter, decoder_width_for, monkeypatch):
     model._slots_prefilled_since_decode = set()
     model.results = []
     model.readback_events = [object(), object()]
-    cache = SimpleNamespace(padded_shape=(16, 1, 64, 8))
+    cache = ScratchTensor(torch.zeros(16, 1, 64, 8, dtype=torch.bfloat16))
     model.kv_cache = [[(cache, cache), (cache, cache)]]
+    runtime = sys.modules["ttnn"]
+    monkeypatch.setattr(runtime, "from_torch", lambda value, **kwargs: ScratchTensor(value), raising=False)
+    monkeypatch.setattr(runtime, "TILE_LAYOUT", object(), raising=False)
+    monkeypatch.setattr(runtime, "ReplicateTensorToMesh", lambda mesh: mesh, raising=False)
+    target = model.model[0]
+    target.mesh_device = model.mesh_device
+    target._page_table_torch_to_ttnn = ScratchTensor
+    target._page_tables_to_ttnn = lambda tables: target._persistent_pt_by_batch[tables[0].shape[0]]
+    for layer in target.layers:
+        layer.self_attn._release_sliding_prefill_tail = lambda **kwargs: None
+    model._contract_prepare_rebuild_storage(model.kv_cache)
     model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1, 2])
     model._build_per_layer_page_tables = (
         lambda per_layer, table: per_layer if per_layer is not None else [table] * len(model.model[0].layers)
@@ -456,7 +496,8 @@ def test_resumed_prefill_uses_chunk_end_without_adding_start_position(model):
     )
     forwarded = [event[1] for event in model.events if event[0] == "prefill"][-1]
     assert forwarded["page_table"].tolist() == [[5, 6, 7, 8, 0, 0]]
-    assert forwarded["start_pos"] == [128]
+    assert forwarded["start_pos"] == [0]
+    assert forwarded["enable_trace"] is False
     assert forwarded["prompt_lens"] == [193]
     assert model._ct_requests[5].tokens == list(range(193))
     assert table.tolist() == [[5, 6, 7, 8, 5, 6]]
@@ -478,8 +519,10 @@ def test_reconstruction_masks_prefix_tables_but_preserves_verification_tables(mo
     assert proposal.num_valid.tolist() == [5]
     reconstruction = [event[1] for event in model.events if event[0] == "prefill"][-1]
     assert reconstruction["prompt_lens"] == [189]
-    assert reconstruction["page_table"].tolist() == [[5, 6, 7, 0, 0, 0]]
-    assert all(item.tolist() == [[5, 6, 7, 0, 0, 0]] for item in reconstruction["page_tables_per_layer"])
+    expected = [[1, 2, 3] + [0] * 13]
+    assert reconstruction["page_table"].tolist() == expected
+    assert all(item.tolist() == expected for item in reconstruction["page_tables_per_layer"])
+    assert reconstruction["kv_cache"] is model._ct_rebuild_storage["kv_cache"]
     assert ordinary.step.page_table.tolist() == [[5, 6, 7, 8, 6, 5]]
     assert model._spec_decoder.refreshes[-1].tolist() == [[5, 6, 7, 8, 6, 5]]
     assert all(item.tolist() == [[5, 6, 7, 8, 6, 5]] for item in model.model[0]._active_page_tables_per_layer)
@@ -698,8 +741,8 @@ def test_padded_solo_at_nonzero_row_rebuilds_only_its_own_prefix(model):
     assert proposal.num_valid.tolist() == [0, 5]
     assert proposal.draft_token_ids[1].tolist() == [21, 22, 23, 24, 25]
     rebuild = [event[1] for event in model.events if event[0] == "prefill"][-1]
-    assert rebuild["page_table"].tolist() == [[10, 0]]
-    assert rebuild["empty_slots"] == [1]
+    assert rebuild["page_table"].tolist() == [[1] + [0] * 15]
+    assert rebuild["empty_slots"] == [0]
     assert rebuild["tokens"].tolist() == [[1, 2, 3]]
 
 
@@ -930,6 +973,10 @@ def test_target_sequence_limit_uses_decoder_physical_width(model, max_seq_len, e
 
 
 def _verified_completion_at(model, position):
+    if position > model._ct_rebuild_storage["capacity"]:
+        model._contract_release_rebuild_storage()
+        model.model_args[0].max_seq_len = 4096
+        model._contract_prepare_rebuild_storage(model.kv_cache)
     _start_solo(model)
     verified = _verify(model)
     owner = model._ct_requests[10]
@@ -1053,7 +1100,7 @@ def test_actual_spec_plan_admits_narrow_concurrent_decode_with_drafter_accountin
         },
     )
     monkeypatch.setattr(adapter, "_dflash_mesh_tp", lambda: 8)
-    plan = adapter.Gemma4DFlashContractForCausalLM.spec_plan(SimpleNamespace(), 4, 5)
+    plan = adapter.Gemma4DFlashContractForCausalLM.spec_plan(_serving_config(), 4, 5)
     assert plan.supports_narrow_decode is True
     assert plan.effective_k == 5
     assert plan.lanes_per_request == 1

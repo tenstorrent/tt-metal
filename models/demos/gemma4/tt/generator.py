@@ -857,6 +857,7 @@ class ChunkedPrefillPageTableGuardMixin:
         max_chunk = self.model_args[model_id].max_prefill_chunk_size
         use_traced_chunks = (
             chunked_prefill_trace_enabled()
+            and not getattr(self, "_ct_eager_prefill", False)
             and page_table is not None
             and kv_cache is not None
             and seq_len > max_chunk

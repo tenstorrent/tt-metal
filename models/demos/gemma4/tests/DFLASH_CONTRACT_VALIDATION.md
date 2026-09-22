@@ -27,9 +27,11 @@ Speculative completions return their own `ContractStep` as `VerifyOutput.hidden`
    submissions before submitting another decode, so initial solo execution and
    a batch transition to solo have a completion at which reconstruction can run.
 5. `_contract_rebuild` eagerly recomputes the surviving request's committed
-   prefix, excluding the newest anchor, to capture drafter residual taps.
-   `_spec_bootstrap` seeds the drafter at the newest anchor. The replay does not
-   publish or append another copy of any committed token.
+   prefix in separate target KV, excluding the newest anchor, to capture drafter
+   residual taps. `_contract_rebuild` preserves committed serving KV and restores
+   serving page tables and tail state before `_spec_bootstrap` seeds the drafter
+   against the original serving KV. The replay does not publish or append another
+   copy of any committed token.
 6. `_contract_refresh` installs the completion's per-layer page tables and
    refreshes the fused decoder before `contract_commit` and `contract_replay`.
 7. `decode_forward` checks request identity, anchor, position, and every valid
@@ -42,6 +44,40 @@ drafting. Transition latency and long-context device memory use are unverified.
 Steady batched ordinary decoding does not reconstruct drafter state.
 `GEMMA4_DFLASH_MAX_SPEC_ISL` also limits reconstruction at the current committed
 prefix length. Prefix caching remains unsupported.
+
+Both CT allocation entry points prepare reconstruction storage before trace
+capture. `_contract_prepare_rebuild_storage` uses the configured serving context,
+rounded to the existing prefill bucket, and each target layer's effective block
+size. Scratch physical block zero receives padded writes. The remaining scratch
+blocks hold the reconstructed prefix. Dedicated page-table tensors cover batch
+keys 1 and `max_batch_size`; reconstruction rejects unprepared page-table shapes
+before allocation. `_contract_covers_position` declines drafts if the padded
+prefix exceeds prepared capacity, then ordinary decoding continues.
+
+The 31B P150x8 configuration with a 4096-token context and 64-token blocks needs
+65 scratch blocks per layer. BF16 scratch KV occupies 487.5 MiB per device;
+dedicated page tables for batch keys 1 and 32 add about 0.483 MiB per device.
+`spec_plan` adds this fixed storage to `extra_bytes_per_seq`, counts shared layers
+conservatively, and rounds page-table rows for device alignment. The plugin does
+not enforce these byte budgets. Available device memory and allocation overhead
+need separate validation. Larger configured contexts increase scratch storage;
+the scratch allocator does not copy the serving pool's full block count.
+
+`_contract_rebuild_context` isolates persistent page-table bookkeeping, sliding
+tail pools and request keys, bounded-fill validity buffers, prefill input stashes,
+slot markers, and decode metrics. Scratch prefill temporarily uses unbounded
+storage while retaining sliding attention semantics. `_ct_eager_prefill` also
+disables generator-level traced chunks, so scratch execution cannot reuse a
+prefill trace that binds serving KV. The context restores original references
+after success or failure. Failed reconstruction releases captured temporary taps.
+`release_persistent_capture` releases scratch tensors after serving traces.
+
+For runtime continuation with positive `start_pos`, CT `prefill_forward`
+recomputes the complete supplied prefix from zero through eager prefill. The
+paired plugin supplies that prefix through `prompt_lens`. This fallback avoids
+depending on an unavailable or incomplete sliding tail from a previous chunk.
+The fallback preserves row ownership and page-table sanitation but adds repeated
+prefill work. Device correctness and the continuation cost remain unverified.
 
 `supports_narrow_decode=True` is backed by initial ordinary completion handling.
 `supports_async_decode` and `supports_async_spec_decode` both default to false.
@@ -72,6 +108,11 @@ must precede the first ring wrap. An unsafe position returns zero drafts before
 `contract_commit`, reconstruction, or replay, and ordinary decoding continues. The contract
 does not enlarge the bounded KV pool. Device correctness of this fallback and
 of speculative execution with sufficient ring headroom remains unverified.
+Bounded eager-only execution also declines drafts while prepared verification
+widths remain uncaptured. Lazy capture writes through zero page tables at
+position zero, but bounded slot zero owns those physical blocks. Bounded
+speculation therefore requires capture before serving requests. Unbounded lazy
+capture and bounded startup trace capture retain their existing behavior.
 
 `_contract_prefill_tables` clones the submitted page tables and masks unused
 columns before traced prefill or prefix reconstruction. Traced padding must not
@@ -97,6 +138,8 @@ PYTHONPATH=/path/to/vllm-tt-plugin/src python -m pytest -o addopts='' \
   models/demos/gemma4/tests/unit/test_dflash_width_prepare.py \
   models/demos/gemma4/tests/unit/test_dflash_capture_cleanup.py \
   models/demos/gemma4/tests/unit/test_dflash_contract_bounded.py \
+  models/demos/gemma4/tests/unit/test_dflash_contract_reconstruction.py \
+  models/demos/gemma4/tests/unit/test_dflash_contract_prefill_continuation.py \
   models/demos/gemma4/tests/unit/test_dflash_contract_width_config.py -q
 ```
 
@@ -114,6 +157,12 @@ unset `GEMMA4_DFLASH_VERIFY` and overridden drafter block sizes.
 Bounded coverage tests check the first wrapped candidate, exact headroom
 equality, every configured layer, actual decoder width, and ordinary progress
 after a verified completion reaches the ring limit.
+Reconstruction tests execute both allocation entry points, actual page-table
+conversion and updates, first and later reconstruction, nonzero owner slots,
+scratch growth rejection, serving KV and tail preservation, input restoration,
+partial allocation cleanup, and final release. Continuation tests check eager
+dispatch and restoration after errors. These host checks do not establish TT
+numerical equivalence or memory sufficiency.
 
 ## Required device evidence before readiness
 
@@ -138,6 +187,13 @@ Do not use an unrelated plugin PR as an implicit dependency.
       128, and 129 during initial decode and both batch transitions.
 - [ ] Async output matches synchronous output from the same contract adapter for
       identical request schedules. Compare token IDs, not decoded text prefixes.
+- [ ] First reconstruction at anchor 158 and transition reconstruction at anchors
+      192 or 193 preserve committed serving KV. Compare synchronous and async
+      candidate/posterior rows at anchor 201 without forced reconstruction delay.
+- [ ] Initial solo and initial batch common-prefix outputs agree after scratch
+      reconstruction, including the observed output-index-4 discrepancy.
+- [ ] A partial peer prefill resumes from a positive `start_pos`, uses complete
+      prefix eager execution, preserves live peer KV, and finishes cleanly.
 - [ ] Repeated runs confirm captured buffers, target KV, drafter context, and
       readback events remain valid. Include bounded sliding KV coverage separately.
 - [ ] Exact-window bounded rings decline proposals before unsafe candidate writes

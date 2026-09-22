@@ -3441,12 +3441,58 @@ class Gemma4DFlashContractForCausalLM(DFlashContractMixin, Gemma4DFlashForCausal
                 )
         outcome = super().spec_plan(vllm_config, 1, requested_k)
         if isinstance(outcome, SpecPlan):
-            return replace(outcome, supports_narrow_decode=True)
+            try:
+                model_config = vllm_config.model_config
+                text_config = getattr(model_config.hf_config, "text_config", model_config.hf_config)
+                capacity = get_padded_prefill_len(int(model_config.max_model_len))
+                block_size = int(vllm_config.cache_config.block_size)
+                if block_size <= 0 or int(model_config.max_model_len) <= 0:
+                    raise ValueError("max_model_len and block_size must be positive")
+                columns = (capacity + block_size - 1) // block_size
+                mesh_tp = _dflash_mesh_tp()
+                framework_tp = vllm_config.parallel_config.tensor_parallel_size
+                scratch_bytes = 0
+                for layer_type in text_config.layer_types:
+                    heads, head_dim = text_config.num_key_value_heads, text_config.head_dim
+                    if layer_type == "full_attention":
+                        heads = getattr(text_config, "num_global_key_value_heads", None) or heads
+                        head_dim = getattr(text_config, "global_head_dim", None) or head_dim
+                    heads = max(1, (heads // framework_tp) // mesh_tp)
+                    # Gemma's serving KV uses BF16. Count shared layers separately
+                    # so the declaration remains conservative when KV is aliased.
+                    scratch_bytes += 2 * (columns + 1) * heads * block_size * head_dim * 2
+                    # Round INT32 rows conservatively for device alignment.
+                    scratch_bytes += sum({1, int(max_num_seqs)}) * ((columns + 31) // 32 * 32) * 4
+            except (AttributeError, TypeError, ValueError, ZeroDivisionError) as exc:
+                return SpecReject(
+                    reason=f"Gemma4 dFlash reconstruction storage configuration is invalid: {exc}", supported_k=()
+                )
+            return replace(
+                outcome,
+                supports_narrow_decode=True,
+                extra_bytes_per_seq=outcome.extra_bytes_per_seq + scratch_bytes,
+            )
         return outcome
 
     def __init__(self, *args, **kwargs):
         self._contract_init()
         super().__init__(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        kv_cache = super().allocate_kv_cache(*args, **kwargs)
+        self._contract_prepare_rebuild_storage(kv_cache)
+        return kv_cache
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        kv_cache = super().allocate_kv_cache_per_layer(per_layer_specs)
+        self._contract_prepare_rebuild_storage(kv_cache)
+        return kv_cache
+
+    def release_persistent_capture(self):
+        try:
+            super().release_persistent_capture()
+        finally:
+            self._contract_release_rebuild_storage()
 
     def _contract_target_prefill(self, *args, **kwargs):
         return Gemma4ForCausalLM.prefill_forward(self, *args, **kwargs)
