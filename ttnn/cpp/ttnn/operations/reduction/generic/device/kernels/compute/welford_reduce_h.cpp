@@ -93,16 +93,16 @@ void kernel_main() {
             // Keep var_dst clean: finalization writes only the result rows, so
             // parking pass-one input there would leak stale data into padding.
             const uint32_t stats_input_dst =
-                ht < num_front_retained_limit ? (ht == 0 ? retained_input_dst : mean_dst) : input_dst;
+                (ht < num_front_retained_limit) ? ((ht == 0) ? retained_input_dst : mean_dst) : input_dst;
             copy_tile(dfb::in, 0, stats_input_dst);
             dfb_in.pop_front(onetile);
 #endif
             if (ht == 0) {
                 two_pass_stats_update_shifted_rows<false, true>(
-                    stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+                    stats_input_dst, 0, (ht == Ht - 1) ? last_tile_rows : tile_height);
             } else {
                 two_pass_stats_update_shifted_rows<false>(
-                    stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+                    stats_input_dst, 0, (ht == Ht - 1) ? last_tile_rows : tile_height);
             }
         }
         two_pass_stats_finish_shifted_mean(two_pass_mean_reciprocal);
@@ -110,14 +110,14 @@ void kernel_main() {
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             copy_tile(dfb::in, ht, input_dst);
-            two_pass_stats_update_rows(input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+            two_pass_stats_update_rows(input_dst, 0, (ht == Ht - 1) ? last_tile_rows : tile_height);
         }
         dfb_in.pop_front(Ht);
 #else
-        constexpr uint32_t num_front_retained = Ht < num_front_retained_limit ? Ht : num_front_retained_limit;
+        constexpr uint32_t num_front_retained = (Ht < num_front_retained_limit) ? Ht : num_front_retained_limit;
         for (uint32_t ht = 0; ht < num_front_retained; ++ht) {
-            const uint32_t stats_input_dst = ht == 0 ? retained_input_dst : ht;
-            two_pass_stats_update_rows(stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+            const uint32_t stats_input_dst = (ht == 0) ? retained_input_dst : ht;
+            two_pass_stats_update_rows(stats_input_dst, 0, (ht == Ht - 1) ? last_tile_rows : tile_height);
         }
         if constexpr (Ht > num_front_retained) {
             for (uint32_t ht = num_front_retained; ht < Ht - 1; ++ht) {
