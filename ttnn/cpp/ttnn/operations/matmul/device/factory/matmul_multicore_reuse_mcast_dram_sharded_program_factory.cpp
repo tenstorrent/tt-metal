@@ -715,9 +715,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         mm_in1_sender_writer_args.push_back((std::uint32_t)vc);
         mm_in1_sender_writer_args.push_back(reader_assignment.worker_index);
 
-        if (per_core_N_in1_sender < per_core_N_storage) {
-            TT_FATAL(curr_storage_core_idx < num_cores_written_back, "Worker {} has no storage area assigned", core);
-
+        if (per_core_N_in1_sender < per_core_N_storage && curr_storage_core_idx >= num_cores_written_back) {
+            TT_FATAL(
+                i * per_core_N_in1_sender >= N,
+                "Worker {} has no output storage but still owns logical output columns",
+                core);
+            // DRAM bank padding can leave a final reader beyond all output shards.
+            // It still feeds compute and drains its output DFB, but writes nothing.
+            mm_in1_sender_writer_args.push_back(0);
+        } else if (per_core_N_in1_sender < per_core_N_storage) {
             uint32_t remaining_per_core_N_storage = (per_core_N_storage - per_core_N_storage_curr_stride);
             uint32_t per_core_N_reshard_1 = (remaining_per_core_N_storage > per_core_N_in1_sender)
                                                 ? per_core_N_in1_sender

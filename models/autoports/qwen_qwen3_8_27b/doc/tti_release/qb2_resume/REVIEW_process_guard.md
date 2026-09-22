@@ -1,0 +1,26 @@
+**QB2 process-guard repair — independent narrow review, 2026-09-15 UTC**
+
+Verdict: **clean for this bounded harness repair**. No blocking source finding. The change addresses an owned engine becoming invisible to the environment-marker scan after its API parent exits, and refuses a new four-device launch when any driver owner entry remains. This is not a model, performance, or Stage 11 acceptance verdict.
+
+The archived `server-b1-baseline/runner.log` identifies guard 1033086, runner 1033105 and launch `ea481ccac1654e3aa9f71791892b320d`. Packaged startup cancellation interrupts readiness waiting, then kills API 1033171 after its shutdown timeout. The guard subsequently reports only PID 1033314 in cleanup; `server_abort.log` shows engine 1033315 continuing to load layers. Parent-recorded `engine_abort.json` binds engine 1033315 to birth 842716679, later parent 1, and all four device owner files. This supports the orphan-ownership gap. These artifacts do not independently identify which operation removed or hid the engine's environment marker; the new host regression exercises explicit environment removal without claiming that exact mechanism was observed in the real engine.
+
+The source repair in [vllm_process_guard.py](/home/mvasiljevic/qwen38-full-rerun/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/vllm_process_guard.py:69) is appropriately restricted:
+
+- `read_adopted` requires the same UID, a live non-zombie state, and current PPID equal to this dedicated guard; it records `/proc/stat` start ticks. The guard enables `PR_SET_CHILD_SUBREAPER` before spawning its one runner. An orphaned descendant is consequently a kernel-established direct child, rather than a process selected by a broad name or device-ownership match.
+- Cleanup combines exact marked processes with those direct children. The adopted-child fallback is opt-in only for `cleanup_owned`; ordinary `signal_owned` calls remain marker-only. It opens a pidfd and revalidates the recorded identity before delivery. PID reuse, a changed birth, or lost direct-parent identity cannot authorize the fallback. The signal targets the opened pidfd, not a subsequently reused PID.
+- Existing bounded SIGTERM behavior and remaining-process failure reporting remain intact; the guard does not introduce a SIGKILL fallback, device reset, or signaling of unknown driver owners. Repeated scans can discover descendants adopted after their parent terminates.
+- `require_idle_tt(4)` reads all matching driver owner files and requires exactly four empty token lists. Strings such as `0`, duplicated entries, ordinary PIDs, missing devices, or extra devices refuse launch. An unreadable owner file also fails before launch. [run_vllm_stage.sh](/home/mvasiljevic/qwen38-full-rerun/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/run_vllm_stage.sh:10) enables this check before `run()` can spawn the server. It does not interpret PID 0 as harmless or attempt to clear it. This preflight is an observation, not an atomic cross-launch reservation; the parent's existing exclusive device ownership remains the operational boundary.
+
+The parent-recorded [guard_tests_final.log](/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/guard_tests_final.log) reports **10 passed in 1.54s**. Source review confirms coverage of the actual packaged orphan-producing shutdown body; marked orphan cleanup and unrelated-launch preservation; SIGINT/SIGTERM handling; a TERM-ignoring survivor; birth checks; the new unmarked adopted-child cleanup; and idle refusal for PID 0/missing devices. The new subprocess regression preserves the runner's exit 7 and requires the unmarked grandchild to be reaped. I did not rerun these process-spawning/signaling tests.
+
+I independently executed only extracted source functions with standard-library, in-memory stand-ins: six adoption predicate checks (direct parent, UID, live/zombie/dead states, malformed stat), two pidfd authorization refusals, one mocked delivery, one idle positive and four idle refusals (0 entries, normal PID, too few, too many). All passed. No actual `/proc` scan, process creation/control, ctypes library invocation, target import, server, HTTP, or device action occurred in that verification. Existing immutable evidence and source diffs were read; only this report was written. No additional hardware run is needed to establish the reviewed host ownership logic; actual future shutdown outcomes must still be recorded normally.
+
+| Artifact | SHA256 |
+|---|---|
+| tests/vllm_process_guard.py | `352495bd093c6dac0f0c74a3c5d18c691b1bb0e9f7e37136a91087143857bf51` |
+| tests/test_vllm_process_guard.py | `21d20901e3cd2f82f2483e31ab61f76e34d31a758484454de4626c0d2f3b3034` |
+| tests/run_vllm_stage.sh | `ef9c095acc6f1f3ab1cdcc1404cf3f334566e132eb2e36ab60f267fd106af64a` |
+| qb2-resume/guard_tests_final.log | `c4d2f273e6fca6415576e65aa5521501b4be4f3965bf661485315c9c3eab2c41` |
+| server-b1-baseline/engine_abort.json | `a51d09bf4dc508a9e93ff7bd25932c1660870b3fa5ffc1d7258f7ee15f47f23b` |
+| server-b1-baseline/runner.log | `517849b7ebf837b6b1f249ff27f1088614863e70bd06876322d7281223e18cf5` |
+| server-b1-baseline/server_abort.log | `edc1b07dd84c328cc79d398e69ea6e5cc2f157bff868d3c11ddf55cf04691140` |

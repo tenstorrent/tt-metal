@@ -1,0 +1,11 @@
+# Local raw captures and setup-only tensors; hashes are retained in raw_artifacts.json.
+control/
+batch3_control/
+tracy*/*/.logs/
+tracy*/*/reports/
+tracy*/*/ops.csv
+**/__pycache__/
+candidates/
+*.pt
+watcher*/generated/
+pytest_tmp/
