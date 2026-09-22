@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#ifndef QB2_ENTRY
+#define QB2_ENTRY kernel_main
+#endif
 #define kernel_main native_attention_writer
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp"
 #undef kernel_main
 #include "tools/profiler/kernel_profiler.hpp"
 
-void kernel_main() {
+void QB2_ENTRY() {
     native_attention_writer();
     if (get_arg_val<uint32_t>(3) == 0) { return; }  // Only the two KV-head reducers write output.
     const uint32_t cx = get_arg_val<uint32_t>(CONCAT_RT_OFFSET + 1);

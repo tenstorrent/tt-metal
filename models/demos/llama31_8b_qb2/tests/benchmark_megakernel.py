@@ -58,6 +58,8 @@ def parse_args():
             "post_attention",
             "attention_tail",
             "decoder",
+            "decoder_loop",
+            "decoder_loop_embedding",
         ),
         required=True,
     )
@@ -117,8 +119,8 @@ def run(args):
         "profile_run": args.profile,
         "sampling": {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},
         "limitations": (
-            "B1; MLP and optional down reduce-scatter fused; attention, normalization, "
-            "other collectives and model boundary remain traced TTNN"
+            "B1; mode-dependent experimental composition. decoder_loop places all32 layers in one program; "
+            "the embedding variant adds lookup; final norm, head and sampling remain traced TTNN. See per-mode qualification in PROGRESS.md."
         ),
     }
     evidence = {"context": args.context, "tokens": args.tokens}
@@ -134,7 +136,11 @@ def run(args):
         generator = LlamaGenerator(mesh, max_batch_size=1, trace_prefill=False, record_token_history=True)
         if args.mode != "baseline":
             enable_experimental_decode(
-                generator.model, mode=args.mode, reuse_scratch=args.reuse_mlp_scratch, gu_workers=args.gu_workers
+                generator.model,
+                mode=args.mode,
+                reuse_scratch=args.reuse_mlp_scratch,
+                gu_workers=args.gu_workers,
+                kv_cache=generator.kv_cache,
             )
         assert generator.model.num_layers == 32
         result["precision"] = generator.model.precision_policy

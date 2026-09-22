@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#ifndef QB2_ENTRY
+#define QB2_ENTRY kernel_main
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 constexpr auto packed_args = TensorAccessorArgs<0>();
 constexpr auto cos_args = TensorAccessorArgs<packed_args.next_compile_time_args_offset()>();
 constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
 constexpr auto position_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
-void kernel_main() {
+void QB2_ENTRY() {
 #ifdef READER
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0)), 1);
     DeviceZoneScopedN("HEADS-AND-ROPE-READ");

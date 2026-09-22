@@ -1,9 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#ifndef QB2_ENTRY
+#define QB2_ENTRY kernel_main
+#endif
 #define kernel_main native_reduce_writer_main
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/kernels/reduce_scatter_minimal_direct_writer.cpp"
 #undef kernel_main
-void kernel_main() {
+void QB2_ENTRY() {
     native_reduce_writer_main();
     // close_finish resets the fabric teardown semaphore and publishes the
     // producer cursor. Reopening the same connections is supported by the

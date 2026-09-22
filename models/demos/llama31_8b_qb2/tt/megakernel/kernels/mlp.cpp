@@ -1,5 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#ifndef QB2_ENTRY
+#define QB2_ENTRY kernel_main
+#endif
 
 // One local MLP body, selected by a DRAM weight-address-table row. Projection
 // and SFPU workers are disjoint; only BRISC produces the phase-release flags.
@@ -68,7 +71,7 @@ void stream_projection(const Input& input, const Weight& weight, uint32_t bank) 
     }
 }
 
-void kernel_main() {
+void QB2_ENTRY() {
     const uint32_t bank = get_arg_val<uint32_t>(0);
     const auto table = TensorAccessor(table_args, get_arg_val<uint32_t>(5), 128);
     const uint32_t scratch = get_write_ptr(31);
@@ -118,7 +121,7 @@ void kernel_main() {
     }
 }
 #elif defined(PROJECTION) && defined(WRITER)
-void kernel_main() {
+void QB2_ENTRY() {
     const uint32_t bank = get_arg_val<uint32_t>(0);
 #ifdef FUSE_OUTPUT
     if (bank < 8) {
@@ -180,7 +183,7 @@ void kernel_main() {
 #endif
 }
 #elif defined(SWIGLU) && defined(READER)
-void kernel_main() {
+void QB2_ENTRY() {
     {
         DeviceZoneScopedN("MLP-SWIGLU-WAIT");
         wait_phase(1);
@@ -198,7 +201,7 @@ void kernel_main() {
     }
 }
 #elif defined(SWIGLU) && defined(WRITER)
-void kernel_main() {
+void QB2_ENTRY() {
     cb_wait_front(18, 7);
     notify_coordinator(2);
     noc_async_atomic_barrier();
@@ -220,7 +223,7 @@ using namespace ckernel;
 
 #include "projection.hpp"
 
-void kernel_main() {
+void QB2_ENTRY() {
 #ifdef FUSE_OUTPUT
     if (get_arg_val<uint32_t>(0) < 8) {
         DeviceZoneScopedN("MLP-O-MATH");
@@ -244,7 +247,7 @@ void kernel_main() {
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 
-void kernel_main() {
+void QB2_ENTRY() {
     compute_kernel_hw_startup(0, 18);
     DeviceZoneScopedN("MLP-SWIGLU-MATH");
     for (uint32_t tile = 0; tile < 7; ++tile) {

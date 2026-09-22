@@ -1,5 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#ifndef QB2_ENTRY
+#define QB2_ENTRY kernel_main
+#endif
 // Fixed QB2 specialization of the native minimal-direct fold. Pack/reload the
 // BF16 collective result before residual addition to preserve the traced path.
 #include "api/compute/common.h"
@@ -50,7 +53,7 @@ void reduce_add_phase() {
     PACK((*generation = invocation + 1));
 }
 
-void kernel_main() {
+void QB2_ENTRY() {
     reduce_add_phase();
 #ifdef FUSE_OUTPUT
     reduce_add_phase();

@@ -1,5 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#ifndef QB2_ENTRY
+#define QB2_ENTRY kernel_main
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
@@ -9,7 +12,7 @@ constexpr auto output_args=TensorAccessorArgs<input_args.next_compile_time_args_
 uint64_t norm_address(uint32_t rank, uint32_t addr) {
     return get_noc_addr(get_arg_val<uint32_t>(4+2*rank),get_arg_val<uint32_t>(5+2*rank),addr);
 }
-void kernel_main() {
+void QB2_ENTRY() {
     const uint32_t rank=get_arg_val<uint32_t>(0);
 #ifdef READER
 #ifdef FUSE_GATHER

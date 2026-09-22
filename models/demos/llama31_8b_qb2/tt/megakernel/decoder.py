@@ -7,6 +7,7 @@ from copy import copy
 import ttnn
 
 from models.demos.llama31_8b_qb2.tt.decoder import LlamaDecoder
+from models.demos.llama31_8b_qb2.tt.model import LlamaModel
 from .mlp import FusedMLP
 from .swiglu import fused_swiglu
 
@@ -182,7 +183,47 @@ def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8
     return result
 
 
-def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_workers=8):
+class ExperimentalModel(LlamaModel):
+    def decode(self, tokens, *, current_pos, rotary_pos, page_table, kv_cache, execution_batch=None):
+        if execution_batch not in (None, 1):
+            raise ValueError("The device layer loop supports batch one")
+        if (
+            any(
+                a.buffer_address() != b.buffer_address()
+                for pair, bound in zip(kv_cache, self.fused_decode_loop.caches)
+                for a, b in zip(pair, bound)
+            )
+            or len(kv_cache) != self.num_layers
+        ):
+            raise ValueError("Release traces and rebuild the loop before rebinding KV allocations")
+        layer = self.layers[0]
+        layer._validate_cache(page_table, kv_cache[0])
+        if self.fused_decode_loop.embedding_weight is not None:
+            x = self.fused_decode_loop.body.reduction.output
+        else:
+            indices = ttnn.reshape(tokens, (1, 32))
+            x = ttnn.embedding(
+                indices, self.embedding_weight, layout=ttnn.TILE_LAYOUT, memory_config=layer.local_residual_memcfg
+            )
+            x = ttnn.reshape(x, ttnn.Shape((1, 1, 1, 1024)), ttnn.Shape((1, 1, 32, 1024)), skip_padding_fill=True)
+        pages_per_chunk = max(1, 256 // layer.page_size)
+        tail_pages = (-page_table.shape[1]) % pages_per_chunk
+        table = ttnn.pad(page_table, ((0, 0), (0, tail_pages)), value=0) if tail_pages else page_table
+        x = self.fused_decode_loop(
+            x,
+            current_pos,
+            table,
+            rotary_pos,
+            tokens=tokens if self.fused_decode_loop.embedding_weight is not None else None,
+        )
+        x = layer._norm_input(x, decode=True, site="attn")
+        x = ttnn.to_memory_config(x, self.lm_head.config.input_memcfg)
+        logits = self.lm_head(x)
+        shape = ttnn.Shape((1, 1, 32, self.padded_vocab_size // 4))
+        return ttnn.reshape(logits, shape, shape, skip_padding_fill=True)
+
+
+def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_workers=8, kv_cache=None):
     """Install the same body across all 32 layers before generator trace setup.
 
     The embedding, final norm, head and sampler remain the existing traced
@@ -191,5 +232,22 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
     """
     if model.max_batch_size != 1 or set(model.decode_families) != {1}:
         raise ValueError("Only a batch-one model without additional families is supported")
-    model.layers = experimental_layers(model.layers, mode=mode, reuse_scratch=reuse_scratch, gu_workers=gu_workers)
+    is_loop = mode in ("decoder_loop", "decoder_loop_embedding")
+    if is_loop and kv_cache is None:
+        raise ValueError("The loop must bind all KV allocations before warmup and capture")
+    model.layers = experimental_layers(
+        model.layers,
+        mode="decoder" if is_loop else mode,
+        reuse_scratch=reuse_scratch,
+        gu_workers=gu_workers,
+    )
+    if is_loop:
+        from .loop import DecoderLoop
+
+        model.fused_decode_loop = DecoderLoop(
+            model.layers[0].fused_body,
+            kv_cache,
+            embedding_weight=model.embedding_weight if mode == "decoder_loop_embedding" else None,
+        )
+        model.__class__ = ExperimentalModel
     model.decode_families[1] = model.layers

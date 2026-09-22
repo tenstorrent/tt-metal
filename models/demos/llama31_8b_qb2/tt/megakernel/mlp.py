@@ -192,6 +192,7 @@ class FusedMLP:
                 addresses[i, 2] = layer.decode_weights["o"].buffer_address()
             if fuse_prepare:
                 addresses[i, 3] = layer.decode_weights["qkv"].buffer_address()
+        self.address_rows = addresses
         self.address_table = ttnn.from_torch(
             addresses,
             dtype=ttnn.uint32,
@@ -340,7 +341,16 @@ class FusedMLP:
         ]
         return ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
 
-    def __call__(self, normalized, layer_index, residual=None, attention_inputs=None, cache_inputs=None):
+    def __call__(
+        self,
+        normalized,
+        layer_index,
+        residual=None,
+        attention_inputs=None,
+        cache_inputs=None,
+        layer_loop=None,
+        embedding_tokens=None,
+    ):
         if residual is not None and self.reduction is None:
             raise ValueError("Residual fusion requires four-chip reduction")
         if self.preparation is not None:
@@ -368,7 +378,7 @@ class FusedMLP:
                     )
                 if self.preparation is not None:
                     local = self.preparation.append(local, layer_index, cache_inputs)
-                descriptor[ttnn.MeshCoordinateRange(coord, coord)] = self.reduction.append(
+                local = self.reduction.append(
                     local,
                     self.output,
                     rank,
@@ -379,9 +389,16 @@ class FusedMLP:
                     fuse_output=self.fuse_output,
                     pre_norm_cores=self.preparation.norm_cores if self.preparation is not None else (),
                 )
+                if layer_loop is not None:
+                    local = layer_loop.append(local, embedding_tokens)
+                descriptor[ttnn.MeshCoordinateRange(coord, coord)] = local
         # Keep every table-referenced weight resident; the returned scratch is
         # consumed by reduce-scatter before the next decoder invokes this body.
         io = [normalized, self.address_table, self.packed, self.product, *self.scratch_storage]
+        if layer_loop is not None:
+            io.extend(layer_loop.tensors())
+            if embedding_tokens is not None:
+                io.append(embedding_tokens)
         if self.preparation is not None:
             io.extend(self.preparation.tensors(cache_inputs))
         if self.attention_stage is not None:

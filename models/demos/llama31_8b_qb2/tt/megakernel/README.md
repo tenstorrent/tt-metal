@@ -1,167 +1,95 @@
-# Experimental QB2 decode fusion
+# Experimental QB2 decode megakernel
 
-This is a **hardware-validated MLP and four-chip reduction prototype**, not a complete decode
-megakernel. On Blackhole QB2, real-checkpoint gate/up, SwiGLU and down stages,
-complete-layer paged replay/remapping, and a batch-one context-128 full-model
-comparison pass. All 32 teacher-forced logit rows and all-layer KV caches are
-bitwise identical to the native traced baseline; all 32 greedy tokens agree.
-Warmed host decode is slower: 9.162 versus 8.786 ms/token with fused reduction
-(9.246 ms/token for local MLP) (31 decode
-steps, median of three runs). These are host generation timings, not device
-profiler or serving measurements. See `PROGRESS.md` and run artifacts for limits.
+This experiment has a **hardware-qualified partial prototype** and a larger
+**compiler-only decoder/32-layer-loop prototype awaiting hardware validation**.
+See [PROGRESS.md](PROGRESS.md) for exact checkpoints, results and recovery state.
+No measured variant is faster than the original traced model.
 
-`FusedMLP` combines local gate/up projection, SwiGLU, and down projection into
-one generic program per chip. Eight projection cores and sixteen SFPU cores
-coordinate through four program-local semaphores. The packed gate/up and product
-stay in L1. A 128-byte row in a DRAM address table selects a layer's weights.
-One object owns all referenced weights and reusable scratch through trace release.
+The body preserves the selected checkpoint policy: GU BFP4, QKV/O/down/head
+and KV BFP8, BF16 activations/residuals/collectives, LoFi projections with BF16
+partials and packer L1 accumulation, native HiFi4/FP32 norm/RoPE/SDPA and HiFi2
+head. Prefill stays in the original implementation. Batch one only.
 
-The initial geometry is batch one, hidden width 4096, TP-local intermediate
-width 3584, eight Blackhole DRAM banks, BFP4 gate/up weights, BFP8 down weights,
-and BF16 activations. It retains the baseline's LoFi projections, BF16 partials
-with packer L1 accumulation, and BF16 rounding between SiLU and multiplication.
-Exact numerical agreement was measured with real layer-0 and layer-31 weights. The separate `swiglu` mode
-replaces only layout/slicing/activation work and retains native projections.
+| Mode | Composed stages | Qualification |
+|---|---|---|
+| `swiglu` | packed gate/up through BF16 SiLU and multiply | Real layer/replay |
+| `mlp` | gate/up, SwiGLU, down | Real full32-layer context128 |
+| `mlp_reduce` | MLP and four-chip reduce-scatter | Real full32-layer context128 |
+| `mlp_tail` | above plus residual | Real full32-layer context128 |
+| `norm_mlp_tail` | native RMSNorm and MLP tail | Real full32-layer context128 |
+| `gather_norm_mlp_tail` | all-gather and normalized MLP tail | Compiler only |
+| `post_attention` | O projection, RS/add, AG/norm, MLP, RS/add | Compiler only |
+| `attention_tail` | native paged SDPA, concat and post-attention path | Compiler only |
+| `decoder` | complete single decoder layer, including QKV/RoPE/paged KV | Compiler only |
+| `decoder_loop` | one device program loops over the layer weight/KV table | Compiler only |
+| `decoder_loop_embedding` | token embedding and the device layer loop | Compiler only |
 
-`enable_experimental_decode(model, mode="mlp")` installs the body across the 32
-layers before generator warmup/capture. Prefill, normalization, attention,
-paged KV operations, collectives, embedding, head, and sampling retain their
-existing implementations. There are still 32 host-orchestrated MLP invocations
-per token; the body does not loop over complete decoder layers on device.
-Output aliases scratch, so calls must be sequential and consumed before reuse.
-This integration is not qualified for vLLM or concurrent requests.
+Qualified modes produce bitwise-identical teacher logits and all64 KV tensors,
+32/32 matching greedy outputs and stable repeated generations at B1/context128.
+Page tests migrate physical pages, mutate the captured page table in place,
+cross positions127/128 and255/256, and replay repeatedly. Real MLP intermediates
+also match for distinct layers0/31. Host medians: baseline8.785510ms/token,
+MLP9.246204, MLP+RS9.161502, MLP+RS/add9.133671, norm+tail9.336578.
+These are31-step generation timings, not device or serving latency.
 
-After verifying the four-chip mesh, run serially with a bounded device runner
-that captures triage before terminating a hung process:
+BF16 Hugging Face diagnostics are separate from the matched quantized TT
+comparison: baseline and exact prototypes both have logitPCC0.977533 and100%
+teacher top1 agreement on the fixed prompt. The provisional0.99 HF target fails
+for both. This does not establish task accuracy. Context2048 baseline is saved
+at9.223623ms/token; matched prototype testing remains pending.
+
+`FusedMLP` owns weights and reusable scratch. A128-byte DRAM row selects a
+layer's weights; `DecoderLoop` additionally binds each layer's two KV addresses
+before warmup. Outputs alias scratch and must be consumed before reuse. Loop
+workers use current DeepSeek cross-RISC synchronization and64-CB reset helpers;
+start/end synchronization words are distinct. Global layer barriers protect
+local semaphore/CB reset, while native fabric initialization coordinates chips.
+Attention retains its native32-core grouping on separate cores and uses CB32.
+The whole-layer layout requires Blackhole's real11x10 grid and GU8 workers.
+
+The embedding variant reads BF16 row-major checkpoint rows directly into the
+first residual buffer. Final normalization, LM head and sampling remain the
+native traced boundary. No persistent multi-token loop or vLLM integration is
+implemented. Cache allocations cannot change while a loop/trace references
+their address table; page-table contents and positions remain device inputs.
+
+After health/ownership verification, run these **serially with bounded commands**:
 
 ```bash
-pytest -q -s models/demos/llama31_8b_qb2/tests/test_decoder.py -k '1-129'
 pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel_mlp.py
 pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel.py
+pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel_loop.py
 python -m models.demos.llama31_8b_qb2.tests.benchmark_megakernel \
     --mode baseline --context 128 --output /outside/repo/baseline
 python -m models.demos.llama31_8b_qb2.tests.benchmark_megakernel \
-    --mode mlp --context 128 --reference /outside/repo/baseline \
-    --output /outside/repo/mlp
+    --mode decoder_loop_embedding --context 128 --reference /outside/repo/baseline \
+    --output /outside/repo/prototype
 ```
 
-Layer tests use real checkpoint weights and embedding inputs, cross positions
-127/128 and 255/256, migrate physical pages and change the same captured page
-table in place, compare complete cache tensors, and replay traces repeatedly.
-Full-model tests exercise greedy token feedback and teacher-forced logits/KV
-across all layers. The comparison checks matched checkpoint/precision/sampling.
-The reported host generation duration includes enqueue and final readback;
-it is not a device-profiler or vLLM serving measurement.
+Use `reference_megakernel --context 128 --tokens 32 --output ...` to prepare the
+CPU HF reference, then pass its `reference.pt` with `--hf-reference` to both TT
+runs. The harness verifies matched prompt/checkpoint/precision/sampling/teacher
+stream and saves logits, tokens and all caches outside Git. Failures retain
+actual tensors. `test_megakernel_loop.py` selects real layers0/31 and separate
+cache allocations to exercise table selection, reset and page remapping.
 
-An optional CPU-only HF reference provides full-model accuracy evidence on a
-fixed teacher stream, in addition to the matched TT fusion comparison:
-
-```bash
-python -m models.demos.llama31_8b_qb2.tests.reference_megakernel \
-    --context 128 --tokens 32 --output /outside/repo/hf-reference
-```
-
-Pass `--hf-reference /outside/repo/hf-reference/reference.pt` to both TT
-benchmark modes. The same prompt and teacher tokens are checked explicitly;
-HF uses BF16 checkpoint/cache precision, so it is an accuracy reference, not
-the matched performance baseline. Logits, predicted tokens and all-layer KV
-are saved outside Git. Failed TT comparisons preserve actual tensors.
-The focused MLP test separately checks packed gate/up, SiLU/product, and down
-outputs with distinct real layer-0/layer-31 weight-table rows and trace replay.
-
-Run profiling in a separate process, without Watcher or serving:
+Collect device profiling in a separate process, without serving or Watcher:
 
 ```bash
 python -m tracy -r --device-memory-profiler --op-support-count 4000 -o /outside/repo/profile \
     -m models.demos.llama31_8b_qb2.tests.benchmark_megakernel \
-    --mode mlp --context 128 --repeats 3 --profile --output /outside/repo/profile-run
+    --mode norm_mlp_tail --context 128 --repeats 3 --profile --output /outside/repo/profile-run
 ```
 
-Compare the matched baseline invocation. `QB2_DECODE_BEGIN_*` / `END_*`
-signposts enclose complete one-token model/sampling traces at a fixed context;
-input/position refreshes are outside. `MLP-*` device zones separate projection,
-SFPU, output write, and barrier phases. Profiler overhead prevents using these
-runs as the generation latency result.
+The harness drains profiler buffers between windows; captures missing operations
+must not support comparisons. Saved qualified baseline/GU16 reports have three
+complete windows/all four devices. Device3 median firmware span9.393458ms
+baseline versus9.853521ms GU16 MLP+RS. Kernel durations overlap with waits; do
+not sum phase durations or firmware operation durations into latency. Profiler
+zones include MLP, attention/concat, paged KV and loop barriers. Hardware DRAM
+traffic counts and final-mode measurements remain outstanding.
 
-The next implementation stage is device profiling and optimization, then
-folding normalization and fabric reductions into the body, then attention/KV
-and device layer-loop coordination. Current DRAM-sharded matmul uses Metal 2.0
-ProgramArtifacts; the legacy Python sequential fuser cannot directly consume
-it. Blackhole has 64 CB indices; this prototype's highest index is 31, so CB
-index exhaustion is not its current constraint.
-
-`reuse_scratch=True` shares input/weight/partial backing storage between the
-sequential projections. Its weight buffer holds one block to fit alongside
-native prefill allocations; the default uses separate double-buffered weights.
-Both configurations pass stage and complete-layer tests. Only the default has
-full-model evidence so far. A larger shared allocation was rejected by current
-runtime prefill L1 collision validation; do not restore it without rechecking.
-
-The BF16 HF reference is a separate accuracy diagnostic: the original selected
-BFP4/BFP8 baseline has aggregate logit PCC 0.97753 on this prompt, despite 100%
-teacher top-1 agreement. The prototype reproduces it exactly. The saved result
-explicitly records `hf_pcc_099_passed=false`; this is not a 0.99 HF accuracy pass.
-Use `--require-hf-pcc` to make an HF threshold mandatory after saving evidence.
-
-## Four-chip reduction milestone (2026-09-22 14:03 UTC)
-
-`mlp_reduce` now combines MLP and native-order four-chip reduce-scatter in one
-mesh program, with two fabric workers and program-local CB receive storage.
-An opt-in native writer LOCAL_STAGING_CB define uses this scratch with the
-existing initialization barrier before any peer writes. Current-runtime rebuild
-passed (five actions, build-local-staging.log); native modes remain unchanged.
-Standalone12 back-to-back trace replays and complete-layer page/remap checks
-pass. All32-layer context128 comparison passes: teacher logits and all64 KV
-tensors bitwise exact,32/32 greedy tokens identical,3 repeats stable. Host trials
-9.161502/9.162214/9.155281 ms/token; median9.161502,4.28% slower than baseline.
-Evidence: local-reduce-layer.*, numerical-local-reduce/, model-mlp-reduce-local-128/.
-
-The first four-worker communication attempt hung; full triage was preserved
-before own-process termination (compact-reduce-triage/). Authorized bounded
-recovery at13:44 passed full connectivity and mesh opening. Two workers avoid
-duplicate fabric sender use. Persistent staging then hit LM-head L1 validation;
-program-local staging resolves it and passes the full model.
-
-Earlier per-op profiler captures lose records in later replays; their breakdowns
-are provisional. The harness now drains buffers between measured windows.
-Matched recapture and coverage validation are underway. Next: optimize gate/up
-from eight workers toward the native two-readers-per-bank schedule, extend
-context, and continue normalization/attention fusion. Full decoder, device
-32-layer loop and embedding/head/sampling fusion remain incomplete.
-
-Verify complete operation coverage for device profiling. The current
-`--device-trace-profiler` flag aggregates whole traces and must be used
-separately from per-operation reporting. No serving result is claimed.
-
-## Native RMSNorm and residual composition (2026-09-22 14:28 UTC)
-
-New verified `norm_mlp_tail` mode combines current native HiFi4/FP32 RMSNorm
-arithmetic, quantized MLP, four-chip reduce-scatter and BF16 residual addition.
-Metal2 DataflowBuffer uses the same Blackhole CB interface; fixed named argument
-bindings allow reusing native norm compute code with a composable data path.
-Input-ready waits and zero initialization of masked statistics are explicit.
-Initial norm failures and intermediate dumps are preserved; final native norm
-outputs are bitwise exact across3 real token embeddings and8 replay iterations.
-Complete-layer12 page-growth/remap checks and all32-layer context128 pass:
-logits/all64 KV tensors exact,greedy32/32,3 stable repeats. Host9.336578ms/token
-versus baseline8.785510; still slower. Separate `mlp_tail` (no fused norm) gives
-9.133671ms/token and the same exact model evidence.
-
-The optional `--gu-workers 16` experiment also passes real layers0/31, paged
-layer checks and full model, but is slower at9.383494ms/token. Default stays8.
-Coverage-qualified device profiling: baseline999 operations/device/window
-(968 model+31 sampling) in all3 windows, no missing durations. Baseline device3
-median summed kernel time8.525387ms and full firmware span9.393458ms at1350MHz.
-GU16 MLP+reduction median kernel sum9.091880ms, firmware span9.853521ms, also
-complete windows/no missing durations. Profiling is separate from host timing.
-Summed firmware durations overlap across programs and are not latency.
-Artifacts: profile-baseline-drained/, profile-gu16-drained/, their coverage.json
-and concise decode-*-summary.csv from tt-perf-report1.3.0.
-
-Measured GU16 synchronization zones over3x32layersx4chips: coordinator GU wait
-median4.029us/p959.388us; down-ready barrier0.348us/p950.351us. Other phase
-durations in phase-durations.json; they overlap and must not be summed. No
-hardware DRAM-traffic count or serving benchmark yet. Next: context2048 baseline
-and matched prototype; fuse all-gather using the existing two fabric workers
-and connections, then projection/attention toward a complete decoder body.
-Full decoder and device32-layer loop remain incomplete.
+Optional `reuse_scratch=True` aliases projection input/weight/partial storage,
+using one weight block to coexist with native prefill allocations. It passes
+real stage/layer tests; full-model performance is unqualified. GU16 passes the
+partial model tests but is slower; complete-layer composition requires GU8.

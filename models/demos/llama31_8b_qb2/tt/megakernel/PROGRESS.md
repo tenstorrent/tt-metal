@@ -146,3 +146,27 @@ of new stages due to the ownership conflict.** Layer-loop/model boundary remains
 to implement; source progress continues using current cross-RISC CB-reset APIs.
 Parent receipt15:16 confirms compiler checkpoint8ee5264a pushed to the requested
 branch and conflict escalated to Mark.
+
+## Compiler-only layer loop and embedding (15:38 UTC)
+
+`DecoderLoop` now binds all layer K/V addresses in the same128-byte weight table
+and wraps every participating RISC in a device layer loop. It snapshots current
+CB interfaces, uses current DeepSeek64-CB reset helpers, and places global
+per-chip plus cross-RISC barriers around each layer. Native fabric initialization
+coordinates chips. Local semaphore masks come from the actual descriptors.
+Separate start/end barrier words fix a source-review race in consecutive packed
+barriers. Native math kernels/configurations are retained. `decoder_loop` is
+integrated at the original model boundary; `decoder_loop_embedding` also reads
+BF16 embedding rows directly from device token IDs. Final norm/head/sampling
+stay native. Immutable KV allocation binding is enforced; page remapping and
+positions remain dynamic device inputs.
+
+Both variants pass explicit mock SFPI compile/link and repeated cached calls;
+latest logs `compile-mock-loop-v3.log` and `compile-mock-loop-embedding.log`.
+Loop max configuration54,160B, including50,320B kernel text; adds4KiB persistent
+state per participating core. `test_megakernel_loop.py` collects real layer0/31
+one-/two-layer checks with distinct cache arenas and page migration. **All these
+new paths remain numerically unqualified because the unrelated device owner is
+still live.** Next hardware order: gather tail, postattention, attention tail,
+complete layer, loop1/2, full32model; preserve triage on any hang. The fullmodel
+benchmark accepts both loop variants and verifies against saved baseline.

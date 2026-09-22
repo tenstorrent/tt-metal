@@ -1,5 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#ifndef QB2_ENTRY
+#define QB2_ENTRY kernel_main
+#endif
 #if defined(READER) || defined(WRITER)
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -9,7 +12,7 @@ constexpr auto table_args = TensorAccessorArgs<weight_args.next_compile_time_arg
 uint64_t peer(uint32_t i, uint32_t address) {
     return get_noc_addr(get_arg_val<uint32_t>(4 + 2 * i), get_arg_val<uint32_t>(5 + 2 * i), address);
 }
-void kernel_main() {
+void QB2_ENTRY() {
     const uint32_t bank = get_arg_val<uint32_t>(0);
 #ifdef READER
     const auto table = TensorAccessor(table_args, get_arg_val<uint32_t>(2), 128);
@@ -52,7 +55,7 @@ void kernel_main() {
 #else
 #include "projection.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
-void kernel_main() {
+void QB2_ENTRY() {
     DeviceZoneScopedN("QKV-MATH");
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 24);
     projection<0, 1, 16, 24, 16, 6, 128, 6>();

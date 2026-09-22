@@ -1,5 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#ifndef QB2_ENTRY
+#define QB2_ENTRY kernel_main
+#endif
 // Bind the current native Metal 2.0 RMSNorm arithmetic to fixed batch-one
 // legacy CB indices. DataflowBuffer uses the same Blackhole CB interface.
 #include "experimental/kernel_args.h"
@@ -18,7 +21,7 @@ constexpr uint32_t ex_partial2=7, ex2=8, ex_external2=9, ex_global=10, ex2pe=11,
 #include "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp"
 #undef kernel_main
 #include "tools/profiler/kernel_profiler.hpp"
-void kernel_main() {
+void QB2_ENTRY() {
     DeviceZoneScopedN("MLP-NORM-MATH");
     // Native sharded input is already resident when dispatch starts. This
     // composed variant first gathers it through NCRISC, so wait explicitly.
