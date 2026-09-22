@@ -123,7 +123,7 @@ def run(args):
         "limitations": (
             "B1; mode-dependent experimental composition. decoder_loop places all32 layers in one program; "
             "decode_token adds embedding/final gather/norm/head; sampling stays native. "
-            "Active batch-one positions only; no serving qualification. See PROGRESS.md."
+            "B1 active decode and inactive warmup; no serving qualification. See PROGRESS.md."
         ),
     }
     evidence = {"context": args.context, "tokens": args.tokens}
@@ -203,6 +203,30 @@ def run(args):
                 ttnn.synchronize_device(mesh)
                 signpost(f"QB2_DECODE_END_{repeat}")
                 ttnn.ReadDeviceProfiler(mesh)
+                if os.environ.get("TT_METAL_PROFILER_SUM") == "1" and hasattr(generator.model, "fused_decode_loop"):
+                    loop = generator.model.fused_decode_loop
+                    counters = []
+                    # Height-sharded storage is assembled in row-major grid
+                    # order, independent of the body's role-ordered core list.
+                    storage_cores = ttnn.corerange_to_cores(loop.grid, row_wise=True)
+                    for device, shard in enumerate(ttnn.get_device_tensors(loop.state)):
+                        tiles = ttnn.to_torch(shard).reshape(len(loop.cores), 32, 32)
+                        for index, core in enumerate(storage_cores):
+                            # Raw tile words480/481 map to face1,row14,col0/1.
+                            cycles, count = int(tiles[index, 14, 16]), int(tiles[index, 14, 17])
+                            assert cycles > 0 and count == 2 * loop.count and count <= 64
+                            per_barrier = tiles[index, 16:20, :16].reshape(-1)[:count].tolist()
+                            assert sum(per_barrier) == cycles and all(v > 0 for v in per_barrier)
+                            counters.append(
+                                {
+                                    "device_shard": device,
+                                    "logical_core": [core.x, core.y],
+                                    "cycles": cycles,
+                                    "barriers": count,
+                                    "per_barrier_cycles": per_barrier,
+                                }
+                            )
+                    result.setdefault("layer_barrier_counters", []).append({"repeat": repeat, "cores": counters})
             result["measurement"] = (
                 "Read device kernel/firmware durations inside decode signposts from the profiler artifacts"
             )

@@ -26,29 +26,40 @@ void snapshot_buffers(uint32_t tt_l1_ptr* state, uint32_t low, uint32_t high) {
     }
 }
 void layer_barrier() {
-    DeviceZoneScopedN("DECODER-LAYER-BARRIER");
-    const uint32_t arrivals = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 7);
-    const uint32_t release = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 8);
-    const uint32_t epoch_address = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 9);
-    const uint32_t coordinator_x = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 10);
-    const uint32_t coordinator_y = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 11);
-    const uint32_t cores = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 12);
-    const uint32_t index = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 13);
-    auto* epoch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(epoch_address);
-    const uint32_t generation = *epoch + 1;
-    *epoch = generation;
-    noc_semaphore_inc(get_noc_addr(coordinator_x, coordinator_y, arrivals), 1);
-    noc_async_atomic_barrier();
-    if (index == 0) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrivals), generation * cores);
-        for (uint32_t i = 0; i < cores; ++i) {
-            noc_async_write(epoch_address,
-                get_noc_addr(get_arg_val<uint32_t>(LOOP_RT_OFFSET + 14 + 2 * i),
-                             get_arg_val<uint32_t>(LOOP_RT_OFFSET + 15 + 2 * i), release), 4);
+#if defined(PROFILE_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+    const uint32_t before = kernel_profiler::sums[0];
+#endif
+    {
+        // Accumulate all64 barriers without exhausting the512-word marker buffer.
+        // The total includes worker waiting; it is not additive model latency.
+        DeviceZoneScopedSumN1("DECODER-LAYER-BARRIER-TOTAL");
+        const uint32_t arrivals = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 7);
+        const uint32_t release = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 8);
+        const uint32_t epoch_address = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 9);
+        const uint32_t coordinator_x = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 10);
+        const uint32_t coordinator_y = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 11);
+        const uint32_t cores = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 12);
+        const uint32_t index = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 13);
+        auto* epoch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(epoch_address);
+        const uint32_t generation = *epoch + 1;
+        *epoch = generation;
+        noc_semaphore_inc(get_noc_addr(coordinator_x, coordinator_y, arrivals), 1);
+        noc_async_atomic_barrier();
+        if (index == 0) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrivals), generation * cores);
+            for (uint32_t i = 0; i < cores; ++i) {
+                noc_async_write(epoch_address,
+                    get_noc_addr(get_arg_val<uint32_t>(LOOP_RT_OFFSET + 14 + 2 * i),
+                                 get_arg_val<uint32_t>(LOOP_RT_OFFSET + 15 + 2 * i), release), 4);
+            }
+            noc_async_write_barrier();
         }
-        noc_async_write_barrier();
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(release), generation);
     }
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(release), generation);
+#if defined(PROFILE_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+    auto* state = reinterpret_cast<uint32_t tt_l1_ptr*>(get_arg_val<uint32_t>(LOOP_RT_OFFSET));
+    state[512 + state[482]++] = kernel_profiler::sums[0] - before;
+#endif
 }
 #endif
 
@@ -62,6 +73,9 @@ void kernel_main() {
     const uint32_t count = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 6);
 #if defined(COMPILE_FOR_NCRISC)
     snapshot_buffers(state, get_arg_val<uint32_t>(LOOP_RT_OFFSET + 1), get_arg_val<uint32_t>(LOOP_RT_OFFSET + 2));
+#if defined(PROFILE_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+    state[482] = 0;
+#endif
 #endif
 #if LOOP_PATCH == 5
     const uint32_t initial_residual = get_arg_val<uint32_t>(14);
@@ -120,4 +134,12 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(state);
         }
     }
+#if defined(COMPILE_FOR_NCRISC) && defined(PROFILE_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+    // Export the total independently of optional marker-buffer capacity.
+    // Words480/481 are outside CB snapshots, synchronization and table scratch.
+    // The separate sum-capture harness reads these after execution, outside
+    // timing signposts. Avoid quick_push on an already full optional buffer.
+    state[480] = kernel_profiler::sums[0];
+    state[481] = state[482];
+#endif
 }
