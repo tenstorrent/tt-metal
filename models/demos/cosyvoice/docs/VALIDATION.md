@@ -126,12 +126,17 @@ shipped (see below).
 | Document tuning, limitations, trade-offs | ✅ | this document, `PERF.md` *Tuning flags* and *Known limitations* | — |
 | `60+ tok/s` | ✅ | checked | *Semantic-token throughput* |
 | `RTF < 0.2` | ❌ floored, not merely unmet — see below | checked against a recorded band | *End-to-end real-time factor* |
-| Streaming inference | ✅ | `test_device_streamed_matches_non_streamed` (content), `test_device_streaming_first_audio_latency` (schedule) | *Streaming* |
+| Streaming inference | ✅ content, schedule and audio | `test_device_streamed_matches_non_streamed` (content), `test_device_streaming_first_audio_latency` (schedule), `test_device_streaming_generates_the_same_tokens_as_batch` (interleaved audio, since 2026-09-22) | *Streaming* |
 | Efficient multi-lingual switching | ✅ 5 languages × 4 modes | `demo/sweep.py` | *Speech quality* |
 
 ---
 
-## The three that are not met, and why
+## What is not met, what was fixed, and why
+
+Three requirements are unmet (`RTF < 0.2`, `RTF < 0.5` on n300, speculative decoding)
+and two device defects remain open (the Wormhole `test_streaming_perf` hang, the n300
+amplitude difference). The interleaved schedule's corrupt audio was in this list and is
+now fixed; its account is kept because the remedy that failed is the instructive half.
 
 ### `RTF < 0.2` — reached the floor of this decomposition
 
@@ -198,11 +203,35 @@ building a real multi-utterance serving path needs that defect closed first, and
 should batch the decode while keeping a device per utterance for the other two stages
 until then.
 
-### The interleaved schedule's corrupt audio — diagnosed, remedy known, not shipped
+### The interleaved schedule's corrupt audio — fixed 2026-09-22
 
-`CosyVoiceTTNN.synthesize_streaming` returns audio peaking around 72 against a batch
-path peaking at 0.001 on the same prompt — identical tokens, correct chunk schedule,
-destroyed waveform. The cause is established, which is the part that changed:
+Closed. `CosyVoiceTTNN.synthesize_streaming` used to return audio peaking around 72
+against a batch path peaking at 0.001 on the same prompt — identical tokens, correct
+chunk schedule, destroyed waveform. Measured on `p150a` one commit apart, with the
+whole `tests/e2e/` suite and `tests/perf/test_streaming_perf.py` in the same two runs:
+
+| | streamed peak | batch peak | `test_streaming_perf` |
+|---|---:|---:|---|
+| before | `72.5000` | `0.0003` | passes, first-audio gain `1.19×` |
+| after | `0.0006` | `0.0005` | passes, first-audio gain `1.19×` |
+
+The remedy is in `TtStreamingSynthesizer._carry_store`. The four tensors a stream
+carries across a seam now live in persistent buffers allocated before any trace is
+captured, and are written thereafter only by `ttnn.copy` — so neither an allocation nor
+a readback crosses a live trace. The first chunk of the warm-up pass adopts each
+buffer, which is what sizes and types them, and is why both callers run that warm-up
+before capturing a trace.
+
+`tests/e2e/test_pipeline_api.py` no longer pins a defect band; it asserts `peak < 1.5`
+and that the streamed peak stays in proportion to the batch path's. Streaming content
+equivalence is unchanged at mel-space PCC `0.901830`, the same figure `PERF.md` already
+records. The full suite at that commit: 20 passed, 1 skipped — the skip is end-to-end
+batched synthesis, which is a different defect and still open.
+
+The account below is kept because it is what made the fix findable, and because the
+remedy that did *not* work is the more useful half of it.
+
+The cause was established first:
 
 * `generate(use_trace=False)` makes it correct. Same conditioning, same schedule,
   same tokens; the only variable is whether a decode trace exists. So it is not the
@@ -218,19 +247,28 @@ arithmetic and leaves what `StreamState` carries across a seam — `mel_overlap`
 live and clobbered by a later `execute_trace`. TTNN warns about exactly this: *"These
 buffers may be corrupted once a trace is executed."*
 
-The remedy is known and is not in the tree. Parking those four on the host between
-chunks (`to_torch` out, `from_torch` back) fixes the audio — verified on `p150a` and
-n300. It is not shipped because it hangs `tests/perf/test_streaming_perf.py` on
-Blackhole, where that test otherwise passes in 12.7 s; the A/B is one commit apart on
-one board. Also tried and
-rejected: draining the queue before the readback, and hoisting the synthesizer out of
-the traced region.
+The first remedy tried was to park those four on the host between chunks (`to_torch`
+out, `from_torch` back). It fixes the audio — verified on `p150a` and n300 — and it is
+*not* what shipped, because it wedges `tests/perf/test_streaming_perf.py` on Blackhole,
+where that test otherwise passes in 12.7 s. Draining the queue before the readback and
+hoisting the synthesizer out of the traced region were also tried, and changed nothing.
 
-So the defect stands, with `synthesize` as the checked path for audio, and the
-schedule itself checked by
-`test_device_streaming_generates_the_same_tokens_as_batch` — which asserts identical
-tokens and that chunks are emitted *during* generation, both of which hold. What is
-not yet deliverable is correct audio out of the interleaved path.
+Why it wedged is the part worth keeping, because it is what pointed at the fix that
+worked. Parking trades one half of TTNN's warning for the other: instead of *carrying*
+a device buffer across a live trace, it *allocates* one (`from_torch`) and *reads one
+back* (`to_torch`) inside the window where a trace is live, at every seam. The readback
+is the expensive half — it forces a device-to-host transfer at a point where the trace
+owns the queue.
+
+What ships avoids both. The carried tensors live in buffers allocated *before* any
+trace is captured, and every later chunk writes into them with a device-to-device
+`ttnn.copy`: no allocation, no readback, nothing new asked of the allocator at a moment
+when the trace already owns addresses. That also explains why the ordering constraint
+is real rather than superstition — a buffer first allocated *after* capture can sit on
+an address the trace has baked in, which is the original defect wearing a different
+hat. Both callers therefore build their synthesizer before capturing a trace, and
+`tests/perf/test_streaming_perf.py` was changed to reuse one rather than construct a
+second after capture.
 
 ### `test_streaming_perf` hangs on Wormhole — open
 

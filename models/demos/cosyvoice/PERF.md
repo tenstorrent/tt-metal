@@ -376,8 +376,7 @@ risky: `COSYVOICE_FF2_GRID`, and `COSYVOICE_KV_INPLACE` on Blackhole.
 ## 10. Known limitations
 
 Four, all reproducible, none smoothed over. `docs/VALIDATION.md` carries the same list
-against the requirements they touch, and item 3 additionally carries a defect whose
-cause is now established and whose remedy is known but does not yet ship cleanly.
+against the requirements they touch.
 
 1. `RTF < 0.2` is not reachable on this decomposition — §3.4. Bounded below by the
    Euler count and by the decode step's weight traffic, not by tuning.
@@ -390,16 +389,21 @@ cause is now established and whose remedy is known but does not yet ship cleanly
    board. TTNN warns about it — *"Allocating device buffers is unsafe due to the
    existence of an active trace"* — and this port has been bitten by two distinct
    symptoms of it, unrelated to each other beyond sharing that cause. One:
-   `synthesize_streaming`'s interleaved audio gets corrupted across a chunk seam,
-   diagnosed with a known remedy that is not shipped — it hangs a Blackhole perf test.
-   Two, separately: `test_device_streaming_first_audio_latency` hangs Wormhole,
-   cause not established. A previous entry here called it an upstream TTNN defect and
+   `synthesize_streaming`'s interleaved audio was corrupted across a chunk seam.
+   Fixed 2026-09-22 — the carried tensors moved into persistent buffers allocated
+   before capture and written only by `ttnn.copy`, so neither an allocation nor a
+   readback crosses a live trace; streamed peak `72.5` → `0.0006` against a batch peak
+   of `0.0005`, with `test_device_streaming_first_audio_latency` still passing at the
+   same `1.19×` first-audio gain. Two, still open:
+   `test_device_streaming_first_audio_latency` hangs Wormhole, cause not established.
+   A previous entry here called it an upstream TTNN defect and
    named re-seeding a trace's buffers after execution; that was withdrawn when the
    probe behind it turned out to be compiling kernels under a live trace, which the
    real path does not do.
-   `docs/VALIDATION.md` has both full accounts, including what was ruled out for each
-   and the design constraint the second one leaves (the flow decoder and vocoder must
-   be warmed before the AR decode trace is captured).
+   `docs/VALIDATION.md` has both full accounts, including what was ruled out for each,
+   why host-parking cured the audio but wedged a Blackhole perf test, and the design
+   constraint that leaves (the flow decoder and vocoder must be warmed, and the
+   streaming synthesizer built, before the AR decode trace is captured).
 
 4. An n300/Blackhole streaming amplitude difference on one synthetic case, found
    while diagnosing the above and not yet explained. Which figure is wrong is not

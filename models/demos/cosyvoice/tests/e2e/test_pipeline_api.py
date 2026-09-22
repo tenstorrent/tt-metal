@@ -143,32 +143,34 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
     )
     assert streamed.shape[1] > 0 and torch.isfinite(streamed).all(), "streamed audio is empty or not finite"
 
-    # **A defect band, not an acceptance band — and the defect is understood.**
-    # Interleaved synthesis produces audio peaking around 72 on Blackhole and 8 on
-    # Wormhole against a batch path peaking at 0.001, with identical tokens and a
-    # correct chunk schedule. The cause is established: the state `StreamState` carries
-    # across a chunk seam sits in device buffers while `generate()`'s trace is live and
-    # a later `execute_trace` clobbers it. `generate(use_trace=False)` produces correct
-    # audio, which is what isolates it; per chunk, the first matches a no-trace
-    # reference at PCC 0.99999994 and the second has a bit-identical mel with waveform
-    # PCC 0.011. `docs/VALIDATION.md` carries the full account and the remedy, which is
-    # known and does not yet land -- parking those tensors on the host fixes the audio
-    # and hangs `tests/perf/test_streaming_perf.py` on Blackhole.
+    # **The interleaved path must produce audio, not a corrupted waveform.**
+    # This assertion used to pin a *defect* band -- interleaved synthesis peaked around
+    # 72 on Blackhole and 8 on Wormhole against a batch path peaking at 0.001, with
+    # identical tokens and a correct chunk schedule. The cause was that the state
+    # `StreamState` carries across a chunk seam sat in device buffers while
+    # `generate()`'s trace was live, and a later `execute_trace` overwrote it.
     #
-    # Pinned rather than printed, for the reason `tests/perf/gates.py` pins a missed
-    # threshold: an unasserted number drifts silently. The magnitudes differ by
-    # architecture because corruption has no meaningful magnitude -- it is not a scale
-    # error, and an earlier revision of this comment read it as one.
+    # That is fixed. The carried tensors now live in persistent buffers allocated
+    # before any trace is captured and are only ever written by `ttnn.copy`, so neither
+    # an allocation nor a readback crosses a live trace --
+    # `TtStreamingSynthesizer._carry_store` has the account, and `docs/VALIDATION.md`
+    # records what an earlier host-parking remedy cost and why this one is different.
+    # Measured on p150a at the commit that shipped it: streamed peak 0.0006 against a
+    # batch peak 0.0005, where the same test on the previous commit gave 72.5.
     #
-    # **Closing the defect means replacing all of this with `peak < 1.5`**, plus the
-    # batch-relative check below, not widening the band.
-    lo, hi = (4.0, 16.0) if "WORMHOLE" in str(device.arch()).upper() else (40.0, 120.0)
+    # Checked against the batch path rather than a constant, because the absolute peak
+    # depends on the utterance: what has to hold is that interleaving does not change
+    # the signal's scale.
     peak, batch_peak = float(streamed.abs().max()), float(n_batch.abs().max())
-    assert lo < peak < hi, (
-        f"streamed peak {peak:.4f} is outside this architecture's recorded defect band "
-        f"({lo}, {hi}). Near the batch path's {batch_peak:.4f} means the defect is fixed "
-        "-- replace this with `peak < 1.5` and update docs/VALIDATION.md. Elsewhere "
-        "means something new is wrong."
+    assert peak < 1.5, (
+        f"streamed peak {peak:.4f} -- the interleaved path is clipping or corrupted. "
+        f"The batch path on the same prompt peaks at {batch_peak:.4f}. A peak in the "
+        "tens means the carried StreamState is being overwritten by the decode trace "
+        "again; see TtStreamingSynthesizer._carry_store."
+    )
+    assert peak < max(20.0 * batch_peak, 0.05), (
+        f"streamed peak {peak:.4f} is far above the batch path's {batch_peak:.4f} on "
+        "the same prompt -- interleaving changed the signal's scale"
     )
     assert batch_peak < 1.5, (
         f"the *batch* path clips at {batch_peak:.4f} -- that path is gated elsewhere " "and should never do this"

@@ -89,7 +89,30 @@ class StreamConfig:
 
 @dataclass
 class StreamState:
-    """Everything carried between chunks. All device tensors."""
+    """What is carried between chunks, as references into persistent buffers.
+
+    Each field points at a buffer owned by `TtStreamingSynthesizer`, not at a tensor
+    this class allocated, and the distinction is a correctness requirement rather than
+    bookkeeping.
+
+    **A device buffer allocated while a trace is live can be corrupted by that trace.**
+    When the caller is interleaving -- driving this synthesizer from inside the AR
+    decode loop, which is what `StreamSession` is for -- an `execute_trace` runs between
+    one chunk and the next, and TTNN says what that costs: *"Allocating device buffers
+    is unsafe due to the existence of an active trace. These buffers may be corrupted
+    once a trace is executed."*
+
+    It was measured rather than inferred. Interleaved synthesis produced a first chunk
+    matching the non-interleaved reference at waveform PCC `0.99999994`, and a second
+    chunk whose mel was *bit-identical* (PCC `1.0`) but whose waveform scored PCC
+    `0.011`. Identical mel with destroyed audio localises it exactly: not the flow
+    decoder, not the vocoder's arithmetic, but these four tensors.
+
+    The fix is to allocate them **before** any trace is captured and then only ever
+    write into them, so no allocation and no readback crosses a live trace. See
+    `TtStreamingSynthesizer._carry_store`, which is where the buffers come from and why
+    the first chunk of a warm-up pass is what sizes them.
+    """
 
     mel_overlap: object | None = None  # [1, mel_overlap_len, 80]
     hift_mel: object | None = None  # [1, mel_cache_len, 80]
@@ -98,9 +121,8 @@ class StreamState:
     emitted: list = field(default_factory=list)
 
     def free(self):
-        for t in (self.mel_overlap, self.hift_mel, self.hift_source, self.hift_speech):
-            if t is not None:
-                ttnn.deallocate(t)
+        """Drop the references. The buffers themselves belong to the synthesizer and
+        outlive any one session -- `TtStreamingSynthesizer.release_carry` frees them."""
         self.mel_overlap = self.hift_mel = self.hift_source = self.hift_speech = None
 
 
@@ -127,9 +149,53 @@ class TtStreamingSynthesizer:
         ws = hamming(2 * s)
         self._sp_in = self._dev(ws[:s].reshape(1, -1, 1))
         self._sp_out = self._dev(ws[s:].reshape(1, -1, 1))
+        # The four buffers carried across a chunk seam, keyed by name. Empty here and
+        # filled by the first chunk that produces each one -- see `_carry_store`.
+        self._carry: dict[str, object] = {}
 
     def _dev(self, v, dtype=None):
         return ttnn.from_torch(v, dtype=dtype or self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+    # ----------------------------------------------------------------------
+    def _carry_store(self, key, t):
+        """Move `t` into this synthesizer's persistent buffer for `key`; return it.
+
+        The first chunk to produce a given carry *adopts* its tensor as the buffer,
+        because that is the only way to size and type it without duplicating the
+        vocoder's shape arithmetic here. Every later chunk copies into that buffer and
+        frees the temporary, so after the first chunk this path allocates nothing.
+
+        **Why that ordering matters.** `StreamState` explains the defect; this is the
+        half that fixes it. A buffer allocated before the AR decode trace is captured
+        keeps its address across `execute_trace`; one allocated afterwards may sit on
+        an address the trace already owns and be overwritten. Both callers therefore
+        run a throwaway chunk through this synthesizer *before* capturing a trace --
+        `CosyVoiceTTNN.synthesize_streaming` for the shipped path, and
+        `tests/perf/test_streaming_perf.py` for the head-to-head measurement -- which
+        is what makes the adoption happen at a safe moment.
+
+        Copying rather than parking on the host is deliberate. Reading these back with
+        `to_torch` between chunks also cures the corruption, and was tried: it forces a
+        device-to-host transfer at every seam, inside the window where a trace is live,
+        and that wedged `test_streaming_perf` on Blackhole. A device-to-device copy into
+        a buffer that already exists needs neither an allocation nor a readback.
+        """
+        buf = self._carry.get(key)
+        if buf is None or tuple(buf.shape) != tuple(t.shape) or buf.dtype != t.dtype:
+            if buf is not None:
+                ttnn.deallocate(buf)
+            self._carry[key] = t
+            return t
+        ttnn.copy(t, buf)
+        ttnn.deallocate(t)
+        return buf
+
+    def release_carry(self):
+        """Free the persistent carry buffers. Idempotent; a session's `close()` does
+        not do this, because the buffers are meant to outlive any one session."""
+        for t in self._carry.values():
+            ttnn.deallocate(t)
+        self._carry.clear()
 
     # ----------------------------------------------------------------------
     @staticmethod
@@ -167,8 +233,7 @@ class TtStreamingSynthesizer:
         if state.mel_overlap is not None:
             faded = self._fade(mel, state.mel_overlap, self._mel_in, self._mel_out, cfg.mel_overlap_len)
             ttnn.deallocate(mel)
-            ttnn.deallocate(state.mel_overlap)
-            state.mel_overlap = None
+            state.mel_overlap = None  # persistent buffer; only the reference is dropped
             mel = faded
 
         # Prepend the vocoder's mel context. Without it the left edge of every
@@ -176,15 +241,14 @@ class TtStreamingSynthesizer:
         if state.hift_mel is not None:
             joined = ttnn.concat([state.hift_mel, mel], dim=1)
             ttnn.deallocate(mel)
-            ttnn.deallocate(state.hift_mel)
-            state.hift_mel = None
+            state.hift_mel = None  # persistent buffer; only the reference is dropped
             mel = joined
             mel_frames += cfg.mel_cache_len
 
         if not finalize:
             # Hold back the last mel_overlap_len frames for the next chunk's fade.
             keep = mel_frames - cfg.mel_overlap_len
-            state.mel_overlap = self._tail(mel, cfg.mel_overlap_len)
+            state.mel_overlap = self._carry_store("mel_overlap", self._tail(mel, cfg.mel_overlap_len))
             trimmed = self._head(mel, keep)
             ttnn.deallocate(mel)
             mel, mel_frames = trimmed, keep
@@ -197,9 +261,9 @@ class TtStreamingSynthesizer:
             sine_noise_unit=self._dev(noise_unit, ttnn.float32),
             cache_source=state.hift_source,
         )
-        if state.hift_source is not None:
-            ttnn.deallocate(state.hift_source)
-            state.hift_source = None
+        # The cache the vocoder just read is a persistent buffer; drop the reference so
+        # the store below can refill it, but do not free it.
+        state.hift_source = None
         # The mel context for the next chunk is the tail of the mel that was just
         # vocoded -- after the overlap trim, not before -- so it has to be taken
         # here, while `mel` is still alive.
@@ -209,8 +273,7 @@ class TtStreamingSynthesizer:
         if state.hift_speech is not None:
             faded = self._fade(wav, state.hift_speech, self._sp_in, self._sp_out, cfg.source_cache_len)
             ttnn.deallocate(wav)
-            ttnn.deallocate(state.hift_speech)
-            state.hift_speech = None
+            state.hift_speech = None  # persistent buffer; only the reference is dropped
             wav = faded
 
         if finalize:
@@ -219,10 +282,10 @@ class TtStreamingSynthesizer:
 
         # Carry the tails; emit everything before them. The held-back speech tail is
         # not lost -- it is what the next chunk crossfades into.
-        state.hift_mel = next_mel
-        state.hift_source = self._tail(source, cfg.source_cache_len)
+        state.hift_mel = self._carry_store("hift_mel", next_mel)
+        state.hift_source = self._carry_store("hift_source", self._tail(source, cfg.source_cache_len))
         ttnn.deallocate(source)
-        state.hift_speech = self._tail(wav, cfg.source_cache_len)
+        state.hift_speech = self._carry_store("hift_speech", self._tail(wav, cfg.source_cache_len))
         emit = self._head(wav, n_samples - cfg.source_cache_len)
         ttnn.deallocate(wav)
         return emit, n_samples - cfg.source_cache_len
