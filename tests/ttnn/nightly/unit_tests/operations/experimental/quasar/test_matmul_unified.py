@@ -335,6 +335,24 @@ def test_borrowed_B_over_several_K_chunks(device):
     _check(out, _golden(a, b))
 
 
+def test_borrowed_A_wins_over_subblock_padding(device):
+    """A's L1 shard is borrowable but its 7-tile height divides no max-volume subblock: the chooser must
+    keep the borrow (subblock_M divides 7) and take its volume from the N axis instead."""
+    gx, gy = _grid(device)
+    if gy < 2:
+        pytest.skip("needs 2 rows")
+    M, K, N = 14 * TILE, 2 * TILE, 3 * TILE
+    cores = _rect(0, 0, 0, 1)
+    in0_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard(cores, [7 * TILE, K])
+    )
+    torch.manual_seed(5)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=cores, C_slice_M_tiles=7, C_slice_N_tiles=3)
+    out = _run(device, a, b, config, in0_mem=in0_mem)
+    _check(out, _golden(a, b))
+
+
 def test_height_sharded_A_with_padded_K_takes_the_copy_path(device):
     """K = 100 is not a tile multiple, so A's padding has to be zeroed in the ring: A cannot be borrowed and is
     copied even though its shard matches the C slices."""
