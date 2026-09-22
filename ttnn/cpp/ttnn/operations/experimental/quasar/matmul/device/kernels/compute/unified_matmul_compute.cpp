@@ -56,14 +56,14 @@ void kernel_main() {
                 // later K chunk reloads them; with it the packer has been accumulating in L1 and only the last
                 // K chunk reloads the sum.
                 const bool reload_partials = K_chunk > 0 && (last_K_chunk || !packer_l1_acc);
-                // Every subblock of this K chunk is packed to the same ring: the finished sum to C_slice on the
+                // Every subblock of this K chunk is packed to the same DFB: the finished sum to C_slice on the
                 // last K chunk, the running sum to C_partials before that.
                 DataflowBuffer& pack_target = last_K_chunk ? C_slice : C_partials;
                 const uint32_t pack_target_id = last_K_chunk ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
-                // Packer setup for this K chunk. The two rings may hold different formats; with packer L1
+                // Packer setup for this K chunk. The two DFBs may hold different formats; with packer L1
                 // accumulation K chunk 0 overwrites the partials, later K chunks add DST onto them, and the
                 // finished sum is packed without accumulation. (The reload below touches only the unpacker.)
                 if constexpr (partials_format_differs) {

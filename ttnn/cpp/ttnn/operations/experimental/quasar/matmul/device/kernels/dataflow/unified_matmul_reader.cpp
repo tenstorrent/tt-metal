@@ -8,7 +8,7 @@
 // both row-major in tiles, the layout the compute kernel indexes. Loop order (batch, MN chunk, K chunk)
 // matches it.
 //
-// Edge C slices: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only
+// Edge C slices: tiles past M_tiles / N_tiles are never read; their entries keep stale L1, which only
 // reaches C tiles the writer drops. When K is not a tile multiple, the padding columns of A's last K
 // tile are zeroed so they contribute nothing. A and B are addressed by tile index through the tensor
 // accessor, so interleaved, L1-sharded and DRAM-sharded inputs are one code path.
@@ -39,7 +39,7 @@ void kernel_main() {
     // Valid element columns in A's last K tile; 0 when K is a multiple of the tile dim.
     constexpr uint32_t A_last_K_tile_valid_columns = get_arg(args::A_last_K_tile_valid_columns);
     constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
-    // Borrowed operands are resident L1 shards bound as the rings; nothing is read for them.
+    // Borrowed operands are resident L1 shards bound as the DFBs; nothing is read for them.
     constexpr bool A_borrowed = get_arg(args::A_borrowed) != 0;
     constexpr bool B_borrowed = get_arg(args::B_borrowed) != 0;
 
@@ -56,7 +56,7 @@ void kernel_main() {
     [[maybe_unused]] const auto A = TensorAccessor(tensor::A);
     [[maybe_unused]] const auto B = TensorAccessor(tensor::B);
 
-    // A borrowed operand's ring IS its resident L1 shard: hand the whole ring to the compute once and never
+    // A borrowed operand's DFB IS its resident L1 shard: hand the whole DFB to the compute once and never
     // read it. (A: the single K chunk covers all of K; B: the compute consumes it one K chunk at a time.)
     if constexpr (A_borrowed) {
         A_slice.reserve_back(A_slice_tiles);
@@ -67,7 +67,7 @@ void kernel_main() {
         B_slice.push_back(K_tiles * C_slice_N_tiles);
     }
 
-    // One ring slot per tile: a slice is stored row-major in tiles, slot (row, column) at
+    // One DFB entry per tile: a slice is stored row-major in tiles, entry (row, column) at
     // (row * columns + column) * tile bytes, which is how the compute kernel indexes it.
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
     const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
@@ -85,7 +85,7 @@ void kernel_main() {
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
 
                 if constexpr (!A_borrowed) {
-                    // A slice: rows C_slice_first_M_tile.., columns K_chunk_first_K_tile.., slot (m_tile, k_tile).
+                    // A slice: rows C_slice_first_M_tile.., columns K_chunk_first_K_tile.., entry (m_tile, k_tile).
                     // Rows past the edge of A are clipped: they trail, so they are simply not written.
                     A_slice.reserve_back(A_slice_tiles);
                     for (uint32_t m_tile = 0; m_tile < C_slice_M_tiles && C_slice_first_M_tile + m_tile < M_tiles;
@@ -113,8 +113,8 @@ void kernel_main() {
                     }
                 }
                 if constexpr (!B_borrowed) {
-                    // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.., slot (k_tile, n_tile).
-                    // Columns past the edge of B are clipped; they keep their slot, which only feeds clipped C.
+                    // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.., entry (k_tile, n_tile).
+                    // Columns past the edge of B are clipped; they keep their entry, which only feeds clipped C.
                     B_slice.reserve_back(B_slice_tiles);
                     for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
                         const uint32_t B_row_first_tile =
