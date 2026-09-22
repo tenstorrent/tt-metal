@@ -204,8 +204,8 @@ Artifacts: external `sdpa-pr1-cleanup-validation-20260922/sdpa-review-*`;
 
 Revision `36d92f2e167`, same Blackhole/toolchain as PR1. The initial adapter
 reuses the compute kernel, numerical policies, preparation kernels and CB depths.
-Only segment addressing and shared host dispatch change; joint tails/ring are
-not enabled yet.
+Only segment addressing and shared host dispatch change in that revision. The
+subsequent whole-tile tail qualification is recorded below; ring remains disabled.
 
 - Joint release: **70 passed**, including 42 synthetic numerical cases and
   14 pinned FLUX.2 capture replays. All **56 numerical cases match dense output
@@ -236,6 +236,58 @@ These are not device-profiler times or full-model speedups.
 
 Artifacts: external `sdpa-pr2-validation-20260922/`, including logs/XML,
 `run.sh`, `qualify.sh` and `compare.py`.
+
+## PR2 joint chunk-tail qualification (2026-09-22)
+
+Revision `77cb2f5f136`, same Blackhole/toolchain. Joint sequences may now end
+inside a Q256/K512 chunk, while individual segments remain tile-aligned. Dense
+eligibility, recipe arithmetic, preparation and CB depths are unchanged.
+
+- Joint release: **125 passed**, seven opt-in performance skips. Added 49 tail
+  numerical cases and seven tail cache/trace cases; removed the obsolete
+  whole-chunk-length rejection. The sub-tile-padding rejection remains.
+- All **56 aligned synthetic/captured comparisons remain bitwise equal** to dense.
+- PR1 regression: **281 passed**, two existing skips. All **147 frozen hashes**
+  and previously recorded numerical metrics remain exact.
+- Watcher/asserts: **236 passed**, seven opt-in performance skips.
+- Performance: **35 passed**. Resident timing changed by less than 0.1%; other
+  existing and aligned-joint measurements stayed within 1.3% of the prior run.
+  These trace-wall comparisons do not measure the new tail-mask overhead.
+- Legacy joint: **4 passed**. Host policy/resolver: **13 passed**.
+
+Tail cases cover short sequences, unequal Q/K lengths, multiple heads, unequal
+chain job counts, normal/uniform/changed-max inputs, constant V and zero V.
+They check independent FP64 error, input immutability, both output shapes,
+fresh-address cache hits, segment repartitioning and trace replay.
+
+| Variant | Maximum tail-case L2 % | Minimum nonconstant-case PCC |
+| --- | ---: | ---: |
+| A | 4.4375 | 0.999010 |
+| B | 4.4366 | 0.999011 |
+| C | 0.3946 | 0.999992 |
+| D | 0.1798 | 0.999998 |
+| E_bf16 | 3.6670 | 0.999335 |
+| E_bfp8 | 3.7373 | 0.999306 |
+| E_bfp4 | 16.7605 | 0.985904 |
+
+Two bring-up findings are retained in the tests/evidence:
+
+- Masking must execute on **PACK after its DST wait**, not MATH: streaming
+  exponential/compensation already owns the SFPU on PACK. A math-thread fill
+  raced that work and caused nondeterministic E results. The shared mask hook
+  now follows existing ownership and waits for SFPU completion before packing.
+- Duplicating K/V preserves exact attention but not finite-precision reduction
+  error. On Q512/K256 uniform attention, A/B yield **1.494%**, exactly matching
+  the existing masked implementation; duplicated K512 gives **0.819%**. The
+  duplicate comparison is diagnostic, not an equal-error gate. A/B additionally
+  gate against the legacy tail result. Constant-V tail cases gate below 1%
+  (0.4% for C/D), preventing a missing key mask from hiding behind PCC.
+
+Artifacts: external `sdpa-pr2-validation-20260922/sdpa-pr2-tail-*`, including
+release, regression, Watcher, performance, legacy-joint and host logs/XML.
+`qualify-tails.sh` reproduces the runs; `compare-tails.py` checks coverage,
+numerical preservation and timing deltas. Sub-tile tails and ring integration
+remain open PR2 gates; this is not a complete PR2 merge qualification.
 
 ## Continuous coverage
 
