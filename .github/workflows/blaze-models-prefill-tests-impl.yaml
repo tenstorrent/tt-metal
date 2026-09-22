@@ -212,20 +212,41 @@ jobs:
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
-        shell: bash
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        uses: ./.github/actions/run-with-log
+        with:
+          working-directory: /home/user/tt-metal
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            CMD=$(cat << 'EOF'
+            ${{ matrix.test-group.cmd }}
+            EOF
+            )
+
+            echo "Running: ${{ matrix.test-group.name }}"
+            echo "$CMD"
+            eval "$CMD"
+
+      # The container-hook runner streams a plain `run:` step's stdout but not a
+      # composite action's, so the run-with-log test step above produces no console
+      # output there — its tee'd .log is the only copy of the run's stdout. Echo it
+      # from a plain step (which does stream) and upload it, or a failed self-
+      # allocating leg leaves nothing to diagnose.
+      - name: 🧾 Surface test log
+        if: always() && !cancelled()
+        continue-on-error: true
         working-directory: /home/user/tt-metal
-        env:
-          TEST_COMMAND: ${{ matrix.test-group.cmd }}
-          TEST_LOG: generated/test_logs/${{ matrix.test-group.name }}.log
         run: |
-          mkdir -p "$(dirname "$TEST_LOG")"
-          printf '[==tt-log-start-line==]\n' > "$TEST_LOG"
-          set +e
-          bash --noprofile --norc -eo pipefail -c "$TEST_COMMAND" 2>&1 | tee -a "$TEST_LOG"
-          status=${PIPESTATUS[0]}
-          printf '\n[==tt-log-finish-line==] exit_code=%s\n' "$status" | tee -a "$TEST_LOG"
-          exit "$status"
+          shopt -s nullglob
+          logs=(generated/test_logs/*.log)
+          if [ ${#logs[@]} -eq 0 ]; then
+            echo "No test log under generated/test_logs"
+            exit 0
+          fi
+          for f in "${logs[@]}"; do
+            echo "==================== $f ===================="
+            cat "$f"
+          done
 
       - name: ⬆️ Upload test log
         if: always() && !cancelled()
