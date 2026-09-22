@@ -255,8 +255,32 @@ vs the golden trace, which requires the runner to publish its KV chunk table + d
 with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
 recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it publishes
 the table and the device map, and every read-back runs in the reader's own process. The producer's reader
-knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
-layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.
+supports merged MLA (DeepSeek / Kimi), MiniMax-M3's triple cache, and GQA K/V
+(GPT-OSS and Llama-3.1-8B). A new layout needs a branch in `_read_slot_kv_and_check_pcc`,
+since readback is not adapter-dispatched.
+
+**GQA golden traces** contain `metadata.json` with `token_ids` and
+`kv_cache/layer_<N>.safetensors` with `key_cache_layer_<N>` and `value_cache_layer_<N>`.
+Each tensor has shape `[1, kv_heads, sequence, head_dim]`. Golden keys use the HF
+half-split rotary frame; the producer converts the rotated dimensions to adjacent
+pairs before comparison. Values do not need a rotary conversion.
+
+**Live address-table tests** should compare table reads against an independently
+indexed live cache tensor, then check protobuf ownership and lookup roundtrip.
+See `models/demos/llama_3p1_8b_d_p/tests/test_kv_cache_table.py`. Unique synthetic
+values test placement; real model-produced values test integration with the writer.
+Use distinct prompts in separate slots to detect slot contamination.
+
+**Llama SC1** uses SP4/TP8, 32 layers, 1K compute chunks, 2K capacity and two slots:
+
+```bash
+export PREFILL_PRODUCER_SLOT_TRACES=/path/to/golden/slot0,/path/to/golden/slot1
+export PREFILL_SUMMARIES=/path/to/results
+bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh llama31 sc1
+```
+
+See the [Llama runner guide](../../../llama_3p1_8b_d_p/docs/runner-integration.md)
+for reference generation, hardware requirements and the direct pytest invocation.
 
 **Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the
 migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
