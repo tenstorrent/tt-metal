@@ -5,6 +5,7 @@
 #endif
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "zero_l1.hpp"
 #include "read_alignment.hpp"
 constexpr auto input_args = TensorAccessorArgs<0>();
 constexpr auto cache_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -35,8 +36,7 @@ void QB2_ENTRY() {
     if (pos == UINT32_MAX) { return; }
     cb_reserve_back(1, 4);
 #ifdef VALUE
-    auto* zeros = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(1));
-    for (uint32_t i = 0; i < 4 * 2048 / 4; ++i) { zeros[i] = 0; }
+    zero_l1<4 * 2048>(get_write_ptr(1));
     for (uint32_t h = 0; h < 2; ++h) {
         for (uint32_t t = 0; t < 4; ++t) {
             const uint64_t source = input.get_noc_addr(40 + h * 4 + t);

@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp"
 #undef kernel_main
 #include "tools/profiler/kernel_profiler.hpp"
+#include "zero_l1.hpp"
 
 void QB2_ENTRY() {
     native_attention_writer();
@@ -30,8 +31,7 @@ void QB2_ENTRY() {
     const auto target = TensorAccessor(target_args, get_arg_val<uint32_t>(CONCAT_RT_OFFSET), 2048);
     cb_reserve_back(32, 32);
     const uint32_t scratch = get_write_ptr(32);
-    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-    for (uint32_t i = 0; i < 32 * 2048 / 4; ++i) { words[i] = 0; }
+    zero_l1<32 * 2048>(scratch);
     for (uint32_t head = 0; !inactive && head < 8; ++head) {
         for (uint32_t column = 0; column < 4; ++column) {
             const uint32_t destination = scratch + (head * 4 + column) * 2048;

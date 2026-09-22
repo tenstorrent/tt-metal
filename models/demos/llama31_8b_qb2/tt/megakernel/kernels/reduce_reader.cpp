@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/kernels/reduce_scatter_minimal_direct_reader.cpp"
 #undef kernel_main
 #include "tools/profiler/kernel_profiler.hpp"
+#include "zero_l1.hpp"
 #include "read_alignment.hpp"
 
 void QB2_ENTRY() {
@@ -40,7 +41,7 @@ void QB2_ENTRY() {
         noc_async_read_barrier();
         auto* target = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(2));
         const auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_scratch);
-        for (uint32_t i = 0; i < 16 * 2048 / 4; ++i) { target[i] = 0; }
+        zero_l1<16 * 2048>(get_write_ptr(2));
         for (uint32_t t = 0; t < 16; ++t) {
             for (uint32_t word = 0; word < 8; ++word) {
                 target[t * 512 + word] = source[t * 16 + word];

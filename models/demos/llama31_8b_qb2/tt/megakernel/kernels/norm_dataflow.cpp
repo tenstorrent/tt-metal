@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "zero_l1.hpp"
 constexpr auto input_args=TensorAccessorArgs<0>();
 constexpr auto output_args=TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 uint64_t norm_address(uint32_t rank, uint32_t addr) {
@@ -24,8 +25,7 @@ void QB2_ENTRY() {
     // Reduction packing writes only the statistic column. Clear masked lanes
     // before publishing input so later full-row reduction cannot see old L1.
     for (uint32_t cb : {7u, 8u, 11u}) {
-        volatile tt_l1_ptr uint32_t* values = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
-        for (uint32_t i=0;i<1024;++i) { values[i]=0; }
+        zero_l1<4096>(get_write_ptr(cb));
     }
     const auto input=TensorAccessor(input_args,get_arg_val<uint32_t>(1),2048);
     cb_reserve_back(0,16);
@@ -60,8 +60,7 @@ void QB2_ENTRY() {
     cb_pop_front(7,1);
 #else
     dataflow_kernel_lib::prepare_reduce_scaler<2,ckernel::PoolType::SUM,ckernel::ReduceDim::REDUCE_ROW>(1.0f/512.0f);
-    volatile tt_l1_ptr uint32_t* eps_tile=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(3));
-    for(uint32_t i=0;i<512;++i) { eps_tile[i]=0; }
+    zero_l1<2048>(get_write_ptr(3));
     DataflowBuffer epsilon(3);
     generate_bcast_col_scalar(epsilon,get_arg_val<uint32_t>(3));
     if(rank==0) {

@@ -167,6 +167,22 @@ def run(args):
         warmup = generator.generate(prompt, args.tokens, **settings)
         ttnn.synchronize_device(mesh)
         evidence["warmup_tokens"] = warmup
+        # Allocator metadata only, outside every measurement window. Static
+        # program CBs/code are additional; this is not an execution peak.
+        result["allocator_after_warmup"] = {}
+        for name, kind in (("L1", ttnn.BufferType.L1), ("DRAM", ttnn.BufferType.DRAM)):
+            view = ttnn.get_memory_view(mesh, kind)
+            result["allocator_after_warmup"][name] = {
+                key: getattr(view, key)
+                for key in (
+                    "num_banks",
+                    "total_bytes_per_bank",
+                    "total_bytes_allocated_per_bank",
+                    "total_bytes_free_per_bank",
+                    "largest_contiguous_bytes_free_per_bank",
+                    "block_table",
+                )
+            }
         if args.profile:
             from tracy import signpost
 

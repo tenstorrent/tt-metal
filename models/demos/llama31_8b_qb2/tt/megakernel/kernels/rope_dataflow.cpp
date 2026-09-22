@@ -5,6 +5,7 @@
 #endif
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "zero_l1.hpp"
 #include "read_alignment.hpp"
 constexpr auto packed_args = TensorAccessorArgs<0>();
 constexpr auto cos_args = TensorAccessorArgs<packed_args.next_compile_time_args_offset()>();
@@ -27,8 +28,7 @@ void QB2_ENTRY() {
     noc_async_read(cosine_row, cosine_scratch, 256);
     noc_async_read(sine_row, sine_scratch, 256);
     for (uint32_t cb : {0u, 1u, 2u}) {
-        auto* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
-        for (uint32_t i = 0; i < 4 * 2048 / 4; ++i) { p[i] = 0; }
+        zero_l1<4 * 2048>(get_write_ptr(cb));
     }
 #ifdef QUERY
     constexpr uint32_t heads = 8, first_tile = 0;
