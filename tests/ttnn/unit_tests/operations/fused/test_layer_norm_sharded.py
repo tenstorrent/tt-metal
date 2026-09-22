@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_watcher_enabled, run_for_blackhole
+from models.common.utility_functions import is_watcher_enabled
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
@@ -163,7 +163,6 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
     )
 
 
-@run_for_blackhole("Blackhole retains tile reductions for lower-precision sharded LayerNorm")
 def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
     torch.manual_seed(20260824)
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, _ = simple_size_params(False)
