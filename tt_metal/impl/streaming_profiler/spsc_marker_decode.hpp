@@ -561,9 +561,7 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_strided(
             }
             n += R;
         }
-        if (n > max_recs) {
-            n = max_recs;
-        }
+        n = std::min(n, max_recs);
         if (n == 0) {
             break;
         }
@@ -697,9 +695,7 @@ __attribute__((noinline)) inline SpscBlockResult spsc_block_qword(
                 break;
             }
         }
-        if (n > max_recs) {
-            n = max_recs;
-        }
+        n = std::min(n, max_recs);
         if (n == 0) {
             break;
         }

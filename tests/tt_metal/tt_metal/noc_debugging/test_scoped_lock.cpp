@@ -1715,7 +1715,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
         constexpr uint32_t gcb_size = gcb_page_size * 100;  // 3200 bytes
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
         auto global_cb = experimental::CreateGlobalCircularBuffer(
-            mesh_device.get(), sender_receiver_core_mapping, gcb_size, BufferType::L1);
+            *mesh_device, sender_receiver_core_mapping, gcb_size, BufferType::L1);
 
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1827,7 +1827,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
         constexpr uint32_t gcb_size = gcb_page_size * 100;  // 3200 bytes
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
         auto global_cb = experimental::CreateGlobalCircularBuffer(
-            mesh_device.get(), sender_receiver_core_mapping, gcb_size, BufferType::L1);
+            *mesh_device, sender_receiver_core_mapping, gcb_size, BufferType::L1);
 
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);

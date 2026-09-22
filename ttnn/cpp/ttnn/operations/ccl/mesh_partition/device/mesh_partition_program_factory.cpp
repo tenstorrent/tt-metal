@@ -11,6 +11,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <tt-metalium/host_api.hpp>
 
@@ -140,29 +141,26 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         },
         program_factory);
 
-    return {std::move(program), shared_variables_t{.slice_program_factory = program_factory}};
+    return {std::move(program), shared_variables_t{}};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    using namespace ttnn::prim::slice_metal2;
+    // Partition attributes, tensor specs and coordinates are in the cache key. Each coordinate
+    // owns its program, so its slice geometry and work split stay fixed across calls. Metal 2.0
+    // updates both tensor accessor bindings and any borrowed sharded DFBs through this API.
+    const tt::tt_metal::experimental::
+        Table<tt::tt_metal::experimental::TensorParamName, tt::tt_metal::experimental::TensorArgument>
+            bindings{{INPUT, tensor_args.input_tensor.mesh_tensor()}, {OUTPUT, tensor_return_value.mesh_tensor()}};
+    // All coordinate programs declare the same tensor specs. Validate fresh buffers once per call.
+    bool validated = false;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_variables = cached_workload.shared_variables.at(range);
-
-        // Get the mesh coordinate from the range (assuming single device per range)
-        auto mesh_coordinate = *range.begin();
-        auto [slice_attrs, slice_tensor_args] =
-            compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
-
-        // Re-apply this coord's per-dispatch state to the cached Program, through the same run args
-        // the slice op uses. DFB entry_size / num_entries are not re-applied on a hit, so any sizing
-        // that varies across calls must be in compute_program_hash().
-        tt::tt_metal::experimental::UpdateProgramRunArgs(
-            program,
-            ttnn::prim::slice_program_run_args(
-                shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value));
+        tt::tt_metal::experimental::UpdateTensorArgs(program, bindings, /*skip_validation=*/validated);
+        validated = true;
     }
 }
 

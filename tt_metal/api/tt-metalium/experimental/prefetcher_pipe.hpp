@@ -8,13 +8,14 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <utility>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
-
-class Program;
 
 namespace distributed {
 class MeshDevice;
@@ -23,45 +24,50 @@ class MeshDevice;
 namespace experimental {
 
 class PrefetcherPipeImpl;
+class PrefetcherPipeSpaceImpl;
 
 /**
  * Host object for a durable cross-program remote DFB.
  *
- * Lifetime: construction allocates the data ring + config page from persistent L1
- * pages once, and this handle owns them. Keep it alive for the entire time any program
- * Attaches / uses it; destroying it frees the ring and config, and an attached Program
- * holds a non-owning reference that does not keep either alive. The runtime does not
- * fence peers; only destroy (or let it go out of scope) after every peer program has
- * Finished.
+ * A PrefetcherPipe is carved from a PrefetcherPipeSpace (below): the space owns the persistent
+ * L1 (data ring + config page) on every core it was reserved over, and a pipe is one sender ->
+ * receivers mapping inside that reservation. Every pipe carved from one space shares the space's
+ * ring and config addresses, which is what lets one Program slot (or one relay DFB) serve several
+ * pipes on disjoint cores.
  *
- * The handle is a movable value. An Attach records the implementation object behind it, and a
+ * Lifetime: ownership runs one way. The space owns the L1; a pipe borrows from its space and
+ * must not outlive it; a Program bound to a pipe holds a non-owning reference and must not
+ * outlive the pipe. Keep the pipe alive for the entire time any Program uses it; destroying it
+ * returns its cores to the space (the next carve on those cores rewrites the config pages). The
+ * runtime does not fence peers; only destroy (or let it go out of scope) after every peer
+ * program has Finished.
+ *
+ * The handle is a movable value. A Program records the implementation object behind it, and a
  * move leaves that object where it is, so a pipe can be handed to a new owner or kept in a
- * container without orphaning an attachment. Moving from a pipe empties it, and an empty pipe
- * is only good for destruction or assignment; move-assigning onto a live pipe destroys the pipe
- * that was there, with the same effect on its attachments as letting it go out of scope.
+ * container without orphaning a binding. Moving from a pipe empties it, and an empty pipe is only
+ * good for destruction or assignment; move-assigning onto a live pipe destroys the pipe that was
+ * there, with the same effect on its bindings as letting it go out of scope.
  *
- * Host programming model:
- *   auto pipe = CreatePrefetcherPipe(device, sender_core, receiver_cores, ring_size);
- *   AttachPrefetcherPipe(program, pipe, sender_cores, entry_size);  // or all receivers
- *   // optional relay to TRISC: CreatePrefetcherPipeRelayDataflowBuffer(program, receivers, cfg, id),
- *   //   declared in impl/dataflow_buffer/prefetcher_pipe.hpp with the DFB config it takes.
+ * Host programming model (Metal 2.0):
+ *   auto space = CreatePrefetcherPipeSpace(device, {.sender_cores = ..., .receiver_domain = ...,
+ *                                                   .ring_size = R, .max_receivers_per_pipe = N});
+ *   PrefetcherPipe pipe = space.create_pipe(sender_core, receiver_cores);
+ *   // ProgramSpec declares a PrefetcherPipeParameter with the same receivers / ring size (the
+ *   // sender is the pipe's, not the spec's); kernels bind it via
+ *   // KernelAdvancedOptions::prefetcher_pipe_bindings; AdvancedProgramRunArgs::prefetcher_pipe_args supplies `pipe`.
  *
  * Device kernel flows (sender / receiver / relay) are documented on the device API:
  *   tt_metal/hw/inc/api/dataflow/prefetcher_pipe.h
  */
 class PrefetcherPipe {
 public:
-    PrefetcherPipe(
-        distributed::MeshDevice* device,
-        CoreCoord sender_core,
-        const CoreRangeSet& receiver_cores,
-        uint32_t ring_size,
-        BufferType buffer_type = BufferType::L1);
+    // Internal (PrefetcherPipeSpace): wrap a carved implementation object.
+    explicit PrefetcherPipe(std::unique_ptr<PrefetcherPipeImpl> impl);
 
     // Movable, not copyable. A handle is a pointer to the implementation object that owns the
-    // durable L1, and a Program's attachment points at that object rather than at the handle, so
-    // relocating a handle keeps every attachment valid. Copying would leave two handles freeing
-    // one ring.
+    // claim on the space, and a Program's binding points at that object rather than at the
+    // handle, so relocating a handle keeps every binding valid. Copying would leave two handles
+    // releasing one claim.
     PrefetcherPipe(const PrefetcherPipe&) = delete;
     PrefetcherPipe& operator=(const PrefetcherPipe&) = delete;
     PrefetcherPipe(PrefetcherPipe&&) noexcept;
@@ -73,6 +79,7 @@ public:
     // Base address of the config pages. Each core of the pipe holds its own page at this address.
     uint32_t config_address() const;
     uint32_t ring_size() const;
+    // Size of a config page (the space's page: sized for max_receivers_per_pipe).
     uint32_t config_page_size() const;
     // The credit counters within a config page, as a byte range relative to config_address(). Zeroing
     // it returns the pipe to its just-created credit state.
@@ -83,7 +90,7 @@ public:
     const CoreRangeSet& sender_cores() const;
     const CoreRangeSet& receiver_cores() const;
     const CoreRangeSet& all_cores() const;
-    distributed::MeshDevice* get_device() const;
+    const distributed::MeshDevice* get_device() const;
 
     // Internal (host runtime, tests): the implementation object this pipe owns.
     PrefetcherPipeImpl& impl() { return *pimpl_; }
@@ -94,59 +101,113 @@ private:
 };
 
 /**
- * @brief Create a PrefetcherPipe host object with an arena-backed data ring and config page.
+ * Reservation geometry for a PrefetcherPipeSpace.
  *
- * Config pages are written to device L1 at Create (safe-point initial write).
- * Caller keeps the returned pipe alive for cross-program persistence; Attach wires programs
- * to the same ring/config addresses.
- *
- * Quasar multi-DM pipe consumers: config pages reserve PREFETCHER_PIPE_MAX_CREDIT_LANES
- * slots at create (page sizing, like max_receivers). Active lane count is programmed at
- * consumer bind — `AttachPrefetcherPipe(..., num_pipe_consumer_threads)` and/or relay
- * `num_producers` — before enqueue. Not a Create knob.
+ * The space pins persistent L1 on `sender_cores ∪ receiver_domain` before any Program places
+ * program-local L1 on those cores. `receiver_domain` is NOT the 1:N map: it is every core that
+ * MAY later be carved as a receiver (typically the compute/worker grid or a sub-device), because
+ * whoever creates the space (the model / a prefetcher) generally does not know the consumer's
+ * receiver layout. The consumer carves pipes once it does.
  */
-PrefetcherPipe CreatePrefetcherPipe(
-    distributed::MeshDevice* device,
-    CoreCoord sender_core,
-    const CoreRangeSet& receiver_cores,
-    uint32_t ring_size,
-    BufferType buffer_type = BufferType::L1);
+struct PrefetcherPipeSpaceConfig {
+    // Worker cores that may act as pipe senders. Never DRAM coordinates.
+    CoreRangeSet sender_cores;
+    // Capacity for DRAM-sender endpoints (0 = worker-only space). Names no cores; exact DRAM
+    // sender cores are bound through impl-only helpers, not through this public surface. Only 0
+    // is accepted until DRAM-sender pipes land (tt-metal#55285).
+    uint32_t num_dram_senders = 0;
+    // Worker cores that may act as pipe receivers. Non-empty: every pipe has at least one receiver.
+    CoreRangeSet receiver_domain;
+    // Per-core data ring size in bytes, shared by every pipe carved here. Multiple of L1 alignment.
+    uint32_t ring_size = 0;
+    // Largest receiver count of any pipe carved here; sizes every core's config page. In
+    // [1, receiver_domain.num_cores()].
+    uint32_t max_receivers_per_pipe = 0;
+    BufferType buffer_type = BufferType::L1;
+};
 
 /**
- * @brief Attach a PrefetcherPipe to `program` on the given cores (non-owning).
+ * A reservation of persistent L1 from which PrefetcherPipes are carved.
  *
- * `cores` must be a non-empty role-complete subset of the PrefetcherPipe's mapping
- * cores: the sender role is this pipe's one sender, while the receiver role contains
- * every receiver. This prevents one PrefetcherPipe role from being split across Programs.
- * Returns an independent prefetcher_pipe_id in [0, 255).
+ * Creating a space takes ONE ring allocation and ONE config-page allocation over every worker
+ * core in `sender_cores ∪ receiver_domain`, so every pipe carved from it shares
+ * `buffer_address()` / `config_address()` by contract (not by first-fit accident), and a model
+ * can re-carve pipes for a different consumer layout with no reallocation. Every domain core is
+ * written a zeroed template page at create; carving writes the real pages for that pipe's cores.
  *
- * WH/BH: on each sender core, only one DM (BRISC or NCRISC) may own PrefetcherPipe
- * credit / resize / push for that Attach. Both DMs can run on the same physical
- * core, but dual-DM ownership races on local sent counters and the checkpoint
- * cursor. Host binding / kernel placement should pin a single sender DM owner
- * until Attach can enforce this.
+ * Cost: every domain core holds `ring_size + config_page_size()` bytes, used or not, and the page
+ * is sized for `max_receivers_per_pipe`. Keep `receiver_domain` to the grid the consumer can
+ * actually use.
  *
- * Quasar multi-DM:
- *   - Sender: `num_threads_per_cluster` / `get_num_threads()` partitions receivers.
- *     Hart `h` owns `{ r | r % P == h }`. Flows A/B/C/D skip non-owned receivers.
- *   - Receiver pipe consumers: `num_pipe_consumer_threads` programs lane credits on
- *     the shared pipe when this Attach includes receivers (must match the consumer
- *     kernel's `num_threads_per_cluster`). Hart tid owns entries `tid, tid+P, …`.
- *     With a relay, `DataflowBufferConfig.num_producers` must match (or alone may
- *     arm lanes if Attach left the default of 1). Relay TRISC consumers use
- *     `num_consumers` / `cap`. Pipe is created first; after programs are bound,
- *     enqueue order is free.
- *
- * @param entry_size Dense entry size for this Program execution epoch.
- * @param num_pipe_consumer_threads Active credit lanes when attaching receivers
- *        (default 1). Ignored for sender-only Attach (must be 1).
+ * Lifetime: the space handle owns the reservation and must outlive every pipe carved from it
+ * (pipes point at the space without owning it). Destroying the space releases the L1; a pipe
+ * that outlives its space is detached and every later use of it throws.
  */
-uint8_t AttachPrefetcherPipe(
-    Program& program,
-    PrefetcherPipe& prefetcher_pipe,
-    const CoreRangeSet& cores,
-    uint32_t entry_size,
-    uint32_t num_pipe_consumer_threads = 1);
+class PrefetcherPipeSpace {
+public:
+    // Internal (CreatePrefetcherPipeSpace): take ownership of the implementation object.
+    explicit PrefetcherPipeSpace(std::unique_ptr<PrefetcherPipeSpaceImpl> impl);
+
+    PrefetcherPipeSpace(const PrefetcherPipeSpace&) = delete;
+    PrefetcherPipeSpace& operator=(const PrefetcherPipeSpace&) = delete;
+    PrefetcherPipeSpace(PrefetcherPipeSpace&&) noexcept;
+    PrefetcherPipeSpace& operator=(PrefetcherPipeSpace&&) noexcept;
+    ~PrefetcherPipeSpace();
+
+    // Addresses every pipe carved from this space shares.
+    uint32_t buffer_address() const;
+    uint32_t config_address() const;
+    uint32_t ring_size() const;
+    uint32_t config_page_size() const;
+    uint32_t max_receivers_per_pipe() const;
+
+    const CoreRangeSet& sender_cores() const;
+    uint32_t num_dram_senders() const;
+    const CoreRangeSet& receiver_domain() const;
+    // sender_cores ∪ receiver_domain: the cores holding this space's L1.
+    const CoreRangeSet& reservation_cores() const;
+    // Reservation cores not currently claimed by a live pipe.
+    CoreRangeSet unclaimed_cores() const;
+    const distributed::MeshDevice* get_device() const;
+
+    /**
+     * Carve one pipe. `sender` must be one of `sender_cores` (worker only; DRAM coordinates are
+     * rejected), `receivers` a non-empty subset of `receiver_domain` with at most
+     * `max_receivers_per_pipe` cores that does not contain `sender`, and none of those cores may
+     * be claimed by a live pipe. Writes this pipe's config pages; allocates nothing.
+     */
+    PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers);
+
+    /**
+     * Carve several disjoint pipes in one call. Validated as a whole before anything is claimed
+     * (a core claimed twice within the batch is rejected); create_pipe is this with M = 1.
+     */
+    std::vector<PrefetcherPipe> create_pipes(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes);
+
+    // Internal (host runtime, tests): the implementation object this space owns.
+    PrefetcherPipeSpaceImpl& impl() { return *pimpl_; }
+    const PrefetcherPipeSpaceImpl& impl() const { return *pimpl_; }
+
+private:
+    std::unique_ptr<PrefetcherPipeSpaceImpl> pimpl_;
+};
+
+/**
+ * @brief Reserve persistent L1 for PrefetcherPipes on `config.sender_cores ∪ config.receiver_domain`.
+ *
+ * Must run before any Program places program-local L1 on those cores (the persistent arena seals
+ * a core at that point). Quasar config pages reserve PREFETCHER_PIPE_MAX_CREDIT_LANES credit
+ * lanes per receiver slot; the active lane count is a per-Program property set from the receiver
+ * kernel's thread count when the pipe is bound.
+ */
+PrefetcherPipeSpace CreatePrefetcherPipeSpace(
+    const distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config);
+
+// A Program uses a pipe through the Metal 2.0 host API only: declare a PrefetcherPipeParameter
+// with the pipe's geometry in the ProgramSpec, bind it from data-movement kernels via
+// KernelAdvancedOptions::prefetcher_pipe_bindings (optionally aliasing its ring with a relay DFB through
+// DFBAdvancedOptions::prefetcher_pipe_relays), then supply the PrefetcherPipe object in
+// AdvancedProgramRunArgs::prefetcher_pipe_args. See metal2_host_api/prefetcher_pipe_parameter.hpp.
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

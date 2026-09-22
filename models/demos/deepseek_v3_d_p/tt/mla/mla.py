@@ -1129,20 +1129,12 @@ class ttMLA:
         )
         ttnn.deallocate(qr)
 
-        # convert to
-        # [batch (1), num_heads_local, seq_len_local, qk_head_dim]
-        tt_q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        # The Q stem uses interleaved head creation. Write the two channel regions directly.
+        tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
             num_heads=num_heads_local,
-            num_kv_heads=0,
-            transpose_k_heads=False,
+            split_head_dim=self.qk_nope_head_dim,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len_local, self.qk_nope_head_dim])
-        tt_q_rope = ttnn.slice(
-            tt_q, [0, 0, 0, self.qk_nope_head_dim], [1, num_heads_local, seq_len_local, self.qk_head_dim]
         )
         ttnn.deallocate(tt_q)
 
@@ -1300,19 +1292,26 @@ class ttMLA:
                 cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
             )
-            tt_kv = ttnn.experimental.fast_reduce_nc(
-                tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+            # Reduce the TP partials directly into the two consumer tensors.
+            tt_kv_nope, tt_kv_rope = ttnn.experimental.fast_reduce_nc_split(
+                tt_kv,
+                dim=1,
+                split_output_width=self.kv_lora_rank,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             )
-
-        # Raw compressed KV (pre-norm/pre-rope, [.., 576]) for debug/PCC against golden traces.
-        kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
-
-        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
-        tt_kv_rope = ttnn.slice(
-            tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
-        )
-        ttnn.deallocate(tt_kv)
+            # tt_kv aliases model-owned gather scratch; keep that buffer alive.
+            kv_intermediates = (
+                {"tt_kv": ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)} if return_kv_intermediates else None
+            )
+        else:
+            # TP=1 has no reduction producer into which to fuse the split.
+            kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
+            tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
+            tt_kv_rope = ttnn.slice(
+                tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
+            )
+            ttnn.deallocate(tt_kv)
 
         tt_kv_nope = ttnn.rms_norm(
             tt_kv_nope,

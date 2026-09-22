@@ -131,6 +131,11 @@ can't vanish from the console summary.
   32-chip Galaxy they were verified against, `host_side.sh` returned DEGRADED on five
   correctable-AER findings on a unit `device_side.sh` and the rest of the suite called
   healthy. Gating on that from day one would ticket the fleet.
+- Two are held the other way: **`hostside_pcie_aer` and `hostside_kernel_log` record
+  their WARN as PASS** (`TRIAGE_ADVISORY_WARN` in `diag_runner.py`). Both count host
+  state accumulated over a boot, so they WARN on units everything else calls healthy,
+  and one phase WARN is a run WARN. FAIL continues to follow `--triage-gating`; the
+  finding still reaches `details` and `data`, annotated `[advisory: WARN recorded as PASS]`.
 
 The text reports land in `<output_dir>/logs/triage_<tool>.txt`, so
 `collect_run_artifacts()` attaches them to the JIRA ticket with no extra wiring.
@@ -251,7 +256,7 @@ Nothing is lost by this — the finding, its offending port paths and its full
 them. Only the status is held, and only because a tool nobody has yet confirmed
 is right should not be the thing an operator's eye is drawn to when triaging a
 rack. A held FAIL goes straight to PASS rather than sliding down through WARN,
-since the phase has undertaken not to raise one.
+since while the holds are on the phase has undertaken not to raise one.
 
 **The ingest module is not subject to this policy.** Run standalone against a
 stored dump it reports WARN and FAIL normally, so reviewing a dump by hand shows
@@ -263,11 +268,16 @@ which is the only place that knows it is feeding a fleet verdict.
 `--qsfp-gating` changes this completely and in one step: findings report at their
 real severity and the phase gates the run like any other — `overall_status`, the
 exit code, `has_actionable_failure()`, the JIRA ticket and the Slurm
-reboot-and-requeue all respond to a QSFP FAIL. `Phase.gates` in the JSON records
-which mode a run was in, and `report.py` plus the CSV analyzer both read that one
-flag rather than each keeping a list of which phases count. A phase with no
-`gates` key gates, so every other phase and every report written before the flag
-existed is unaffected.
+reboot-and-requeue all respond to a QSFP FAIL.
+
+Both holds lift together, FAIL and WARN. Restoring only FAIL would leave the five
+WARN-capable checks mute — `qsfp_findings` among them, whose whole job is to stop
+`collect`'s exit code 0 reading as a clean run.
+
+`Phase.gates` in the JSON records which mode a run was in, and `report.py` plus
+the CSV analyzer both read that one flag rather than each keeping a list of which
+phases count. A phase with no `gates` key gates, so every other phase and every
+report written before the flag existed is unaffected.
 
 Turning it on is the decision to make once there is enough fleet history to say
 the findings are right — which is why the phase records them from the first run

@@ -4,11 +4,14 @@
 import ml_dtypes
 import numpy as np
 import pytest
+import torch
 import os
 import sys
 
 import ttnn
 import ttml  # noqa: E402
+
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 def supported_autograd_types_except(*except_types):
@@ -534,6 +537,26 @@ def make_tensors(tensor_data, numpy_type, autograd_type, layout):
     return (numpy_tensor, autograd_tensor)
 
 
+def assert_binary_result(actual, expected):
+    # The default FULL read upcasts BF16 results to FP32, which would make the ULP check too strict.
+    actual = actual.to_numpy(precision=ttml.autograd.PreferredPrecision.NATIVE)
+    if np.issubdtype(actual.dtype, np.integer):
+        np.testing.assert_array_equal(actual, expected)
+        return
+
+    dtype = {
+        np.dtype(np.float32): torch.float32,
+        np.dtype(ml_dtypes.bfloat16): torch.bfloat16,
+    }[actual.dtype]
+    # NumPy's custom BF16 dtype cannot be passed directly to torch.from_numpy.
+    # Restore the output dtype after conversion so ULPs are measured at its precision.
+    assert_with_ulp(
+        expected_result=torch.from_numpy(expected.astype(np.float32)).to(dtype),
+        actual_result=torch.from_numpy(actual.astype(np.float32)).to(dtype),
+        ulp_threshold=1,
+    )
+
+
 @pytest.mark.parametrize("tensor_data", [default_tensor_data])
 @pytest.mark.parametrize("numpy_type", numpy_data_types)
 @pytest.mark.parametrize("autograd_type", metal_data_types)
@@ -549,7 +572,7 @@ def test_binary_operators_add(tensor_data, numpy_type, autograd_type, layout):
     numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     sum = autograd_tensor + autograd_tensor
-    assert (sum.to_numpy() == (numpy_tensor + numpy_tensor)).all()
+    assert_binary_result(sum, numpy_tensor + numpy_tensor)
 
 
 @pytest.mark.parametrize("tensor_data", [default_tensor_data])
@@ -568,7 +591,7 @@ def test_binary_operators_diff(tensor_data, numpy_type, autograd_type, layout):
 
     diff = autograd_tensor - autograd_tensor
 
-    assert (diff.to_numpy() == (numpy_tensor - numpy_tensor)).all()
+    assert_binary_result(diff, numpy_tensor - numpy_tensor)
 
 
 @pytest.mark.parametrize("tensor_data", [default_tensor_data])
@@ -591,8 +614,8 @@ def test_binary_operators_mul(tensor_data, numpy_type, autograd_type, layout):
     mul = autograd_tensor * autograd_tensor
     mul_float = autograd_tensor * 10.0
 
-    assert (mul.to_numpy() == (numpy_tensor * numpy_tensor)).all()
-    assert (mul_float.to_numpy() == (numpy_tensor * 10.0)).all()
+    assert_binary_result(mul, numpy_tensor * numpy_tensor)
+    assert_binary_result(mul_float, numpy_tensor * 10.0)
 
 
 @pytest.mark.parametrize("tensor_data", [default_tensor_data])
@@ -614,4 +637,39 @@ def test_binary_operators_div(tensor_data, numpy_type, autograd_type, layout):
 
     div = autograd_tensor.__div__(autograd_tensor)
 
-    assert (div.to_numpy() == (numpy_tensor / numpy_tensor)).all()
+    assert_binary_result(div, numpy_tensor / numpy_tensor)
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("numpy_type", [np.float32, ml_dtypes.bfloat16])
+@pytest.mark.parametrize(
+    "binary_op, numpy_op",
+    [
+        pytest.param("__add__", np.add, id="add"),
+        pytest.param("__sub__", np.subtract, id="sub"),
+        pytest.param("__mul__", np.multiply, id="mul"),
+        pytest.param("__div__", np.divide, id="div"),
+    ],
+)
+@pytest.mark.parametrize(
+    "lhs_data, rhs_data",
+    [
+        pytest.param(
+            default_tensor_data,
+            [[3, 7, 2], [9, 2, 5], [4, 3, 7]],
+            id="distinct-positive",
+        ),
+        pytest.param(
+            [[-1.5, 0.25, 3.5], [4.25, -5.5, 0], [7.75, -8.5, 9.25]],
+            [[0.5, -3.5, 7], [-2.25, 5.5, 1.5], [3, -0.25, -4.5]],
+            id="signed-fractional",
+        ),
+    ],
+)
+def test_binary_operators_distinct_operands(numpy_type, binary_op, numpy_op, lhs_data, rhs_data):
+    lhs, autograd_lhs = make_tensors(lhs_data, numpy_type, None, ttnn.Layout.TILE)
+    rhs, autograd_rhs = make_tensors(rhs_data, numpy_type, None, ttnn.Layout.TILE)
+
+    result = getattr(autograd_lhs, binary_op)(autograd_rhs)
+
+    assert_binary_result(result, numpy_op(lhs, rhs))
