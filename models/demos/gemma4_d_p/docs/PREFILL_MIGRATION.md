@@ -1,6 +1,8 @@
 # Gemma4 prefill migration tests
 
-Both tests run on TT hardware using input tokens and reference KV from a GPU capture.
+This doc contains relevant info for running migration tests in `models/demos/gemma4_d_p/tests/test_prefill_migration.py`.
+
+There are two types of tests: mock and loopback. Both run on TT hardware using input tokens and reference KV from a GPU capture.
 
 | Test | Purpose |
 | --- | --- |
