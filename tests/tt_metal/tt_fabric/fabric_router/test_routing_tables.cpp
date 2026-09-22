@@ -224,7 +224,7 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
 TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -236,7 +236,7 @@ TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
 TEST_F(ControlPlaneFixture, TestGalaxyCornerPins) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -2220,7 +2220,7 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

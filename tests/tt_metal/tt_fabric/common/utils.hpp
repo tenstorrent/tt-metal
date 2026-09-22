@@ -87,4 +87,13 @@ void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control
 // Writes an inline descriptor to a PID-qualified temporary file and returns its path.
 std::string write_temp_descriptor(const std::string& name, const std::string& text_proto);
 
+// Fabric config the active MGD (TT_MESH_GRAPH_DESC_PATH / custom fabric mesh graph desc) declares via its
+// device_topology dim_types: RING on both axes -> FABRIC_2D_TORUS_XY, RING on one -> TORUS_X/Y, else
+// FABRIC_2D. ControlPlaneFixture tests that can share a tt-run process (galaxy layout/corner checks and
+// the pipeline-builder checks) must all use this same MGD-implied config, otherwise the set-once fabric
+// config guard (metal_env.cpp:276 "Tried to override previous value of fabric config") fires when the
+// second test in the process asks for a different one. Reliability is the caller's choice (RELAXED for
+// these structural checks). Returns FABRIC_2D when no custom MGD path is set.
+tt::tt_fabric::FabricConfig fabric_config_for_active_mgd();
+
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -1382,6 +1383,36 @@ std::string write_temp_descriptor(const std::string& name, const std::string& te
     const auto path = std::filesystem::temp_directory_path() / (std::to_string(::getpid()) + "_" + name);
     std::ofstream(path) << text_proto;
     return path.string();
+}
+
+tt::tt_fabric::FabricConfig fabric_config_for_active_mgd() {
+    using tt::tt_fabric::FabricConfig;
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (!rtoptions.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        return FabricConfig::FABRIC_2D;
+    }
+    tt::tt_fabric::MeshGraphDescriptor mgd(std::filesystem::path(rtoptions.get_custom_fabric_mesh_graph_desc_path()));
+    bool ring_ns = false;  // device dim 0 (N/S)
+    bool ring_ew = false;  // device dim 1 (E/W)
+    for (const auto& mesh_name : mgd.get_all_mesh_names()) {
+        const auto declared = mgd.try_get_declared_topology(mesh_name);
+        if (!declared.has_value()) {
+            continue;
+        }
+        const auto effective = tt::tt_fabric::with_effective_ring_dims(*declared);
+        ring_ns = ring_ns || (effective.ring_dims.size() > 0 && effective.ring_dims[0]);
+        ring_ew = ring_ew || (effective.ring_dims.size() > 1 && effective.ring_dims[1]);
+    }
+    if (ring_ns && ring_ew) {
+        return FabricConfig::FABRIC_2D_TORUS_XY;
+    }
+    if (ring_ns) {
+        return FabricConfig::FABRIC_2D_TORUS_Y;
+    }
+    if (ring_ew) {
+        return FabricConfig::FABRIC_2D_TORUS_X;
+    }
+    return FabricConfig::FABRIC_2D;
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
