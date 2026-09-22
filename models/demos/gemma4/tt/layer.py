@@ -43,9 +43,10 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
-from models.demos.gemma4.tt.rms_norm import RMSNorm
+from models.demos.gemma4.tt.rms_norm import RMSNorm, decode_width_shard_memcfg
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -124,6 +125,12 @@ class Gemma4DecoderLayer:
             self.layer_scalar = layer_state["layer_scalar"].item()
         else:
             self.layer_scalar = 1.0
+
+        # Dense 12B/31B on a full Wormhole T3K: keep the decode residual stream
+        # in the width-sharded L1 layout RMSNorm and the TP all-reduce share,
+        # instead of round-tripping it through DRAM between every op. Same gate
+        # as the tuned matmul path; see dram_sharded.is_t3k_dense_target.
+        self._tuned_decode = is_t3k_dense_target(mesh_device, hf_config)
 
         # Attention
         attn_config = Gemma4AttentionConfig(hf_config, layer_idx)
@@ -237,9 +244,27 @@ class Gemma4DecoderLayer:
         Returns:
             hidden_states: [1, 1, seq_len, hidden_size] on device
         """
+        # Dense decode without per-layer inputs keeps the residual stream in the
+        # exact width-sharded L1 layout shared by RMSNorm and the TP all-reduce.
+        # ``stream_memcfg`` stays None everywhere else, and every placement below
+        # then resolves to the op default it uses today.
+        stream_memcfg = None
+        if is_decode and self._tuned_decode and not self.enable_moe_block and not self.hidden_size_per_layer_input:
+            stream_memcfg = decode_width_shard_memcfg(self.mesh_device, hidden_states.shape[-1])
+            if stream_memcfg is not None and not hidden_states.is_sharded():
+                sharded_hidden_states = ttnn.to_memory_config(hidden_states, stream_memcfg)
+                hidden_states.deallocate(True)
+                hidden_states = sharded_hidden_states
+        shard_stream = (
+            stream_memcfg is not None and hidden_states.is_sharded() and hidden_states.memory_config() == stream_memcfg
+        )
+
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        normed = self.input_layernorm.forward(
+            hidden_states,
+            interleaved_memory_config=ttnn.L1_MEMORY_CONFIG if shard_stream else None,
+        )
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
         else:
@@ -269,18 +294,26 @@ class Gemma4DecoderLayer:
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
+            attn_output = self.post_attention_layernorm.forward(attn_output, keep_sharded=shard_stream)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
                 )
-            hidden_states = ttnn.add(residual, attn_output)
+            hidden_states = ttnn.add(
+                residual,
+                attn_output,
+                memory_config=stream_memcfg if shard_stream else None,
+            )
             residual.deallocate(True)
             attn_output.deallocate(True)
 
         # 2. MLP + MoE block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        normed = self.pre_feedforward_layernorm.forward(
+            hidden_states,
+            keep_sharded=shard_stream,
+            interleaved_memory_config=ttnn.L1_MEMORY_CONFIG if shard_stream else None,
+        )
         mlp_output = self.shared_mlp(normed)
         normed.deallocate(True)
 
@@ -310,8 +343,12 @@ class Gemma4DecoderLayer:
             hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
-        combined = ttnn.add(residual, hidden_states)
+        hidden_states = self.post_feedforward_layernorm.forward(hidden_states, keep_sharded=shard_stream)
+        combined = ttnn.add(
+            residual,
+            hidden_states,
+            memory_config=stream_memcfg if shard_stream else None,
+        )
         residual.deallocate(True)
         hidden_states.deallocate(True)
 
@@ -333,6 +370,10 @@ class Gemma4DecoderLayer:
 
         # Layer scalar — AFTER PLI (matching HF order)
         if self.layer_scalar != 1.0:
-            hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
+            hidden_states = ttnn.mul(
+                hidden_states,
+                self.layer_scalar,
+                memory_config=hidden_states.memory_config() if hidden_states.is_sharded() else None,
+            )
 
         return hidden_states
