@@ -1336,9 +1336,14 @@ def eltwise_unary_sfpu(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # The op's declared accuracy contract, resolved for this exact variant. This is where
-    # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver means
-    # all eight call sites are enrolled at once, and a budget change is a registry edit.
+    # The op's declared *tolerance*, resolved for this exact variant. This is where
+    # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver
+    # means all eight call sites pick it up at once, and a change is a registry edit.
+    #
+    # Tolerance only, deliberately. A step budget measured over every value the format
+    # has -- which is what the nightly sweep measures -- is much wider than one measured
+    # over this driver's sampled domain, so enforcing it here would replace a gate that
+    # binds with one that does not. The budgets are enforced where they were measured.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
@@ -1350,7 +1355,7 @@ def eltwise_unary_sfpu(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 

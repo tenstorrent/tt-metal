@@ -116,6 +116,20 @@ class AccuracyContract:
                     f"metric={Metric.ULP} to use them"
                 )
 
+    def tolerance_kwargs(self) -> Dict[str, Any]:
+        """The contract as ``passed_test`` arguments for a *tolerance-only* caller.
+
+        The functional drivers gate on tolerance and PCC; the step budgets are enforced
+        by the exhaustive nightly sweep, over every value the format has rather than the
+        few thousand a driver samples. A budget measured on the whole format is far
+        wider than one measured on a driver's domain, so feeding it back into the driver
+        would loosen that gate rather than tighten it. An op on the ULP metric therefore
+        resolves to today's per-format tolerance here, unchanged.
+        """
+        if self.metric == Metric.ULP:
+            return {}
+        return {"custom_atol": self.atol, "custom_rtol": self.rtol}
+
     def passed_test_kwargs(self) -> Dict[str, Any]:
         """The contract as ``passed_test`` keyword arguments, so the driver's call site
         is one ``**`` expansion and switching metrics is a registry edit."""
