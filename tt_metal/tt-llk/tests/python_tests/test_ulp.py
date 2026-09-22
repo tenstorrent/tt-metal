@@ -710,6 +710,17 @@ def test_the_verdict_refuses_a_mask_it_would_otherwise_broadcast(shape):
         ulp_stats(ulp_distance(golden, golden.clone()), mask)
 
 
+def test_the_verdict_refuses_a_non_boolean_mask():
+    """The selection is combined with ``&``. An integer mask makes that bitwise, where a
+    truthy ``2`` becomes ``2 & 1 == 0`` and drops the lane it was meant to select."""
+    golden = torch.ones(2, 6, dtype=torch.bfloat16)
+    mask = torch.full((2, 6), 2, dtype=torch.int64)
+    with _refuses("mask must be bool"):
+        within_ulp(golden, golden.clone(), max_ulp=1, mask=mask)
+    with _refuses("mask must be bool"):
+        ulp_stats(ulp_distance(golden, golden.clone()), mask)
+
+
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
 def test_the_threshold_warning_fires_past_one_binade(dtype):
     assert MAX_MEANINGFUL_ULP[dtype] == 1 << MANTISSA_BITS[dtype]

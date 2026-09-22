@@ -221,6 +221,28 @@ def nonfinite_mismatches(golden: torch.Tensor, result: torch.Tensor) -> torch.Te
     )
 
 
+def _selection(
+    mask: Optional[torch.Tensor], reference: torch.Tensor, caller: str
+) -> torch.Tensor:
+    """*mask* as a boolean selection over *reference*'s lanes, or all of them.
+
+    Shape is checked, not broadcast: ``(1,)`` would judge every lane or none. dtype is
+    checked because the selection is combined with ``&`` -- on an integer mask that is
+    bitwise arithmetic, where a truthy ``2`` becomes ``2 & 1 == 0`` and silently drops
+    the lane it was meant to select, from the failure scan and from every statistic.
+    """
+    if mask is None:
+        return torch.ones_like(reference, dtype=torch.bool)
+    if mask.shape != reference.shape:
+        raise ValueError(
+            f"{caller}: mask shape {tuple(mask.shape)} does not match "
+            f"{tuple(reference.shape)}"
+        )
+    if mask.dtype is not torch.bool:
+        raise ValueError(f"{caller}: mask must be bool, got {mask.dtype}")
+    return mask
+
+
 def ulp_stats(
     distance: torch.Tensor, mask: Optional[torch.Tensor] = None
 ) -> Dict[str, Any]:
@@ -230,15 +252,8 @@ def ulp_stats(
     separately so they cannot quietly shrink a mean. *mask* is checked against
     *distance*'s shape, not broadcast: ``(1,)`` would judge every lane or none.
     """
-    if mask is not None and mask.shape != distance.shape:
-        raise ValueError(
-            f"ulp_stats: mask shape {tuple(mask.shape)} does not match distance "
-            f"{tuple(distance.shape)}"
-        )
     flat = distance.reshape(-1).to(torch.int64)
-    selected = (
-        torch.ones_like(flat, dtype=torch.bool) if mask is None else mask.reshape(-1)
-    )
+    selected = _selection(mask, distance, "ulp_stats").reshape(-1)
 
     unmeasurable = int((selected & (flat < 0)).sum())
     measurable = selected & (flat >= 0)
@@ -433,13 +448,7 @@ def within_ulp(
             )
     warn_if_threshold_unmeaningful(max_ulp, golden.dtype)
 
-    if mask is not None and mask.shape != golden.shape:
-        # Checked, not broadcast -- see ulp_stats.
-        raise ValueError(
-            f"within_ulp: mask shape {tuple(mask.shape)} does not match golden "
-            f"{tuple(golden.shape)}"
-        )
-    selected = torch.ones_like(golden, dtype=torch.bool) if mask is None else mask
+    selected = _selection(mask, golden, "within_ulp")
     # Positional agreement first, and no budget buys past it: finite against `Inf` is one
     # step apart in the value order, but it is an overflow, not an inexact answer. The only
     # `Inf` lane reaching the distance is same-sign, which is 0.
