@@ -952,7 +952,8 @@ def test_first_rejection_after_peer_join_forces_next_ordinary_host_anchor_reload
     reloaded = [event[1] for event in model.events if event[0] == "decode"][-1]
     assert reloaded["reset_batch"] is True
     assert reloaded["tokens"].reshape(-1).tolist() == [99, 8]
-    assert model._slots_prefilled_since_decode == {0, 1}
+    assert reloaded["force_host_decode_rows"] == {0, 1}
+    assert model._slots_prefilled_since_decode == set()
     _ordinary(model, [99, 8], [5, 4], [10, 20], DeviceResult(_tensor([[101], [10]])), reset_batch=False)
     steady = [event[1] for event in model.events if event[0] == "decode"][-1]
     assert steady["reset_batch"] is False

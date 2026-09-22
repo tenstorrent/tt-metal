@@ -1354,6 +1354,7 @@ class ChunkedPrefillPageTableGuardMixin:
         slot_remap=None,
         defer_device_sampling: bool = False,
         prepare_trace: bool = False,
+        force_host_decode_rows: set[int] | None = None,
         **kwargs,
     ):
         """Gemma4 decode with safe async-ahead merge (no ``tt_transformers`` edits).
@@ -1361,6 +1362,9 @@ class ChunkedPrefillPageTableGuardMixin:
         Same control flow as ``Generator.decode_forward``, but merges host/device
         tokens via :func:`merge_async_ahead_decode_tokens` so bucket changes and
         OOB ``slot_remap`` fall back instead of ``IndexError``.
+
+        ``force_host_decode_rows`` identifies current rows whose host tokens and
+        positions are authoritative after a contract reconstruction or verify.
         """
         del kwargs  # Generator accepts extras; Gemma4 path ignores them.
         # Sequential per-user prefill narrows the per-layer tables to one row and
@@ -1403,6 +1407,14 @@ class ChunkedPrefillPageTableGuardMixin:
         ):
             new_tokens = []
             new_start_pos = []
+            # Prefill slots follow slot_remap; force_host_decode_rows names current rows.
+            prefilled_slots = getattr(self, "_slots_prefilled_since_decode", None) or set()
+            prefilled_rows = (
+                {row for row, slot in enumerate(slot_remap) if int(slot) in prefilled_slots}
+                if slot_remap is not None
+                else set(prefilled_slots)
+            )
+            host_rows = prefilled_rows | set(force_host_decode_rows or ())
             for i, tok_chunk in enumerate(tokens):
                 trace_in = self.trace_inputs_decode[decode_trace_key][i]
                 host_pos = start_pos[i].reshape(-1).to(torch.int64)
@@ -1418,11 +1430,7 @@ class ChunkedPrefillPageTableGuardMixin:
                     remap = slot_remap[i * host_b : (i + 1) * host_b]
                     remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
                     slot_remap_local = remap_t - i * host_b
-                prefilled = getattr(self, "_slots_prefilled_since_decode", None)
-                prefilled_local = None
-                if prefilled:
-                    bs = tok_chunk.shape[0]
-                    prefilled_local = {slot - i * bs for slot in prefilled if i * bs <= slot < (i + 1) * bs}
+                prefilled_local = {row - i * host_b for row in host_rows if i * host_b <= row < (i + 1) * host_b}
                 merged, merged_pos, src = merge_async_ahead_decode_tokens(
                     host_toks,
                     host_pos,

@@ -471,7 +471,7 @@ class DFlashContractMixin:
                 # Mixed verification disables the speculative row in the plain
                 # trace. Its next ordinary step must load the committed anchor.
                 kwargs["reset_batch"] = True
-                self._slots_prefilled_since_decode = {row for row, owner in enumerate(step.owners) if owner is not None}
+                kwargs["force_host_decode_rows"] = {row for row, owner in enumerate(step.owners) if owner is not None}
             payload = self._contract_target_decode(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
             self._ct_force_reload = False
             self._ct_ordinary.append(step)
