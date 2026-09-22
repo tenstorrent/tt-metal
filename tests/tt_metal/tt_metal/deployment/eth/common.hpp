@@ -5,6 +5,7 @@
 #ifndef _ETH_COMMON_HPP
 #define _ETH_COMMON_HPP
 
+#include <algorithm>
 #include <chrono>
 
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
@@ -698,14 +699,10 @@ static bool tensix_compare_dram_banks(
 
             if (errors) {
                 uint32_t t = read_l1_u32(device, core, first_error_addr);
-                if (t < first_error) {
-                    first_error = t;
-                }
+                first_error = std::min(t, first_error);
 
                 t = read_l1_u32(device, core, last_error_addr);
-                if (t > last_error) {
-                    last_error = t;
-                }
+                last_error = std::max(t, last_error);
             }
         }
     }
