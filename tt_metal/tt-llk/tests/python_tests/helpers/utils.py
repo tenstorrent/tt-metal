@@ -608,6 +608,7 @@ def passed_test(
     max_ulp: Optional[int] = None,
     near_zero_atol: Optional[float] = None,
     flush_subnormals: Optional[bool] = None,
+    mask=None,
 ):
     """Verdict for one result tensor against its golden.
 
@@ -620,6 +621,10 @@ def passed_test(
     ``atol`` one -- ``rtol * 2**mantissa_bits`` steps at large magnitude, ~6 for bf16 and
     ~51 for fp16 -- and the gate warns when a budget crosses it. This mirrors the MX
     path, which has always returned on its lattice verdict without consulting PCC.
+
+    *mask* narrows the gate to the lanes it selects, for a caller that has already
+    settled the rest. The exhaustive ULP sweep is what needs it: it feeds every value a
+    format has, and the subnormals the unpack path flushes are not the op's accuracy.
 
     *near_zero_atol* is the floor under that budget for the lanes where the reference
     crosses zero; see :func:`helpers.ulp.ulp_elementwise_valid`.
@@ -778,6 +783,17 @@ def passed_test(
             near_zero_atol=near_zero_atol,
             flush_subnormals=flush_subnormals,
         )
+        if mask is not None:
+            # Lanes the caller has already settled are not this gate's to judge. The
+            # exhaustive sweep is the case that needs it: it feeds every value the
+            # format has, including the subnormals the unpack path flushes and the
+            # golden does not, and a flushed lane is worth ~16,000 steps of something
+            # that is not the op's accuracy. Validated by `_selection`, so a wrong
+            # shape or a non-boolean mask is an error rather than a silent reshape.
+            from .ulp import _selection
+
+            selected = _selection(mask, golden_tensor, "passed_test")
+            is_valid = is_valid | ~selected
         # No lattice arm here, unlike the Bfp8_b tolerance branch below: ORing the
         # block-aware compare in would mean max_ulp was not the enforced maximum, since a
         # lane many bf16 steps out would pass a 0-step budget on the lattice's say-so. So

@@ -527,3 +527,24 @@ def test_the_displaced_figure_is_not_rounded_to_read_as_equal(captured_logs):
     logged = "\n".join(captured_logs)
     assert "max_ulp=26 is looser" in logged and "~25.6 steps" in logged
     assert "~26 steps" not in logged
+
+
+def test_a_mask_narrows_the_gate_to_the_lanes_it_selects():
+    """A caller that has already settled some lanes can keep them out of the verdict.
+
+    The exhaustive sweep is the case: it feeds every value the format has, and a
+    subnormal the unpack path flushed is worth thousands of steps of something that is
+    not the op's accuracy. Validation is `_selection`'s, so the shape and dtype rules
+    are the same ones `within_ulp` applies."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = golden.clone()
+    result.reshape(-1)[0] = _step(golden, 5).reshape(-1)[0]
+
+    assert not passed_test(golden, result, fmt, max_ulp=0, print_errors=False)
+    keep = torch.ones_like(golden, dtype=torch.bool)
+    keep.reshape(-1)[0] = False
+    assert passed_test(golden, result, fmt, max_ulp=0, mask=keep, print_errors=False)
+
+    with _refuses("mask must be bool"):
+        passed_test(golden, result, fmt, max_ulp=0, mask=torch.ones_like(golden))
