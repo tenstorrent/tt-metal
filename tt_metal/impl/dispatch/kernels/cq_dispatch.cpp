@@ -312,7 +312,8 @@ void notify_host_of_completion_queue_write_pointer() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-    noc_async_write(static_cast<uint32_t>(dev_completion_q_wr_ptr), pcie_noc_xy | completion_queue_write_ptr_addr, 4);
+    noc_async_write_pcie(
+        static_cast<uint32_t>(dev_completion_q_wr_ptr), pcie_noc_xy | completion_queue_write_ptr_addr, 4);
 #else
     cq_noc_async_write_with_state<CQ_NOC_SnDL>(
         static_cast<uint32_t>(dev_completion_q_wr_ptr), completion_queue_write_ptr_addr, 4);
@@ -349,7 +350,9 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
+    // Programs NOC_CTRL, the destination coordinate and the PCIe routing bit in one go. The with_state issuers
+    // below leave MID alone, so it stays set for the whole command and is cleared once at the end.
+    cq_noc_async_write_init_state_pcie(pcie_noc_xy);
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
     if (is_event) {
@@ -374,7 +377,7 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
                 uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-                noc_async_write(
+                noc_async_write_pcie(
                     static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, last_chunk_size);
 #else
                 cq_noc_async_write_with_state_any_len(
@@ -392,7 +395,7 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
             uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-            noc_async_write(static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, xfer_size);
+            noc_async_write_pcie(static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, xfer_size);
 #else
             cq_noc_async_write_with_state_any_len(
                 static_cast<uint32_t>(data_ptr), completion_queue_write_addr, xfer_size);
@@ -413,6 +416,9 @@ void process_write_host_h() {
         }
     }
     cmd_ptr = data_ptr;
+#if !defined(FABRIC_RELAY)
+    noc_async_write_clear_pcie_state(noc_index, NCRISC_WR_CMD_BUF);
+#endif
 }
 
 void process_exec_buf_end_h() {
@@ -552,6 +558,15 @@ void process_write_linear(uint32_t num_mcast_dests) {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
     }
 
+#ifdef ARCH_BLACKHOLE
+    // init_state just programmed MID from dst_addr. Carry that forward so each chunk knows what the register
+    // already holds and only rewrites it on a real 4GB carry, rather than reprogramming it every chunk.
+    uint32_t mid_shadow = (uint32_t)(dst_addr >> 32);
+    uint32_t* const mid_shadow_arg = &mid_shadow;
+#else
+    uint32_t* const mid_shadow_arg = nullptr;
+#endif
+
     while (length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
 #if defined(FABRIC_RELAY)
@@ -568,12 +583,17 @@ void process_write_linear(uint32_t num_mcast_dests) {
             } else {
                 cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
             }
+#ifdef ARCH_BLACKHOLE
+            // The re-init reprogrammed MID from the current dst_addr.
+            mid_shadow = (uint32_t)(dst_addr >> 32);
+#endif
         }
 #else
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
 #endif
-        cq_noc_async_write_with_state_any_len(static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests);
+        cq_noc_async_write_with_state_any_len(
+            static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests, noc_index, mid_shadow_arg);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
@@ -582,6 +602,16 @@ void process_write_linear(uint32_t num_mcast_dests) {
         data_ptr += xfer_size;
         dst_addr += xfer_size;
     }
+
+    // Clear the host address bits a pinned destination leaves in RET_ADDR_MID. On-chip writes sharing the
+    // command buffer no longer program MID, so they would inherit them.
+#ifdef ARCH_BLACKHOLE
+    // The shadow tracks what the register holds, and a device destination leaves it zero. Testing it keeps the
+    // clear, which has to poll the command buffer first, off the path of every on-chip write_linear.
+    if (mid_shadow != 0) {
+        noc_async_write_clear_pcie_state(noc_index, NCRISC_WR_CMD_BUF);
+    }
+#endif
 
     cmd_ptr = data_ptr;
 }

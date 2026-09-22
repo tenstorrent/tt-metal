@@ -26,6 +26,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     pcie_read_bw/test_pcie_read_bw.cpp
     pcie_write_bw/test_pcie_write_bw.cpp
     device_pcie_loopback/test_device_pcie_loopback.cpp
+    pcie_mid_cleanup/test_pcie_mid_cleanup.cpp
     atomics/test_atomic_semaphore_bandwidth.cpp
     multicast_atomics/test_multicast_atomic_semaphore.cpp
     noc_api_latency/test_noc_api_latency.cpp

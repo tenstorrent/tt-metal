@@ -9,6 +9,8 @@
 constexpr uint32_t WARMUP_ITERS = 5;
 
 // D2H: write one page from L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks.
+// Leaves PCIe routing on write_cmd_buf. socket_notify_receiver clears it, so callers that follow this with
+// a notify need no cleanup of their own; callers that do not must call noc_async_write_clear_pcie_state.
 inline void noc_write_page_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
     while (size) {
@@ -22,7 +24,9 @@ inline void noc_write_page_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64
 }
 
 // H2D: read one page from PCIe host RAM into L1 in NOC_MAX_BURST_SIZE chunks.
-// Caller must call noc_async_read_barrier() after this returns.
+// Caller must call noc_async_read_barrier() after this returns, and noc_async_read_clear_pcie_state on
+// read_cmd_buf once the run of reads is done. Each call refreshes MID, so no cleanup is needed between
+// them, but the plain read path no longer rewrites MID and would inherit whatever is left.
 inline void noc_read_page_chunked(uint32_t pcie_xy_enc, uint64_t src_pcie, uint32_t dst_l1, uint32_t size) {
     while (size) {
         uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;
