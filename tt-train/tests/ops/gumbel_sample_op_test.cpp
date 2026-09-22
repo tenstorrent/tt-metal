@@ -490,23 +490,32 @@ TEST_F(GumbelSampleOpTest, TestSamplingRaggedShapes) {
     constexpr uint32_t kTokens = 37U;  // 37 = 32 + 5 -> Ht = 2, last tile row has 5 valid rows
     constexpr uint32_t kVocab = 77U;   // 77 = 2*32 + 13 -> Wt = 3, last tile has 13 valid columns
 
-    // A distinct winner per (batch, token) so a row/page mix-up cannot pass by coincidence.
-    const auto [a, expected] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 7U);
-    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    // A distinct winner per (batch, token) so a row/page mix-up cannot pass by coincidence. The
+    // winner/floor values are exact in both dtypes, so one grid serves both runs below.
+    const auto winners = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 7U);
 
-    // Greedy is exact, so assert the full result vector: one id per token, in [batch, token] order.
-    auto greedy = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 0.0F, 7));
-    ASSERT_EQ(greedy.size(), kBatch * kTokens) << "one sampled id per token, across all batch entries";
-    EXPECT_EQ(greedy, expected);
+    auto run = [&](const ttnn::Tensor& tensor_a, const char* what) {
+        // Greedy is exact, so assert the full result vector: one id per token, in [batch, token] order.
+        auto greedy = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 0.0F, 7));
+        ASSERT_EQ(greedy.size(), kBatch * kTokens) << what << ": one sampled id per token, across all batch entries";
+        EXPECT_EQ(greedy, winners.expected) << what;
 
-    // The scan bounds also have to hold in the sampled kernel, which is a separate binary
-    // (the noise compile-time arg). The noise makes the winner unpredictable, but no index may ever leave the
-    // logical vocabulary -- reaching the zero-filled padding would.
-    auto sampled = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 99));
-    ASSERT_EQ(sampled.size(), kBatch * kTokens);
-    for (uint32_t i = 0; i < sampled.size(); ++i) {
-        EXPECT_LT(sampled[i], kVocab) << "index " << i << " left the logical vocabulary";
-    }
+        // The scan bounds also have to hold in the sampled kernel, which is a separate binary
+        // (the noise compile-time arg). The noise makes the winner unpredictable, but no index may ever leave the
+        // logical vocabulary -- reaching the zero-filled padding would.
+        auto sampled = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 1.0F, 99));
+        ASSERT_EQ(sampled.size(), kBatch * kTokens) << what;
+        for (uint32_t i = 0; i < sampled.size(); ++i) {
+            EXPECT_LT(sampled[i], kVocab) << what << ": index " << i << " left the logical vocabulary";
+        }
+    };
+
+    // Both dtypes: bf16 tile copies ride SrcA while FLOAT32 rides the factory's unpack-to-dest
+    // path, and dtype is in the program-cache key -- two distinct programs whose ragged scan and
+    // write-out bounds must hold independently.
+    auto* device = &ttml::autograd::ctx().get_device();
+    run(ttml::core::from_xtensor(winners.logits, device), "bf16");
+    run(ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(winners.logits, device), "fp32");
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingHonoursBufferPlacement) {
@@ -707,48 +716,56 @@ TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositions) {
 
     const std::vector<uint32_t> positions = {0U, 45U, 69U};  // tile rows 0, 1, 2; rows 0, 13, 5
 
-    const auto [a, expected_all] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 11U);
-    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
-
-    // Sample everything first. Besides producing the reference, this seeds the program cache with
-    // the no-positions program: the positioned call that follows has the same shapes, dtype and
-    // mask-ness, so it collides with it unless the cache key knows about positions -- and a
-    // collision would reuse a program whose output is [B, 1, tokens, 1].
-    auto greedy_all = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 0.0F, 7));
-    ASSERT_EQ(greedy_all.size(), kBatch * kTokens);
-    EXPECT_EQ(greedy_all, expected_all);
-
+    const auto winners = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 11U);
+    const auto& expected_all = winners.expected;
     std::vector<uint32_t> expected_at_positions(kBatch);
     for (uint32_t b = 0; b < kBatch; ++b) {
         expected_at_positions[b] = expected_all[b * kTokens + positions[b]];
     }
 
-    auto greedy_at = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
-        tensor_a, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, make_positions(positions)));
-    ASSERT_EQ(greedy_at.size(), kBatch) << "one sampled id per batch entry, not per token";
-    EXPECT_EQ(greedy_at, expected_at_positions);
+    auto run = [&](const ttnn::Tensor& tensor_a, const char* what) {
+        // Sample everything first. Besides producing the reference, this seeds the program cache with
+        // the no-positions program: the positioned call that follows has the same shapes, dtype and
+        // mask-ness, so it collides with it unless the cache key knows about positions -- and a
+        // collision would reuse a program whose output is [B, 1, tokens, 1].
+        auto greedy_all = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 0.0F, 7));
+        ASSERT_EQ(greedy_all.size(), kBatch * kTokens) << what;
+        EXPECT_EQ(greedy_all, expected_all) << what;
 
-    // The scan bounds have to hold in the sampled kernel too, which is a separate binary
-    // (the noise compile-time arg). The noise makes the winner unpredictable, but every real logit here is
-    // negative while from_xtensor zero-fills the padding, so any index that leaves the logical
-    // vocabulary means the scan walked into padding.
-    auto sampled_at = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
-        tensor_a, 1.0F, 99, /* seed_axes */ {}, /* mask */ std::nullopt, make_positions(positions)));
-    ASSERT_EQ(sampled_at.size(), kBatch);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        EXPECT_LT(sampled_at[b], kVocab) << "batch entry " << b << " left the logical vocabulary";
-    }
+        auto greedy_at = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
+            tensor_a, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, make_positions(positions)));
+        ASSERT_EQ(greedy_at.size(), kBatch) << what << ": one sampled id per batch entry, not per token";
+        EXPECT_EQ(greedy_at, expected_at_positions) << what;
 
-    // Every entry pointed at the SAME row exercises the other extreme of the work split: all three
-    // entries now read the same tile row of their own shard, and the boundary-merge path sees three
-    // groups that each span whatever cores the split handed them.
-    const std::vector<uint32_t> uniform(kBatch, kTokens - 1U);
-    auto greedy_uniform = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
-        tensor_a, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, make_positions(uniform)));
-    ASSERT_EQ(greedy_uniform.size(), kBatch);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        EXPECT_EQ(greedy_uniform[b], expected_all[b * kTokens + (kTokens - 1U)]);
-    }
+        // The scan bounds have to hold in the sampled kernel too, which is a separate binary
+        // (the noise compile-time arg). The noise makes the winner unpredictable, but every real logit here is
+        // negative while from_xtensor zero-fills the padding, so any index that leaves the logical
+        // vocabulary means the scan walked into padding.
+        auto sampled_at = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
+            tensor_a, 1.0F, 99, /* seed_axes */ {}, /* mask */ std::nullopt, make_positions(positions)));
+        ASSERT_EQ(sampled_at.size(), kBatch) << what;
+        for (uint32_t b = 0; b < kBatch; ++b) {
+            EXPECT_LT(sampled_at[b], kVocab) << what << ": batch entry " << b << " left the logical vocabulary";
+        }
+
+        // Every entry pointed at the SAME row exercises the other extreme of the work split: all three
+        // entries now read the same tile row of their own shard, and the boundary-merge path sees three
+        // groups that each span whatever cores the split handed them.
+        const std::vector<uint32_t> uniform(kBatch, kTokens - 1U);
+        auto greedy_uniform = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
+            tensor_a, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, make_positions(uniform)));
+        ASSERT_EQ(greedy_uniform.size(), kBatch) << what;
+        for (uint32_t b = 0; b < kBatch; ++b) {
+            EXPECT_EQ(greedy_uniform[b], expected_all[b * kTokens + (kTokens - 1U)]) << what;
+        }
+    };
+
+    // Both dtypes: the position-mode page walk and the single-row writer path run against a bf16
+    // program (tile copies through SrcA) and a FLOAT32 program (unpack-to-dest); dtype is in the
+    // program-cache key, so the cache-collision setup above is staged once per dtype too.
+    auto* device = &ttml::autograd::ctx().get_device();
+    run(ttml::core::from_xtensor(winners.logits, device), "bf16");
+    run(ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(winners.logits, device), "fp32");
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositionsAcrossTokenCounts) {
