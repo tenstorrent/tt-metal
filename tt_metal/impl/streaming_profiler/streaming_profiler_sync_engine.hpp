@@ -93,8 +93,18 @@ public:
     }
     // The newest instant's refclk: nothing later is known.
     double frontier() const { return pts.empty() ? 0.0 : pts.back().r; }
-    // The wall tick at refclk r: linear between the instants around it, along the last two past the newest, and 0
-    // before the first, where nothing places.
+    // Between the raw instants pts[i-1] and pts[i] the wall clock's rate runs linearly from the rate at the first
+    // to the rate at the second (each from its neighbours) when the pair is close: a glide's instants are ~1 us
+    // apart and a chord across them misses the bend by (rate change per tick) x gap^2 / 8, up to 5 cycles. Across a
+    // longer gap -- a straight stretch the cone held through, or a hole -- the same construction scales rate noise
+    // by gap^2 (a 64 ms pair bowed 55 cycles on a 0.001 cycle/tick difference) and the chord stands.
+    static constexpr double kBendMaxTicks = 250.0;  // 5 us
+    bool curved(size_t i) const {
+        return i >= 2 && i + 1 < pts.size() && pts[i - 1].k8 == 0 && pts[i].k8 == 0 &&
+               pts[i].r - pts[i - 1].r <= kBendMaxTicks;
+    }
+    // The wall tick at refclk r: on the curve between the instants around it (see curved), along the last two
+    // past the newest, and 0 before the first, where nothing places.
     double wall_at(double r) const {
         if (pts.empty() || r < pts.front().r) {
             return 0.0;
@@ -109,9 +119,20 @@ public:
         if (hi == pts.begin()) {
             ++hi;
         }
-        const Instant& a = *(hi - 1);
-        const Instant& b = *hi;
-        return a.w + (b.w - a.w) * (r - a.r) / (b.r - a.r);
+        const size_t i = static_cast<size_t>(hi - pts.begin());
+        const Instant& a = pts[i - 1];
+        const Instant& b = pts[i];
+        const double dr = b.r - a.r, x = r - a.r;
+        const double chord = (b.w - a.w) / dr;
+        if (!curved(i)) {
+            return a.w + chord * x;
+        }
+        const Instant& p = pts[i - 2];
+        const Instant& n = pts[i + 1];
+        const double rate_a = (b.w - p.w) / (b.r - p.r);
+        const double rate_b = (n.w - a.w) / (n.r - a.r);
+        const double kappa = (rate_b - rate_a) / (2.0 * dr);
+        return a.w + chord * x + kappa * x * (x - dr);
     }
 };
 
@@ -316,8 +337,13 @@ public:
     explicit SeriesPublisher(ClockMap& map) : map_(map) {}
     void reset() { series_.clear(); }
     // Publishes one chip's instants beyond its series' end, from its model and root transform as they stand; true
-    // when a node was added.
-    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf);
+    // when a node was added. A raw instant waits for the one after it (the curve across the gap before it needs
+    // the rate at both ends); `final` publishes the newest regardless.
+    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final);
+    // Where the model curves between two instants (LocalClockModel::curved), kBendNodes nodes sampled from its
+    // wall_at go between them, so consumers interpolate linearly as ever and follow the curve to a sixteenth of
+    // the chord's error.
+    static constexpr uint32_t kBendNodes = 3;
     // A chip's series, null before its first publish.
     const Series* series(uint32_t dev) const {
         const auto it = series_.find(dev);
@@ -360,7 +386,7 @@ private:
     // The fleet timeline's root: the chip the host probe reads, fixed for the capture.
     uint32_t root_dev() const { return ctx_.root_dev; }
     // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
-    bool publish_dev(uint32_t dev);
+    bool publish_dev(uint32_t dev, bool final = false);
     void publish_all();
     // The capture-end report: each chip's clock model, every link's solution, the loop closures; the sync error per
     // round and each chip's AICLK as plots.

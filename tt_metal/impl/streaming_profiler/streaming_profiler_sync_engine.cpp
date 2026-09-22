@@ -737,7 +737,7 @@ void SeriesPublisher::append_node(Series& s, uint32_t chip, const Node& n) {
     push_node(s, chip, n);
 }
 
-bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf) {
+bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final) {
     Series& s = series_[dev];
     const std::vector<LocalClockModel::Instant>& pts = fit.pts;
     const size_t before = s.nodes.size();
@@ -745,9 +745,23 @@ bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel
     auto it = std::upper_bound(
         pts.begin(), pts.end(), s.last_r, [](double x, const LocalClockModel::Instant& p) { return x < p.r; });
     for (; it != pts.end(); ++it) {
+        const size_t i = static_cast<size_t>(it - pts.begin());
+        const bool has_next = i + 1 < pts.size();
+        if (it->k8 == 0 && !has_next && !final) {
+            break;
+        }
         const double root = root_at(*it);
+        if (fit.curved(i)) {
+            const LocalClockModel::Instant& a = pts[i - 1];
+            for (uint32_t q = 1; q <= kBendNodes; q++) {
+                const double r = a.r + (it->r - a.r) * q / (kBendNodes + 1);
+                const double w = fit.wall_at(r);
+                const double w2 = fit.wall_at(r + 1.0);
+                append_node(s, chip, Node{w, xf.scale * r + xf.shift, r, xf.scale / (w2 - w)});
+            }
+        }
         double tangent = 0.0;
-        if (it + 1 != pts.end()) {
+        if (has_next) {
             tangent = (root_at(*(it + 1)) - root) / ((it + 1)->w - it->w);
         } else if (it->k8 != 0) {
             tangent = xf.scale * 8.0 / it->k8;
@@ -762,7 +776,7 @@ bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel
     return s.nodes.size() > before;
 }
 
-bool SyncEngine::publish_dev(uint32_t dev) {
+bool SyncEngine::publish_dev(uint32_t dev, bool final) {
     const auto st = local_.find(dev);
     if (st == local_.end() || st->second.pts.empty() || dev >= ctx_.devices.size()) {
         return false;
@@ -781,12 +795,12 @@ bool SyncEngine::publish_dev(uint32_t dev) {
     if (xf == to_root_.end() || !xf->second.ok) {
         return false;
     }
-    return series_.publish(dev, ctx_.devices[dev].chip_id, st->second, xf->second);
+    return series_.publish(dev, ctx_.devices[dev].chip_id, st->second, xf->second, final);
 }
 
 void SyncEngine::publish_all() {
     for (const auto& kv : local_) {
-        publish_dev(kv.first);
+        publish_dev(kv.first, /*final=*/true);
     }
     for (const CaptureContext::Device& d : ctx_.devices) {
         map_.finish(d.chip_id);
