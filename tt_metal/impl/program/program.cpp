@@ -1840,7 +1840,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             it != prefetcher_pipe_parameters_.end(), "Program declares no PrefetcherPipeParameter '{}'", bind.name);
         PrefetcherPipeParameterBinding& binding = it->second;
 
-        if (binding.bound_pipe == &prefetcher_pipe) {
+        if (binding.bound_pipe != nullptr && binding.bound_pipe_identity == prefetcher_pipe.identity()) {
             continue;  // sticky: same object again is a no-op
         }
         TT_FATAL(
@@ -1887,6 +1887,7 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
                 *checked.pipe);
         }
         checked.binding->bound_pipe = checked.pipe;
+        checked.binding->bound_pipe_identity = checked.pipe->identity();
     }
 }
 

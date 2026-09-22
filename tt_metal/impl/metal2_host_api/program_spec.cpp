@@ -1150,7 +1150,7 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
 
         const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
         TT_FATAL(
-            dfb_nodes == relayed_receivers,
+            same_node_set(dfb_nodes, relayed_receivers),
             "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes do not match the DFB's node set (union of its "
             "bound kernels' WorkUnitSpec nodes). The relay must live on exactly the receiver nodes.",
             dfb.unique_id);

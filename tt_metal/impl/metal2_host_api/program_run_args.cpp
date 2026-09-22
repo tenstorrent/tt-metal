@@ -253,7 +253,7 @@ void ValidatePrefetcherPipeArgs(
             "Program's mesh.",
             param_name);
         TT_FATAL(
-            binding->bound_pipe == nullptr || binding->bound_pipe == &pipe.impl(),
+            binding->bound_pipe == nullptr || binding->bound_pipe_identity == pipe.identity(),
             "PrefetcherPipeArgument for '{}' supplies a different PrefetcherPipe object than the one this Program "
             "is bound to. A Program binds a parameter to one pipe for its lifetime; build a new Program to use "
             "another pipe.",

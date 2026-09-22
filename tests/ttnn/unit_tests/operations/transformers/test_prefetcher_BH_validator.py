@@ -555,7 +555,10 @@ def _setup_weight_and_pipes_recv_contig(
     bank->receiver pairing (see _recv_contig_weight_and_bank_map), differing only in the target
     object. The space ring is sized as `num_entries` blocks of this tensor's block size divided by
     `entry_divisor`; a later request may push any other aligned block size the ring holds, so a
-    divisor above 1 is how a caller gets a ring the pushed block size does not divide."""
+    divisor above 1 is how a caller gets a ring the pushed block size does not divide.
+
+    Returns (tt_weight, pipes, bank_to_receivers, push_page_size, ring_size[, pipe_space]); the
+    validator takes bank_to_receivers to know which slab each receiver expects."""
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy, row_offset=row_offset
     )
@@ -575,7 +578,7 @@ def _setup_weight_and_pipes_recv_contig(
         bank_to_receivers,
         support_multi_receiver_shards=not dual_senders,
     )
-    result = (tt_weight, pipes, push_page_size, ring_size)
+    result = (tt_weight, pipes, bank_to_receivers, push_page_size, ring_size)
     return (*result, pipe_space) if return_space else result
 
 
@@ -602,7 +605,7 @@ def test_validator_pipe_recv_contig(device, K, N, dtype, recv_per_bank, num_laye
     rotation changes which DRAM block feeds a receiver at each push step, not how much any receiver
     is credited, so a pipe sender's write cursors stay in lockstep across receivers exactly as they
     do for batched delivery. A byte mismatch here means the rotation reached the wrong receiver."""
-    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, dual_senders=dual_senders
     )
     # Non-identity rotation (cyclic shift by 1), so this only passes if the prefetcher slices by the
@@ -618,6 +621,7 @@ def test_validator_pipe_recv_contig(device, K, N, dtype, recv_per_bank, num_laye
             num_layers=num_layers,
             print_stride=max(1, ring_size // 4),
             prefetcher_pipes=pipes,
+            bank_to_receivers=bank_to_receivers,
             streaming=streaming,
             rotation=rotation,
         )
@@ -626,7 +630,7 @@ def test_validator_pipe_recv_contig(device, K, N, dtype, recv_per_bank, num_laye
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
 def test_validator_pipe_recv_contig_shard_contiguous(device, K, N, dtype, recv_per_bank):
     """CONTIGUOUS_1D shards paired with contiguous ring arcs, rather than round-robin/strided."""
-    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device,
         K,
         N,
@@ -637,7 +641,12 @@ def test_validator_pipe_recv_contig_shard_contiguous(device, K, N, dtype, recv_p
     with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
         ttnn.experimental.test_tensor_prefetcher_pipe_validator(
-            device, tt_weight, num_layers=1, print_stride=max(1, ring_size // 4), prefetcher_pipes=pipes
+            device,
+            tt_weight,
+            num_layers=1,
+            print_stride=max(1, ring_size // 4),
+            prefetcher_pipes=pipes,
+            bank_to_receivers=bank_to_receivers,
         )
 
 
@@ -649,14 +658,19 @@ def test_validator_pipe_cursor_persists_across_requests(device, K, N, dtype, rec
     counters, in the durable config page. The second request must therefore resume where the first
     stopped, which this only detects because the validator expects block b of layer 2 in the slot
     following layer 1's."""
-    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank
     )
     with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
         ttnn.experimental.test_tensor_prefetcher_pipe_validator(
-            device, tt_weight, num_layers=2, print_stride=max(1, ring_size // 4), prefetcher_pipes=pipes
+            device,
+            tt_weight,
+            num_layers=2,
+            print_stride=max(1, ring_size // 4),
+            prefetcher_pipes=pipes,
+            bank_to_receivers=bank_to_receivers,
         )
 
 
@@ -668,7 +682,7 @@ def test_pipe_consumer_cache_uses_pipe_identity(device, K, N, dtype, recv_per_ba
     every allocation address. The replacement still has fresh persistent sender state, so a
     compiled program whose pipe slots are sticky must not be reused for it.
     """
-    tt_weight, pipes, page_size, ring_size, pipe_space = _setup_weight_and_pipes_recv_contig(
+    tt_weight, pipes, _bank_to_receivers, page_size, ring_size, pipe_space = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, return_space=True
     )
     # CoreRangeSet is bound reference-internal from a pipe, so make an owning copy before dropping
@@ -721,7 +735,7 @@ def test_pipe_consumer_trace_replay(device):
     num_dram_banks = device.dram_grid_size().x
     K = 448
     N = num_dram_banks * 2 * 2 * ttnn.TILE_SIZE
-    tt_weight, pipes, page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, pipes, _bank_to_receivers, page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, ttnn.bfloat8_b, recv_per_bank=2
     )
     trace_repeats = 2
@@ -756,11 +770,11 @@ def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_p
     block as padding at each wrap, so a lap credits the whole ring and its cursor comes back to the
     ring base on a block boundary. Two layers so the ring wraps at least once with a gap in play.
     """
-    tt_weight, gapped_pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, gapped_pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, num_entries=num_entries, entry_divisor=2
     )
     with tensor_prefetcher_session(device):
-        _queue_and_validate_pipes(device, tt_weight, gapped_pipes, ring_size, num_layers=2)
+        _queue_and_validate_pipes(device, tt_weight, gapped_pipes, bank_to_receivers, ring_size, num_layers=2)
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
@@ -773,20 +787,25 @@ def test_validator_pipe_ring_holds_one_block(device, K, N, dtype, recv_per_bank,
     half-block trailing gap after that one block, so each push credits payload plus gap and the
     cursor wraps back to zero every time.
     """
-    tt_weight, shallow_pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, shallow_pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, num_entries=num_entries, entry_divisor=entry_divisor
     )
     with tensor_prefetcher_session(device):
-        _queue_and_validate_pipes(device, tt_weight, shallow_pipes, ring_size, num_layers=1)
+        _queue_and_validate_pipes(device, tt_weight, shallow_pipes, bank_to_receivers, ring_size, num_layers=1)
 
 
-def _queue_and_validate_pipes(device, tt_weight, pipes, ring_size, num_layers=1):
+def _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size, num_layers=1):
     """One PrefetcherPipe request plus the validator that drains it."""
     ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, ring_size)] * num_layers, prefetcher_pipes=pipes
     )
     ttnn.experimental.test_tensor_prefetcher_pipe_validator(
-        device, tt_weight, num_layers=num_layers, print_stride=max(1, ring_size // 4), prefetcher_pipes=pipes
+        device,
+        tt_weight,
+        num_layers=num_layers,
+        print_stride=max(1, ring_size // 4),
+        prefetcher_pipes=pipes,
+        bank_to_receivers=bank_to_receivers,
     )
 
 
@@ -809,12 +828,12 @@ def test_validator_pipe_dual_single_receiver_bank(device, K, N, dtype):
     consumes, and for pipes that is receiver-contiguous. The pipe twin of
     test_validator_dram_sender_dual_single_receiver_bank, which reads the same bytes as K-row-major.
     """
-    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank=1, dual_senders=True
     )
     assert len({p.sender_core().x for p in pipes}) == len(pipes), "a single-receiver bank must fall back to one sender"
     with tensor_prefetcher_session(device):
-        _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size)
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
@@ -828,14 +847,16 @@ def test_validator_pipe_multi_set_switching(device, K, N, dtype, recv_per_bank):
     The pipe twin of test_validator_dram_sender_multi_gcb_switching.
     """
     num_dram_banks = device.dram_grid_size().x
-    tt_weight_a, pipes_a, _push_a, ring_size = _setup_weight_and_pipes_recv_contig(device, K, N, dtype, recv_per_bank)
-    tt_weight_b, pipes_b, _push_b, _ring_b = _setup_weight_and_pipes_recv_contig(
+    tt_weight_a, pipes_a, bank_to_receivers_a, _push_a, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank
+    )
+    tt_weight_b, pipes_b, bank_to_receivers_b, _push_b, _ring_b = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, row_offset=_receiver_rows(num_dram_banks, recv_per_bank)
     )
     with tensor_prefetcher_session(device):
-        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_size)
-        _queue_and_validate_pipes(device, tt_weight_b, pipes_b, ring_size)
-        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_size)
+        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, bank_to_receivers_a, ring_size)
+        _queue_and_validate_pipes(device, tt_weight_b, pipes_b, bank_to_receivers_b, ring_size)
+        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, bank_to_receivers_a, ring_size)
 
 
 @pytest.mark.parametrize("dual_senders", [False, True], ids=["single_sender", "dual_senders"])
@@ -859,16 +880,16 @@ def test_validator_pipe_mixed_num_receivers(device, dual_senders):
     # transport takes receiver-contiguous only). N covers 6 = lcm(2, 3) receivers per bank so both
     # ring sizes divide it.
     N = num_dram_banks * 6 * 2 * ttnn.TILE_SIZE
-    tt_weight_a, pipes_a, _push_a, ring_a = _setup_weight_and_pipes_recv_contig(
+    tt_weight_a, pipes_a, bank_to_receivers_a, _push_a, ring_a = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank=2, dual_senders=dual_senders
     )
-    tt_weight_b, pipes_b, _push_b, ring_b = _setup_weight_and_pipes_recv_contig(
+    tt_weight_b, pipes_b, bank_to_receivers_b, _push_b, ring_b = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank=3, row_offset=_receiver_rows(num_dram_banks, 2), dual_senders=dual_senders
     )
     with tensor_prefetcher_session(device):
-        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_a)
-        _queue_and_validate_pipes(device, tt_weight_b, pipes_b, ring_b)
-        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_a)
+        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, bank_to_receivers_a, ring_a)
+        _queue_and_validate_pipes(device, tt_weight_b, pipes_b, bank_to_receivers_b, ring_b)
+        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, bank_to_receivers_a, ring_a)
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
@@ -881,13 +902,13 @@ def test_pipe_list_order_is_not_semantic(device, K, N, dtype, recv_per_bank, exp
     ordered, and a repeated pipe delivers to a receiver twice.
     """
     num_dram_banks = device.dram_grid_size().x
-    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, dual_senders=True
     )
     assert len(pipes) > len({p.sender_core().x for p in pipes}), "this case needs a bank with two senders"
     # A second set on its own receiver rows, so its pipes clash with the first set's only over
     # slabs -- their receivers are disjoint.
-    _tt_weight_b, pipes_b, _push_b, _ring_b = _setup_weight_and_pipes_recv_contig(
+    _tt_weight_b, pipes_b, _bank_to_receivers_b, _push_b, _ring_b = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, dual_senders=True, row_offset=_receiver_rows(num_dram_banks, recv_per_bank)
     )
 
@@ -904,17 +925,15 @@ def test_pipe_list_order_is_not_semantic(device, K, N, dtype, recv_per_bank, exp
             queue([pipes[0], pipes_b[0]])
         # Interleaved: no bank's two pipes are adjacent any more. Each keeps its own slab base, so
         # delivery is unchanged.
-        _queue_and_validate_pipes(device, tt_weight, pipes[::2] + pipes[1::2], ring_size)
-        # Bank 0's two senders swapped. Delivery follows the pipes' own bases, so it is unchanged;
-        # the validator derives its expectation from list position, so it takes the factory order.
+        _queue_and_validate_pipes(device, tt_weight, pipes[::2] + pipes[1::2], bank_to_receivers, ring_size)
+        # Bank 0's two senders swapped, for both the request and the validator. Delivery follows the
+        # pipes' own bases and the validator's expectation follows bank_to_receivers, so neither
+        # depends on list order.
         swapped = list(pipes)
         swapped[0], swapped[1] = swapped[1], swapped[0]
-        queue(swapped)
-        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
-            device, tt_weight, num_layers=1, print_stride=max(1, ring_size // 4), prefetcher_pipes=pipes
-        )
+        _queue_and_validate_pipes(device, tt_weight, swapped, bank_to_receivers, ring_size)
         # The list as the factory returned it still works, on the same prefetcher.
-        _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size)
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(448, 1792, ttnn.bfloat8_b, 1)])
@@ -924,14 +943,14 @@ def test_pipe_outlives_the_list_it_came_in(device, K, N, dtype, recv_per_bank):
     A pipe's destructor frees its ring out of the device's persistent L1, so each pipe keeps the
     device alive on its own rather than relying on the list that carried it.
     """
-    tt_weight, pipes, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+    tt_weight, pipes, bank_to_receivers, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank
     )
     kept = pipes[0]
     assert kept.sender_core_type() == "dram"
     assert kept.ring_size() == push_page_size * _GCB_DEPTH_PAGES
     with tensor_prefetcher_session(device):
-        _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size)
     # Reading through the surviving handle after the list is gone must not touch freed device state.
     del pipes
     assert kept.config_address() > 0
@@ -950,12 +969,12 @@ def test_validator_gcb_and_pipe_interleaved(device, K, N, dtype, recv_per_bank):
     tt_weight_gcb, gcb, _iters, _push_gcb, ring_size = _setup_weight_and_gcb_recv_contig(
         device, K, N, dtype, recv_per_bank, num_layers=1
     )
-    tt_weight_pipe, pipes, _push_pipe, _ring_pipe = _setup_weight_and_pipes_recv_contig(
+    tt_weight_pipe, pipes, bank_to_receivers, _push_pipe, _ring_pipe = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, row_offset=_receiver_rows(num_dram_banks, recv_per_bank)
     )
     with tensor_prefetcher_session(device):
         _queue_and_validate_gcb(device, tt_weight_gcb, gcb, ring_size)
-        _queue_and_validate_pipes(device, tt_weight_pipe, pipes, ring_size)
+        _queue_and_validate_pipes(device, tt_weight_pipe, pipes, bank_to_receivers, ring_size)
         _queue_and_validate_gcb(device, tt_weight_gcb, gcb, ring_size)
 
 

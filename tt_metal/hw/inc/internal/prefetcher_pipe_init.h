@@ -102,13 +102,10 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         // Lane 0 slots; PrefetcherPipe ctor offsets all three by tid * L1_ALIGNMENT when lanes > 1.
         iface.aligned_pages_sent_ptr = sent_ptr;    // sender's NoC atomics
         iface.aligned_pages_acked_ptr = acked_ptr;  // local, cached stores
-        // Ack target on the sender core: the same slot offset, except when the sender's page sits
-        // at another address than this one -- a DRAM sender keeps its page in DRISC L1 -- in which
-        // case word[9] carries the page-relative delta to this receiver's slot there. Only the ack
-        // target moves; the local acked slot above stays in this page.
-        const uint32_t peer_counter_offset =
-            load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET);
-        iface.remote_pages_acked_ptr = peer_counter_offset != 0 ? config_page_ptr + peer_counter_offset : acked_ptr;
+        // Ack target on the sender core, page-relative to this page (word[9]). A DRAM sender keeps
+        // its page in DRISC L1 rather than at this address, so the target is not simply acked_ptr.
+        iface.remote_pages_acked_ptr =
+            config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET);
         iface.fifo_limit_page_aligned = fifo_limit;
         // Low byte only; the slot word also carries the active lane count (remote_dfb_constants.h).
         iface.relay_id = static_cast<uint8_t>(prefetcher_pipe_slot_relay_id(relay_dfb_id_word));
