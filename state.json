@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "35638744281",
-  "timestamp": "2026-09-21T18:36:21Z"
+  "run_id": "35728067639",
+  "timestamp": "2026-09-22T12:38:00Z"
  },
- "run_id": "35638744281",
+ "run_id": "35728067639",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -11,7 +11,7 @@
   },
   "51868": {
    "issue": 51866,
-   "status": "addressed maintainer (mateusznowakTT) /repo-assist request 2026-09-10: pushed test_softplus_negative_tail.py (adapted from tzh476's contributed test) and posted explanatory comment; awaiting CI on new commit"
+   "status": "MAINTAINER FLAGGED 2.1x PERF REGRESSION 2026-09-22 (mateusznowakTT) on current version ca350a3. Posted honest response acknowledging likely lane-masking cost of Cody-Waite exp tail (matches prior Copilot review point); cannot benchmark on HW, left rework to maintainer. Do NOT push another unverified numeric change here without HW measurement."
   },
   "53113": {
    "issue": 53106,
@@ -133,7 +133,7 @@
   },
   "56428": {
    "issue": 56424,
-   "status": "CI green (5/5 checks), posted confirmation comment 2026-09-14 (no comment had been posted since PR opened), no reviews yet"
+   "status": "CI green; APPROVED by mcw-anasuya 2026-09-22, ready to merge"
   },
   "56520_logical_not": {
    "issue": 56520,
@@ -245,6 +245,24 @@
    "branch": "repo-assist/fix-issue-57213-squared-difference-golden-scalar-dtype",
    "title": "fix(ttnn): key squared_difference golden dtype branch off tensor operand",
    "status": "opened this run; reuses _tensor_operand/_matched_operands/_integer_path_scalars helpers already used by add/subtract/multiply/divide goldens (#55722); adds regression test; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
+  },
+  "57244": {
+   "issue": 57213,
+   "status": "CI green (5/5), unchanged"
+  },
+  "57311": {
+   "issue": 57286,
+   "status": "CI green (5/5); MetalEnv mesh-device context-leak guard fix"
+  },
+  "57288": {
+   "issue": 57270,
+   "status": "CI green (5/5); tracy perf-report drop-unreplayed-ops fix"
+  },
+  "57322": {
+   "issue": 57322,
+   "branch": "repo-assist/fix-issue-57322-ternary-tanhbw-alignment-hash",
+   "title": "fix(ttnn): hash Alignment/Tile in ternary and tanh_bw program-cache keys",
+   "status": "opened this run; follow-up to #55702, verified root cause against current ternary_device_operation.cpp and tanh_bw_device_operation.cpp; CI triggered, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
   }
  },
  "issues_labeled": [
@@ -690,14 +708,14 @@
    "type": "approved_but_dirty_author_action"
   },
   "49317": {
-   "last_ping": "2026-08-25",
-   "type": "author_checkin",
-   "note": "blocked mergeable_state, ~1mo stale"
+   "last_ping": "2026-09-22",
+   "type": "re-ping",
+   "note": "still blocked ~2mo, no author action since 08-25 checkin"
   },
   "50993": {
-   "last_ping": "2026-08-25",
-   "type": "author_checkin",
-   "note": "blocked mergeable_state, Copilot review posted, ~1mo stale"
+   "last_ping": "2026-09-22",
+   "type": "re-ping",
+   "note": "still blocked ~1mo, no author action since 08-25 checkin"
   },
   "50519": {
    "last_ping": "2026-08-25",
@@ -946,9 +964,9 @@
    "note": "CHANGES_REQUESTED review from bbradelTT unanswered since June (overlap with merged #46112), dirty mergeable_state"
   },
   "45631": {
-   "date": "2026-09-12",
-   "note": "approved by dstoiljkovicTT but unresolved comments from ruizhangTT/nkapreTT since Aug, mergeable_state=blocked, never previously nudged",
-   "type": "author_checkin"
+   "last_ping": "2026-09-22",
+   "type": "re-ping",
+   "note": "still dirty (needs rebase), threads resolved but no author action since 09-12 checkin"
   },
   "46054": {
    "date": "2026-09-12",
@@ -1167,8 +1185,8 @@
   }
  },
  "backlog_cursor": {
-  "task1_task2_latest": "2026-09-21 18:36 run: labeled 5 fresh unlabeled issues found paging newest-open-issues below prior cursor: #57055/#57003 infra-ci, #56914 feature, #56913 performance monitoring, #57011 feature. Commented on #57213 and #57212 (both iklemenskiTT, eltwise golden/comparison-mode gaps, zero prior repo-assist engagement). Cursor: reached down to roughly #56876 in the newest-desc scan (3 pages of 30); continue below #56876 next run for further Task1/2 sweeps.",
-  "task6_latest": "2026-09-20: nudged 3 never-previously-nudged stale PRs (oldest-updated, non-repo-assist, draft:false): #52375 (softplus golden beta/threshold, author checkin), #50598 (sdpa_decode fp32_dest_acc_en, author checkin re earlier CHANGES_REQUESTED), #51447 (VibeVoice1.5B bring-up, author checkin). Hit 3-action cap. Remaining never-nudged candidates further down oldest-updated list: #41596 (aarch64 support, behind main, very old), #40339 (Gentoo support, behind main, very old) -- both look abandoned/low-priority, consider for closure discussion rather than nudge next time."
+  "task1_task2_latest": "2026-09-22 run: reviewed newest ~30 open issues (57345 down through 57259); most are internal team-tracking issues (assignees set, no public body) e.g. shield_prefill/MoE-block tasks -- not triage candidates. Verified and labeled #57322 (ternary/tanh_bw program-cache key omits Alignment/Tile, follow-up to #55702) `bug`, opened fix PR. Continue below #57259 next run.",
+  "task6_latest": "2026-09-22: re-pinged 3 stale PRs previously nudged with no author response: #45631, #49317, #50993 (3-action cap reached). Candidates further down oldest-updated list not yet re-checked this run: #51119, #51120, #51129, #51155, #45435, #47426, #38627, #38639, #39293, #40858 (all previously nudged in Aug, worth re-ping when cap allows)."
  },
  "labeled_issues": {
   "53866": {
@@ -1598,26 +1616,6 @@
    "run_id": "35480399102",
    "date": "2026-09-20T01:06:00Z",
    "summary": "Task5: checked CI on 14 open repo-assist PRs pending outcome (53690/54246/54792/55847/56375/56195/56428/56790/56817/56864-closed/56943/56956/56997) -- all green except #56195 (RTL Sim CI failure but details_url is the same known broken placeholder domain already flagged as infra noise elsewhere, not a real code defect). Task1/2: reviewed ~100 newest open issues (cursor #57096 down through #56755) -- most already labeled/assigned to humans with active fix PRs; confirmed #56865 (vLLM sampling regression) assigned to iwroszTT with draft PR #56467 already addressing it, #56824/#56781/#56769/#56776 assigned to reporters, #57095/#57028/#57011/#56802/#56801/#56803/#56792/#56783 are maintainer-authored perf/infra notes needing no action. Commented on #56967 (LO16 vs tt-isa-documentation UINT16 naming discrepancy in tt-llk) after verifying current llk_defs.h on Blackhole+Wormhole match reporter's citations exactly (LO16=6, no value-9 entry) -- naming-clarity only, not labeled bug. Task3: investigated #56827 (concat block-sharded width ragged-tail corruption) -- confirmed still open, no other PR fixes it (only #56603 fixes the height mirror, itself unmerged), prior repo-assist PR #56864 was auto-closed without merge/comment despite 5/5 green checks for unclear reasons; re-implemented the fix on a fresh branch (real padded_shape()[-1] instead of shard capacity for the per-input cursor, output range clipped via std::min), added a parametrized regression test (2/3 inputs x row/col orientation) adapted from the issue's own repro; opened new ready-for-review PR, commented on issue linking it. Task8: refreshed monthly summary #55015 (added #57092/#57093 PR items, replaced stale #56827/#56864 closed-PR suggested-action with the new PR)."
-  },
-  {
-   "run_id": "35461161503",
-   "date": "2026-09-19T18:41:00Z",
-   "summary": "Task1/3/4: investigated fresh issue #57088 (prefill_producer.py hardcoded PREFILL_NUM_LAYERS default to 61=Kimi-K2.7's depth; verified against current reference/glm_5_2_config.py (78), glm_5_1_config.py (78), mistral_small_4_config.py (36), and all 5 manifests under deepseek_v3_d_p/tt/runners/manifests/ -- none set PREFILL_NUM_LAYERS) -- confirmed GLM-5.2/GLM-5.1/Mistral-4 silently scored only their first 61 layers on sc4. Fixed by defaulting from ADAPTER.model_config.NUM_LAYERS, mirroring prefill_runner.py:77's existing pattern; labeled bug, opened ready-for-review PR (Python-only, no build). Also investigated #57090 (per-model prefill CI mesh-graph descriptors identical across models) -- verified glm52_{sc1,sc4} and kimi27_{sc1,sc4} textprotos are byte-identical via diff/md5sum; collapsed to shared sc1_mgd.textproto/sc4_mgd.textproto, updated run_multirank_pcc.sh's path derivation and RUN_COMMANDS.md; labeled bug, opened [skip ci] ready-for-review PR (shell+docs+data only). Task5: spot-checked CI on 3 recent repo-assist PRs (#56997/#56943/#57052) -- pre-checks green, pr-gate.yaml still shows zero runs, same repo-side gating pattern as prior runs, no action needed. Investigated #57055 (CMake TT::Metalium::Private refactor, 47 sites/32 files) -- genuine but too large for a surgical fix, left unlabeled pending maintainer scoping. Confirmed #57003 (T3K dispatch pipeline retirement) is gated to on-or-after 31 October 2026, not actionable yet. Task7: verified #57090's reporter kgrujcic-tt has 30 merged PRs -- established contributor, no welcome. Task8: refreshed monthly summary #55015 with this run's entry and updated suggested actions."
-  },
-  {
-   "run_id": "35443093172",
-   "date": "2026-09-19T12:36:57Z",
-   "summary": "Task5: checked CI on ~15 open repo-assist PRs; all green except #55670 (investigated 3 failures via job logs, all confirmed unrelated pre-existing issues -- tilize program-cache flake x2 + glm5 perf-band regression -- posted breakdown comment) and #51868 (RTL Sim CI shows failure but details_url is the known broken placeholder domain, could not fetch real logs, likely infra noise not actionable). Task1/2: investigated #56880 (gather rank>4 leading-dim independent-fold silent-wrong-data, sibling of already-fixed #56876/scatter) against current gather.cpp/gather_program_factory.cpp/gather_device_operation.cpp -- confirmed genuine defect but decided the fix is architecturally riskier than scatter's (4 program factories + codegen route + TILE-layout slicing + transpose reordering which leading dims fold), labeled bug only, no PR. Confirmed #56876 already fixed by open PR #56875, #56853 (ttnn.pow int scalar exponent bit-reinterpret bug, sibling issue) already fixed by open PR #56860, #56738 (binary_ng fused-activation dtype corruption) already fixed by open PR #56850 -- no duplicates opened. Reviewed #56776 (Quasar V2 multicast write loss), #56701/#56702 (Quasar DFB trace/refresh gaps) -- all well-documented, already labeled bug, but need emulator/HW access or deep dispatch-serialization expertise beyond repo-assist's safe scope. Task6: nudged 3 never-previously-nudged stale PRs -- /codeowners re-ping on #52367 (pending since 08-11), author nudge on #52340 (unaddressed review comment re: duplicated constexpr guard), author nudge on #52326 (dirty + noted scope overlap with repo-assist's own #54246). Task7: welcomed first-time contributor Tinmc189623 on PR #57084 after verifying 0 prior merged PRs/issues/PRs. Task8: rewrote monthly summary #55015 (had regrown to ~247KB) with current suggested actions."
-  },
-  {
-   "run_id": "35427004707",
-   "date": "2026-09-19T06:41:00Z",
-   "summary": "Task1/2: reviewed newest ~40 open issues below prior cursor #56998 down through #56914; labeled #57083 (fabric CCL packet size 4352B vs validator-computed 8192B ideal on Blackhole) `performance monitoring` and commented with root-cause confirmation against current ccl_common.cpp/erisc_datamover_builder.hpp, noting the existing FabricRouterConfig workaround and that the reporter's bandwidth numbers are unverified by Repo Assist. Re-confirmed #56945/#56954 still covered by external PRs #56932/#56953 (no duplicate). Most other issues in range already labeled/tracked or are speculative sfpi/perf suggestions without a confirmed defect. Task5: checked CI on 4 recently-opened repo-assist PRs (#56943/#56956/#56997/#57052) -- pre-checks (RTL Sim + Cycode) all green, but pr-gate.yaml itself has zero runs for these branches (0 workflow runs found via list_workflow_runs), confirming the previously-noted action_required pattern is a repo-side gating state, not a code defect; no fix needed, just waiting on maintainer approval to trigger the real build. Also checked reviews on #56396 (maintainer already approved a prior revision, no new activity since last run's fix) and #56817 (no new human review since last run). Task6: re-pinged 3 stale PRs (#50131, #50149, #50150) from page2 of draft:false sort:updated-asc, all unchanged mergeable_state and quiet since their prior nudge ~1 month ago; hit the 3-action cap. Task7: checked contributor history for #57083's author (L-Beale-NZ) -- has a prior issue (#55125), not a new contributor, no welcome posted. Task8: rewrote monthly summary #55015 (body had regrown to ~253KB); trimmed to canonical current-state format with updated suggested actions."
-  },
-  {
-   "run_id": "35411011460",
-   "date": "2026-09-19T01:15:00Z",
-   "summary": "Task2 (investigate/comment, least-recently-run task): commented on 3 fresh open issues without prior repo-assist engagement. #56941 (Quasar BFD datacopy DFB race) -- verified the AI-suggested fix snippet against current dataflow_buffer.inl and found the file already has an additional read_acked/ctxn_id_loop_cnt_ modular-comparison guard not present in the issue's quoted code; couldn't determine from static reading whether this closes the race, asked reporter to re-verify repro against current main. #56616 (gelu accurate-mode CDF bug) -- confirmed via merged PR #56338's body/docstrings that this was a misattribution: the failing element (x=-5.34375) traces to torch's own fp32 golden cancellation, not a device defect; fix (float64 golden) is already merged and the PR explicitly says to close #56616 as a misattribution -- suggested maintainer close it. #56526 (ttnn.quantize Int32 output can't represent -128) -- verified root cause against current ckernel_sfpu_quant.h (WH+BH): Int32 output routes through FP32_TO_INT8's 7-bit sign-magnitude saturation at +-127, confirmed via the kernel's own comments; reporter supplied a well-tested but non-trivial SFPU replay-buffer rewrite patch (gist) that also touches a companion RNE-rounding issue (#56525) -- too architecturally risky to port blind without hardware, encouraged reporter to submit it as their own PR. Task1 spot-check: reviewed newest ~13 issues below prior cursor (#56993 down to #56913), most already labeled/maintainer-tracked or are perf/feature investigations without confirmed-defect status; #56945 already covered by merged PR #56932 (no dup); #56976 (matmul L1-interleaved 4x slowdown) confirmed root cause but is an architectural perf issue, left unlabeled/uncommented pending maintainer triage. Task7: checked all issues/PRs from the last 24h (#57081, 57066, 57055, 57042, 57028 and recent PRs) -- all authors are established maintainers/contributors (rtawfik01, blozano-tt, bbradelTT, nathan-TT etc), no new-contributor welcomes needed. Task8: updated monthly summary #55015 with this run's entry."
   }
  ],
  "no_action_reviewed": [
@@ -1704,9 +1702,10 @@
    "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
   }
  },
- "task8_last_update": "2026-09-21T18:36:21Z",
+ "task8_last_update": "2026-09-22T12:38:00Z",
  "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
  "lessons_learned": [
-  "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning."
+  "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning.",
+  "2026-09-22: PR #51868 (softplus negative-tail fix) got a real maintainer-measured 2.1x perf regression report from mateusznowakTT. Reinforces the earlier #56817 lesson: always weight device-measured maintainer feedback over any prior confident fix, even our own; do not push further numeric/perf-sensitive kernel changes without hardware validation -- acknowledge and defer to maintainer rework instead."
  ]
 }
