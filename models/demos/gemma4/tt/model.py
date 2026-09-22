@@ -24,6 +24,7 @@ from tracy import signpost
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target, linear_l1_safe, lm_head_decode_config
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -286,6 +287,9 @@ class Gemma4Model:
         )
         self.hf_config = hf_config
         self.mesh_config = mesh_config
+        # Dense 12B/31B on a full Wormhole T3K: the one target the tuned decode
+        # configs were measured on. See dram_sharded.is_t3k_dense_target.
+        self._tuned_decode = is_t3k_dense_target(mesh_device, hf_config)
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
         self.final_logit_softcapping = hf_config.final_logit_softcapping
@@ -1271,13 +1275,37 @@ class Gemma4Model:
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
-            lm_head_pc = _get_lm_head_program_config(
-                self.mesh_device,
-                m=hidden_states.shape[2],
-                k=self.hidden_size,
-                n=self.lm_head_weight.shape[-1],
+            # On the tuned decode target the LM head takes the swept 1D config
+            # plus an explicit #38306-safe HiFi3 + fp32 dest-acc pairing, via
+            # linear_l1_safe like the other tuned matmuls: whether the in1 CB
+            # fits depends on the compute grid as well as the vocab shard, so
+            # the width bound inside lm_head_decode_config can still overflow
+            # and must fall back per shape rather than kill the run. Every other
+            # mesh keeps _get_lm_head_program_config and ttnn's own fidelity.
+            lm_head_pc = lm_head_out_memcfg = lm_head_ckc = None
+            if self._tuned_decode:
+                lm_head_pc, lm_head_out_memcfg, lm_head_ckc = lm_head_decode_config(
+                    self.mesh_device,
+                    m=hidden_states.shape[2],
+                    k=self.hidden_size,
+                    n=self.lm_head_weight.shape[-1],
+                    weight=self.lm_head_weight,
+                    tuned_decode=True,
+                )
+            if lm_head_pc is None and lm_head_ckc is None:
+                lm_head_pc = _get_lm_head_program_config(
+                    self.mesh_device,
+                    m=hidden_states.shape[2],
+                    k=self.hidden_size,
+                    n=self.lm_head_weight.shape[-1],
+                )
+            logits = linear_l1_safe(
+                hidden_states,
+                self.lm_head_weight,
+                program_config=lm_head_pc,
+                memory_config=lm_head_out_memcfg,
+                compute_kernel_config=lm_head_ckc,
             )
-            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
             # ``deallocate_input=False`` is required when the caller owns a
             # *persistent* buffer that outlives this call — notably the batched
             # prefill-sampling trace, whose input is written by

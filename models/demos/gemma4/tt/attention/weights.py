@@ -22,7 +22,12 @@ import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard, is_t3k_dense_target
+from models.demos.gemma4.tt.dram_sharded import (
+    DramShardedLinear,
+    can_dram_shard,
+    decode_1d_matmul_config,
+    is_t3k_dense_target,
+)
 from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -46,9 +51,17 @@ class AttentionWeights:
     # operations.py. False everywhere else, which keeps every other SKU and
     # variant on the plain ttnn.linear it runs today.
     tuned_prefill: bool = False
+    # Same gate, for the tuned decode matmul path. Held separately from
+    # ``tuned_prefill`` only for readability -- both resolve to
+    # ``is_t3k_dense_target``.
+    tuned_decode: bool = False
     # fp32 destination accumulation on the m<=32 projections; see
     # single_tile_matmul_ckc. Per model, and only consulted on the tuned target.
     single_tile_dest_acc: bool = True
+    # Swept 1D-mcast (program_config, compute_kernel_config) for the decode QKV
+    # matmul, built once at weight load. None off the tuned target, and None
+    # when wqkv is DRAM-width-sharded (that kernel has its own config).
+    qkv_decode_config: object = None
 
 
 def load_attention_weights(
@@ -226,6 +239,14 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    tuned_target = is_t3k_dense_target(mesh_device, config)
+    dest_acc = resolve_single_tile_dest_acc(single_tile_dest_acc)
+    qkv_decode_config = (
+        None
+        if isinstance(wqkv, DramShardedLinear)
+        else decode_1d_matmul_config(mesh_device, hidden_size, qkv_n, dest_acc=dest_acc, tuned_decode=tuned_target)
+    )
+
     return AttentionWeights(
         wqkv=wqkv,
         o_proj=o_proj,
@@ -233,6 +254,8 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
-        tuned_prefill=is_t3k_dense_target(mesh_device, config),
-        single_tile_dest_acc=resolve_single_tile_dest_acc(single_tile_dest_acc),
+        tuned_prefill=tuned_target,
+        tuned_decode=tuned_target,
+        single_tile_dest_acc=dest_acc,
+        qkv_decode_config=qkv_decode_config,
     )

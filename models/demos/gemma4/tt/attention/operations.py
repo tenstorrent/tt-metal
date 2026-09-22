@@ -20,6 +20,7 @@ import os
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.dram_sharded import (
+    TILE_SIZE,
     DramShardedLinear,
     hoist_prefill_in0,
     in_prefill_l1_matmul_band,
@@ -30,6 +31,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_linear_above_cutoff,
     should_prefill_long_2d,
     single_tile_matmul_ckc,
+    wh_t3k_decode_progcfg,
 )
 
 from .weights import AttentionWeights
@@ -113,26 +115,32 @@ def o_proj_input_memcfg(sdpa_out, default_memcfg=None):
     return default_memcfg
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, decode=False):
     """Fused QKV matmul (no bias for Gemma4).
 
     ``memory_config`` lets the packed-verify decode keep the projection output
     resident on L1; ``None`` keeps the op default (DRAM) for existing callers.
 
     On the tuned-prefill target this takes a shape-gated 2D program config and
-    hoists in0 into L1 when it fits. The config band opens above one tile, so
-    decode (M<=32) resolves to ``program_config=None`` and runs the same bare
-    matmul as every other SKU.
+    hoists in0 into L1 when it fits. The prefill config band opens above one
+    tile, so ``decode=True`` instead opts into the swept 1D config built at
+    weight load (``AttentionWeights.qkv_decode_config``), guarded on a
+    single-tile activation height so a batched caller never picks up a config
+    shaped for one row. Off the tuned target both resolve to
+    ``program_config=None`` and this is the bare matmul every other SKU runs.
     """
     if isinstance(weights.wqkv, DramShardedLinear):
         return weights.wqkv(hidden_states, out_memory_config=memory_config)
-    if not weights.tuned_prefill:
+    if not (weights.tuned_prefill or weights.tuned_decode):
         return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
 
     rows = matmul_rows(hidden_states)
-    program_config, compute_kernel_config = interleaved_prefill_config(
-        rows, int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
-    )
+    if decode and weights.qkv_decode_config is not None and rows <= TILE_SIZE:
+        program_config, compute_kernel_config = weights.qkv_decode_config
+    else:
+        program_config, compute_kernel_config = interleaved_prefill_config(
+            rows, int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
+        )
     if compute_kernel_config is None:
         compute_kernel_config = single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
     activation, owned_activation = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
@@ -623,8 +631,8 @@ def concat_heads(
     one core per user), so the SDPA output (DRAM, [1, batch, heads, head_dim]) is
     resharded first across ``batch`` cores. The old path ran the concat on a
     single core (~30 us/layer) and needed a separate transpose; the decode op
-    drops the transpose and spreads work across cores. Output is converted back
-    to DRAM interleaved so the downstream o_proj matmul is unchanged.
+    drops the transpose and spreads work across cores. Output is interleaved
+    DRAM unless the caller passes ``memory_config``.
 
     Prefill: ``memory_config`` defaults to DRAM; pass L1 for short-lived concat
     temps (caller must DRAM-ify before o_proj / allreduce).
@@ -655,12 +663,18 @@ def concat_heads(
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
+        # SDPA can already have emitted this exact height-sharded layout (the
+        # tuned decode path asks it to), in which case the reshard is a no-op.
+        if tensor.is_sharded() and tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            tensor_sh = tensor
+        else:
+            tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
         # Output is [1, 1, B(padded to 32), num_heads*head_dim] width-sharded.
         out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
-        tensor_sh.deallocate(True)
+        if tensor_sh is not tensor:
+            tensor_sh.deallocate(True)
         out_sh = out
-        out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.sharded_to_interleaved(out_sh, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         out_sh.deallocate(True)
         # Drop the batch padding (B is padded to 32 by the op) so downstream sees
         # [1, 1, batch, hidden_local] just like the old transpose+concat path.
@@ -673,25 +687,43 @@ def concat_heads(
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights):
+def apply_output_projection(tensor, weights: AttentionWeights, memory_config=None):
     """Apply output projection (no bias for Gemma4).
 
     On the tuned-prefill target a tall activation (a 2048-row prefill chunk and
     up) goes through the batched-reshape matmul rather than one shot, and a
-    shorter one is hoisted into L1 first. Decode is below both bounds and is
-    unchanged.
+    shorter one is hoisted into L1 first. Decode (M<=32) takes the swept
+    1D-mcast config on the tuned-decode target and is otherwise unchanged.
+
+    ``memory_config`` lets decode keep the projection output in L1 so the
+    following all-reduce gathers from L1 rather than DRAM; ``None`` keeps the
+    op default for existing callers.
     """
     rows = matmul_rows(tensor)
     if isinstance(weights.o_proj, DramShardedLinear):
-        out = weights.o_proj(tensor)
-    elif not weights.tuned_prefill:
-        out = ttnn.linear(tensor, weights.o_proj)
+        out = weights.o_proj(tensor, out_memory_config=memory_config)
+    elif not (weights.tuned_prefill or weights.tuned_decode):
+        out = ttnn.linear(tensor, weights.o_proj, memory_config=memory_config)
     elif should_prefill_long_2d(rows):
-        out = prefill_linear_above_cutoff(tensor, weights.o_proj)
+        out = prefill_linear_above_cutoff(tensor, weights.o_proj, out_memory_config=memory_config)
     else:
-        activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor)
-        out = ttnn.linear(
-            activation, weights.o_proj, compute_kernel_config=single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
+        program_config = (
+            wh_t3k_decode_progcfg(
+                tensor.device(),
+                int(tensor.shape[-1]),
+                int(weights.o_proj.shape[-1]),
+                tuned_decode=weights.tuned_decode,
+            )
+            if rows <= TILE_SIZE
+            else None
+        )
+        activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor, program_config)
+        out = linear_l1_safe(
+            activation,
+            weights.o_proj,
+            program_config=program_config,
+            memory_config=memory_config,
+            compute_kernel_config=single_tile_matmul_ckc(rows, weights.single_tile_dest_acc),
         )
         if owned_activation is not None:
             owned_activation.deallocate(True)

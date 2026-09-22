@@ -34,6 +34,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_linear_above_cutoff,
     should_prefill_long_2d,
     single_tile_matmul_ckc,
+    wh_t3k_decode_progcfg,
 )
 from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -161,6 +162,8 @@ class SharedMLP:
         is_moe = bool(getattr(hf_config, "enable_moe_block", False))
         dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
         self._tuned_prefill = is_t3k_dense_target(mesh_device, hf_config)
+        # Same gate for the tuned decode matmuls; see ``_linear``.
+        self._tuned_decode = self._tuned_prefill
         self._single_tile_dest_acc = resolve_single_tile_dest_acc(single_tile_dest_acc)
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
@@ -213,22 +216,56 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-    def _linear(self, x, weight, long_2d_min_rows=0):
-        """gate_up / down_proj matmul, tuned for prefill on the T3K dense target.
+    def _decode_in0(self, x):
+        """Un-shard a decode activation into L1, so the residual island stays on-chip.
 
-        ``should_prefill_long_2d`` catches a chunk too tall for one shot; below
-        that ``interleaved_mlp_prefill_config`` covers the short-prefill band and
-        declines elsewhere, including decode, where this is the bare matmul every
-        other SKU runs. ``long_2d_min_rows`` raises the first bound: gate_up
-        passes 4096 to keep the auto config its 2048-row chunk was measured on,
-        so only down_proj takes the reshape from 2048.
+        Returns ``(activation, owned)`` where ``owned`` is the copy the caller
+        must deallocate, or ``None`` when the input was handed back untouched.
+        The swept decode program configs below have their own core grids, which
+        will not match the island's width-shard grid, so the activation has to
+        be interleaved -- but it can be interleaved in L1 rather than DRAM.
         """
+        if not x.is_sharded():
+            return x, None
+        activation = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        return activation, activation
+
+    def _linear(self, x, weight, long_2d_min_rows=0):
+        """gate_up / down_proj matmul, tuned for the T3K dense target.
+
+        Prefill: ``should_prefill_long_2d`` catches a chunk too tall for one
+        shot; below that ``interleaved_mlp_prefill_config`` covers the
+        short-prefill band. ``long_2d_min_rows`` raises the first bound:
+        gate_up passes 4096 to keep the auto config its 2048-row chunk was
+        measured on, so only down_proj takes the reshape from 2048.
+
+        Decode (M<=32) takes the swept 1D-mcast config and keeps its output in
+        L1 for the all-reduce that follows. Off the tuned target both bands
+        decline and this is the bare matmul every other SKU runs.
+        """
+        rows = matmul_rows(x)
+        decode_memcfg = ttnn.L1_MEMORY_CONFIG if (self._tuned_decode and rows <= TILE_SIZE) else None
         if isinstance(weight, DramShardedLinear):
-            return weight(x)
-        if not self._tuned_prefill:
+            return weight(x, out_memory_config=decode_memcfg)
+        if not (self._tuned_prefill or self._tuned_decode):
             return ttnn.linear(x, weight)
 
-        rows = matmul_rows(x)
+        if self._tuned_decode and rows <= TILE_SIZE:
+            program_config = wh_t3k_decode_progcfg(
+                self.mesh_device, int(x.shape[-1]), int(weight.shape[-1]), tuned_decode=True
+            )
+            activation, owned = self._decode_in0(x)
+            output = linear_l1_safe(
+                activation,
+                weight,
+                program_config=program_config,
+                memory_config=decode_memcfg,
+                compute_kernel_config=single_tile_matmul_ckc(rows, self._single_tile_dest_acc),
+            )
+            if owned is not None:
+                owned.deallocate(True)
+            return output
+
         if should_prefill_long_2d(rows) and rows >= long_2d_min_rows:
             return prefill_linear_above_cutoff(x, weight)
         program_config, out_memcfg, compute_kernel_config = interleaved_mlp_prefill_config(

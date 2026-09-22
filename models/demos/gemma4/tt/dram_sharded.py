@@ -756,53 +756,6 @@ def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE, dest_acc=None, tuned
     return program_config, compute_kernel_config
 
 
-def _program_grid(program_config):
-    grid = program_config.compute_with_storage_grid_size
-    return (int(grid.x), int(grid.y)) if hasattr(grid, "x") else (int(grid[0]), int(grid[1]))
-
-
-def width_shard_core_count(memcfg):
-    """Core count behind a width-sharded memory config, or ``None``."""
-    if memcfg is None or not memcfg.is_sharded() or memcfg.shard_spec is None:
-        return None
-    box = memcfg.shard_spec.grid.bounding_box().grid_size()
-    return int(box.x) * int(box.y)
-
-
-def width_shard_matches_1d_progcfg(memcfg, program_config) -> bool:
-    """True when a width-sharded in0's core grid equals the 1D matmul grid."""
-    if memcfg is None or program_config is None or not memcfg.is_sharded():
-        return False
-    spec = memcfg.shard_spec
-    if spec is None:
-        return False
-    box = spec.grid.bounding_box().grid_size()
-    pc_x, pc_y = _program_grid(program_config)
-    return int(box.x) == pc_x and int(box.y) == pc_y
-
-
-def prefill_progcfg_1d_for_width_sharded_in0(m, k, n, in0_memcfg, grid_size=None):
-    """1D progcfg whose core grid matches ``in0_memcfg``, or ``None`` if impossible.
-
-    Prefers the sharded-in0 core count (the decode residual island) over the
-    interleaved core picker. ``fuse_batch=True`` is required when in0 is
-    sharded, and ``in0_block_w`` must divide the PER-CORE K tiles, not ``kt``.
-    """
-    cores = width_shard_core_count(in0_memcfg)
-    if cores is None:
-        return None
-    kt = math.ceil(k / TILE_SIZE)
-    if kt % cores:
-        return None
-    in0_block_w = _find_largest_divisor(kt // cores, max_div=4)
-    program_config = prefill_progcfg_1d(
-        m, k, n, cores=cores, grid_size=grid_size, fuse_batch=True, in0_block_w=in0_block_w
-    )
-    if program_config is None or not width_shard_matches_1d_progcfg(in0_memcfg, program_config):
-        return None
-    return program_config
-
-
 def wide_vocab_lm_head_ckc(weight):
     """Fidelity for an LM head too wide for the tuned 1D-mcast program config.
 
