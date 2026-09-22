@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from loguru import logger
@@ -316,3 +317,49 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
             apply_quant_config(pipeline.transformer_states[idx].model, config)
 
     pipeline._prepare_transformer = _prepare_with_quant
+
+
+# ---------------------------------------------------------------------------
+# Environment opt-in (test / experiment plumbing; never changes a default)
+# ---------------------------------------------------------------------------
+
+QUANT_CONFIG_ENV = "WAN5B_QUANT_CONFIG"
+"""Name of a `QuantConfig` preset (`all_weights_bf8`, `all_lofi`, `all_bf8_lofi`) to opt into."""
+
+
+def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig] | None:
+    """Return `(name, QuantConfig)` for the preset named in `var`, or None when unset.
+
+    `default` is accepted and means "apply the explicit bf16/HiFi2 config", which is a no-op on
+    the weights but replaces the layers' compute configs with the preset's, so it is a useful
+    control when comparing presets.
+    """
+    name = os.environ.get(var, "").strip()
+    if not name:
+        return None
+    factory = getattr(QuantConfig, name, None) if not name.startswith("_") else None
+    if factory is None or not callable(factory):
+        presets = [n for n in ("default", "all_weights_bf8", "all_lofi", "all_bf8_lofi")]
+        msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
+        raise ValueError(msg)
+    return name, factory()
+
+
+def set_quant_config_from_env(pipeline, *, rewarm: bool = True, var: str = QUANT_CONFIG_ENV) -> str | None:
+    """Apply the preset named in `var` to `pipeline` (see `set_quant_config`); return its name.
+
+    Meant to be called right after the pipeline is constructed and before any trace is captured.
+    With `rewarm=True` the pipeline's eager warmup runs again afterwards: the construction-time
+    warmup compiled programs for bf16 weights and the baseline compute configs, and a trace
+    capture cannot compile the new binaries a different dtype or fidelity needs.
+    """
+    found = quant_config_from_env(var)
+    if found is None:
+        return None
+    name, config = found
+    logger.info(f"{var}={name}: applying QuantConfig.{name}() to the pipeline")
+    set_quant_config(pipeline, config)
+    if rewarm:
+        logger.info("re-running the eager warmup so the quantized programs are compiled before trace capture")
+        pipeline._warmup()
+    return name

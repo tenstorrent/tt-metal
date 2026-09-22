@@ -27,6 +27,7 @@ from models.tt_dit.models.transformers.wan2_2.transformer_wan import WanTransfor
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b_i2v import WanTI2V5BI2VPipeline  # noqa: F401
+from models.tt_dit.pipelines.wan.quant_config import apply_quant_config, quant_config_from_env
 from models.tt_dit.pipelines.wan.ti2v_5b_i2v_math import first_frame_mask, pad_timesteps_for_sequence_parallel
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, local_device_to_torch
@@ -404,6 +405,13 @@ def _reference_and_tt(mesh_device, sp_axis, tp_axis, num_links, topology, *, per
         cfg, mesh_device=mesh_device, ccl_manager=ccl_manager, parallel_config=parallel_config, num_layers=1
     )
     tt_model.load_torch_state_dict(state_dict)
+
+    # Opt-in precision preset (WAN5B_QUANT_CONFIG), the same switch the 5B perf tests read, so
+    # the PCC cost of a preset is measured against the same torch reference as the baseline.
+    quant = quant_config_from_env()
+    if quant is not None:
+        logger.info(f"applying QuantConfig.{quant[0]}() to the TT transformer under test")
+        apply_quant_config(tt_model, quant[1])
 
     spatial_host, n = tt_model.preprocess_spatial_input_host(spatial)
     assert n == n_tokens, f"token count mismatch: {n} vs {n_tokens}"
