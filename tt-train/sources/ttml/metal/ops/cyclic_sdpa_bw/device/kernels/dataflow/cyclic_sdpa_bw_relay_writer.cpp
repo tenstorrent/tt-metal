@@ -294,4 +294,8 @@ void kernel_main() {
 #endif
     }
     }  // slices
+    // The last statement of a non-coordinator core's final timestep is a
+    // remote semaphore increment; Blackhole issues atomics non-posted and
+    // the firmware asserts them flushed at kernel exit.
+    noc_async_atomic_barrier();
 }

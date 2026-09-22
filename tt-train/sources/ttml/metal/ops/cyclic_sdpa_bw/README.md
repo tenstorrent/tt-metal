@@ -404,3 +404,16 @@ nothing and surfaces as back-pressure in the next zone.
 Branch `bklockiewicz/cyclic-kernel-opt` (kernel work, off
 `bklockiewicz/ring-zigzag`). The original two-pass `ring_sdpa_bw` is
 untouched and remains the reference the comparisons are taken against.
+
+## Audit (2026-09-22)
+
+The tt-llk audit skills (semaphores, SrcA/SrcB banks, reconfig stalls,
+mailboxes, CB credits, NoC ordering, SFPU latency and performance) were run
+over this kernel, its relay reader and writer and the forward; the findings
+are in tt-flash-attn `docs/audit-2026-09-22.md`. Changes here: the FPU_SFPU
+init is ordered before the pack thread's first wait by one empty DST round
+trip (a stale count left by a killed kernel would otherwise run the
+exponential one group early for the whole launch); the broadcast-statistic
+init is issued once per group instead of once per key tile; the relay writer
+drains its atomics at exit; the release token's ordering invariant is
+documented. 106 device tests pass; speed unchanged.

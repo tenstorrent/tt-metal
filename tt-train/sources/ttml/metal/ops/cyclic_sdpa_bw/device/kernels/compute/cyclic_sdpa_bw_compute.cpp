@@ -465,8 +465,9 @@ void transpose_packet_in_place(const uint32_t cb_prev_srca) {
 // rows of DST. Once per column of the score grid, since every key tile of
 // the column shares it. The statistic goes through SrcB as it did through
 // the column broadcast before; same precision.
-void broadcast_statistic_rows_to_dst(
-    const uint32_t tmp_reg, const uint32_t cb_statistics, const uint32_t stat_tile) {
+// The init half, once per group: its arguments do not depend on the key
+// tile, so re-issuing it per tile only cost the unpack thread instructions.
+void broadcast_statistic_init(const uint32_t cb_statistics) {
     reconfig_data_format_srcb(cb_statistics);
     UNPACK((llk_unpack_A_init<BroadcastType::ROW, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_statistics)));
@@ -474,6 +475,10 @@ void broadcast_statistic_rows_to_dst(
           ckernel::DataCopyType::B2D,
           DST_ACCUM_MODE,
           BroadcastType::ROW>(cb_statistics)));
+}
+
+void broadcast_statistic_rows_to_dst(
+    const uint32_t tmp_reg, const uint32_t cb_statistics, const uint32_t stat_tile) {
     unary_bcast<BroadcastType::ROW>(cb_statistics, stat_tile, tmp_reg);
 }
 
@@ -717,6 +722,17 @@ void kernel_main() {
     // The score pass's FPU -> SFPU handshake, one count per column posted by
     // the math thread and taken by the pack thread.
     MATH((t6_semaphore_init(semaphore::FPU_SFPU, 0, semaphore::SEMAPHORE_MAX_VALUE)));
+    // The firmware never resets this semaphore between launches, and the
+    // init above sits in the math stream with nothing ordering the pack
+    // thread's first wait behind it: a stale count left by a kernel killed
+    // mid-run would let the exponential run one group early for the whole
+    // launch. One empty DST round trip puts the init before the pack's
+    // first wait (the pack cannot pass tile_regs_wait before math's commit,
+    // which follows the init in math's stream).
+    tile_regs_acquire();
+    tile_regs_commit();
+    tile_regs_wait();
+    tile_regs_release();
     PACK((pack_sfpu::init()));
     copy_init(cb_query);
     matmul_init(cb_key_operand, cb_query);
@@ -861,6 +877,7 @@ void kernel_main() {
             // -L first, by the FPU: broadcast into the score registers, its
             // remainder as a rank-one product against the column of ones,
             // then K Q^T accumulated on top. No SFPU subtract at all.
+            broadcast_statistic_init(cb_neg_lse_row);
             for (uint32_t i = 0; i < kGroup; ++i) {
                 if (i >= n_live) {
                     break;  // constant trip count keeps the loop unrolled
@@ -895,6 +912,7 @@ void kernel_main() {
             // dP^T - D^T for the group: -D broadcast into every register of
             // the second half, then V dO^T accumulated onto it. The FPU adds
             // into DST.
+            broadcast_statistic_init(cb_neg_u_row);
             for (uint32_t i = 0; i < kGroup; ++i) {
                 if (i >= n_live) {
                     break;  // constant trip count keeps the loop unrolled
@@ -1046,12 +1064,13 @@ void kernel_main() {
             } else {
                 pack_reconfig_l1_acc(true);
             }
+            // SrcA takes the second operand (dO, bf16), SrcB the first (P^T,
+            // Float32). Once for all blocks: nothing in the loops re-inits.
+            reconfig_data_format(cb_grad_output, cb_attention_weights);
+            mm_init<kFidDV>(cb_attention_weights, cb_grad_output, /* transpose */ 0);
             for (uint32_t b = 0; b < Bt; ++b) {
                 for (uint32_t k0 = 0; k0 < vWt; k0 += block_size) {
                     tile_regs_acquire();
-                    // SrcA takes the second operand (dO, bf16), SrcB the first (P^T, Float32).
-                    reconfig_data_format(cb_grad_output, cb_attention_weights);
-                    mm_init<kFidDV>(cb_attention_weights, cb_grad_output, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         // Query tiles below the key tile hold no P^T on a
                         // diagonal pair (see the score pass).
@@ -1100,11 +1119,12 @@ void kernel_main() {
             } else {
                 pack_reconfig_l1_acc(true);
             }
+            // Once for all blocks: nothing in the loops re-inits.
+            reconfig_data_format_srca(cb_prev_srca, cb_query);
+            mm_init<kFidDK>(cb_grad_scores, cb_query, /* transpose */ 0);
             for (uint32_t b = 0; b < Bt; ++b) {
                 for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
                     tile_regs_acquire();
-                    reconfig_data_format_srca(cb_prev_srca, cb_query);
-                    mm_init<kFidDK>(cb_grad_scores, cb_query, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         for (uint32_t a = 0; a < Bt; ++a) {
                             if (skip_masked && a < b) {
@@ -1158,7 +1178,11 @@ void kernel_main() {
 
         }
 #if RELEASE_TOKEN
-        // Slot t mod 2 is free now: every read of it is done.
+        // Slot t mod 2 is free now: every read of it is done. The token is
+        // pushed by the pack thread while the slot's pops above run on the
+        // unpack thread, and nothing orders the two; it is safe because every
+        // unpack read of the slot precedes the last pack this push follows.
+        // Do not add an unpack read of the slot after the last matmul.
         cb_reserve_back(cb_slot_release, 1);
         cb_push_back(cb_slot_release, 1);
 #endif
