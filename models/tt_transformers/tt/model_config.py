@@ -1502,7 +1502,7 @@ class ModelArgs:
         if override:
             parts = override.split(",")
             if len(parts) == 2:
-                return (int(parts[0]), int(parts[1]))
+                return self._clamp_grid_to_device((int(parts[0]), int(parts[1])))
         if (
             is_blackhole()
             and os.getenv("QWEN_MM_BIG_GRID_BH", "0") == "1"
@@ -1511,6 +1511,21 @@ class ModelArgs:
         ):
             return (8, 10)
         return grid
+
+    def _clamp_grid_to_device(self, grid):
+        """Clamp a requested (x, y) core grid to what this device actually has.
+
+        Blackhole P150 parts ship harvested: a nominally 13x10 (130-core) part
+        can expose 12x10 (120 cores). Requesting the full grid then fails with
+        "compute_with_storage_grid_size must be <= device grid size" deep inside
+        the matmul op, which reads as a model bug rather than a SKU difference.
+        Clamping keeps a grid request portable across harvest configurations.
+        """
+        try:
+            dev = self.mesh_device.compute_with_storage_grid_size()
+        except Exception:
+            return grid
+        return (min(grid[0], int(dev.x)), min(grid[1], int(dev.y)))
 
     def _resolve_mm_blocks(self, knob: str = None, default=(8, 8, 8)):
         """MinimalMatmul (M, K, N) block sizes, overridable for experiments.
@@ -4157,6 +4172,15 @@ class ModelArgs:
         )
 
     def find_largest_divisor(self, n, max_divisor=8):
+        """Largest divisor of ``n`` at or below ``max_divisor``.
+
+        The 8 cap is historical. It can strand a dominant prefill matmul at a
+        tiny ``in0_block_w``: pplx-embed-4B FF2 has k=9728, which over a grid_y=8
+        row is 38 K-tiles, whose only divisors are 1, 2, 19 and 38 — so the cap
+        forces in0_block_w=2. ``QWEN_MM_MAX_DIVISOR`` raises the ceiling so the
+        larger legal divisors can be swept (see tt-perf-report OPT-004).
+        """
+        max_divisor = int(os.getenv("QWEN_MM_MAX_DIVISOR", max_divisor))
         for i in range(max_divisor, 0, -1):
             if n % i == 0:
                 return i

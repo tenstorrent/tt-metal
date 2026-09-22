@@ -1,0 +1,25 @@
+{
+  "workload": {"profile": "prefill_embedding", "prompt_len": 512, "gen_len": 0, "batch": 1,
+               "note": "embedding model: prefill+norm+mean-pool only, no decode/LM-head/sampling"},
+  "device": {"arch": "blackhole", "sku": "P150", "compute_grid": "12x10=120 cores (harvested; nominal 13x10=130)"},
+  "ttft_ms": 28.9,
+  "prefill_ms_e2e": 28.9,
+  "prefill_ms_device": 27.636,
+  "roofline_ms_estimate": 6.40,
+  "roofline_basis": "3.72 TFLOP matmul (all 5 roles BFP4/LoFi) / 580.9 TFLOPS measured P150 BFP4-LoFi peak (tech_reports/GEMM_FLOPS)",
+  "baseline_ms_e2e": 35.9,
+  "h200_reference_ms": 5.437,
+  "ratio_vs_h200": 5.3,
+  "device_op_breakdown_ms": {
+    "Matmul": 15.126, "SDPA": 3.741, "LayerNorm": 3.700, "BinaryNg": 2.343,
+    "RotaryEmbeddingLlama": 1.658, "GenericOp_headsplit": 1.037, "Embeddings": 0.030
+  },
+  "named_limitations": [
+    "matmul at 42% of measured BFP4/LoFi peak (15.13 ms vs 6.40 ms roofline); legacy MatmulMultiCoreReuseMultiCast beats minimal_matmul at bs=1 (33.1 vs 49.0 ms) so MinimalMatmulConfig block/grid knobs are inert on this path",
+    "non-matmul ops are 45% of device time (12.5 ms) and were not reduced in this pass: SDPA 3.74, LayerNorm 3.70, BinaryNg 2.34, Rotary 1.66",
+    "LayerNorm cannot use the block-sharded path: dim=2560 exceeds the per-core LN budget, so QWEN_LN_BLOCK_SHARDED is inert on 4B",
+    "bs>=8 throughput is L1-capacity-bound: minimal_matmul blocks above (8,8,8) fail with statically-allocated dataflow buffers at 3.03 MB vs 1.57 MB L1, and the core grid is already maxed at 120",
+    "device is harvested 120/130 cores, so absolute numbers are ~8% pessimistic vs a full 13x10 P150",
+    "profiler cannot match ops inside a trace (ops_perf_results CSV empty); breakdown derived by joining tracy_ops_data.csv op names to cpp_device_perf_report.csv on GLOBAL CALL COUNT"
+  ]
+}
