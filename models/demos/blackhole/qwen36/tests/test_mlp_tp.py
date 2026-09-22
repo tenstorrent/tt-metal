@@ -82,7 +82,7 @@ def test_mlp_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
 
     in_dtype is the dtype ff_norm hands the MLP, and it is model-dependent on Wormhole:
     the 27B narrows its post-norm all-gather to bf8 because that collective is bytes-bound on one
-    ETH link (layer.py ``_ff_gather_dtype`` / tt/prefill_norm_tuned.py), while the 9B gathers
+    ETH link (layer.py ``_ff_gather_dtype`` / the norm's distributed_output_dtype), while the 9B gathers
     before the norm and stays bf16. Both are covered here so the bf8 arm's accuracy is measured
     against the fp32 torch reference rather than against another device path that shares the same
     quantisation -- the model-level TP tests compare two paths that BOTH carry it, so they cannot

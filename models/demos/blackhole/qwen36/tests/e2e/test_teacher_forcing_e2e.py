@@ -144,9 +144,6 @@ from models.demos.blackhole.qwen36.tests.unit.full_depth_pcc_common import (
 
 # Prefill length + decode steps; total tokens consumed is prefill_len +
 # max_new_tokens + 1 (the last decode step still needs a ground-truth target).
-# Overridable so a longer horizon can be run without editing the file — the id is
-# built from the effective values, so the floor lookup can never drift from the
-# lengths actually run.
 _PREFILL_LEN = int(os.getenv("QWEN36_TF_PREFILL_LEN", "128"))
 _MAX_NEW_TOKENS = int(os.getenv("QWEN36_TF_MAX_NEW_TOKENS", "128"))
 _TF_LENGTHS = [
@@ -154,23 +151,7 @@ _TF_LENGTHS = [
 ]
 
 # Floors for the assertions — REGRESSION DETECTORS at the model, mesh and length they
-# were measured at, not correctness targets. Keyed by ``(model_key, case_id)`` so that
-# changing either the checkpoint or the lengths cannot silently inherit numbers
-# calibrated elsewhere; an unlisted combination falls back to ``_FALLBACK_FLOORS`` and
-# the run logs a warning saying so.
-#
-# Each rate floor is the WILSON LOWER BOUND of its measurement at this n, not the
-# measurement itself: a floor inside the interval makes every healthy run print
-# "UNRESOLVED — CI straddles the floor", which teaches the reader to skip the block that
-# exists to catch exactly that. At the lower bound a good run reads RESOLVED pass, and a
-# regression of more than the sample size can absorb is what flips it. Raising n (more
-# decode steps) narrows the interval and would let the floors move up.
-#
-# Why per model, when pcc_thresholds.json is deliberately flat and function-keyed: the
-# two checkpoints do not behave the same over a long teacher-forced run (see the 27B
-# row), and one shared number would either bless the weaker configuration or fail the
-# stronger one. These floors also need provenance text that a flat JSON cannot carry,
-# which is why they live here rather than in that table.
+# were measured at, not correctness targets.
 _MEASURED_FLOORS = {
     ("32L-4096", "prefill_128-max_new_tokens_128"): (
         0.84,
@@ -215,8 +196,6 @@ _PRINT_STEPS = int(os.getenv("QWEN36_TF_PRINT_STEPS", "16"))
 
 # A top-1 flip is only a defect at a CONFIDENT token — one the REFERENCE itself
 # decided by more than this logit margin (its own top-1 minus its own top-2). Smaller
-# margins are near-ties that bf16 activations and bfp8 weights are expected to
-# reorder, and a raw match rate cannot tell the two apart.
 _CONFIDENT_GAP = float(os.getenv("QWEN36_TF_CONFIDENT_GAP", "5.0"))
 
 # Width of the decision-relevant logit comparison. Full-vocab PCC spreads its weight

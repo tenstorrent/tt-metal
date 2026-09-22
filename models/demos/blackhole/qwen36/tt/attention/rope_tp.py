@@ -23,7 +23,7 @@ tensorbin is used ONLY if both the source weights AND this version are unchanged
 that produced it. Bump this string (any change is enough, e.g. "v2") whenever the permutation's
 semantics change -- rope_channel_perm's index derivation, permute_rope_channels' gather, the
 stride convention, etc. -- so existing on-disk caches are automatically orphaned and rebuilt
-instead of silently being served as if still correct. See README-N300-9B.md Known limitations."""
+instead of silently being served as if still correct. See the main README Known limitations."""
 
 
 def rope_full_head_dim(args):
@@ -576,9 +576,6 @@ def rot_mats_prefill(
     if position_ids is None and not is_blackhole():
         # Text-only on Wormhole: positions are exactly arange(seq_len), i.e. a contiguous prefix of
         # the RoPE table, so slice on device instead of recomputing trig on host
-        # a [1,1,seq_len,rope_dim] cos+sin pair across. (t==h==w here, so interleaved-mrope
-        # collapses to ordinary 1D RoPE and mrope_section is irrelevant -- same values.)
-        # Blackhole falls through to the original host path below: unchanged flow.
         tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, seq_len, theta, full_head_dim=full_head_dim)
 
         def _slice(tbl):
@@ -627,10 +624,7 @@ def shard_rot_mats_decode(cos_tt, sin_tt, shard_cfg):
     kv_cache_write_k_shard_cfg). Cheap enough to be worth it: this is per DECODE STEP, amortised over
     every full-attention layer, against ops removed per layer.
     """
-    # Promote to 4D first: the decode-mode kernel matches cos/sin against the input on
-    # padded_shape()[1] (the batch axis), and producers differ on rank -- rot_mats_decode and
-    # Model._rope_decode_gather return [1,B,1,W] while Qwen36RoPESetup.get_rot_mats' B==T==1 fast
-    # path returns [1,1,W], whose axis 1 would read as the (padded) head axis instead. Metadata-only.
+    # Promote to 4D first:
     cos_tt = ttnn.unsqueeze_to_4D(cos_tt)
     sin_tt = ttnn.unsqueeze_to_4D(sin_tt)
     return (
@@ -708,22 +702,7 @@ def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
     """
     # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified).
-    #
     # forward_prefill_paged's chunked_scaled_dot_product_attention still clashes with this at S=2048
-    # even with q_chunk_size capped to 64 (see `cap` in attention/tp.py) -- MEASURED via
-    # ttnn.dump_device_memory_state right before the SDPA call: the ONLY persistent >100KB L1
-    # allocation there is this function's roped Q (196608 B at 85696), and
-    # SDPA's static CBs start at L1 address 0 whatever the chunk size, so ANY
-    # persistent buffer at a low address clashes regardless of its size or the
-    # CB region's. TRIED moving this to DRAM at S>=2048: does NOT help even
-    # combined with the `cap`=64 fix (MEASURED: CB region stays exactly 1393856 whether q_chunk_size
-    # is 64 or 128 once the source is DRAM vs 454080 when L1: DRAM-source SDPA
-    # pays a large fixed CB cost, so no chunk size makes DRAM win here).
-    # This is a genuine conflict between the L1 allocator's first-come placement of Q and where
-    # SDPA's CBs are laid out, not a simple memory-config choice -- needs a program-factory-level fix
-    # (don't assume L1 address 0 for CBs, or force Q high) to fully
-    # resolve at S=2048 for the paged/chunked SDPA path specifically. Left at unconditional L1 (only
-    # lever that helped was `cap`, which shrank but kept the S=2048 overflow).
     _L1 = ttnn.L1_MEMORY_CONFIG
     hd = x.shape[-1]
     seq_len = x.shape[-2]

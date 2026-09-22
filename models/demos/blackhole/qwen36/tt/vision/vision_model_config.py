@@ -60,48 +60,14 @@ class VisionSdpaPlan(NamedTuple):
 _L1_PER_CORE = 1499136  # MEM_L1_SIZE, wormhole/dev_mem_map.h
 # Per-core L1 that a matmul's own CBs and buffers cannot have. Three things, not one:
 #   - the l1_small_size the demo opens with,
-#   - the L1 UNRESERVED BASE that statically-allocated CBs are placed above (~75 KB on Wormhole:
-#     firmware, kernel config, semaphores). `cb_bytes` below is a byte-exact model of the CB
-#     *sizes*, but the region they occupy is [base, base + cb_bytes) -- so budgeting against
-#     `_L1_PER_CORE - cb_bytes` silently hands out the base as if it were free,
-#   - slack for interleaved-buffer page rounding (a buffer's pages are dealt round-robin over the
-#     banks, so a bank can hold ceil(pages/banks), not the average).
-#
-# 32 KB covers only the first item, over-claiming ~44 KB/core (2.7 MB / 64 banks).
 _L1_RESERVE = 32 * 1024
 
 # Per-device override, same keying as `_VISION_MM_TUNING_BY_DEVICE` (`ModelArgs.device_name`).
-#
 # N300: 128 KB. The 32 KB default is invisible at the 11008-row demo grid this table was swept on,
-# but fatal at 3x the rows -- at 33024 the plan still takes L1 and mlp_fc2's CBs then clash with it
-# ("circular buffers ... clash with L1 buffers"), which is the 300dpi cases of
-# test_model.py::test_vision_model_inference. 128 KB restores the invariant with margin and keeps
-# every 11008-row placement the sweep chose (verified on 9B/N300: mlp_fc2 still takes L1 at 11008,
-# DRAM at 33024/34816, no other family moved, all 6 vision cases pass).
-#
-# NOT applied to the other Wormhole meshes, though the bug is general: the widest image measured on
-# them is this same 11008-row grid, and T3K's overrides put FOUR families' outputs in L1 on derived
-# rather than measured numbers. Extend per mesh, backed by a large-image run.
 _L1_RESERVE_BY_DEVICE = {"N300": 128 * 1024}
 
 # Per-family matmul tuning, from tests/perf/test_sweep_vision_matmuls.py.
-#
-# WORMHOLE B0 ONLY -- gated by `self.vision_mm_tuned`. Everything here was swept on N300 and T3K and
-# is sized against that hardware: grids and subblocks against an 8x8 core grid, row chunks and L1
-# placements against Wormhole's L1 and DRAM bandwidth, the fidelity walk against its throughput.
-# Blackhole (P150, P150x4, BH QuietBox) has a 13x10 grid and different DRAM bandwidth, so none of it
-# carries over -- there the tower runs exactly as it did before this sweep.
-#
-# `chunk` and `in0_block_w` are CAPS, snapped down to whatever is legal for the shape actually being
-# run, so another image size or TP degree still gets a valid config rather than a crash;
-# `in0_block_w=None` leaves that matmul on ttnn's auto config. `in0_l1` and `out_l1` are a TRADE, not
-# two free wins: L1 residency for the input, for the output, and the circular buffers all come out of
-# the same 1464 KB/core. `grid_x`/`grid_y` pin a grid extent where `_grid_extent`'s divisor rule picks
-# the wrong one for a shape.
-#
-# The measured per-op deltas, the rejected alternatives (sharded activations; in0-in-L1 on the 9B; a
-# forced config for the merger) and the headroom deliberately left (LoFi, worth ~-46 ms/tower but an
-# accuracy call) are all recorded under "Tower kernel tuning" in ../../README-N300-9B.md.
+# WORMHOLE B0 ONLY -- gated by `self.vision_mm_tuned`.
 _VISION_MM_TUNING = {
     # patch_embed's DRAM output is deliberate: L1 was worth only -58 us once per image, and its
     # consumers are elementwise ops plus a pad that would inherit L1 unvalidated.
@@ -118,8 +84,6 @@ _VISION_MM_TUNING = {
 
 # Overrides keyed on `ModelArgs.device_name`, applied on top of the table above, which was swept on
 # Qwen3.5-9B / N300 / TP=2. At TP=8 every per-device N is ~4x narrower, which frees the L1 that lets
-# qkv and mlp_fc1 hold their INPUT there as well as their output. Taken only where the sweep beat the
-# derived config at the same or better fidelity, so each one holds or improves PCC.
 _VISION_MM_TUNING_BY_DEVICE = {
     "T3K": {
         "patch_embed": dict(grid_x=8, in0_block_w=6),
@@ -133,32 +97,12 @@ _VISION_MM_TUNING_BY_DEVICE = {
 }
 
 # qkv and wo are the only families whose PRE-sweep fidelity came from `decoders_optimizations`
-# (HiFi4 under this model's preset) rather than from a `compute_kernel_config_*` on the args, so the
-# untuned path restores it from there -- preset and all -- rather than hard-coding it. The other five
-# families' table entries are already their pre-sweep values, so they need no untuned override.
+# (HiFi4 under this model's preset)
 _UNTUNED_FIDELITY_OP = {"qkv": OpGroup.LI_QKV_PREFILL, "wo": OpGroup.LI_O_PREFILL}
 _FIDELITY_NAMES = ("lofi", "hifi2", "hifi2_na", "hifi2_fp16", "hifi2_nol1acc", "hifi4", "hifi4_fp16", "hifi4_fp32")
 
 # SDPA tuning, from tests/perf/test_sweep_vision_sdpa.py. Wormhole-only, same gate as the matmuls.
-#
-# The tower's SDPA is its largest single op. Two things were wrong: HiFi4 on BFP8 inputs (HiFi2 is
-# -16% at equal PCC; LoFi is only 3% faster again and collapses to PCC 0.9656, since the flash
-# softmax accumulates over chunks and LoFi cannot carry it), and K arriving in BF16 from
-# `kv_cache_dtype` while Q and V were BFP8 -- there is no KV *cache* in a single-pass non-causal
-# tower, so that dtype never applied.
-#
-# `fp32_dest_acc_en` stays True via compute_kernel_config_hifi2: the softmax sum needs it (a ~0.94
-# PCC cliff at False), and unlike a matmul it costs SDPA nothing here.
-#
-# Chunks are q=128 / k=512 on BOTH meshes. The kernel parallelises over heads x q_chunks across 64
-# cores, and at 11008 rows q=256 gives 344 units (6 rounds, 40 idle slots) against q=128's 688 (11
-# rounds, 16 idle) -- the balance q=256 lost once the row count stopped being a multiple of
-# 256x64/heads. Measured at the demo shape against the HiFi4/bf16-K baseline: 9B/N300 18.27 -> 13.43
-# ms (1.36x), 27B/T3K 6.06 -> 3.80 ms (1.59x), pcc 0.999909 both.
-#
-# `exp_approx=True` measured 0.6% (inside noise) and accumulates approximate exp over flash chunks
-# across 27 blocks -- not taken. 512/512 is rejected: the flash CBs reach 1,949,888 B against L1's
-# 1,499,136 B.
+# The tower's SDPA is its largest single op. Two things were wrong:
 _VISION_SDPA_TUNING = dict(fidelity="hifi2", k_bf8b=True, q_chunk=128, k_chunk=512, exp_approx=False)
 _VISION_SDPA_TUNING_BY_DEVICE = {}
 
@@ -248,17 +192,7 @@ class VisionModelArgs(ModelArgs):
         assert self.qkv_size % tp == 0, f"vision qkv_size ({self.qkv_size}) must be divisible by TP={tp}"
         assert self.dim % tp == 0, f"vision dim ({self.dim}) must be divisible by TP={tp}"
         # Can the block I/O contract keep activations FRACTURED along dim=3? Only if dim splits into
-        # a whole number of TILES per device: the fracture is restored by tt_all_reduce(dim=3), a
-        # reduce_scatter over a TILE-layout tensor, and a tile cannot be split across devices.
-        # Unlike hidden_dim (padded to tile_size*num_devices above), dim comes straight from the HF
-        # config — Qwen3.6-27B's vision dim 1152 is 36 tiles, i.e. 9/device at TP=4 but 4.5 at TP=8.
-        #
-        # When it does not divide, run the tower with REPLICATED activations instead: the
-        # row-parallel out-projections all-reduce to a full-width replicated tensor rather than
-        # reduce-scattering to a fractured one (see vision_ccl.all_reduce_replicated). Weights stay
-        # sharded, so no TP compute is given up. The PatchMerger still fractures its OUTPUT for the
-        # LLM, which is safe because it splits out_hidden_size (5120 -> 20 tiles/device at TP=8),
-        # not dim.
+        # a whole number of TILES per device:
         self.vision_replicated_acts = (self.dim // tp) % self.tile_size != 0
         if self.vision_replicated_acts:
             logger.info(
@@ -343,14 +277,6 @@ class VisionModelArgs(ModelArgs):
         tile = self.tile_size
         # NOT AN ASSERT. The 2D plan below divides all three extents by the tile size (k_t, n_t, m_t)
         # and needs `chunk` to divide `rows` exactly, so a non-tile-aligned shape simply cannot take
-        # it -- but that is a reason to DECLINE the tuned plan, not to kill the model. Asserting here
-        # made every non-multiple-of-32 token count a hard failure: images happen to produce aligned
-        # counts, VIDEO does not, and test_demo_vision[traced_video] died with
-        #   "merger_fc2: 728x576x5120 not tile-aligned"   (728 video tokens, 728/32 = 22.75)
-        # on a path that has nothing wrong with it. `auto` is ttnn's own config on an unchunked
-        # activation -- exactly what the tower ran before any of this tuning existed -- so declining
-        # costs those shapes the speedup and nothing else. Plans are cached per (family, rows, k, n,
-        # dtypes), so tile-aligned callers of the SAME family still get the tuned config.
         if rows % tile or k % tile or n % tile:
             logger.debug(f"vision {family}: {rows}x{k}x{n} not tile-aligned -> ttnn auto config")
             return auto
