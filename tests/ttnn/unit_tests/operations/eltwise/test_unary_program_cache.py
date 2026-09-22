@@ -282,6 +282,34 @@ def test_unary_cache_rm_different_widths_need_separate_entries(device):
     assert device.cache_entries_counter.total == 2
 
 
+def test_unary_cache_miss_rm_same_padded_shape_different_alignment(device):
+    """Same ROW_MAJOR padded shape, different alignment.
+
+    logical == padded is Alignment{}. Padding only the height keeps that padded shape
+    and yields Alignment{padded_h, padded_w}. padded_shape alone would still collide.
+    """
+    device.cache_entries_counter.reset()
+    torch.manual_seed(0)
+
+    torch_full = torch.empty([1, 1, 32, 64], dtype=torch.bfloat16).uniform_(1, 100)
+    tt_full = ttnn.from_torch(torch_full, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_short = torch.empty([1, 1, 16, 64], dtype=torch.bfloat16).uniform_(1, 100)
+    tt_short = ttnn.from_torch(torch_short, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_short = ttnn.pad(tt_short, padding=((0, 0), (0, 0), (0, 16), (0, 0)), value=0)
+
+    assert tt_full.padded_shape == tt_short.padded_shape
+    assert tt_full.memory_config() == tt_short.memory_config()
+
+    with device.cache_entries_counter.measure():
+        out_full = ttnn.abs(tt_full)
+        out_short = ttnn.abs(tt_short)
+
+    assert torch.equal(ttnn.to_torch(out_full), torch.abs(torch_full))
+    assert torch.equal(ttnn.to_torch(out_short), torch.abs(torch_short))
+    assert device.cache_entries_counter.total == 2
+
+
 # =============================================================================
 # Sharded cache tests (GitHub issue #33910)
 # =============================================================================

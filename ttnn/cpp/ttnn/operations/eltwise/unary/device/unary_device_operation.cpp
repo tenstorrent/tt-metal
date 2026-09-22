@@ -9,6 +9,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
@@ -183,6 +185,14 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // CB pages are sized from the data format alone, so a non-32x32 tile would be the wrong size.
+    const auto input_tile = input_tensor.tensor_spec().tile();
+    TT_FATAL(
+        input_tile.get_height() == tt::constants::TILE_HEIGHT && input_tile.get_width() == tt::constants::TILE_WIDTH,
+        "Unary: only 32x32 tiles are supported, got {}x{}",
+        input_tile.get_height(),
+        input_tile.get_width());
+
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -294,9 +304,10 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const auto& alignment = input_tensor.tensor_spec().tensor_layout().get_alignment();
     const auto tile = input_tensor.tensor_spec().tile();
 
+    // Interleaved ROW_MAJOR: logical == padded is an empty alignment; otherwise it is the padded H/W.
     // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
     // different widths get separate cache entries. Consider hashing only the last
-    // dimension to allow cache reuse when only height differs
+    // dimension to allow cache reuse when only height differs.
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         return operation::hash_operation<UnaryDeviceOperation>(
             attributes,
