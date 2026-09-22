@@ -167,9 +167,21 @@ def apply_recommended_env(batched_l1: bool) -> None:
     os.environ.setdefault("QWEN_FF13_OUT_BFP8", "1")
     os.environ.setdefault("QWEN_FFNORM_IN_BFP8", "1")
     os.environ.setdefault("QWEN_RESIDUAL_BFP8", "1")
-    # Architecture-level TM optimizations
+    # Architecture-level TM optimizations. Both route through the model-local
+    # generic_op kernels in tt/custom_ops (see that README); both are bit-identical
+    # to the stock ops, so these flags are purely a perf trade.
+    #
+    # Measured on P150, bs=1 ISL=512, 3 runs each (avg / best prefill):
+    #   neither          9.0 / 8.7 ms
+    #   QKV only         8.0 / 7.9 ms   <- default
+    #   concat only      9.0 / 8.8 ms
+    #   both             8.2 / 8.0 ms
+    # The QKV split is worth ~0.9 ms. The concat split does not pay for itself at
+    # this shape — its work units are only 4 tiles each, so the extra dispatch
+    # costs ~0.2 ms more than the occupancy gain returns. Left off by default;
+    # re-measure before enabling at other batch/ISL points.
     os.environ.setdefault("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "1")
-    os.environ.setdefault("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "1")
+    os.environ.setdefault("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "0")
     os.environ.setdefault("QWEN_ROPE_PREFILL_L1", "1")
     # RoPE is a cos/sin rotation (operands in [-1,1]); the rotary_embedding_llama
     # op defaults to HiFi4, but LoFi is accuracy-neutral (STS-B 0.8487 vs 0.8481)
