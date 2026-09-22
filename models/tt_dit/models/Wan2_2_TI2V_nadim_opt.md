@@ -13,21 +13,28 @@ the per-run `Std` the perf test prints is a single sample, not a spread.
 
 | | before | after | delta |
 |---|---|---|---|
-| 720p T2V total (1280x704, 81f) | 16.78s | **12.51s** | **-25.4%** |
-| 720p I2V total | 18.86s | **14.68s** | **-22.2%** |
-| 480p T2V total (832x480, 81f) | 8.87s | **6.98s** | **-21.3%** |
-| 720p VAE decode | 4.632s | **0.966s** | **-79.2%** |
-| 720p denoise | 12.045s | **11.436s** | -5.1% |
+| 720p T2V total (1280x704, 81f) | 16.78s | **11.77s** | **-29.8%** |
+| 720p I2V total | 18.86s | **13.96s** | **-26.0%** |
+| 480p T2V total (832x480, 81f) | 8.87s | **6.34s** | **-28.5%** |
+| 720p VAE decode | 4.632s | **0.959s** | **-79.3%** |
+| 720p denoise | 12.045s | **10.701s** | **-11.2%** |
 
-121 frames at 720p T2V: **19.76s** traced (494 ms/step). No prior baseline — newly measured.
+121 frames at 720p T2V: **19.76s** traced (494 ms/step). No prior baseline — newly measured;
+not re-run with the swept matmul table.
 
-Section detail at the current tip:
+Section detail at the current tip (swept matmul table, 2026-09-22, host u13-43, mean of 3;
+denoise and total spread <= 0.8%):
 
 | Mode | Resolution | Text enc | Image enc | Denoise | VAE dec | Total |
 |------|------------|----------|-----------|---------|---------|-------|
-| T2V  | 1280x704   | 0.094s   | —         | 11.436s | 0.966s  | 12.51s |
-| I2V  | 1280x704   | 0.089s   | 1.512s    | 12.072s | 0.986s  | 14.68s |
-| T2V  | 832x480    | 0.090s   | —         | 6.301s  | 0.578s  | 6.98s |
+| T2V  | 1280x704   | 0.092s   | —         | 10.701s | 0.959s  | 11.77s |
+| I2V  | 1280x704   | 0.088s   | 1.379s    | 11.513s | 0.964s  | 13.96s |
+| T2V  | 832x480    | 0.089s   | —         | 5.667s  | 0.576s  | 6.34s |
+
+Before the swept table (2026-09-17, previous host): T2V 720p 11.436s denoise / 12.51s total,
+I2V 720p 12.072s / 14.68s, T2V 480p 6.301s / 6.98s. The "before" column above is from that host
+too; the one same-host reference is the single 720p T2V run on u13-43 the day before the sweep
+(11.238s denoise, 12.29s total), against which the swept table is -4.8% / -4.2%.
 
 ---
 
@@ -251,7 +258,15 @@ All verified by reading the code; none implemented.
 
    At 720p the pattern is one full M block per core (73 M tiles over 12 columns -> M_block 7) with
    K_block 6, and the top-5 combos per shape sit within ~1% of each other, so the winners are not
-   noise picks. E2E perf gates not yet re-run with the swept table.
+   noise picks.
+
+   *E2E with the full table (2026-09-22, u13-43, mean of 3, all gates pass):* 720p T2V denoise
+   11.436 -> **10.701s** (-6.4%; -4.8% against the 11.238s single run on this host the day
+   before), total 12.51 -> **11.77s**. 480p T2V denoise 6.301 -> **5.667s** (-10.1%), total
+   6.98 -> **6.34s**. 720p I2V denoise 12.072 -> **11.513s** (-4.6%), total 14.68 ->
+   **13.96s**. Spreads 0.4-0.8% on denoise and total. 480p gains most because at M=1024 the
+   defaults were worst (ff1 and ff2 were 15-22% off in kernel time). Text encoder, image
+   encode and VAE are unchanged, as expected: none of them use these tables.
 
    **The sweep fills the disk.** It compiles one program per combo and the kernel JIT cache
    (`~/.cache/tt-metal-cache`) keeps every one: ~118 GB across 587k files for ten shapes, plus
@@ -305,6 +320,13 @@ All verified by reading the code; none implemented.
 - **`flow_shift` is the 14B value (12.0)** overriding this checkpoint's own 5.0, so quality
   comparisons against upstream are currently invalid. A controlled A/B found 5.0 visibly crisper.
 - **480p is out of distribution** for this checkpoint and looks soft; do quality work at 720p.
+- **The 5B weights are not in `~/.cache/huggingface`.** They live in a colleague's HF cache on
+  the NFS mount; run device tests with `HF_HOME=/mnt/tt-data/teja/hf`. Without it diffusers
+  starts a 32 GB re-download into the local cache, which on this box's root disk ends in
+  `ENOSPC` a few minutes later and looks like a test crash. Do **not** add `HF_HUB_OFFLINE=1`
+  as a guard: diffusers' `from_pretrained` calls the model-info API before touching the cache
+  and fails outright in offline mode.
+- **`pytest` is not on PATH** until `source python_env/bin/activate`.
 
 ---
 
@@ -316,7 +338,8 @@ Everything below was re-run green at the current tip.
 |---|---|
 | `test_dup_up3d_ti2v_5b` | 12/12, `max_abs_diff == 0.0` at production shapes |
 | `test_vae_chunk_pcc_ti2v_5b` | PCC **1.0**, max_abs_diff 0.0 |
-| `test_transformer_wan_ti2v_5b` | PCC **100.0000 / 99.9893 / 99.9894%** (2 pre-existing skips) |
+| `test_transformer_wan_ti2v_5b` | PCC **100.0000 / 99.9893 / 99.9894%** (2 pre-existing skips); identical to four decimals after the swept matmul table (2026-09-22) |
+| `test_pipeline_performance_ti2v_5b` 720p / 480p, `_i2v` 720p | 3/3 pass each with the swept table (2026-09-22); section 1 has the means |
 | `test_ti2v_5b_i2v_math` | 20/20 |
 | I2V E2E frame-0 vs seed | PCC **0.9984** |
 | Teja's 121f `test_pipeline_ti2v_5b_generate` | passes, CLIP mean 40.38 vs 36.00 |
