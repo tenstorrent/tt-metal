@@ -12,9 +12,9 @@
 #include <cstdint>
 
 #include "api/compute/cb_api.h"
+#include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"  // tile_regs_*
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rand.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/sfpu_binary_bcast.h"  // sfpu_sub_bcast_row, the mask apply
@@ -61,7 +61,7 @@ void kernel_main() {
     const uint32_t rand_stream_id = get_arg_val<uint32_t>(rt_idx++);
 
     compute_kernel_hw_startup(cb_logits, cb_scores);
-    init_sfpu(cb_logits, cb_scores);
+    copy_init(cb_logits);
 
     // One init per core: the LFSR advances monotonically across all rand_tile calls, and the
     // (device, core) stream id keeps streams reproducible yet disjoint across cores and devices.
@@ -93,7 +93,7 @@ void kernel_main() {
                         rand_tile(score_base + i, rand_from_bits, rand_scale_bits);
                     }
 
-                    copy_tile_init(cb_logits);
+                    copy_init(cb_logits);
                     for (uint32_t i = 0U; i < batch; ++i) {
                         copy_tile(cb_logits, k + i, operand_base + i);
                     }
@@ -109,7 +109,7 @@ void kernel_main() {
                     }
                 } else {
                     // Greedy: the logits ARE the scores (no 1/T; it cannot change an argmax).
-                    copy_tile_init(cb_logits);
+                    copy_init(cb_logits);
                     for (uint32_t i = 0U; i < batch; ++i) {
                         copy_tile(cb_logits, k + i, score_base + i);
                     }
@@ -119,7 +119,7 @@ void kernel_main() {
                 // The operand slots are dead once the scores exist, so the mask reuses them. The
                 // init is re-run per batch: rand/gumbel inits recycle SFPU state between batches.
                 if constexpr (do_logits_mask) {
-                    copy_tile_init(cb_mask);
+                    copy_init(cb_mask);
                     for (uint32_t i = 0U; i < batch; ++i) {
                         copy_tile(cb_mask, k + i, operand_base + i);
                     }
