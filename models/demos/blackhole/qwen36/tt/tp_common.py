@@ -33,6 +33,63 @@ def prefill_grid_default():
     return (8, 10) if is_blackhole() else (8, 8)
 
 
+# ---------------------------------------------------------------------------
+# Fused-CCL prefill geometry (arch-dependent).
+#
+# The fused CCL ops (all_gather_minimal_matmul_async, matmul_reduce_scatter_async) run their
+# CCL workers on the SAME Tensix grid as the matmul they overlap with, so every row has to be
+# accounted for and the CCL workers must not collide with the matmul (a full-grid fused CCL
+# deadlocks -- see matmul_reduce_scatter_decode's docstring).
+#
+# BH P150 exposes an 11x10 worker grid, so the BH tuning can afford a 9-row matmul grid for the
+# AG path and park 2 reduce-scatter worker rows at rows 8-9. A Wormhole n300 has only 8x8, where
+# rows 8-9 DO NOT EXIST -- so the geometry has to be retuned, not just the link count.
+# ---------------------------------------------------------------------------
+
+
+def fused_ccl_num_links():
+    """EDM links a fused CCL may use. 2 on BH; 1 on a Wormhole T3K, where one ethernet link of
+    each chip pair is reserved for the Dispatcher datapath (tech_reports/EthernetMultichip/
+    BasicEthernetGuide.md) -- CCL_Performance_Best_Practices.md states the rule outright:
+    "2 for BH and 4 for WH, except 1 for T3K"."""
+    return 2 if is_blackhole() else 1
+
+
+def _full_grid(mesh_device):
+    g = mesh_device.compute_with_storage_grid_size()
+    return (g.x, g.y)
+
+
+def agmm_prefill_grid_default(mesh_device):
+    """Matmul grid for the fused all-gather+matmul prefill ops.
+
+    Derived from the device, NOT branched on arch, so a harvested chip (an n300 exposing 8x7
+    instead of 8x8) stays correct rather than computing per-core blocks for rows that do not
+    exist. Callers widen x to 8 so grid.x == num_links*workers holds.
+
+    y = full.y - 1 because the all-gather mux cores land on the LAST row: with topology=Ring and
+    a full-width matmul grid, all_gather_minimal_matmul_async_program_factory.cpp:555 places them
+    at CoreCoord(idx, full_grid_size.y - 1). Overlapping the matmul onto that row collides with
+    the muxes. BH (11x10) -> (7,9), reproducing the original hardcoded default exactly;
+    WH (8x8) -> (7,7)."""
+    return (7, _full_grid(mesh_device)[1] - 1)
+
+
+def mmrs_prefill_grid_default(mesh_device):
+    """(matmul grid, RS worker offset) for the fused matmul+reduce-scatter prefill op.
+
+    The reduce-scatter workers start at the offset row and must be DISJOINT from the matmul grid
+    -- a full-grid fused CCL deadlocks (see matmul_reduce_scatter_decode) and an offset near the
+    grid edge can push cores off the worker grid entirely, onto dispatch cores.
+
+    Reserving the top TWO rows reproduces the BH tuning exactly (11x10 -> matmul (8,8), RS at
+    row 8, i.e. rows 8-9 for its 2 links) and gives WH (8x8 -> matmul (8,6), RS at row 6) two
+    free rows for its single link -- deliberately generous, mirroring the decode path's
+    (8,6)/offset-(0,6) split which is already proven on an 8-row grid."""
+    y = _full_grid(mesh_device)[1] - 2
+    return (8, y), (0, y)
+
+
 # Max grid COLUMNS a tuned prefill config may use. A Blackhole galaxy reports a 12-wide worker
 # grid, but harvested P150s expose only 11, so tuning to 12 would not port. 11 x 10 = 110 cores.
 PREFILL_MAX_COLS_PORTABLE = 11
@@ -346,7 +403,7 @@ def all_gather_matmul_prefill(
     tt_ccl,
     compute_cfg,
     topology,
-    grid=(7, 9),
+    grid=None,
     cluster_axis=1,
     fused_activation=None,
     out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -359,9 +416,11 @@ def all_gather_matmul_prefill(
     (default DRAM; L1 keeps it resident for downstream slices)."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
-    # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    num_links = 2
+    # AG-bound: on BH 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win); a WH
+    # T3K has only 1 usable link. grid.x must = num_links*workers, and the 7-wide default (prime)
+    # forces 1 link -> widen to 8 (BH: 2 links x 4 workers; WH: 1 link x 8 workers).
+    grid = grid or agmm_prefill_grid_default(tt_ccl.mesh_device)
+    num_links = fused_ccl_num_links()
     grid = (8, grid[1])
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
@@ -398,14 +457,15 @@ def mlp_gateup_agmm_enabled(num_devices):
 
 
 def all_gather_swiglu_prefill(
-    x, weight, tt_ccl, compute_cfg, topology, grid=(7, 9), cluster_axis=1, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+    x, weight, tt_ccl, compute_cfg, topology, grid=None, cluster_axis=1, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
 ):
     """Fused all-gather + col-parallel gate/up matmul + SwiGLU for prefill (packing gate+up lets ff_norm's AG fuse in).
 
     x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    num_links = 2
+    grid = grid or agmm_prefill_grid_default(tt_ccl.mesh_device)
+    num_links = fused_ccl_num_links()
     grid = (8, grid[1])
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
@@ -525,20 +585,24 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     return cache[key]
 
 
-def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
+def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=None, rs_offset=None):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
-    GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
+    GDN-out with its large RS). Geometry per mmrs_prefill_grid_default(). x: K-sharded
     [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
     x4 = ttnn.reshape(x, (1, 1, M, K_local))
-    # RS-bound: 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max; traced_8k win).
-    # grid (8,8) leaves rows 8-9 for the 2 RS worker rows.
-    num_links = 2
+    # RS-bound: on BH 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max;
+    # traced_8k win) and grid (8,8) leaves rows 8-9 for the 2 RS worker rows. A WH T3K has 1 usable
+    # link and only 8 rows total, so it runs the matmul on (8,7) and puts the single RS row at 7.
+    _grid_default, _rs_default = mmrs_prefill_grid_default(tt_ccl.mesh_device)
+    grid = grid or _grid_default
+    rs_offset = rs_offset or _rs_default
+    num_links = fused_ccl_num_links()
     per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,

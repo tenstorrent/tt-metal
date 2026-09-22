@@ -1551,6 +1551,21 @@ targets:
             accuracy: {}
             owner_id: U08HL8X1ECD # Aniruddha Tupe
             team: models
+  qwen3.8-27b:
+    aliases: ["Qwen3.8-27B", "Qwen/Qwen3.8-27B"]
+    skus:
+      # Wormhole LoudBox / QuietBox (4x n300 = 8 chips), TP=8. Architecturally identical to
+      # qwen3.6-27b above (the two config.json files differ only in transformers_version), so the
+      # bh_quietbox_2 numbers there are the cross-arch reference point.
+      # status: todo -> excluded from perf validation until measured on this SKU.
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: 128
+            status: todo
+            perf: {}
+            accuracy: {}
+            team: models
   qwq-32b:
     aliases: ["QwQ-32B", "Qwen/QwQ-32B"]
     skus:

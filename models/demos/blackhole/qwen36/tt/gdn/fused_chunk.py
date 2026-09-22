@@ -25,10 +25,13 @@ Notes:
 * GVA (Nk<Nv) head expansion is done inside the fused op; we pass q/k with Nk heads.
 """
 
+import os
+
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import l2_norm_ttnn
 
 # The chunk size the fused op runs at (same math as 128, different internal tiling).
@@ -37,8 +40,22 @@ _FUSED_CHUNK_SIZE = 32
 
 def fused_chunk_enabled():
     """Route GDN prefill through the fused ttnn.transformer.chunk_gated_delta_rule op (fast path).
-    Always on; the seq adapter is used only for decode (valid_len set), selected in tp.py."""
-    return True
+
+    Blackhole only. The fused op's own correctness gate
+    (tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py) is
+    skipif(not is_blackhole()), so on Wormhole it is unvalidated -- and its phased scan was
+    tuned against BH's ~110-core grid and larger L1. Wormhole therefore falls back to
+    chunk_gated_delta_rule_seq_adapter (selected in tp.py), the pure-TTNN composite that
+    models/experimental/gated_attention_gated_deltanet validates on Wormhole to PCC 0.9998
+    out to T=32768. Slower prefill (many dispatches per chunk vs one op), same math.
+
+    QWEN36_GDN_FUSED=1/0 forces the fused/seq path regardless of arch -- set it to 1 to
+    re-probe the fused op on Wormhole once its kernels are ported.
+    Decode always uses the seq adapter (valid_len set); see tp.py."""
+    env = os.getenv("QWEN36_GDN_FUSED")
+    if env is not None:
+        return env != "0"
+    return is_blackhole()
 
 
 def phased_enabled():
