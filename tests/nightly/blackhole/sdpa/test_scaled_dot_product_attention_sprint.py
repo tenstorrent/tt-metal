@@ -427,8 +427,10 @@ def test_sdpa_create_perf_table(request, b, nh, s, d):
 
 
 # === TEST 5: PERFORMANCE CHECK ===
-# Symmetric +/- band — catches both regressions and unexpected speedups.
-SDPA_PERF_MARGIN = 0.015
+# Symmetric +/- band — catches both regressions and unexpected speedups. 3% covers board to board variance: a p100a
+# delivers 2.3 to 2.7% (relative) less than the expected util on the 0.17 ms wan2_2_4xGLX case at the commit that
+# set it, with 0.2 points of spread between runs.
+SDPA_PERF_MARGIN = 0.03
 
 SDPA_PERF_CHECK_CONFIGS = [
     # (shape_id, q_chunk_size, k_chunk_size, expected_util)
