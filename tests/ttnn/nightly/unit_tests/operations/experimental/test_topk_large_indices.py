@@ -1035,12 +1035,12 @@ def _ceil32(x: int) -> int:
     [
         (2048, 1024, 256),  # already 32-aligned: ceil32 is a no-op
         (2048, 1000, 256),  # NOT 32-aligned -> rounds up to 1024
-        (2048, 1001, 256),  # one past an alignment boundary -> rounds to 1024
+        (2048, 1025, 256),  # one past an alignment boundary -> rounds to the NEXT one, 1056
         (2048, 1023, 256),  # one short of it -> still 1024
         (4096, 100, 64),  # small and non-aligned -> 128
         (2048, 2048, 256),  # equals the row: the cap must not bite
     ],
-    ids=["aligned1024", "unaligned1000", "unaligned1001", "unaligned1023", "small100", "full2048"],
+    ids=["aligned1024", "unaligned1000", "unaligned1025", "unaligned1023", "small100", "full2048"],
 )
 def test_topk_large_indices_valid_end_matches_scalar_bound(device, n, valid_end, k):
     """valid_end must reproduce the SCALAR bound exactly: min(valid_length, ceil32(valid_end)).
