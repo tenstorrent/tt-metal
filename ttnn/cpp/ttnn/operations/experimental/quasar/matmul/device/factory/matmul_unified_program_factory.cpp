@@ -53,40 +53,20 @@ constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar
 constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 
-// DFB sizing for one candidate K chunk; pure so the K chunk search can size several candidates.
-struct DfbSizes {
-    uint32_t K_chunk_tiles = 0;
-    uint32_t num_K_chunks = 0;
-    bool packer_l1_acc_en = false;
-    tt::DataFormat C_partials_format{};
-    uint32_t A_entry_bytes = 0;
-    uint32_t B_entry_bytes = 0;
-    uint32_t C_entry_bytes = 0;
-    uint32_t C_partials_entry_bytes = 0;
-    uint32_t A_slice_entries = 0;
-    uint32_t B_slice_entries = 0;
-    uint32_t C_slice_entries = 0;
-    uint32_t C_partials_entries = 0;
-    bool alias_C_partials_onto_C_slice = false;
-    bool borrow_A = false;
-    bool borrow_B = false;
-    bool borrow_C = false;
-    uint64_t l1_bytes = 0;
-
-    bool fits(uint64_t l1_budget) const {
-        const uint64_t dfb_bytes[] = {
-            (uint64_t)A_slice_entries * A_entry_bytes,
-            (uint64_t)B_slice_entries * B_entry_bytes,
-            (uint64_t)C_slice_entries * C_entry_bytes,
-            (uint64_t)C_partials_entries * C_partials_entry_bytes};
-        for (uint64_t bytes : dfb_bytes) {
-            if (bytes > MAX_DFB_EXTENT_BYTES) {
-                return false;
-            }
+// True when every sized DFB fits the extent cap and their total fits the L1 budget.
+bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
+    const uint64_t dfb_bytes[] = {
+        (uint64_t)plan.A_slice_entries * plan.A_entry_bytes,
+        (uint64_t)plan.B_slice_entries * plan.B_entry_bytes,
+        (uint64_t)plan.C_slice_entries * plan.C_entry_bytes,
+        (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes};
+    for (uint64_t bytes : dfb_bytes) {
+        if (bytes > MAX_DFB_EXTENT_BYTES) {
+            return false;
         }
-        return l1_bytes <= l1_budget;
     }
-};
+    return plan.l1_bytes <= l1_budget;
+}
 
 // Max-volume DST-filling subblock among the shapes the caller's fits predicate accepts (L1 fit and
 // borrow preservation stay external): the C slice is rounded up to subblock multiples and the
@@ -113,59 +93,60 @@ std::pair<uint32_t, uint32_t> maximize_subblock_size(
     return best;
 }
 
-DfbSizes size_dfbs(
-    const UnifiedMatmulPlan& plan,
+// Completes a candidate plan for one K chunk: chunking, formats, DFB entry counts and byte totals.
+// Takes the plan by value so the K chunk search can size several candidates.
+UnifiedMatmulPlan size_dfbs(
+    UnifiedMatmulPlan plan,
     uint32_t K_chunk_tiles,
     bool fp32_dest_acc_en,
     bool packer_l1_acc,
     bool A_borrowable,
     bool B_borrowable,
     bool C_borrowable) {
-    DfbSizes sizes;
-    sizes.K_chunk_tiles = K_chunk_tiles;
-    sizes.num_K_chunks = plan.K_tiles / K_chunk_tiles;
+    plan.K_chunk_tiles = K_chunk_tiles;
+    plan.num_K_chunks = plan.K_tiles / K_chunk_tiles;
 
     // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
     // to pay off (the last K chunk spills and reloads either way, so more than two).
-    sizes.packer_l1_acc_en = packer_l1_acc && sizes.num_K_chunks > 2;
-    sizes.C_partials_format = sizes.packer_l1_acc_en
-                                  ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                  : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
-    sizes.C_entry_bytes = tt::tile_size(plan.C_format);
-    sizes.C_partials_entry_bytes = tt::tile_size(sizes.C_partials_format);
+    plan.packer_l1_acc_en = packer_l1_acc && plan.num_K_chunks > 2;
+    plan.C_partials_format = plan.packer_l1_acc_en
+                                 ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                 : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
+    plan.C_entry_bytes = tt::tile_size(plan.C_format);
+    plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
 
     const uint32_t C_slice_tiles = plan.C_slice_M_padded_tiles * plan.C_slice_N_padded_tiles;
-    sizes.C_slice_entries = C_slice_tiles;
-    sizes.C_partials_entries = C_slice_tiles;
+    plan.C_slice_entries = C_slice_tiles;
+    plan.C_partials_entries = C_slice_tiles;
 
     // Copied operands double-buffer when more than one slice passes through; a borrowed DFB is the
     // resident shard itself. A is borrowable only when one K chunk covers K.
-    const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * sizes.num_K_chunks > 1;
+    const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * plan.num_K_chunks > 1;
     const uint32_t slice_buffering_factor = more_than_one_slice ? 2 : 1;
-    sizes.borrow_A = A_borrowable && sizes.num_K_chunks == 1;
-    sizes.borrow_B = B_borrowable;
-    sizes.borrow_C = C_borrowable;
-    sizes.A_entry_bytes = tt::tile_size(plan.A_format);
-    sizes.B_entry_bytes = tt::tile_size(plan.B_format);
-    sizes.A_slice_entries = sizes.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles
-                                           : plan.C_slice_M_padded_tiles * K_chunk_tiles * slice_buffering_factor;
-    sizes.B_slice_entries = sizes.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles
-                                           : K_chunk_tiles * plan.C_slice_N_padded_tiles * slice_buffering_factor;
+    plan.borrow_A = A_borrowable && plan.num_K_chunks == 1;
+    plan.borrow_B = B_borrowable;
+    plan.borrow_C = C_borrowable;
+    plan.A_entry_bytes = tt::tile_size(plan.A_format);
+    plan.B_entry_bytes = tt::tile_size(plan.B_format);
+    plan.A_slice_entries = plan.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles
+                                         : plan.C_slice_M_padded_tiles * K_chunk_tiles * slice_buffering_factor;
+    plan.B_slice_entries = plan.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles
+                                         : K_chunk_tiles * plan.C_slice_N_padded_tiles * slice_buffering_factor;
 
     // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
     // (else compute packs slice i+1's partials over slice i before the writer drains it).
-    const bool partials_ever_written = sizes.num_K_chunks > 1;
+    const bool partials_ever_written = plan.num_K_chunks > 1;
     const bool one_C_slice_per_core = plan.batch_size == 1 && plan.max_C_slices_per_core == 1;
-    sizes.alias_C_partials_onto_C_slice =
-        (sizes.C_partials_format == plan.C_format) && (!partials_ever_written || one_C_slice_per_core);
+    plan.alias_C_partials_onto_C_slice =
+        (plan.C_partials_format == plan.C_format) && (!partials_ever_written || one_C_slice_per_core);
 
     // Borrowed DFBs are the tensors' own memory and cost nothing here.
-    sizes.l1_bytes =
-        (sizes.borrow_A ? 0 : (uint64_t)sizes.A_slice_entries * sizes.A_entry_bytes) +
-        (sizes.borrow_B ? 0 : (uint64_t)sizes.B_slice_entries * sizes.B_entry_bytes) +
-        (sizes.borrow_C ? 0 : (uint64_t)sizes.C_slice_entries * sizes.C_entry_bytes) +
-        (sizes.alias_C_partials_onto_C_slice ? 0 : (uint64_t)sizes.C_partials_entries * sizes.C_partials_entry_bytes);
-    return sizes;
+    plan.l1_bytes =
+        (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_entries * plan.A_entry_bytes) +
+        (plan.borrow_B ? 0 : (uint64_t)plan.B_slice_entries * plan.B_entry_bytes) +
+        (plan.borrow_C ? 0 : (uint64_t)plan.C_slice_entries * plan.C_entry_bytes) +
+        (plan.alias_C_partials_onto_C_slice ? 0 : (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes);
+    return plan;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -317,15 +298,16 @@ UnifiedMatmulPlan plan_unified_matmul(
         if (voids_A_borrow || voids_B_borrow || voids_C_borrow) {
             return false;
         }
-        return size_dfbs(
-                   candidate,
-                   K_chunk_floor,
-                   fp32_dest_acc_en,
-                   packer_l1_acc,
-                   /*A_borrowable=*/A_shard_borrowable,
-                   /*B_borrowable=*/B_shard_borrowable,
-                   /*C_borrowable=*/C_shard_borrowable && C_borrow_kept)
-            .fits(l1_budget);
+        return dfbs_fit(
+            size_dfbs(
+                std::move(candidate),
+                K_chunk_floor,
+                fp32_dest_acc_en,
+                packer_l1_acc,
+                /*A_borrowable=*/A_shard_borrowable,
+                /*B_borrowable=*/B_shard_borrowable,
+                /*C_borrowable=*/C_shard_borrowable && C_borrow_kept),
+            l1_budget);
     };
 
     TT_FATAL(
@@ -358,14 +340,14 @@ UnifiedMatmulPlan plan_unified_matmul(
                               plan.C_slice_M_padded_tiles == plan.C_slice_M_tiles;
 
     // ---- K chunk and DFB sizing ----
-    std::optional<DfbSizes> chosen;
+    std::optional<UnifiedMatmulPlan> chosen;
     if (config.K_chunk_tiles == 0) {
         // A resident A shard is only borrowable with a single K chunk, so try that first (main pins
         // in0_block_w == K for height-sharded in0 for the same reason).
         if (A_borrowable) {
-            const DfbSizes candidate = size_dfbs(
+            const UnifiedMatmulPlan candidate = size_dfbs(
                 plan, plan.K_tiles, fp32_dest_acc_en, packer_l1_acc, A_borrowable, B_borrowable, C_borrowable);
-            if (candidate.borrow_A && candidate.fits(l1_budget)) {
+            if (candidate.borrow_A && dfbs_fit(candidate, l1_budget)) {
                 chosen = candidate;
             }
         }
@@ -376,9 +358,9 @@ UnifiedMatmulPlan plan_unified_matmul(
             if (plan.K_tiles % K_chunk_tiles != 0) {
                 continue;
             }
-            const DfbSizes candidate = size_dfbs(
+            const UnifiedMatmulPlan candidate = size_dfbs(
                 plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, A_borrowable, B_borrowable, C_borrowable);
-            if (candidate.fits(l1_budget)) {
+            if (dfbs_fit(candidate, l1_budget)) {
                 chosen = candidate;
             }
         }
@@ -399,7 +381,7 @@ UnifiedMatmulPlan plan_unified_matmul(
         chosen = size_dfbs(
             plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, A_borrowable, B_borrowable, C_borrowable);
         TT_FATAL(
-            chosen->fits(l1_budget),
+            dfbs_fit(*chosen, l1_budget),
             "MatmulUnifiedProgramConfig: DFBs for a {}x{}-tile C slice with K_chunk_tiles={} do not fit "
             "(needs {} B, budget {} B, max DFB extent {} B: A slice {} B, B slice {} B, C slice {} B, C partials {} B)",
             plan.C_slice_M_tiles,
@@ -413,24 +395,7 @@ UnifiedMatmulPlan plan_unified_matmul(
             (uint64_t)chosen->C_slice_entries * chosen->C_entry_bytes,
             (uint64_t)chosen->C_partials_entries * chosen->C_partials_entry_bytes);
     }
-    // The plan takes the winning candidate exactly once; nothing downstream adjusts it.
-    plan.K_chunk_tiles = chosen->K_chunk_tiles;
-    plan.num_K_chunks = chosen->num_K_chunks;
-    plan.packer_l1_acc_en = chosen->packer_l1_acc_en;
-    plan.C_partials_format = chosen->C_partials_format;
-    plan.A_entry_bytes = chosen->A_entry_bytes;
-    plan.B_entry_bytes = chosen->B_entry_bytes;
-    plan.C_entry_bytes = chosen->C_entry_bytes;
-    plan.C_partials_entry_bytes = chosen->C_partials_entry_bytes;
-    plan.A_slice_entries = chosen->A_slice_entries;
-    plan.B_slice_entries = chosen->B_slice_entries;
-    plan.C_slice_entries = chosen->C_slice_entries;
-    plan.C_partials_entries = chosen->C_partials_entries;
-    plan.alias_C_partials_onto_C_slice = chosen->alias_C_partials_onto_C_slice;
-    plan.borrow_A = chosen->borrow_A;
-    plan.borrow_B = chosen->borrow_B;
-    plan.borrow_C = chosen->borrow_C;
-    plan.l1_bytes = chosen->l1_bytes;
+    plan = std::move(*chosen);
 
     // ---- Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
     if (attributes.output_mem_config.is_sharded()) {
