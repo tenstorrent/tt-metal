@@ -118,6 +118,18 @@ class Qwen36Model:
             and args.vocab_size % self.num_devices == 0
             and (args.vocab_size // self.num_devices <= 64 * 1024)
         )
+        if mesh_shape == (1, 1) and os.environ.get("QWEN36_ONDEV_SAMPLING_TP1", "0") == "1":
+            # TP=1 mode (lane C experiment): TTSampling runs a single device's vocab as power-of-two same-device
+            # chunks of <= 64K (multi_step_reduction; 248320 -> 4 x 62080), so the 64K-per-device gate above does
+            # not apply. Gate on the same split test TTSampling itself uses; validate greedy identity before use.
+            from models.common.sampling.tt_sampling import TTSampling
+
+            padded_vocab = getattr(args, "padded_vocab_size", None) or args.vocab_size
+            self._supports_on_device_sampling = TTSampling.num_single_device_vocab_splits(padded_vocab) is not None
+            logger.info(
+                f"[sampling] TP=1 on-device sampling {'enabled' if self._supports_on_device_sampling else 'unavailable'} "
+                f"(padded vocab {padded_vocab}, splits {TTSampling.num_single_device_vocab_splits(padded_vocab)})"
+            )
         if self._supports_on_device_sampling:
             from models.common.sampling.generator import SamplingGenerator
 
@@ -241,6 +253,9 @@ class Qwen36Model:
         self.vocab_size = args.vocab_size
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
         self._ondev_argmax = False
+        # Host-sampling decode logits leave the device ROW_MAJOR and unpadded to the active width (see
+        # ttnn_decode_forward); QWEN36_DECODE_LOGITS_RM=0 keeps the padded TILE readback.
+        self._decode_logits_row_major = os.environ.get("QWEN36_DECODE_LOGITS_RM", "1") != "0"
         self._paged_kv_caches = None
         # Positions in self.layers of full-attn layers (not checkpoint indices); drives KV cache bind.
         self._attention_layer_indices = [pos for pos, layer in enumerate(self.layers) if layer.is_full_attention]
@@ -5438,6 +5453,21 @@ class Qwen36Model:
             # Bare tensor (not a tuple): the traced path passes this straight to capture_trace().
             return logits
         logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
+        if self._decode_logits_row_major:
+            # Host-sampling readback: the lm_head output is a TILE tensor padded to 32 rows, so `.cpu()` moves the
+            # whole 32 x vocab buffer (15.9 MB at vocab 248320) and to_torch untilizes it on the host, per step,
+            # whatever the active width B. Untilize + unpad ON DEVICE to ROW_MAJOR [1,1,B,vocab] (a pure data
+            # movement, bit-exact) so the host reads B x vocab bf16 (0.5 MB per user) and converts with a memcpy.
+            # Measured on one BH die: readback + convert 8.6 ms -> <1 ms at B=1 (laneC_RESULTS.md). The on-device
+            # sampling branch above keeps the tiled logits its sampler expects. QWEN36_DECODE_LOGITS_RM=0 disables.
+            B = int(logits.shape[-2])
+            rm = ttnn.untilize_with_unpadding(
+                logits,
+                output_tensor_end=[0, 0, B - 1, int(logits.shape[-1]) - 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(logits)
+            logits = rm
         return logits, None
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
