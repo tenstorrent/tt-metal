@@ -3,6 +3,7 @@
 
 import os
 
+from loguru import logger
 from torch import nn
 
 import ttnn
@@ -53,6 +54,9 @@ def _norm_shard_cfg(rows: int, width: int):
     return cfg
 
 
+_SHARD_LOGGED = set()  # DIAG GEMMA4_NORM_SHARD one-shot witness per shape
+
+
 class RMSNorm(nn.Module):
     def __init__(self, mesh_config, hf_config, state_dict, tensor_cache_path=None, with_scale=True):
         mesh_device = mesh_config.device
@@ -98,6 +102,13 @@ class RMSNorm(nn.Module):
             cfg = _norm_shard_cfg(int(x.padded_shape[-2]), int(x.padded_shape[-1]))
             if cfg is not None:
                 memcfg, prgcfg = cfg
+                # DIAG witness: prove the flag actually reached the op. The other two
+                # fixes log one; this one predates the practice, which made it the only
+                # fix whose engagement could not be verified from a run log.
+                _k = (int(x.padded_shape[-2]), int(x.padded_shape[-1]))
+                if _k not in _SHARD_LOGGED:
+                    _SHARD_LOGGED.add(_k)
+                    logger.info(f"[DIAG] prefill norm: block-sharded rows={_k[0]} width={_k[1]}")
                 xs = ttnn.to_memory_config(x, memcfg)
                 out = ttnn.rms_norm(
                     xs,

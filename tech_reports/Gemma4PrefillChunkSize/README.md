@@ -1,5 +1,16 @@
 # Gemma4 prefill: why chunk 2048 is ~2x slower than 8192 at long context
 
+> ## Navigation
+> | doc | what it is |
+> |---|---|
+> | **[EXPERIMENTS.md](EXPERIMENTS.md)** | every experiment incl. negatives, keyed by env flag |
+> | **[REPRODUCE.md](REPRODUCE.md)** | re-measure after a rebase: 6 runs + one drift check |
+> | [scripts/](scripts/) | `run_e2e.sh`, `capture.sh`, `fit_chunks.py`, `diff_ops.py`, `check_baseline.py`, `BASELINE.json` |
+> | [L1Activations/](L1Activations/) | 23 per-op tables, unpatched and patched |
+> | [CHUNK_SIZE_ANATOMY.md](CHUNK_SIZE_ANATOMY.md) · [PER_OP_TABLES.md](PER_OP_TABLES.md) | earlier detail |
+
+
+
 > **Base note.** Every number in this file is on the **pre-L1-activations** base.
 > For the same measurements on `mmanzoor/svuckovic/gemma4-L1-activations` @ `9dc8e32a2`
 > (Asif's branch, PR #56862) see [`L1Activations/`](L1Activations/). **Do not compare

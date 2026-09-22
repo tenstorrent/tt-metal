@@ -1,0 +1,27 @@
+{
+  "_README": "Expected values for check_baseline.py. Re-measure after any rebase: Asif's branch moves underneath us and a carried number is not a measured one. sigma: within-session 0.03% on a, cross-session 0.2-0.4%; treat >1% as a real shift.",
+  "_measured_on": "bh-glx-120-c03u08, 2026-09-22, tt-metal 196712f7fcf",
+  "_ctx": 262144,
+  "_mesh": "8x4 (CP=8, TP=4)",
+  "configs": {
+    "mmanzoor_only": {
+      "flags": ["GEMMA4_PREFILL_L1_ACT=1"],
+      "2048": {"a": 126.6, "slope": 1.457, "total_s": 28.05},
+      "4096": {"a": 163.8, "slope": 3.030, "total_s": 16.59},
+      "8192": {"a": 203.5, "slope": 12.774, "total_s": 12.85}
+    },
+    "all_fixes": {
+      "flags": ["GEMMA4_PREFILL_L1_ACT=1", "GEMMA4_NORM_SHARD=1",
+                "GEMMA4_MLP_MM_CFG=1", "GEMMA4_MLP_MM_GRID=12x10", "GEMMA4_ATTN_MM_PC=1"],
+      "2048": {"a": 93.0, "slope": 1.456, "total_s": 23.74},
+      "4096": {"a": 116.3, "slope": 3.090, "total_s": 13.67},
+      "8192": {"a": 184.2, "slope": 12.955, "total_s": 12.32}
+    }
+  },
+  "_historical_pre_mmanzoor": {
+    "_sha": "3bd2c2bbe299",
+    "2048": {"a": 132.7, "slope": 1.452, "total_s": 28.79},
+    "4096": {"a": 176.1, "slope": 2.982, "total_s": 17.28},
+    "8192": {"a": 243.5, "slope": 12.189, "total_s": 13.84}
+  }
+}
