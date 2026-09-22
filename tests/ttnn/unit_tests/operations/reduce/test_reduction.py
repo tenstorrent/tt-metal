@@ -30,6 +30,30 @@ def enabled_program_cache(device):
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.var, ttnn.std], ids=["var", "std"])
 @pytest.mark.parametrize("correction", [False, True])
+@pytest.mark.parametrize(
+    "shape,dim",
+    [
+        ((1, 1, 32, 1), -1),
+        ((1, 1, 1, 32), -2),
+        ((2, 1, 1, 1), (-2, -1)),
+        ((1, 1, 1, 1), (-2, -1)),
+        ((1, 1, 1, 2), (-2, -1)),
+        ((2, 1, 1, 1), (0, 2, 3)),
+    ],
+)
+def test_std_var_small_population(device, ttnn_op, correction, shape, dim):
+    # Public singleton reductions return NaN/zero before invoking the kernel.
+    # HW must also accept H=1 when columns/batches provide a larger population.
+    values = torch.arange(1, 1 + torch.Size(shape).numel(), dtype=torch.float32).reshape(shape)
+    input_tensor = ttnn.from_torch(values, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_op = torch.var if ttnn_op == ttnn.var else torch.std
+    expected = torch_op(values, dim=dim, keepdim=True, correction=int(correction))
+    actual = ttnn.to_torch(ttnn_op(input_tensor, dim=dim, keepdim=True, correction=correction))
+    torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-4, equal_nan=True)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.var, ttnn.std], ids=["var", "std"])
+@pytest.mark.parametrize("correction", [False, True])
 @pytest.mark.parametrize("value", [1e38, -1e38])
 def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
     # W=128 selects the SFPU leaf combine on Wormhole and Blackhole. The lane means are finite,

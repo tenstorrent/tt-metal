@@ -327,6 +327,17 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     }
 
     const std::uint32_t two_pass_reduce_size = reduce_w ? W : H;
+    TT_FATAL(two_pass_reduce_size > 0, "Two-pass statistics require a non-zero reduction dimension");
+    if (operation_attributes.correction) {
+        // HW applies Bessel's correction after combining columns and batches;
+        // its per-column variance still divides by H, which may validly be 1.
+        const std::uint64_t corrected_population =
+            reduce_hw ? static_cast<std::uint64_t>(H) * W * reduce_batch_size : two_pass_reduce_size;
+        TT_FATAL(
+            corrected_population >= 2,
+            "Bessel's correction requires at least 2 elements across the reduction dimensions, got {}",
+            corrected_population);
+    }
     const std::uint32_t two_pass_variance_divisor =
         reduce_hw ? H : (operation_attributes.correction ? two_pass_reduce_size - 1 : two_pass_reduce_size);
     const std::uint32_t two_pass_mean_reciprocal =
@@ -393,13 +404,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     KernelSpec::CompilerOptions::Defines writer_defines;
 
     if (reduce_hw) {
-        if (operation_attributes.correction) {
-            TT_FATAL(
-                H * W * reduce_batch_size >= 2,
-                "Bessel's correction requires at least 2 elements across all reduction dimensions, got {}",
-                H * W * reduce_batch_size);
-        }
-
         // HW-reduce: custom writer that combines partial stats and constructs the output tile.
         writer_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -485,14 +489,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         compute_kernel = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_hw.cpp";
         compute_rta_name = "NC_per_core";
     } else {
-        if (operation_attributes.correction) {
-            uint32_t reduce_size = reduce_w ? W : H;
-            TT_FATAL(
-                reduce_size >= 2,
-                "Bessel's correction requires at least 2 elements along the reduction dimension, got {}",
-                reduce_size);
-        }
-
         compute_ct_args = {
             {reduce_w ? "Wt" : "Ht", reduce_w ? Wt : Ht},
             {reduce_w ? "W" : "H", reduce_w ? W : H},
