@@ -157,7 +157,7 @@ train:
     bh_p100: 105
     bh_p150b_civ2: 90
   perf:
-    bh_p100: 180
+    bh_p100: 160
     bh_p150b_civ2: 400
   e2e_tier3:
     bh_sc1_high_power: 140
@@ -237,7 +237,7 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 125
     bh_sc1: 20
-    bh_sc4: 160
+    bh_sc4: 90
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
