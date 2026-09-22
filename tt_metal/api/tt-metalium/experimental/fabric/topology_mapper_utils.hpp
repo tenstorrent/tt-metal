@@ -16,6 +16,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -40,14 +41,14 @@ using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
 
 // Type alias for the flat ASIC adjacency map used by hierarchical graph builders
-using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
+using PhysicalAdjacencyMap = std::map<tt::tt_metal::PhysicalNodeId, std::vector<tt::tt_metal::PhysicalNodeId>>;
 
 // Use ASICPosition from tt::tt_metal namespace
 using AsicPosition = tt::tt_metal::ASICPosition;
 
-// Map from AsicID to its physical position (TrayID, ASICLocation)
+// Map from a physical node id to its physical position (TrayID, ASICLocation)
 // Required only when using pinning constraints
-using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
+using AsicPositionMap = std::map<tt::tt_metal::PhysicalNodeId, AsicPosition>;
 
 // MGD many-to-many pinning group (same type as MeshGraphDescriptor::get_pinnings() values).
 using PinningConstraint = ::tt::tt_fabric::AsicPinningGroup;
@@ -134,7 +135,7 @@ struct TopologyMappingConfig {
     // listed logical nodes may map to
     std::vector<PinningConstraint> pinnings;
 
-    // Map from AsicID to (TrayID, ASICLocation) - required if pinnings is non-empty.
+    // Map from a physical node id to (TrayID, ASICLocation) - required if pinnings is non-empty.
     // Used to validate pinning constraints against the physical topology.
     AsicPositionMap asic_positions;
 
@@ -153,13 +154,13 @@ struct TopologyMappingConfig {
     // Optional: Map from hostname to ASIC IDs on that host. When non-empty, enforces that each host
     // has exactly one rank binding (all ASICs on the same host map to fabric nodes with the same rank).
     // Used even when some ASICs have UNSET rank. Default empty.
-    std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+    std::map<std::string, std::set<tt::tt_metal::PhysicalNodeId>> hostname_to_asics;
 
     // Optional: when non-empty, every mesh may only be seated on these ASICs. A restriction, not a
     // footprint: a mesh smaller than the set still fits. TopologyMapper sets it in local mode (one mesh,
     // one host rank, rank bindings disabled) when the PSD spans several hosts, so the mesh lands on the
     // calling host's chips instead of an arbitrary host. Default empty (no restriction).
-    std::set<tt::tt_metal::AsicID> placement_asic_allowlist;
+    std::set<tt::tt_metal::PhysicalNodeId> placement_asic_allowlist;
 };
 
 /**
@@ -212,8 +213,8 @@ struct TopologyMappingResult {
 
     // Bidirectional mappings between logical fabric nodes and physical ASICs.
     // On failure this is the closest/partial mapping found (meshes that seated plus the failing mesh).
-    std::map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_to_asic;
-    std::map<tt::tt_metal::AsicID, FabricNodeId> asic_to_fabric_node;
+    std::map<FabricNodeId, tt::tt_metal::PhysicalNodeId> fabric_node_to_physical;
+    std::map<tt::tt_metal::PhysicalNodeId, FabricNodeId> physical_to_fabric_node;
 };
 
 using LogicalMeshNode = MeshId;
@@ -260,11 +261,12 @@ struct LogicalExitNode {
  * @brief Represents a physical exit node (ASIC that connects to other meshes)
  *
  * Physical exit nodes represent ASICs that have intermesh connections.
- * Each physical exit node has a mesh_id (which mesh it belongs to) and an asic_id (the ASIC identifier).
+ * Each physical exit node has a mesh_id (which mesh it belongs to) and the ASIC's physical node id.
+ * This is the inter-mesh solver's node, so it has to carry the same identity as the intra-mesh one.
  */
 struct PhysicalExitNode {
     PhysicalMeshNode mesh_id;
-    tt::tt_metal::AsicID asic_id;
+    tt::tt_metal::PhysicalNodeId physical_node_id;
 
     bool operator<(const PhysicalExitNode& other) const {
         if (mesh_id < other.mesh_id) {
@@ -273,11 +275,11 @@ struct PhysicalExitNode {
         if (other.mesh_id < mesh_id) {
             return false;
         }
-        return asic_id < other.asic_id;
+        return physical_node_id < other.physical_node_id;
     }
 
     bool operator==(const PhysicalExitNode& other) const {
-        return mesh_id == other.mesh_id && asic_id == other.asic_id;
+        return mesh_id == other.mesh_id && physical_node_id == other.physical_node_id;
     }
 };
 
@@ -332,7 +334,7 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
  */
 struct PhysicalMultiMeshGraph {
     // Map from PhysicalMeshNode to its internal adjacency graph (stored once, no duplication)
-    std::map<PhysicalMeshNode, AdjacencyGraph<tt::tt_metal::AsicID>> mesh_adjacency_graphs_;
+    std::map<PhysicalMeshNode, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> mesh_adjacency_graphs_;
 
     // Mesh-level adjacency graph using PhysicalMeshNodes (lightweight, no graph duplication)
     AdjacencyGraph<PhysicalMeshNode> mesh_level_graph_;
@@ -367,7 +369,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
     const TopologyMappingConfig& config,
     const std::optional<PinningsByMesh>& pinnings = {},
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+    const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
 // No PGD: MGD fallback groupings via the enumerator (same next() intra-mesh path).
@@ -376,7 +378,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
     const TopologyMappingConfig& config,
     const std::optional<PinningsByMesh>& pinnings = {},
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+    const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
 // One input MGD plus that descriptor's local-space pinnings and host ranks. The enumerator
@@ -385,7 +387,7 @@ struct MultiMeshMappingPart {
     const ::tt::tt_fabric::MeshGraphDescriptor* mesh_graph_descriptor = nullptr;
     std::optional<PinningsByMesh> pinnings;
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
 };
 
 // One TopologyMappingResult per input part, using that descriptor's local MeshIds. A failed
@@ -420,7 +422,8 @@ public:
         const TopologyMappingConfig& config,
         bool unique_shapes = false,
         const std::optional<PinningsByMesh>& pinnings = {},
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+        const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank =
+            {},
         const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
     MultiMeshSolutionEnumerator(
@@ -437,7 +440,8 @@ public:
         const TopologyMappingConfig& config,
         bool unique_shapes = false,
         const std::optional<PinningsByMesh>& pinnings = {},
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+        const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank =
+            {},
         const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
     MultiMeshSolutionEnumerator(
@@ -466,8 +470,8 @@ private:
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor_ = nullptr;
     TopologyMappingConfig config_;
     LogicalMultiMeshGraph logical_;
-    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph_;
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank_;
+    AdjacencyGraph<tt::tt_metal::PhysicalNodeId> flat_graph_;
+    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank_;
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank_;
     std::vector<std::map<MeshId, MeshId>> per_part_local_to_global_mesh_ids_;
     ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode_ =
@@ -525,6 +529,9 @@ struct fmt::formatter<tt::tt_metal::experimental::tt_fabric::PhysicalExitNode> {
     auto format(const tt::tt_metal::experimental::tt_fabric::PhysicalExitNode& exit_node, format_context& ctx) const
         -> format_context::iterator {
         return fmt::format_to(
-            ctx.out(), "PhysicalExitNode(mesh_id={}, asic_id={})", exit_node.mesh_id.get(), exit_node.asic_id.get());
+            ctx.out(),
+            "PhysicalExitNode(mesh_id={}, physical_node_id={})",
+            exit_node.mesh_id.get(),
+            exit_node.physical_node_id);
     }
 };

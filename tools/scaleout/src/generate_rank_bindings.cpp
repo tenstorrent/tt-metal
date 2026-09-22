@@ -131,8 +131,9 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
     config.strict_mode = true;
     config.disable_rank_bindings = false;
 
+    // Keyed by address, matching the physical graph the solver is handed.
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(asic_id);
+        config.hostname_to_asics[desc.host_name].insert(tt::tt_metal::node_id_from_asic_descriptor(desc));
     }
 
     std::vector<MultiMeshMappingPart> parts(mesh_graph_descriptors.size());
@@ -248,7 +249,7 @@ TopologyMappingParts run_topology_mapping(
 std::vector<RankBindingConfig> extract_rank_bindings(
     const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
     struct AsicGrouping {
-        std::vector<AsicID> asic_ids;
+        std::vector<tt::tt_metal::PhysicalNodeId> physical_node_ids;
         std::vector<tt::ChipId> chip_ids;
         std::optional<MeshHostRankId> mesh_host_rank;
     };
@@ -256,7 +257,10 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     // mesh_id -> hostname -> mesh_host_rank -> AsicGrouping
     std::map<int, std::map<std::string, std::map<int, AsicGrouping>>> mesh_host_asics;
 
-    for (const auto& [fabric_node_id, asic_id] : mapping_result.fabric_node_to_asic) {
+    // The solver returned addresses; the descriptor is still queried by its own ASIC labels.
+    const auto node_index = tt::tt_metal::build_physical_node_id_index(psd);
+
+    for (const auto& [fabric_node_id, physical_node_id] : mapping_result.fabric_node_to_physical) {
         const MeshId mesh_id_local = fabric_node_id.mesh_id;
         tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(fabric_node_id.chip_id);
 
@@ -272,13 +276,16 @@ std::vector<RankBindingConfig> extract_rank_bindings(
             continue;
         }
 
+        // Emit the hostname exactly as the descriptor spells it, not the canonical form carried in the
+        // node id: this string goes into the generated rank bindings, which name real hosts.
+        const AsicID asic_id = node_index.node_id_to_asic_id.at(physical_node_id);
         std::string hostname = psd.get_host_name_for_asic(asic_id);
         tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
 
         int mesh_id_int = static_cast<int>(*mesh_id_local);
         const int mesh_host_rank_int = static_cast<int>(*mesh_host_rank.value());
         auto& bucket = mesh_host_asics[mesh_id_int][hostname][mesh_host_rank_int];
-        bucket.asic_ids.push_back(asic_id);
+        bucket.physical_node_ids.push_back(physical_node_id);
         bucket.chip_ids.push_back(chip_id);
         bucket.mesh_host_rank = mesh_host_rank;
     }
