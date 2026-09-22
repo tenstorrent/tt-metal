@@ -990,6 +990,19 @@ void kernel_main() {
             constexpr uint32_t kRReg = kOutGroup;
             constexpr uint32_t kFirstGroup = (qWt > 3u) ? 3u : qWt;
             constexpr uint32_t kAccGroup = (qWt > 4u) ? 4u : qWt;
+            // A forwarded row's state goes to the reader one query tile at a
+            // time, as soon as the tile's l and O^T are final, so the reader
+            // forwards it under the remaining columns instead of after them;
+            // the packs above are then relative to the advanced write
+            // pointers. A finished row (final) is repacked below in place, so
+            // its state is handed over whole afterwards, at the slot's base.
+            const auto hand_over_tile = [&]() {
+                if (!final) {
+                    cb_push_back(cb_max_out, 1);
+                    cb_push_back(cb_sum_out, 1);
+                    cb_push_back(cb_out_out, qWt);
+                }
+            };
             const auto sum_and_update = [&](uint32_t a) {
                 const uint32_t live = n_live(a);
                 const bool rescaled = ((need_mask >> a) & 1u) != 0u;
@@ -1010,7 +1023,7 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_reconfig_data_format(cb_sum_out);
-                    pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, a);
+                    pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, final ? a : 0u);
                     tile_regs_release();
                     for (uint32_t k0 = 0; k0 < qWt; k0 += kOutGroup) {
                         const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
@@ -1041,10 +1054,11 @@ void kernel_main() {
                             if (i >= nk) {
                                 break;
                             }
-                            pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
+                            pack_tile</* out_of_order */ true>(i, cb_out_out, (final ? a * qWt : 0u) + k0 + i);
                         }
                         tile_regs_release();
                     }
+                    hand_over_tile();
                     return;
                 }
                 const bool accumulate = !fresh;
@@ -1059,9 +1073,9 @@ void kernel_main() {
                 if (accumulate) {
                     pack_reconfig_l1_acc(true);
                 }
-                pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, a);
+                pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, final ? a : 0u);
                 for (uint32_t i = 0; i < kFirstGroup; ++i) {
-                    pack_tile</* out_of_order */ true>(kSumReg + 1 + i, cb_out_out, a * qWt + i);
+                    pack_tile</* out_of_order */ true>(kSumReg + 1 + i, cb_out_out, (final ? a * qWt : 0u) + i);
                 }
                 if (accumulate) {
                     pack_reconfig_l1_acc(false);
@@ -1081,13 +1095,14 @@ void kernel_main() {
                         if (i >= nk) {
                             break;
                         }
-                        pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
+                        pack_tile</* out_of_order */ true>(i, cb_out_out, (final ? a * qWt : 0u) + k0 + i);
                     }
                     if (accumulate) {
                         pack_reconfig_l1_acc(false);
                     }
                     tile_regs_release();
                 }
+                hand_over_tile();
             };
 
             // The exact path copies the state into DST through the unpacker,
@@ -1222,10 +1237,13 @@ void kernel_main() {
             cb_push_back(cb_lse, Bt);
         }
 
-        // ---- hand the updated state to the reader, pop the slot, release it.
-        cb_push_back(cb_max_out, Bt);
-        cb_push_back(cb_sum_out, Bt);
-        cb_push_back(cb_out_out, Bt * qWt);
+        // ---- hand the updated state to the reader (a forwarded row's went
+        // tile by tile above), pop the slot, release it.
+        if (final) {
+            cb_push_back(cb_max_out, Bt);
+            cb_push_back(cb_sum_out, Bt);
+            cb_push_back(cb_out_out, Bt * qWt);
+        }
         {
             DeviceZoneScopedN("T-POPS");
             cb_pop_front(cb_query, Bt * qWt);
