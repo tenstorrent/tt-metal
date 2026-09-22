@@ -352,7 +352,7 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 
 #ifndef COMPILE_FOR_TRISC
 template <bool is_producer>
-inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index) {
+inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, uint8_t txn_id_index) {
     // Determine the txn_id for the last batch. If transactions_issued lands exactly on
     // a boundary, txn_id_index has already wrapped past it, so step back one slot.
     uint8_t tail_txn_idx = (transactions_issued % local_dfb_interface_.num_entries_per_txn_id == 0)
@@ -362,7 +362,8 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    uint16_t expected_slot0 = transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u);
+    uint16_t expected_slot0 =
+        static_cast<uint16_t>(transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u));
 
     auto read_actual_slot0 = [&]() -> uint16_t {
         if constexpr (is_producer) {
@@ -526,7 +527,8 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
 // Preamble for implicit-sync read: spin until previous reads are posted and there is space in the tile counters.
 // Returns the txn_id to stamp on the next NOC read.
 inline uint32_t DataflowBuffer::prepare_implicit_read() {
-    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+    const DFBTCSlot& tc_slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+    dfb::PackedTileCounter packed_tc = tc_slot.packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     const uint32_t txn_id = local_dfb_interface_.txn_ids[ptxn_id_index_];
@@ -541,7 +543,16 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
         static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    // HW free-space excludes only reads that have reached POSTED. Include this
+    // kernel's pending reads by comparing ACKED against the software issue
+    // cursor. Before issuing the next read, this TC must have consumed at least
+    // (reads_issued_to_tc + 1 - capacity) entries.
+    const uint32_t capacity = (tc_slot.limit - tc_slot.base_addr) / local_dfb_interface_.stride_size;
+    const uint32_t reads_issued_to_tc =
+        local_dfb_interface_.broadcast_tc ? ptiles_read_ : ptiles_read_ / local_dfb_interface_.num_tcs_to_rr;
+    const uint16_t min_acked = static_cast<uint16_t>(reads_issued_to_tc + 1 - capacity);
+    while (static_cast<int16_t>(
+        static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) - min_acked) < 0);
     WAYPOINT("PIRD");
     return txn_id;
 }
@@ -575,7 +586,13 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) -
         static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    // HW occupancy includes entries for which this kernel has already issued a
+    // write but whose ACK is still pending. Compare POSTED directly with the
+    // software cursor so one posted entry can be claimed only once.
+    const uint16_t next_write =
+        static_cast<uint16_t>(ctiles_written_ / local_dfb_interface_.num_tcs_to_rr + 1);
+    while (static_cast<int16_t>(
+        static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) - next_write) < 0);
     WAYPOINT("PIWD");
     return txn_id;
 }

@@ -68,10 +68,16 @@ void kernel_main() {
         copy_init(dfb::in0);
         copy_block(dfb_in0, dfb::in0, dfb_out, tiles_per_input);
 
+        DPRINT("after copy_block in0\n");
+
         copy_init(dfb::in1);
         copy_block(dfb_in1, dfb::in1, dfb_out, tiles_per_input);
 
+        DPRINT("after copy_block in1\n");
+
         copy_init(dfb::in2);
         copy_block(dfb_in2, dfb::in2, dfb_out, tiles_per_input);
+
+        DPRINT("after copy_block in2\n");
     }
 }
