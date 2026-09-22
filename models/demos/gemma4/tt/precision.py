@@ -62,18 +62,26 @@ class Gemma4Precision:
     """Per-module dtype mapping. Construct via ``Gemma4Precision.load(...)``
     or directly with ``Gemma4Precision({...})``."""
 
-    def __init__(self, overrides=None, single_tile_dest_acc=DEFAULT_SINGLE_TILE_DEST_ACC):
+    def __init__(self, overrides=None, single_tile_dest_acc=DEFAULT_SINGLE_TILE_DEST_ACC, ccl_topology=None):
         self._overrides = dict(overrides) if overrides else {}
         # fp32 destination accumulation on the m<=32 projections. Per model, not
         # global: it is what carries 12B's accuracy, and it is what collapses
         # 31B's 128k decode into a repetition loop. See single_tile_matmul_ckc.
         self.single_tile_dest_acc = bool(single_tile_dest_acc)
+        # Forced CCL topology ("ring" / "linear"), or None to let
+        # default_ccl_topology pick from the arch. Model-wide like
+        # single_tile_dest_acc: Ring and Linear reduce in different orders, so
+        # this is a numerics knob, not a perf-only one.
+        self.ccl_topology = ccl_topology
 
     def get(self, module_name, default=ttnn.bfloat16):
         return self._overrides.get(module_name, default)
 
     def __repr__(self):
-        return f"Gemma4Precision({self._overrides!r})"
+        return (
+            f"Gemma4Precision({self._overrides!r}, single_tile_dest_acc={self.single_tile_dest_acc}, "
+            f"ccl_topology={self.ccl_topology!r})"
+        )
 
     @classmethod
     def load(cls, model_path, mesh_shape, max_seq_len=None):
@@ -193,7 +201,18 @@ class Gemma4Precision:
             raise ValueError(
                 f"precision_overrides.json[{model_key}][single_tile_dest_acc]=" f"{dest_acc!r} — expected true or false"
             )
-        return cls(resolved, single_tile_dest_acc=dest_acc)
+        # Same model-wide argument as single_tile_dest_acc above.
+        if "ccl_topology" in raw:
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][{mesh_key}][ccl_topology] — "
+                "this flag is model-wide; put it on the model entry, not a mesh entry"
+            )
+        topology = model_entry.get("ccl_topology")
+        if topology is not None and topology not in ("ring", "linear"):
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][ccl_topology]={topology!r} — expected 'ring' or 'linear'"
+            )
+        return cls(resolved, single_tile_dest_acc=dest_acc, ccl_topology=topology)
 
 
 def default_single_tile_dest_acc():
