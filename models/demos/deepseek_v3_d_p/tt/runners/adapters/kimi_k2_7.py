@@ -28,6 +28,9 @@ class KimiK27Adapter(MLAPrefillAdapter):
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
     # Empty: https://github.com/tenstorrent/tt-metal/issues/54973
     mla_trace_defaults = ()
+    # The drafter golden is keyed to prefill_trace_default's prompt, so the two move together.
+    dflash_model_default = "/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash"
+    dflash_golden_default = "/mnt/models/deepseek-prefill-cache/golden/dflash_27_context_kv_55k"
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
     # Routing consumes 512 B; leave 256 B for MLA high-bandwidth-gather semaphores.
@@ -43,7 +46,10 @@ class KimiK27Adapter(MLAPrefillAdapter):
     hf_repo_id = "moonshotai/Kimi-K2.7-Code"
     env_var = "KIMI_K2_7_HF_MODEL"
     default_local_path = Path("/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized")
-    shared_path = None
+    # Config-only fallback for hosts without the yyz4 weights mount (e.g. bh_loudbox, which
+    # mounts /mnt/MLPerf instead). Holds no safetensors index, so get_or_download_model and
+    # _resolve_state_dict both skip it -- it feeds the config/tokenizer lookups only.
+    shared_path = Path("models/demos/deepseek_v3_d_p/reference/kimi_k2_7")
     num_layers_to_download = 24
     ref_cache_env = "TT_KIMI_PREFILL_HOST_REF_CACHE"
     mla_ref_cache_env = "KIMI_MLA_REF_CACHE"

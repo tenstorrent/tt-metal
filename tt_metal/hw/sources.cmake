@@ -120,6 +120,9 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/xielu.h
     inc/api/compute/ema.h
     inc/api/compute/experimental/2_0/bcast.h
+    inc/api/compute/experimental/2_0/compressed_custom_mm.h
+    inc/api/compute/experimental/2_0/custom_mm.h
+    inc/api/compute/experimental/2_0/custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/2_0/eltwise_binary.h
     inc/api/compute/experimental/2_0/hw_startup.h
     inc/api/compute/experimental/2_0/llk_operand.h
@@ -135,8 +138,10 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/add_rsqrt.h
     inc/api/compute/experimental/compressed_custom_mm.h
     inc/api/compute/experimental/compute_kernel_hw_cleanup.h
+    inc/api/compute/experimental/csa_index_remap.h
     inc/api/compute/experimental/custom_mm.h
     inc/api/compute/experimental/custom_mm_reuse_dest_srcb.h
+    inc/api/compute/experimental/custom_pack_untilize.h
     inc/api/compute/experimental/deepseek_compute_kernel_hw_startup.h
     inc/api/compute/experimental/eltwise_add_scalar.h
     inc/api/compute/experimental/eltwise_mul_scalar.h
@@ -208,6 +213,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/prefetcher_pipe.h
     inc/api/dataflow/dataflow_buffer.h
     inc/api/dataflow/dfb_binding_token.h
+    inc/api/dataflow/prefetcher_pipe_binding_token.h
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
@@ -239,6 +245,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/mod_div_lib.h
     inc/internal/pch.h
     inc/internal/risc_attribs.h
+    inc/internal/runtime_reload.h
     inc/internal/scoped_lock_cache_ops.h
     inc/internal/template_string.h
     inc/internal/tensix_functions.h
@@ -290,7 +297,6 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h
-    inc/internal/tt-2xx/quasar/c_tensix_core.h
     inc/internal/tt-2xx/quasar/cache.h
     inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h
@@ -321,8 +327,14 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v2.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api_v3.h
     inc/internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg_defines_core.h
-    inc/internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg_defines_debug.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/memory_port_cacheable_reg.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/memory_port_noncacheable_reg.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_cache_controller_reg.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_cluster_clint_reg.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_cluster_ctrl_reg.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_overlay_llk_tile_counters_reg.h
+    inc/internal/tt-2xx/quasar/overlay/meta/registers/tt_rocc_accel_reg.h
     inc/internal/tt-2xx/quasar/overlay/overlay_addresses.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h

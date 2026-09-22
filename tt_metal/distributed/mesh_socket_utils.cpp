@@ -4,6 +4,9 @@
 
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -264,7 +267,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     uint32_t config_buffer_size = 0;
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
-        const SocketSenderSize sender_size;
+        const SocketSenderSize sender_size(device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
         config_buffer_size =
             sender_size.md_size_bytes + max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes);
     } else {
@@ -295,7 +298,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     auto sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED);
     if (socket_endpoint_uses_per_core_allocation(config, socket_endpoint)) {
         TT_FATAL(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_allocator_mode_hybrid(),
+            device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid(),
             "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
             "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
         experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
@@ -347,7 +350,7 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
             receiver_cores.size());
 
         TT_FATAL(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_allocator_mode_hybrid(),
+            receiver->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid(),
             "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
             "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
 
@@ -404,7 +407,7 @@ void write_socket_configs(
     const auto core_to_core_id = config_buffer_core_to_id(config_buffer, config, socket_endpoint);
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
-    const SocketSenderSize sender_size;
+    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

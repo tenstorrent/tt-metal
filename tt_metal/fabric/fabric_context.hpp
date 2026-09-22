@@ -58,7 +58,13 @@ public:
     tt::tt_fabric::Topology get_fabric_topology() const { return topology_; }
     bool is_2D_routing_enabled() const { return is_2D_routing_enabled_; }
     bool is_bubble_flow_control_enabled() const { return bubble_flow_control_enabled_; }
-    bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
+    // Whether a router on this axis needs protected (bubble) flow control compiled in.
+    //
+    // Express meshes derive it from whether the axis actually carries protected rings, since express
+    // chords can close a ring on an axis that is not a torus. Other meshes keep the topology-derived
+    // answer unchanged.
+    bool need_deadlock_avoidance_support(
+        const ControlPlane& control_plane, const FabricNodeId& fabric_node_id, eth_chan_directions direction) const;
     bool is_ubb_galaxy() const { return is_ubb_galaxy_; }
 
     // ============ Mesh Type Queries ============
@@ -67,9 +73,13 @@ public:
     bool is_switch_mesh(MeshId mesh_id) const;
 
     // ============ Z Router Queries ============
-    // Check if a fabric node has Z router channels
-    // Queries control plane to see if any ethernet channels are assigned Z direction
-    bool has_z_router_on_device(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
+    // Do not add a raw "does this node/mesh have a Z edge" query here. Scanning connectivity for
+    // RoutingDirection::Z answers a weaker question than any of its callers actually ask:
+    //   - selecting the 2D action-map format
+    //                                    -> is_2D_routing_enabled(), independent of whether the mesh
+    //                                       has a Z edge
+    //   - sizing the VC0 downstream fan  -> get_vc0_downstream_edm_count(is_2D, express_routing_enabled)
+    //   - intermesh / express edge role  -> classify_fabric_edge() and ZPortRole, per edge
 
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
@@ -91,7 +101,9 @@ public:
         return routing_2d_buffer_size_;
     }
 
-    // Returns empty map if routing mode is undefined
+    // Configuration-wide kernel defines. Exact 2D mesh shape is runtime routing metadata; express
+    // capacity is enabled for all local kernels when any locally bound mesh uses express routing.
+    // Returns empty map if routing mode is undefined.
     std::map<std::string, std::string> get_fabric_kernel_defines(const ControlPlane& control_plane) const;
 
     // ============ Builder Context Access ============
@@ -113,32 +125,29 @@ private:
         //     ROUTING_PATH_SIZE_1D = 1024 bytes / 16 bytes per entry = 64 chips max (63 hops)
         static constexpr uint32_t MAX_1D_HOPS = 63;
 
-        // 2D: Max route buffer size (optimized to 67, fits in 128B header)
-        //     Each byte in route buffer encodes 1 hop, so MAX_2D_HOPS = MAX_2D_ROUTE_BUFFER_SIZE
-        //     67-byte buffer fits in 128B header (61B base + 67B buffer = 128B, zero padding waste)
-        static constexpr uint32_t MAX_2D_ROUTE_BUFFER_SIZE = 67;
-        static constexpr uint32_t MAX_2D_HOPS = MAX_2D_ROUTE_BUFFER_SIZE;
+        // Maximum supported 2D shape is 64x4 in either orientation, so packets need 68 action bytes.
+        static constexpr uint32_t MAX_2D_ACTION_MAP_BYTES = 68;
     };
 
     // 1D routing: hops per routing word (base word supports 16 hops)
     static constexpr uint32_t ROUTING_1D_HOPS_PER_WORD = 16;
 
     // 2D routing: buffer tiers optimized to maximize capacity per header size
-    // Header base = 61B, aligned to 16B boundaries
+    // Header base = 60 B, aligned to 16 B boundaries
     // Strategy: One tier per header size (max capacity) to avoid bloat
-    //   80B:  61+19=80  (max capacity)
-    //   96B:  61+35=96  (max capacity)
-    // Fabric context automatically selects smallest header that fits required hop count
-    struct Routing2DBufferTier {
-        uint32_t max_hops;
-        uint32_t buffer_size;
+    //   80 B: 60 + 20 = 80
+    //   96 B: 60 + 36 = 96
+    // FabricContext selects the smallest header that holds the topology's action map.
+    struct Routing2DHeaderTier {
+        uint32_t max_action_map_bytes;
+        uint32_t route_buffer_size;
     };
-    static constexpr Routing2DBufferTier ROUTING_2D_BUFFER_TIERS[] = {
+    static constexpr Routing2DHeaderTier ROUTING_2D_HEADER_TIERS[] = {
         // NOTE: 80B header size de-stabilized some Mesh benchmarks for 8X4 mesh, so disabling for now
-        //{19, 19},  // 80B header - max capacity (61+19=80)
-        {35, 35},  // 96B header - max capacity (61+35=96)
-        {51, 51},  // 112B header - max capacity (61+51=112)
-        {67, 67}   // 128B header - max capacity (61+67=128)
+        //{20, 20},  // 80B header - max capacity (60+20=80)
+        {36, 36},                                                           // 96B header - max capacity (60+36=96)
+        {52, 52},                                                           // 112B header - max capacity (60+52=112)
+        {Limits::MAX_2D_ACTION_MAP_BYTES, Limits::MAX_2D_ACTION_MAP_BYTES}  // 128B header
     };
 
     // ============ Private Implementation ============
@@ -152,9 +161,9 @@ private:
 
     // Topology-based sizing
     uint32_t get_max_1d_hops_from_topology(const ControlPlane& control_plane) const;
-    uint32_t get_max_2d_hops_from_topology(const ControlPlane& control_plane) const;
+    uint32_t get_max_2d_action_map_bytes_from_topology(const ControlPlane& control_plane) const;
     uint32_t compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const;
-    uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const;
+    uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const;
     void compute_packet_specifications(const ControlPlane& control_plane, const tt_metal::Hal& hal, tt::ARCH arch);
 
     // Header size helpers (use explicit template instantiation for type safety)
@@ -180,7 +189,6 @@ private:
     // Dynamic header sizing (set by compute_packet_specifications based on mode)
     uint32_t max_1d_hops_ = 0;                 // Valid only in 1D mode
     uint32_t routing_1d_extension_words_ = 0;  // Valid only in 1D mode
-    uint32_t max_2d_hops_ = 0;                 // Valid only in 2D mode
     uint32_t routing_2d_buffer_size_ = 0;      // Valid only in 2D mode
 
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED by default

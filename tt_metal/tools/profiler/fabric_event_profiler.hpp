@@ -11,9 +11,6 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "hostdev/profiler_common.h"
 
-// Type alias for cleaner access to 2D mesh routing constants
-using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
-
 namespace kernel_profiler {
 
 // For Unicasts
@@ -25,7 +22,7 @@ FORCE_INLINE void recordFabricNocEvent(
     static_assert(std::is_same_v<NocAddrU64, uint64_t>);
     auto [decoded_x, decoded_y] = noc_event_profiler::decode_noc_addr_to_coord(noc_addr);
 
-    // first profiler packet stores XY address data as well as packet type tag (used to decode routing fields)
+    // The first profiler packet stores XY address data and the packet type used to interpret routing metadata.
     KernelProfilerNocEventMetadata ev_md;
 
     auto& fabric_noc_event = ev_md.data.fabric_event;
@@ -51,7 +48,7 @@ FORCE_INLINE void recordFabricNocEventMulticast(
     uint8_t noc_y_start,
     uint8_t mcast_rect_size_x,
     uint8_t mcast_rect_size_y) {
-    // first profiler packet stores XY address data as well as packet type tag (used to decode routing fields)
+    // The first profiler packet stores XY address data and the packet type used to interpret routing metadata.
     KernelProfilerNocEventMetadata ev_md;
 
     auto& fabric_noc_event = ev_md.data.fabric_event;
@@ -114,55 +111,22 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
 }
 
-// how slow is this? alternative is storing entire route buffer which isn't ideal either...
 template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
-FORCE_INLINE void recordRoutingFields2D(
-    const volatile tt::tt_fabric::LowLatencyMeshRoutingFields routing_fields, const volatile uint8_t* route_buffer) {
+FORCE_INLINE void recordRoutingMetadataUnavailable2D() {
+    // The indexed 2D action map is not a sequential hop program. Reconstructing a unicast route requires the source
+    // fabric coordinate, topology, and routing policy. For multicast, mcast_params describes destination extents
+    // rather than the executed routing tree, and it cannot be represented by the legacy combined N/S hop count.
+    // Do not infer legacy hop counts from route_buffer here.
     KernelProfilerNocEventMetadata ev_md;
-    auto& routing_fields_2d = ev_md.data.fabric_routing_fields_2d;
-    routing_fields_2d.noc_xfer_type = KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS_2D;
-
-    // dimension order routing: first we have N/S forwarding with possible branching/local writes for mcast
-    uint8_t total_hops = 0;
-    while (route_buffer[total_hops] & MeshRoutingFields::WRITE_AND_FORWARD_NS) {
-        total_hops++;
-    }
-
-    routing_fields_2d.ns_hops = total_hops;
-
-    // compute e/w hops and check for e/w line mcast
-    while (route_buffer[total_hops] != MeshRoutingFields::NOOP) {
-        total_hops++;
-    }
-
-    // Look at last entry in buffer to check if west branch exists
-    // If west branch exists, compute west hops and east hops as remaining
-    // Otherwise, we only have east hops (which is trivially to 0 if we have no e/w hops at all)
-    if (route_buffer[total_hops - 1] == MeshRoutingFields::FORWARD_EAST) {
-        routing_fields_2d.w_hops = total_hops - routing_fields.branch_west_offset;
-        routing_fields_2d.e_hops = routing_fields.branch_west_offset - routing_fields_2d.ns_hops;
-    } else {
-        routing_fields_2d.e_hops = total_hops - routing_fields_2d.ns_hops;
-    }
-
-    // look at first entries of trunk/branches in buffer to check for N/S line mcast, E/W line mcast, or 2d mcast
-    // the last check is for the 1N1E1W edge case (which is a 2d mcast)
-    if (routing_fields_2d.ns_hops > 0 &&
-            (route_buffer[0] & MeshRoutingFields::WRITE_AND_FORWARD_NS) == MeshRoutingFields::WRITE_AND_FORWARD_NS ||
-        routing_fields_2d.e_hops > 0 &&
-            route_buffer[routing_fields.branch_east_offset] == MeshRoutingFields::WRITE_AND_FORWARD_EW ||
-        routing_fields_2d.w_hops > 0 &&
-            route_buffer[routing_fields.branch_west_offset] == MeshRoutingFields::WRITE_AND_FORWARD_EW ||
-        routing_fields_2d.e_hops > 0 && routing_fields_2d.w_hops > 0) {
-        routing_fields_2d.is_mcast = true;
-    }
+    ev_md.data.fabric_routing_metadata_unavailable_2d.noc_xfer_type =
+        KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_METADATA_UNAVAILABLE_2D;
 
     kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
 }
 
 void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) {
-    // determine routing fields type at compile time
+    // Determine the fabric packet type at compile time.
     KernelProfilerNocEventMetadata::FabricPacketType routing_fields_type;
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyMeshRoutingFields>) {
         routing_fields_type = KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH;
@@ -172,7 +136,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
         routing_fields_type = KernelProfilerNocEventMetadata::FabricPacketType::REGULAR;
     }
 
-    // first profiler packet stores XY address data as well as packet type tag (used to decode routing fields)
+    // The first profiler packet stores XY address data and the packet type used to interpret routing metadata.
     auto noc_send_type = fabric_header_ptr->get_noc_send_type();
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
@@ -245,10 +209,10 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
         }
     }
 
-    // following profiler event just stores the routing fields
+    // The following profiler event preserves the routing-metadata marker sequence.
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyMeshRoutingFields>) {
 #if defined(FABRIC_2D)
-        recordRoutingFields2D(fabric_header_ptr->routing_fields, fabric_header_ptr->route_buffer);
+        recordRoutingMetadataUnavailable2D();
 #endif
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         recordRoutingFields1D(fabric_header_ptr->routing_fields.value);
