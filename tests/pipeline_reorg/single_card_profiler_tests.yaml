@@ -98,3 +98,15 @@
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
   budget_type: profiler
+
+- name: Sync events profiler
+  cmd: run_sync_events_test
+  skus:
+    # Blackhole only: sync events use the streaming profiler.
+    bh_p100a_civ2_viommu:
+      timeout: 3
+    bh_p150b_civ2_viommu:
+      timeout: 3
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler

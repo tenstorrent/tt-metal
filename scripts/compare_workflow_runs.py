@@ -39,7 +39,7 @@ Usage examples:
     python scripts/compare_workflow_runs.py --workflows t3000-unit-tests.yaml
 
     # Compare a specific workflow run ID on your branch
-    python scripts/compare_workflow_runs.py --workflows pipeline-select.yaml --branch-run-id 1234567890
+    python scripts/compare_workflow_runs.py --workflows perf-device-models.yaml --branch-run-id 1234567890
 
     # Compare a specific branch
     python scripts/compare_workflow_runs.py --branch my-feature-branch

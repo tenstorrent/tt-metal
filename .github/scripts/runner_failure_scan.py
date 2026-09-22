@@ -216,6 +216,16 @@ def mark_job_checked(state: dict[str, Any], result: JobScanResult) -> None:
     }
 
 
+def log_download_counts(
+    jobs_to_scan: list[RecentJob],
+    scan_results: list[JobScanResult],
+) -> tuple[int, int, int]:
+    attempts = len(jobs_to_scan)
+    successes = sum(1 for result in scan_results if result.log_checked)
+    failures = max(attempts - successes, 0)
+    return attempts, successes, failures
+
+
 def build_markdown_report(
     *,
     generated_at: datetime,
@@ -228,6 +238,8 @@ def build_markdown_report(
     scan_results: list[JobScanResult],
 ) -> str:
     failures = [result for result in scan_results if result.signature_labels]
+    download_attempts, download_successes, download_failures = log_download_counts(jobs_to_scan, scan_results)
+    download_failure_rate = download_failures / download_attempts if download_attempts else 0.0
     lines = [
         "# Runner Failure Scan",
         "",
@@ -236,7 +248,9 @@ def build_markdown_report(
         f"- Workflows: `{', '.join(workflow.name for workflow in workflows)}`",
         f"- Recent selected jobs: `{len(recent_jobs)}`",
         f"- Failed jobs: `{len(failed_jobs)}`",
-        f"- Scanned jobs: `{len(jobs_to_scan)}`",
+        f"- Jobs selected for scanning: `{len(jobs_to_scan)}`",
+        f"- Log downloads: `{download_successes}/{download_attempts}` succeeded",
+        f"- Log download failures: `{download_failures}` (`{download_failure_rate:.1%}`)",
         f"- Runner-failure jobs: `{len(failures)}`",
         "",
     ]
@@ -299,6 +313,8 @@ def build_json_report(
     runner_log_table_results: list[JobScanResult],
 ) -> dict[str, Any]:
     failures = [result for result in scan_results if result.signature_labels]
+    download_attempts, download_successes, download_failures = log_download_counts(jobs_to_scan, scan_results)
+    download_failure_rate = download_failures / download_attempts if download_attempts else 0.0
     return {
         "generated_at": format_utc(generated_at),
         "since": format_utc(since),
@@ -318,6 +334,10 @@ def build_json_report(
             "failed_jobs": len(failed_jobs),
             "jobs_to_scan": len(jobs_to_scan),
             "scanned_jobs": len(scan_results),
+            "log_download_attempts": download_attempts,
+            "log_download_successes": download_successes,
+            "log_download_failures": download_failures,
+            "log_download_failure_rate": download_failure_rate,
             "runner_log_table_jobs": len(runner_log_table_results),
             "runner_failure_jobs": len(failures),
         },

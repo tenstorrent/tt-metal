@@ -13,11 +13,12 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "experimental/llk_unpack_AB_custom_mm.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <bool read_transposed = false>
+template <bool read_transposed = false, bool configure_mask_extent = false>
 inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -27,8 +28,9 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1,
-    const bool mask_chunk      = false)
+    const std::uint32_t ct_dim              = 1,
+    const bool mask_chunk                   = false,
+    const std::uint32_t operandB_face_r_dim = 8)
 {
     volatile std::uint32_t* cfg         = get_cfg_pointer();
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
@@ -44,8 +46,17 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     if (mask_chunk)
     {
         cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = base_address_mask;
+        if constexpr (configure_mask_extent)
+        {
+            LLK_ASSERT(ct_dim * 2 <= 64, "mask_chunk requires ct_dim*2 <= 64 SrcB rows");
+            TT_SETADCXX(p_setadc::UNP_B, ct_dim * 2 * FACE_C_DIM - 1, 0x0);
+        }
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
         TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcB, 0b00000000, 1, 1);
+        if constexpr (configure_mask_extent)
+        {
+            TT_SETADCXX(p_setadc::UNP_B, operandB_face_r_dim * FACE_C_DIM - 1, 0x0);
+        }
     }
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim);

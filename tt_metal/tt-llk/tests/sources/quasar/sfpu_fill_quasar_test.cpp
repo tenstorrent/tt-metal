@@ -52,17 +52,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // fill always uses unpack_to_dest (SFPU test — no FPU datacopy path).
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
-    // hw_configure: int-fill needs DEST in int32 mode; float-fill follows is_fp32_dest_acc_en.
-    const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
-    if (is_int_fill)
-    {
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-    }
-    else
-    {
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
-    }
-
     // Source descriptor: buffer_A in L1, L1-side format = formats.unpack_A_src,
     // face geometry from the harness. reg_data_format = unpack_A_dst is the
     // DEST-side (post-conversion) format.
