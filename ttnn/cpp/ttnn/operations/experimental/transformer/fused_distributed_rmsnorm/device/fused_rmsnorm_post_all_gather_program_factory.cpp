@@ -229,8 +229,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_sin.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
-    rh::ReduceAuxiliaryArgs({reduce_scalar_cb_id, reduce_plan.auxiliary_tiles}).append_to(reader_compile_time_args);
-
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_id,
         num_tile_cols,
@@ -240,6 +238,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         num_tile_rows,
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    rh::ReduceAuxiliaryArgs({reduce_scalar_cb_id, reduce_plan.auxiliary_tiles}).append_to(writer_compile_time_args);
 
     bool use_legacy_rsqrt = false;
     std::vector<uint32_t> compute_args = {

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -13,9 +12,7 @@ void kernel_main() {
     constexpr uint32_t output_group = get_compile_time_arg_val(3);
     constexpr bool reduce_row = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t cb_in = 0;
-    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<5>;
-    constexpr auto src_args = TensorAccessorArgs<Auxiliary::next_compile_time_args_offset()>();
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+    constexpr auto src_args = TensorAccessorArgs<5>();
 
     const auto accessor = TensorAccessor(src_args, src_addr, get_tile_size(cb_in));
     const auto read_tile = [&](uint32_t tile_id) {

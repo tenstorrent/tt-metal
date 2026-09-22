@@ -9,7 +9,6 @@
 #include "llk_defs.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
@@ -59,9 +58,6 @@ void reduce_rm_reader() {
     DataflowBuffer dfb_rm(dfb::rm);
     DataflowBuffer dfb_clear_value(dfb::clear_value);
     Noc noc;
-
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // Identity template — pre-built once, reused as the pad source for every staged slab.
     const uint32_t clear_template_bytes = dfb_clear_value.get_tile_size();

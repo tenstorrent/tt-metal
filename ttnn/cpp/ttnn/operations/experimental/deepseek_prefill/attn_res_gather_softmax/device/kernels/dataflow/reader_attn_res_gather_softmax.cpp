@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -59,16 +58,11 @@ void kernel_main() {
     auto q_accessor = TensorAccessor(q_args, q_addr);
     auto pending_accessor = TensorAccessor(pending_args, pending_addr);
 
-    // Pass one, on the cores that carry token rows. The scaler and q feed only this
-    // pass, so a fold-only core must not push them either: compute pops them exactly
+    // Pass one, on the cores that carry token rows. q feeds only this
+    // pass, so a fold-only core must not push it: compute pops it exactly
     // when it runs the pass, and an unmatched push leaves the buffer full for the
     // rest of the program.
     if (num_stat_rows > 0) {
-        // Both reductions are plain sums; the mean this feeds is taken against the
-        // full unsharded `d` downstream, not against this rank's share.
-        using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<pending_args.next_compile_time_args_offset()>;
-        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
-
         // q spans the same d as a row of the stream and is the same for every row
         // this core owns, so it is read once and left resident.
         q_buf.reserve_back(Wt);

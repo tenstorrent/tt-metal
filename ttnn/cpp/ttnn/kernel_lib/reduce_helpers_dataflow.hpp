@@ -26,7 +26,7 @@ namespace dataflow_kernel_lib {
  * The planner aggregates the physical tiles needed by all calls in one
  * planning unit. The dataflow kernel receives this recipe independently from
  * the compute call list. Call this function exactly once at the beginning of
- * that unit's dataflow work; it fills and pushes the aggregate CB once, and all
+ * that unit's writer work; it fills and pushes the aggregate CB once, and all
  * compute calls use slices of those same tiles. Do not loop over the compute
  * call count or try to infer a call's partial mode from this physical recipe.
  * Full, static first-row scalers initialize only the rows consumed by reduction;

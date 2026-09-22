@@ -183,11 +183,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
                     .accessor_name = "input",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = ONE_DFB,
-                    .accessor_name = "one",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
+
             },
         .tensor_bindings =
             {
@@ -201,7 +197,6 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
                 .runtime_arg_names = {"input_is_dram", "num_cols_per_core", "tile_offset", "Ht", "Wt"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(arch),
-        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     };
 
     KernelSpec writer{
@@ -209,6 +204,12 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
         .source = writer_kernel_file,
         .dfb_bindings =
             {
+                DFBBinding{
+                    .dfb_spec_name = ONE_DFB,
+                    .accessor_name = "one",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+
                 DFBBinding{
                     .dfb_spec_name = OUTPUT_DFB,
                     .accessor_name = "output",
@@ -227,6 +228,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
                 .runtime_arg_names = {"output_is_dram", "num_cols_per_core", "tile_offset"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     };
 
     ////////////////////////////////////////////////////////////////////////////

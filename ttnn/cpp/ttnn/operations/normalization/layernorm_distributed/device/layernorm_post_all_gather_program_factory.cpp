@@ -265,7 +265,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
         beta_is_row_major = 1;
     }
-    // Reader uses this compile-time reduction width to generate the AVG scaler tile.
+    // This reduction width determines the planned AVG scaler tile.
     const uint32_t reduce_factor = logical_W * num_devices;
 
     // Get program config
@@ -388,10 +388,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{
                     .dfb_spec_name = POST_EPS, .accessor_name = "eps", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{
-                    .dfb_spec_name = POST_REDUCE,
-                    .accessor_name = "reduce",
-                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+
             },
         .tensor_bindings =
             {
@@ -407,7 +404,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"Wt", tiles_per_core_y}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
     if (gamma.has_value()) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -425,13 +421,21 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     m2::KernelSpec writer{
         .unique_id = POST_WRITER,
         .source = POST_WRITER_KERNEL,
-        .dfb_bindings = {m2::DFBBinding{
-            .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {m2::DFBBinding{
+                 .dfb_spec_name = POST_REDUCE,
+                 .accessor_name = "reduce",
+                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+             m2::DFBBinding{
+                 .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POST_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
+    writer.compiler_options.defines.emplace("REDUCE_AUXILIARY_CB", "dfb::reduce");
 
     m2::KernelSpec compute{
         .unique_id = POST_COMPUTE,

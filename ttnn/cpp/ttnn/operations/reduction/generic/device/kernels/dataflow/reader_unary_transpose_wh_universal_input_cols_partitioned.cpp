@@ -9,7 +9,6 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
@@ -36,9 +35,6 @@ void kernel_main() {
     // dfb::in0 is the reduce input pipe: this kernel fills it, the compute kernel drains it.
     DataflowBuffer dfb_in0(dfb::in0);
     const uint32_t tile_bytes = dfb_in0.get_tile_size();
-
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     auto tensor_accessor = TensorAccessor(tensor::src);
 

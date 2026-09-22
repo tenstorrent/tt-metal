@@ -10,7 +10,12 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::one>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+
     const bool output_is_dram = get_arg(args::output_is_dram) == 1;
     const auto num_cols_per_core = get_arg(args::num_cols_per_core);
     const auto tile_offset = get_arg(args::tile_offset);

@@ -861,7 +861,7 @@ def _run_case(device, case: ReduceCase, *, keep_empty_auxiliary_cb=False) -> tup
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=_single_core(),
             compile_time_args=auxiliary_compile_time_args,
-            config=ttnn.ReaderConfigDescriptor(),
+            config=ttnn.WriterConfigDescriptor(),
         ),
         ttnn.KernelDescriptor(
             kernel_source=PLAN_SEQUENCE_KERNEL,
@@ -917,7 +917,7 @@ def test_reduce_auxiliary_scalers_and_masks_over_dirty_memory(device, dtype):
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=_single_core(),
                     compile_time_args=compile_args,
-                    config=ttnn.ReaderConfigDescriptor(),
+                    config=ttnn.WriterConfigDescriptor(),
                 )
             ],
             semaphores=[],
@@ -1005,7 +1005,7 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
                     kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
                     core_ranges=core_range,
                     compile_time_args=auxiliary_args,
-                    config=ttnn.ReaderConfigDescriptor(),
+                    config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=PLAN_SEQUENCE_KERNEL,
@@ -1196,7 +1196,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
                 kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
                 core_ranges=grid,
                 compile_time_args=auxiliary_args,
-                config=ttnn.ReaderConfigDescriptor(),
+                config=ttnn.WriterConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=PLAN_SEQUENCE_KERNEL,
@@ -1378,6 +1378,12 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                 ttnn.ProgramDescriptor(
                     kernels=[
                         ttnn.KernelDescriptor(
+                            kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
+                            core_ranges=_single_core(),
+                            compile_time_args=auxiliary_args,
+                            config=ttnn.WriterConfigDescriptor(),
+                        ),
+                        ttnn.KernelDescriptor(
                             kernel_source="tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_tail_stream_reader.cpp",
                             core_ranges=_single_core(),
                             compile_time_args=auxiliary_args,
@@ -1495,7 +1501,7 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
                     kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
                     core_ranges=_single_core(),
                     compile_time_args=auxiliary_args,
-                    config=ttnn.ReaderConfigDescriptor(),
+                    config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=PLAN_SEQUENCE_KERNEL,
@@ -1594,7 +1600,7 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset)
                         kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
                         core_ranges=_single_core(),
                         compile_time_args=auxiliary_args,
-                        config=ttnn.ReaderConfigDescriptor(),
+                        config=ttnn.WriterConfigDescriptor(),
                     ),
                     ttnn.KernelDescriptor(
                         kernel_source="tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_bound_tail.cpp",
@@ -1679,7 +1685,7 @@ def test_reduce_resident_hw_row_tail(device, algorithm):
                         kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
                         core_ranges=_single_core(),
                         compile_time_args=auxiliary_args,
-                        config=ttnn.ReaderConfigDescriptor(),
+                        config=ttnn.WriterConfigDescriptor(),
                     ),
                     ttnn.KernelDescriptor(
                         kernel_source=PLAN_SEQUENCE_KERNEL,
@@ -1736,7 +1742,7 @@ def test_reduce_plan_sequence_repeated_input_cb(device):
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=_single_core(),
             compile_time_args=auxiliary_compile_time_args,
-            config=ttnn.ReaderConfigDescriptor(),
+            config=ttnn.WriterConfigDescriptor(),
         ),
         ttnn.KernelDescriptor(
             kernel_source=PLAN_SEQUENCE_KERNEL,

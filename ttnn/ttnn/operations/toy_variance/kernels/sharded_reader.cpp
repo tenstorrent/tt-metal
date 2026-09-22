@@ -31,7 +31,6 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe_spec.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t Ht = get_arg(args::Ht);
@@ -43,9 +42,6 @@ void kernel_main() {
     DataflowBuffer dfb_mean_src(dfb::mean_src);
     DataflowBuffer dfb_mean(dfb::mean);
     constexpr auto mc = MCAST_ARGS(mean_bcast);
-
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // Credit the resident shard. No write -- the bytes are already there.
     dfb_in.reserve_back(shard_tiles);

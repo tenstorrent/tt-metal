@@ -316,11 +316,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                 .accessor_name = "rm",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
-            DFBBinding{
-                .dfb_spec_name = SCALER_DFB,
-                .accessor_name = "scaler",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
+
             // Self-loop: the reader both fills the identity template and re-reads it.
             DFBBinding{
                 .dfb_spec_name = CLEAR_VALUE_DFB,
@@ -340,7 +336,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
             "reader_unary_reduce_input_rows_partitioned_sharded.cpp";
         reader_ct_args = {{"scaler_bits", std::bit_cast<uint32_t>(operation_attributes.scaler)}};
         reader_rta_names = {"num_tiles"};
-        // The sharded reader prepares the scaler tile itself (gated on REDUCE_SCALER).
+        // Preserve the shared reader compile configuration; the writer prepares the scaler.
         reader_defines_map["REDUCE_SCALER"] = "1";
         reader_dfb_bindings = {
             DFBBinding{
@@ -348,11 +344,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                 .accessor_name = "in0",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
-            DFBBinding{
-                .dfb_spec_name = SCALER_DFB,
-                .accessor_name = "scaler",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
+
             // Self-loop: the reader reserves the whole borrowed input shard and re-reads it in place
             // as the NoC source; nothing else touches it.
             DFBBinding{
@@ -381,11 +373,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                 .accessor_name = "in0",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
-            DFBBinding{
-                .dfb_spec_name = SCALER_DFB,
-                .accessor_name = "scaler",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            },
+
         };
         reader_tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}};
     }
@@ -399,7 +387,6 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = reduce_unit.get_auxiliary_compile_time_args()},
     });
 
     // ---- Writer kernel ----
@@ -433,16 +420,24 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         .unique_id = WRITER,
         .source = writer_source,
         .compiler_options = {.defines = KernelSpec::CompilerOptions::Defines(reduce_defines)},
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = SCALER_DFB,
+                 .accessor_name = "scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             }},
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reduce_unit.get_auxiliary_compile_time_args()},
     });
+    spec.kernels.back().compiler_options.defines["REDUCE_AUXILIARY_CB"] = "dfb::scaler";
 
     // ---- Compute kernels (one per core group) ----
     // Legacy resolved a TTNN ComputeKernelConfig but forwarded only math_fidelity,

@@ -44,6 +44,7 @@ const m2::TensorParamName PRE1D_OUTPUT_T{"pre1d_output_t"};
 // ---- Pre 2D spec names ----
 const m2::KernelSpecName PRE2D_READER{"pre2d_reader"};
 const m2::KernelSpecName PRE2D_WRITER{"pre2d_writer"};
+const m2::KernelSpecName PRE2D_AUX_WRITER{"pre2d_aux_writer"};
 const m2::KernelSpecName PRE2D_COMPUTE_MERGE{"pre2d_compute_merge"};
 const m2::KernelSpecName PRE2D_COMPUTE_WORKER{"pre2d_compute_worker"};
 
@@ -259,16 +260,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                     .dfb_spec_name = PRE1D_INPUT,
                     .accessor_name = "inp",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{
-                    .dfb_spec_name = PRE1D_REDUCE,
-                    .accessor_name = "reduce",
-                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+
             },
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_INPUT_T, .accessor_name = "src"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -280,13 +277,21 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     m2::KernelSpec writer{
         .unique_id = PRE1D_WRITER,
         .source = PRE_WRITER_KERNEL,
-        .dfb_bindings = {m2::DFBBinding{
-            .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {m2::DFBBinding{
+                 .dfb_spec_name = PRE1D_REDUCE,
+                 .accessor_name = "reduce",
+                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+             m2::DFBBinding{
+                 .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", writer_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
+    writer.compiler_options.defines.emplace("REDUCE_AUXILIARY_CB", "dfb::reduce");
 
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
     m2::KernelSpec compute{
@@ -585,10 +590,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                     .dfb_spec_name = PRE2D_INPUT,
                     .accessor_name = "inp",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{
-                    .dfb_spec_name = PRE2D_REDUCE,
-                    .accessor_name = "reduce",
-                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+
                 m2::DFBBinding{
                     .dfb_spec_name = PRE2D_X2_MERGE,
                     .accessor_name = "x2_merge",
@@ -609,7 +611,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
             {.runtime_arg_names =
                  {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -621,13 +622,23 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     m2::KernelSpec writer{
         .unique_id = PRE2D_WRITER,
         .source = PRE_WRITER_KERNEL,
-        .dfb_bindings = {m2::DFBBinding{
-            .dfb_spec_name = PRE2D_OUT_FINAL, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {m2::DFBBinding{
+                 .dfb_spec_name = PRE2D_REDUCE,
+                 .accessor_name = "reduce",
+                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+             m2::DFBBinding{
+                 .dfb_spec_name = PRE2D_OUT_FINAL,
+                 .accessor_name = "out",
+                 .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", writer_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
+    writer.compiler_options.defines.emplace("REDUCE_AUXILIARY_CB", "dfb::reduce");
 
     // Two instances of the one compute source, over disjoint node sets: the merge row additionally
     // reduces the column's partials into the final output buffer, so only it binds that buffer. The
@@ -725,6 +736,19 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     m2::Group<m2::KernelSpec> kernels;
     kernels.push_back(std::move(reader));
     kernels.push_back(std::move(writer));
+    if (has_worker_cores) {
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = PRE2D_AUX_WRITER,
+            .source = "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+                      "writer_reduce_auxiliary.cpp",
+            .dfb_bindings = {m2::DFBBinding{
+                .dfb_spec_name = PRE2D_REDUCE,
+                .accessor_name = "reduce",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER}},
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
+        });
+    }
     kernels.push_back(make_compute(PRE2D_COMPUTE_MERGE, /*is_merge_core=*/true));
     if (has_worker_cores) {
         kernels.push_back(make_compute(PRE2D_COMPUTE_WORKER, /*is_merge_core=*/false));
@@ -785,7 +809,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .name = "merge", .kernels = {PRE2D_READER, PRE2D_WRITER, PRE2D_COMPUTE_MERGE}, .target_nodes = merge_cores});
     if (has_worker_cores) {
         work_units.push_back(m2::WorkUnitSpec{
-            .name = "worker", .kernels = {PRE2D_READER, PRE2D_COMPUTE_WORKER}, .target_nodes = worker_cores});
+            .name = "worker",
+            .kernels = {PRE2D_READER, PRE2D_AUX_WRITER, PRE2D_COMPUTE_WORKER},
+            .target_nodes = worker_cores});
     }
 
     m2::ProgramSpec spec{

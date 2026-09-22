@@ -11,7 +11,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -31,9 +30,6 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cb_input(input_cb);
-
-    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<input_args.next_compile_time_args_offset()>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t input_tile_idx = tile_row * num_tile_cols;

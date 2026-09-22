@@ -10,14 +10,10 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     auto num_tiles = get_arg(args::num_tiles);
     auto start_id = get_arg(args::start_id);
-
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto s0 = TensorAccessor(tensor::src0);
     const auto s1 = TensorAccessor(tensor::src1);

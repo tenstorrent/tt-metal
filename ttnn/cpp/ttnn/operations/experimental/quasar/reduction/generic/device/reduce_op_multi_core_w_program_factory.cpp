@@ -204,8 +204,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         TensorAccessorArgs(a).append_to(reader_compile_time_args);
     }
 
-    auxiliary_sequence.append_auxiliary_to(reader_compile_time_args);
-
     std::vector<uint32_t> writer_compile_time_args;
     if (rm_path) {
         writer_compile_time_args = build_rm_writer_ct_args(plan, output, ReduceOpDim::W);
@@ -213,6 +211,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
     }
+
+    auxiliary_sequence.append_auxiliary_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils_qsr::get_defines(operation_attributes.math_op, ReduceOpDim::W);

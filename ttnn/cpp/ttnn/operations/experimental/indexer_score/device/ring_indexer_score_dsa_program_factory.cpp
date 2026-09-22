@@ -515,7 +515,7 @@ ProgramDescriptor build_ring_program_descriptor(
 
     rh::ReduceCallArgs(pool_plan, {cb_id[cb_acc_strip_arg], cb_id[cb_scaler_arg], cb_id[cb_out_strip_arg]})
         .append_to(compute_ct);
-    rh::ReduceAuxiliaryArgs({cb_id[cb_scaler_arg], pool_plan.auxiliary_tiles}).append_to(reader_ct);
+    rh::ReduceAuxiliaryArgs({cb_id[cb_scaler_arg], pool_plan.auxiliary_tiles}).append_to(writer_ct);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     KernelDescriptor reader_kernel{};

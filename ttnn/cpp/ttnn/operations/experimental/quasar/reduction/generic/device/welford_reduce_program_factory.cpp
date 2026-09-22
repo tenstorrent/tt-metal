@@ -322,9 +322,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/1};
         TensorAccessorArgs(input).append_to(reader_compile_time_args);
-        namespace rh = ttnn::kernel_lib::host;
-        rh::ReduceAuxiliaryArgs({2, {{0.0F, rh::ReduceAuxiliaryTileType::Zero, 0}}})
-            .append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp";
@@ -333,9 +330,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // W-reduce: sequential reader reads tiles row by row.
         std::vector<uint32_t> reader_compile_time_args = {scaler_bits};
         TensorAccessorArgs(input).append_to(reader_compile_time_args);
-        namespace rh = ttnn::kernel_lib::host;
-        rh::ReduceAuxiliaryArgs({2, {{0.0F, rh::ReduceAuxiliaryTileType::Zero, 0}}})
-            .append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/dataflow/"
             "reader_unary_reduce_universal_start_id.cpp";
@@ -367,6 +361,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             reduce_batch_size,
             static_cast<uint32_t>(narrow_scratch_to_bf16)};
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
+        namespace rh = ttnn::kernel_lib::host;
+        rh::ReduceAuxiliaryArgs({2, {{0.0F, rh::ReduceAuxiliaryTileType::Zero, 0}}})
+            .append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/dataflow/"
             "writer_welford_hw.cpp";
@@ -376,6 +373,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // W-reduce and H-reduce: generic tile writer.
         std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
+        namespace rh = ttnn::kernel_lib::host;
+        rh::ReduceAuxiliaryArgs({2, {{0.0F, rh::ReduceAuxiliaryTileType::Zero, 0}}})
+            .append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/reduction/generic/device/kernels/dataflow/"
             "writer_unary_interleaved_start_id.cpp";

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 fork of reader_unary_transpose_wh_universal_input_cols_partitioned.cpp (interleaved H/W
-// reduce reader). Identical dataflow: fill the reduce-scaler DFB once, then stream input tiles into
+// reduce reader). Stream input tiles into
 // the input DFB in the chunked N/W_skip/H/W_chunk order. CB indices → dfb:: bindings, source
 // TensorAccessor → tensor:: binding (src_addr runtime arg gone), CTAs/RTAs named. Legacy retained for
 // not-yet-ported reduce paths.
@@ -15,7 +15,6 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "experimental/kernel_args.h"
@@ -31,9 +30,6 @@ void kernel_main() {
     constexpr uint32_t row_chunk = get_arg(args::reduce_output_tiles);
 
     constexpr uint32_t onetile = 1;
-
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto tensor_accessor = TensorAccessor(tensor::input);
 

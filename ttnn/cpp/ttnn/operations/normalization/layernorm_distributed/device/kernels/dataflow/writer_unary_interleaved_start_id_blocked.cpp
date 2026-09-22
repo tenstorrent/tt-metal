@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 /*
  * This kernel writes tiles from the output buffer to interleaved dram.
  */
@@ -13,6 +15,11 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+#ifdef REDUCE_AUXILIARY_CB
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, REDUCE_AUXILIARY_CB>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+#endif
     const auto num_tiles = get_arg(args::num_tiles);      // Number of tiles to write
     const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
 

@@ -6,7 +6,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 
 template <uint32_t Vt, uint32_t H, uint32_t Mt, uint32_t epsilon_bits>
@@ -20,8 +19,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer epsilon(dfb::epsilon);
     Noc noc;
 
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     generate_bcast_col_scalar(epsilon, epsilon_bits);
 
     weight.reserve_back(Vt);

@@ -8,7 +8,15 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+#ifdef REDUCE_AUXILIARY_CB
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, REDUCE_AUXILIARY_CB>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+#endif
+
     uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t start_id = get_arg(args::start_id);
 

@@ -252,7 +252,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         DFBBinding{.dfb_spec_name = X, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = MEAN, .accessor_name = "mean", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = RSTD, .accessor_name = "rstd", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+
         DFBBinding{
             .dfb_spec_name = N_RECIP_N, .accessor_name = "n_recip_n", .endpoint_type = DFBEndpointType::PRODUCER},
     };
@@ -290,7 +290,6 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
                      "origin_w"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = reduction.sequence.get_auxiliary_compile_time_args()},
     };
 
     KernelSpec writer{
@@ -298,6 +297,9 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         .source = writer_kernel_file,
         .dfb_bindings =
             {
+                DFBBinding{
+                    .dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+
                 DFBBinding{
                     .dfb_spec_name = DX, .accessor_name = "input_grad", .endpoint_type = DFBEndpointType::CONSUMER},
             },
@@ -307,6 +309,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
             },
         .runtime_arg_schema = {.runtime_arg_names = {"tile_offset", "num_rows_per_core", "num_inner_tiles"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reduction.sequence.get_auxiliary_compile_time_args()},
     };
 
     ////////////////////////////////////////////////////////////////////////////

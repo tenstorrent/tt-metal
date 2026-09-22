@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -16,9 +15,6 @@ void kernel_main() {
     const uint32_t mask_w = get_arg(args::mask_w);
     const bool do_mask_h = (get_arg(args::do_mask_h) == 1);
     const bool do_mask_w = (get_arg(args::do_mask_w) == 1);
-
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // The mask buffer is only allocated when a mask applies, so the host binds it — and defines
     // DO_MASK_H_W — on exactly that condition. Without the binding there is no dfb::mask_h_w token

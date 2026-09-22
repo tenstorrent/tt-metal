@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
@@ -28,8 +27,7 @@ void kernel_main() {
 
     constexpr bool gamma_has_value = get_compile_time_arg_val(0) == 1;
     constexpr bool beta_has_value = get_compile_time_arg_val(1) == 1;
-    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<2>;
-    constexpr auto input_args = TensorAccessorArgs<Auxiliary::next_compile_time_args_offset()>();
+    constexpr auto input_args = TensorAccessorArgs<2>();
     constexpr auto gamma_args = TensorAccessorArgs<decltype(input_args)::next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<decltype(gamma_args)::next_compile_time_args_offset()>();
 
@@ -55,7 +53,6 @@ void kernel_main() {
     const auto cb_id_mask_w = cb_id++;
 
     DataflowBuffer dfb_eps(cb_id_eps);
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     fill_cb_with_value(dfb_eps, eps);
 
     const bool do_mask_h = (origin_h % TILE_H) != 0;

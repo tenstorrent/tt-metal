@@ -238,7 +238,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         DFBBinding{.dfb_spec_name = X, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = MEAN, .accessor_name = "mean", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = RSTD, .accessor_name = "rstd", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+
     };
     if (do_mask_h) {
         reader_dfb_bindings.push_back(
@@ -273,10 +273,11 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
                      "origin_w"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = reduction.sequence.get_auxiliary_compile_time_args()},
     };
 
-    Group<DFBBinding> writer_dfb_bindings{};
+    Group<DFBBinding> writer_dfb_bindings{
+        DFBBinding{.dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+    };
     Group<TensorBinding> writer_tensor_bindings{};
     if (gamma_grad_has_value) {
         writer_dfb_bindings.push_back(DFBBinding{
@@ -302,6 +303,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
                 .runtime_arg_names = {"tile_offset", "num_channels_per_core", "num_inner_tiles", "batch"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = reduction.sequence.get_auxiliary_compile_time_args()},
     };
 
     ////////////////////////////////////////////////////////////////////////////

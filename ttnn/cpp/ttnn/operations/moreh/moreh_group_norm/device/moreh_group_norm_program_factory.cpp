@@ -246,7 +246,6 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
 
     KernelDescriptor::CompileTimeArgs reader_ct_args{
         static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(beta_has_value)};
-    moment_sequence.append_auxiliary_to(reader_ct_args);
     TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(gamma_has_value ? gamma->buffer() : nullptr).append_to(reader_ct_args);
     TensorAccessorArgs(beta_has_value ? beta->buffer() : nullptr).append_to(reader_ct_args);
@@ -261,6 +260,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
 
     KernelDescriptor::CompileTimeArgs writer_ct_args{
         static_cast<uint32_t>(mean_has_value), static_cast<uint32_t>(rstd_has_value)};
+    moment_sequence.append_auxiliary_to(writer_ct_args);
     TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(mean_has_value ? mean.value().buffer() : nullptr).append_to(writer_ct_args);
     TensorAccessorArgs(rstd_has_value ? rstd.value().buffer() : nullptr).append_to(writer_ct_args);

@@ -17,7 +17,7 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
-// Metal 2.0 port of the single-core HW reduce factory. reader (data + reduce-scaler DFB) -> compute
+// Metal 2.0 port of the single-core HW reduce factory. reader (data) -> compute
 // (reduce<in, scaler, out>) -> writer. Reduce defines (REDUCE_OP / REDUCE_DIM / optional
 // REDUCE_POST_MUL) flow through compiler_options.defines. MIN (negate) is rejected in validate() on
 // Quasar (negative_tile is unported), so no fused-negate compute variant exists here.
@@ -154,26 +154,27 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .source = kdir / "dataflow/reader_unary_reduce_universal_start_id_metal2.cpp",
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER}},
+            {
+                DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args = {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config =
             ttnn::create_reader_datamovement_config(a.device().arch(), /*disable_dfb_implicit_sync_for_all=*/true),
-        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     KernelSpec writer{
         .unique_id = WRITER,
         .source = kdir / "dataflow/writer_unary_interleaved_start_id_metal2.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config =
             ttnn::create_writer_datamovement_config(a.device().arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     // ---- Compute (reduce<in, scaler, out>) ----

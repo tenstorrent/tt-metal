@@ -131,9 +131,9 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
     reduce_host::ReduceCallArgs(max_plan, {0, 1, 2}).append_to(compute_reduce_args);
     const auto sum_args = sum_sequence.get_compile_time_args();
     compute_reduce_args.insert(compute_reduce_args.end(), sum_args.begin(), sum_args.end());
-    std::vector<uint32_t> reader_reduce_args;
-    reduce_host::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).append_to(reader_reduce_args);
-    reduce_host::ReduceAuxiliaryArgs(sum_sequence.auxiliary).append_to(reader_reduce_args);
+    std::vector<uint32_t> writer_reduce_args;
+    reduce_host::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).append_to(writer_reduce_args);
+    reduce_host::ReduceAuxiliaryArgs(sum_sequence.auxiliary).append_to(writer_reduce_args);
     const auto* max_auxiliary = max_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const auto* sum_auxiliary = sum_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const uint32_t sum_auxiliary_tiles = sum_sequence.auxiliary.tiles.size();
@@ -187,31 +187,33 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_h_large.cpp",
         .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
+            {
+                DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER},
+
+            },
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt"}},
+        .hw_config = ttnn::create_reader_datamovement_config(arch),
+    };
+
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_h_large.cpp",
+        .dfb_bindings =
+            {DFBBinding{
                  .dfb_spec_name = MAX_SCALER,
                  .accessor_name = "max_scaler",
                  .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{
                  .dfb_spec_name = SUM_SCALER,
                  .accessor_name = "sum_scaler",
-                 .endpoint_type = DFBEndpointType::PRODUCER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
-    };
-
-    reader.advanced_options.compile_time_varargs = reader_reduce_args;
-
-    KernelSpec writer{
-        .unique_id = WRITER,
-        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_h_large.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset", "Ht", "Wt"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
+    writer.advanced_options.compile_time_varargs = writer_reduce_args;
 
     KernelSpec::CompilerOptions::Defines compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {

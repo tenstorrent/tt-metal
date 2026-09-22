@@ -31,7 +31,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "layernorm_dataflow_utils.h"
@@ -100,9 +99,6 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.
-    using ReduceAuxiliary =
-        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<ReduceAuxiliary>();
     const uint32_t eps = get_arg(args::eps);
     DataflowBuffer dfb_eps(dfb::eps);
     generate_bcast_col_scalar(dfb_eps, eps);

@@ -126,8 +126,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
             {
                 DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
                 DFBBinding{.dfb_spec_name = IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+
             },
         .tensor_bindings =
             {
@@ -137,7 +136,6 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = create_reader_datamovement_config(device->arch()),
     };
-    reader.advanced_options.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args();
 
     // ----- Writer kernel -----
     KernelSpec writer{
@@ -145,6 +143,9 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
         .source = WRITER_KERNEL_PATH,
         .dfb_bindings =
             {
+                DFBBinding{
+                    .dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+
                 DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .tensor_bindings =
@@ -154,6 +155,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = create_writer_datamovement_config(device->arch()),
     };
+    writer.advanced_options.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args();
 
     // ----- Compute kernel -----
     KernelSpec compute{

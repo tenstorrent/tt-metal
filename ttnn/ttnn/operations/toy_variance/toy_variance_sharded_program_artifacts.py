@@ -238,12 +238,10 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
         hw_config=ttnn.create_reader_dm_config(),
         dfb_bindings=[
             ttnn.producer_of(DFB_IN_SHARD, DFB_IN_SHARD),
-            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
             ttnn.consumer_of(DFB_MEAN_SRC, DFB_MEAN_SRC),
             ttnn.producer_of(DFB_MEAN, DFB_MEAN),
         ],
         compile_time_args=shape_args,
-        advanced_options=ttnn.KernelAdvancedOptions(compile_time_varargs=auxiliary_args),
         runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["is_root"]),
     )
 
@@ -276,7 +274,9 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
         unique_id=K_WRITER,
         source=str(KERNEL_DIR / "sharded_writer.cpp"),
         hw_config=ttnn.create_writer_dm_config(),
+        advanced_options=ttnn.KernelAdvancedOptions(compile_time_varargs=auxiliary_args),
         dfb_bindings=[
+            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
             ttnn.consumer_of(DFB_PARTIAL, DFB_PARTIAL),
             ttnn.producer_of(DFB_GATHER_MEAN, DFB_GATHER_MEAN),
             ttnn.producer_of(DFB_GATHER_VAR, DFB_GATHER_VAR),

@@ -89,7 +89,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
     const KernelSpec::CompilerOptions::Defines auxiliary_defines{
         {"REDUCE_AUXILIARY_CB", auxiliary ? "dfb::scaler" : "ttnn::kernel_lib::reduce_plan_args::no_cb_id"}};
     const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
-    const auto reader_reduce_args =
+    const auto writer_reduce_args =
         reduce_host::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_DFB,
@@ -124,17 +124,9 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
     };
-    if (auxiliary) {
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = SCALER_DFB,
-            .accessor_name = "scaler",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-    }
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_h.cpp",
-        .compiler_options = {.defines = auxiliary_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args =
@@ -145,22 +137,32 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
             },
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = reader_reduce_args},
     });
+
+    Group<DFBBinding> writer_dfb_bindings = {DFBBinding{
+        .dfb_spec_name = OUT_DFB,
+        .accessor_name = "out",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    }};
+    if (auxiliary) {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = SCALER_DFB,
+            .accessor_name = "scaler",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
 
     // ---- Writer kernel ----
     spec.kernels.push_back(KernelSpec{
         .unique_id = WRITER,
         .source =
             "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_unary_interleaved_start_id.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
+        .compiler_options = {.defines = auxiliary_defines},
+        .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = writer_reduce_args},
     });
 
     // ---- Compute kernels (two groups) ----

@@ -411,7 +411,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     rh::ReduceCallArgs(pool_plan, {cb_id[cb_acc_strip_arg], cb_id[cb_scaler_arg], cb_id[cb_out_strip_arg]})
         .append_to(compute_ct);
-    rh::ReduceAuxiliaryArgs({cb_id[cb_scaler_arg], pool_plan.auxiliary_tiles}).append_to(reader_ct);
+    rh::ReduceAuxiliaryArgs({cb_id[cb_scaler_arg], pool_plan.auxiliary_tiles}).append_to(writer_ct);
 
     auto reader_id = tt::tt_metal::CreateKernel(
         program, kdir + "reader_indexer_score.cpp", core_ranges, tt::tt_metal::ReaderDataMovementConfig(reader_ct));

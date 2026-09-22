@@ -179,7 +179,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{reduce_auxiliary_dfb, "reduce_auxiliary", m2::DFBEndpointType::PRODUCER},
+
                 m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
@@ -193,7 +193,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
-        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     m2::KernelSpec writer{
@@ -203,6 +202,8 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             "writer_prepare_chunk_recurrence.cpp",
         .dfb_bindings =
             {
+                m2::DFBBinding{reduce_auxiliary_dfb, "reduce_auxiliary", m2::DFBEndpointType::PRODUCER},
+
                 m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{t_inv_dfb, "t_inv", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{kd_dfb, "kd", m2::DFBEndpointType::CONSUMER},
@@ -224,6 +225,8 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
+
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);

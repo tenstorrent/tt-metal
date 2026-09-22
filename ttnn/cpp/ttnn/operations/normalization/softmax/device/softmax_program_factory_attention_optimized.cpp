@@ -348,10 +348,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     // ---- Reader kernel ----
     Group<DFBBinding> reader_bindings = {
         DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{
-            .dfb_spec_name = MAX_SCALER, .accessor_name = "max_scaler", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{
-            .dfb_spec_name = SUM_SCALER, .accessor_name = "sum_scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+
     };
     Group<TensorBinding> reader_tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}};
     std::vector<std::string> reader_rta_names = {"blk", "num_rows", "tile_offset", "Wt"};
@@ -395,7 +392,6 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
-        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
 
     // ---- Writer kernel ----
@@ -404,7 +400,15 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .source =
             std::string(SOFTMAX_KERNEL_PATH_ATTENTION) + "/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp",
         .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER},
+            {DFBBinding{
+                 .dfb_spec_name = MAX_SCALER,
+                 .accessor_name = "max_scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = SUM_SCALER,
+                 .accessor_name = "sum_scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{
                  .dfb_spec_name = MASK_PADDED,
                  .accessor_name = "mask_padded",
@@ -413,6 +417,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .compile_time_args = {{"num_datum_padded", num_datum_padded}, {"tile_hw", tile_height * tile_width}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "blk", "mask_padded_data", "Wt"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_auxiliary_args},
     };
 
     // for broadcasting in H direction we need to

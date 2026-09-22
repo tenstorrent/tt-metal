@@ -8,7 +8,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 // Height-sharded W-reduce reader (mirror of the width-sharded H reader
@@ -24,8 +23,6 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
 
 #ifdef REDUCE_SCALER
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 #endif
 
     constexpr uint32_t onetile = 1;

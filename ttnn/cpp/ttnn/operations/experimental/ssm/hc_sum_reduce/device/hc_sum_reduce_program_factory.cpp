@@ -66,8 +66,7 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
         {.arch = tensor_args.input.device()->arch()},
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
     reduce_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::NONE;
-    std::vector<uint32_t> reader_compile_time_args =
-        reduce_host::ReduceAuxiliaryArgs({scalar_cb_id, reduce_plan.auxiliary_tiles}).get_compile_time_args();
+    std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         intermed_cb_id1,
@@ -75,6 +74,7 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
         output_cb_id,
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
+    reduce_host::ReduceAuxiliaryArgs({scalar_cb_id, reduce_plan.auxiliary_tiles}).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         input_cb_id,
         scalar_cb_id,

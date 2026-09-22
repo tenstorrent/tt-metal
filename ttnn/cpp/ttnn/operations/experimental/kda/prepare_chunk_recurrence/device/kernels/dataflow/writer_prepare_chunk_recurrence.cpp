@@ -10,7 +10,13 @@
 #include "experimental/kernel_args.h"
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count) {
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::reduce_auxiliary>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;

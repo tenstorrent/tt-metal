@@ -206,8 +206,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .data_format_metadata = input_cb_data_format,
     });
 
-    // The reader fills one scalar entry on every reduce dim, but no welford compute kernel reads it
-    // (the user scalar is applied post-reduction via WELFORD_POST_MUL instead), so the reader is this
+    // The writer fills one scalar entry on every reduce dim, but no welford compute kernel reads it
+    // (the user scalar is applied post-reduction via WELFORD_POST_MUL instead), so the writer is this
     // buffer's only toucher.
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALAR_DFB,
@@ -344,7 +344,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .source = reader_source,
         .compiler_options = {.defines = KernelSpec::CompilerOptions::Defines(reduce_defines)},
         // The two readers are shared with the Reduce factories, so their accessor names are the
-        // shared kernels' vocabulary (in0 / scaler), not this factory's local naming.
+        // shared kernels' vocabulary (in0), not this factory's local naming.
         .dfb_bindings =
             {
                 DFBBinding{
@@ -352,24 +352,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                // Self-loop: no welford compute kernel reads the scalar entry, so the reader is its
-                // only toucher.
-                DFBBinding{
-                    .dfb_spec_name = SCALAR_DFB,
-                    .accessor_name = "scaler",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = SCALAR_DFB,
-                    .accessor_name = "scaler",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = auxiliary_args},
     });
 
     // --- Writer kernel ---
@@ -437,6 +424,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         writer_defines = KernelSpec::CompilerOptions::Defines(reduce_defines);
     }
 
+    writer_dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = SCALAR_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER});
+    writer_dfb_bindings.push_back(
+        DFBBinding{.dfb_spec_name = SCALAR_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER});
+    writer_defines.emplace("REDUCE_AUXILIARY_CB", "dfb::scaler");
     spec.kernels.push_back(KernelSpec{
         .unique_id = WRITER,
         .source = writer_source,
@@ -446,6 +438,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .compile_time_args = std::move(writer_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     });
 
     // --- Compute kernels ---

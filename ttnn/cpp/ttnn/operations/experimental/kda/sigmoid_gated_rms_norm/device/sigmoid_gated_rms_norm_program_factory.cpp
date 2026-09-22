@@ -116,7 +116,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{X_DFB, "x", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::PRODUCER},
+
                 m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
@@ -128,7 +128,6 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}, {"epsilon_bits", eps_bits}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
-        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     m2::KernelSpec writer{
@@ -136,11 +135,15 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
             "writer_sigmoid_gated_rms_norm.cpp",
-        .dfb_bindings = {m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::PRODUCER},
+             m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{OUTPUT, "output"}},
         .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
+
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     };
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);

@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -21,8 +20,6 @@ void kernel_main() {
     // Constants
     constexpr auto dfb_in = dfb::in;
     constexpr auto dfb_mask = dfb::mask;
-    constexpr auto dfb_max_scaler = dfb::max_scaler;
-    constexpr auto dfb_sum_scaler = dfb::sum_scaler;
 
     // Ublocks size defined in tiles
     constexpr std::uint32_t onetile = 1;
@@ -30,14 +27,6 @@ void kernel_main() {
     // Input tensor
     constexpr bool is_fp32 = get_arg(args::is_fp32) == 1;
     const auto src_in = TensorAccessor(tensor::src);
-
-    using MaxAuxiliary =
-        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb_max_scaler>;
-    using SumAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
-        ttnn::kernel_lib::ReduceAuxiliaryArgs<MaxAuxiliary::next_compile_time_args_offset()>,
-        dfb_sum_scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAuxiliary>();
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
 
     // Generate mask tile
     const DataflowBuffer dfb_mask_obj(dfb_mask);

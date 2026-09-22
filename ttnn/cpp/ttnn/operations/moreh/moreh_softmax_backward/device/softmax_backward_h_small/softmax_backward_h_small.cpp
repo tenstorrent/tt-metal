@@ -76,7 +76,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create_program
 
     const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
-    const auto reader_reduce_args =
+    const auto writer_reduce_args =
         reduce_host::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
 
     // create read/write kernel
@@ -97,11 +97,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create_program
                     .accessor_name = "dy",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = SCALER_DFB,
-                    .accessor_name = "scaler",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
+
             },
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "y"},
@@ -110,20 +106,25 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create_program
         .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     };
 
-    reader_spec.advanced_options.compile_time_varargs = reader_reduce_args;
-
     KernelSpec writer_spec{
         .unique_id = WRITER_KERNEL,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/writer_moreh_softmax_h.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = DX_DFB,
-            .accessor_name = "out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = SCALER_DFB,
+                 .accessor_name = "scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = DX_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_GRAD_TENSOR, .accessor_name = "dx"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "tile_offset", "Ht", "Wt"}},
         .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
     };
+    writer_spec.advanced_options.compile_time_varargs = writer_reduce_args;
 
     // create compute kernel
     auto compute_hw_config = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);

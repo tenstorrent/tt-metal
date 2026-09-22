@@ -351,7 +351,6 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     TensorAccessorArgs(*partial.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*pending.buffer()).append_to(reader_ct_args);
-    rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).append_to(reader_ct_args);
 
     const auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -366,6 +365,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     TensorAccessorArgs(*mass.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*total.buffer()).append_to(writer_ct_args);
+    rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).append_to(writer_ct_args);
 
     const auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

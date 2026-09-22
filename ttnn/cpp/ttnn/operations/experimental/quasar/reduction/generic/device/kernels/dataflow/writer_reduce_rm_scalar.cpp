@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -49,6 +51,8 @@ void reduce_rm_writer() {
     //
     constexpr uint32_t datum_bytes = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 1 : 4>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<dst_args.next_compile_time_args_offset()>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     constexpr uint32_t cb_id_tile = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;

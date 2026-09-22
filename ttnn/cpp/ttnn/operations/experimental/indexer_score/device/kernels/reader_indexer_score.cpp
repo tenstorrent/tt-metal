@@ -626,11 +626,6 @@ void kernel_main() {
     // argument reads behind if constexpr, so the regular binary never touches slots 27+.
     const auto run = [&](const FusedRingGate* gate) {
         build_mask_tiles(noc);
-        if constexpr (block_pool) {
-            using Auxiliary =
-                ttnn::kernel_lib::ReduceAuxiliaryArgs<decltype(slot_meta_args)::next_compile_time_args_offset()>;
-            dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
-        }
 
         WorkUnitSpan span;
         span.set_valid_k_len_tiles(kv_len_tiles);

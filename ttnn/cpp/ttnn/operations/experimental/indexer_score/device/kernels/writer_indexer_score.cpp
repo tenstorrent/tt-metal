@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 // Writer for indexer_score: drains compute's output and scatters it row-major (page = row; future keys
 // pre-stamped -inf). Loops num_out_groups planes (page offset g*Sq). block_size==0: scatter each untilized
 // KC strip's 32 rows. block_size>0: extract per-query block maxes from the pooled tiles' col 0, force each
@@ -195,6 +197,11 @@ inline void write_pooled_strip(
 }
 
 void kernel_main() {
+    if constexpr (block_pool) {
+        using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<metadata_args_base + 2>;
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+    }
+
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     // Banded schedule (matches reader/compute): group-phase x band rectangle.
     const uint32_t row_group0 = get_arg_val<uint32_t>(1);

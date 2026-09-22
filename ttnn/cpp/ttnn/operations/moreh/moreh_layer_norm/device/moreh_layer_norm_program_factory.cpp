@@ -256,13 +256,13 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     KernelDescriptor::CompileTimeArgs reader_compile_time_args{block_size};
-    moment_sequence.append_auxiliary_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args{
         static_cast<uint32_t>(mean_has_value), static_cast<uint32_t>(rstd_has_value), block_size};
+    moment_sequence.append_auxiliary_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output->buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(mean_as_tensor ? mean_as_tensor->buffer() : nullptr)
         .append_to(writer_compile_time_args);

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -22,14 +21,12 @@ void kernel_main() {
     const auto cb_id_decimal = cb_id++;
     const auto cb_id_mask_h_w = cb_id++;
 
-    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
-    constexpr auto input_args = TensorAccessorArgs<Auxiliary::next_compile_time_args_offset()>();
+    constexpr auto input_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(input_args, input_addr);
 
     DataflowBuffer dfb_decimal(cb_id_decimal);
     DataflowBuffer dfb_mask_h_w(cb_id_mask_h_w);
     fill_cb_with_value(dfb_decimal, decimal);
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     generate_mask_h_w_if_needed(dfb_mask_h_w, origin_h, origin_w);
 
     constexpr uint32_t onetile = 1;

@@ -161,31 +161,33 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = SCALER_DFB,
-                    .accessor_name = "scaler",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
+
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_TENSOR, .accessor_name = "src0"}},
         // `batch_num` names the kernel-side local it lands in; the value is batch_num * Ht, the
         // number of tiles in one full column.
         .runtime_arg_schema = {.runtime_arg_names = {"batch_num", "Wt", "Wt_per_core", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
-        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     });
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = SCALER_DFB,
+                 .accessor_name = "scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = BIAS_GRAD_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     });
 
     ////////////////////////////////////////////////////////////////////////////

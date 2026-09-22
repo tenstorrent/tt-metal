@@ -56,8 +56,6 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for reduce scalar
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::reduce>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     if (is_merge_core) {
         dataflow_kernel_lib::prepare_zero_tile<dfb::zero>();
     }

@@ -74,7 +74,6 @@ def create_program_descriptor(
         )
 
     reader_ct_args = [plan.Ht, plan.Wt, plan.batches, plan.chunk.output_tiles, int(reduce_row)]
-    sequence.append_auxiliary_to(reader_ct_args)
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_rt_args = ttnn.RuntimeArgs()
     reader_rt_args[core.x][core.y] = [input_tensor.buffer_address(), 0]
@@ -88,6 +87,7 @@ def create_program_descriptor(
 
     writer_ct_args = [output_tensor.buffer_num_pages()]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    sequence.append_auxiliary_to(writer_ct_args)
     writer_rt_args = ttnn.RuntimeArgs()
     writer_rt_args[core.x][core.y] = [output_tensor.buffer_address(), 0]
     writer_kernel = ttnn.KernelDescriptor(

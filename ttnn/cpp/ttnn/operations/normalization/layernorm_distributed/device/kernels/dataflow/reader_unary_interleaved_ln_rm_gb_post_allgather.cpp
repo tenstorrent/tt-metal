@@ -9,7 +9,6 @@
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
@@ -98,10 +97,6 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-#ifndef USE_WELFORD
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::reduce>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
-#endif
     const auto eps = get_arg(args::eps);
     // generate_bcast_col_scalar is a shared kernel-pool helper that still takes a CircularBuffer by
     // value, so the handle is wrapped here at the call site rather than passed as a DataflowBuffer.

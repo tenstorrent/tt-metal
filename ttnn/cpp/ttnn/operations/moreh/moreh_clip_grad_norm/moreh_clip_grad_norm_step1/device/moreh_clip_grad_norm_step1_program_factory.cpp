@@ -211,17 +211,6 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor::CompileTimeArgs writer_ct_args;
-    TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(writer_ct_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = WRITER_KERNEL_PATH;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_group_1;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.runtime_args.reserve(num_cores_to_be_used);
-
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
@@ -237,7 +226,7 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
 
         const auto& reduction = reductions.at(i);
         const CoreRangeSet core_range{CoreRange{core, core}};
-        auto reader_ct_args = reduction.get_auxiliary_compile_time_args();
+        KernelDescriptor::CompileTimeArgs reader_ct_args;
         TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
         KernelDescriptor reader_desc;
         reader_desc.kernel_source = READER_KERNEL_PATH;
@@ -249,8 +238,16 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
             core, {input.buffer(), num_tiles, std::bit_cast<uint32_t>(decimal), origin_h, origin_w});
         desc.kernels.push_back(std::move(reader_desc));
 
-        // writer
+        auto writer_ct_args = reduction.get_auxiliary_compile_time_args();
+        TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(writer_ct_args);
+        KernelDescriptor writer_desc;
+        writer_desc.kernel_source = WRITER_KERNEL_PATH;
+        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_desc.core_ranges = core_range;
+        writer_desc.compile_time_args = std::move(writer_ct_args);
+        writer_desc.config = WriterConfigDescriptor{};
         writer_desc.emplace_runtime_args(core, {tmp_pow_sum.buffer(), tile_offset});
+        desc.kernels.push_back(std::move(writer_desc));
 
         KernelDescriptor compute_desc;
         compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
@@ -267,8 +264,6 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
         desc.kernels.push_back(std::move(compute_desc));
         tile_offset++;
     }
-
-    desc.kernels.push_back(std::move(writer_desc));
 
     return desc;
 }

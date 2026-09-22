@@ -171,11 +171,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
             .accessor_name = "in0",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-        DFBBinding{
-            .dfb_spec_name = SCALER_DFB,
-            .accessor_name = "scaler",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
+
     };
     KernelSpec::CompilerOptions::Defines reader_defines;
     if (do_mask_h_w) {
@@ -197,20 +193,26 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "start_id", "mask_h", "mask_w", "do_mask_h", "do_mask_w"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
-        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     });
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = SCALER_DFB,
+                 .accessor_name = "scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = BIAS_GRAD_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduce_sequence.get_auxiliary_compile_time_args()},
     });
 
     ////////////////////////////////////////////////////////////////////////////

@@ -94,7 +94,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
     const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
-    const auto reader_reduce_args =
+    const auto writer_reduce_args =
         reduce_host::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = INPUT_DFB,
@@ -127,11 +127,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
             .accessor_name = "input",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-        DFBBinding{
-            .dfb_spec_name = SCALER_DFB,
-            .accessor_name = "scaler",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
+
     };
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
@@ -148,21 +144,27 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
             },
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.compile_time_varargs = reader_reduce_args},
     });
 
     // ---- Writer kernel ----
     spec.kernels.push_back(KernelSpec{
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/writer_moreh_sum_h.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = OUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = SCALER_DFB,
+                 .accessor_name = "scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = writer_reduce_args},
     });
 
     // ---- Compute kernels (two groups) ----

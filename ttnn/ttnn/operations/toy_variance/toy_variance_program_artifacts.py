@@ -199,14 +199,12 @@ def create_program_artifacts(
         hw_config=ttnn.create_reader_dm_config(),
         dfb_bindings=[
             ttnn.producer_of(DFB_IN, DFB_IN),
-            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
         ],
         tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
         compile_time_args={
             **shape_args,
             "auxiliary_tiles": len(sequence.auxiliary.tiles),
         },
-        advanced_options=ttnn.KernelAdvancedOptions(compile_time_varargs=auxiliary_args),
     )
 
     compute = ttnn.KernelSpec(
@@ -238,7 +236,8 @@ def create_program_artifacts(
         unique_id=K_WRITER,
         source=str(KERNEL_DIR / "writer.cpp"),
         hw_config=ttnn.create_writer_dm_config(),
-        dfb_bindings=[ttnn.consumer_of(DFB_OUT, DFB_OUT)],
+        advanced_options=ttnn.KernelAdvancedOptions(compile_time_varargs=auxiliary_args),
+        dfb_bindings=[ttnn.producer_of(DFB_SCALER, DFB_SCALER), ttnn.consumer_of(DFB_OUT, DFB_OUT)],
         tensor_bindings=[ttnn.TensorBinding(TP_OUT, TP_OUT)],
         compile_time_args={"num_tiles": output_tensor.buffer_num_pages()},
     )

@@ -10,7 +10,17 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+    using MaxAuxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::max_scaler>;
+    using SumAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<MaxAuxiliary::next_compile_time_args_offset()>,
+        dfb::sum_scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAuxiliary>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
+
     using namespace tt::constants;
 
     const std::uint32_t num_tiles = get_arg(args::num_tiles);

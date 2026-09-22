@@ -27,7 +27,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t Ht = get_arg(args::Ht);
@@ -39,9 +38,6 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in_tiles);
     const auto acc_in = TensorAccessor(tensor::in);
     const uint32_t tile_bytes = dfb_in.get_tile_size();
-
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     for (uint32_t pass = 0; pass < 2; ++pass) {
         for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {

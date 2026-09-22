@@ -13,16 +13,12 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
     const uint32_t start_id = get_arg(args::start_id);
-
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto tensor_accessor = TensorAccessor(tensor::input);
 
