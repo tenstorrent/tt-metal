@@ -43,7 +43,7 @@ class FusedAttention:
             memory_config=layer.decode_inputs["o"],
         )
 
-    def append(self, program, inputs, projection_cores):
+    def append(self, program, inputs, projection_cores, *, wait_for_kv=False):
         q, k, v, position, table = inputs
         if tuple(q.shape) != (1, 1, 8, 128) or q.dtype != ttnn.bfloat16:
             raise ValueError("Attention composition requires one BF16 query with eight heads")
@@ -78,6 +78,8 @@ class FusedAttention:
         if len(offsets) != 1:
             raise ValueError("Unexpected native SDPA writer runtime argument layout")
         reader.runtime_args = reader_rt
+        if wait_for_kv:
+            reader.kernel_source = str(Path(__file__).with_name("kernels") / "attention_reader.cpp")
         writer.runtime_args = writer_rt
         writer.kernel_source = str(Path(__file__).with_name("kernels") / "attention_writer.cpp")
         writer.defines = [
@@ -107,4 +109,9 @@ class FusedAttention:
             ttnn.SemaphoreDescriptor(id=3, core_ranges=self.grid, initial_value=0),
             ttnn.SemaphoreDescriptor(id=14, core_ranges=_grid(projection_cores), initial_value=0),
         ]
+        if wait_for_kv:
+            program.semaphores = [
+                *program.semaphores,
+                ttnn.SemaphoreDescriptor(id=4, core_ranges=self.grid, initial_value=0),
+            ]
         return program

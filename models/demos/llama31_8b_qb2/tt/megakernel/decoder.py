@@ -13,6 +13,22 @@ from .swiglu import fused_swiglu
 
 class ExperimentalDecoder(LlamaDecoder):
     def decode_forward(self, x, *, current_pos, page_table, kv_cache, rotary_pos=None):
+        if self.fusion_mode == "decoder":
+            self._validate_cache(page_table, kv_cache)
+            if tuple(x.shape) != (1, 1, 1, self.hidden):
+                raise ValueError("Complete fused layer supports batch one")
+            if tuple(current_pos.shape) != (1,) or current_pos.dtype != ttnn.int32 or page_table.shape[0] != 1:
+                raise ValueError("Expected one device position and page-table row")
+            residual = ttnn.to_memory_config(x, self.local_residual_memcfg)
+            pages_per_chunk = max(1, 256 // self.page_size)
+            tail_pages = (-page_table.shape[1]) % pages_per_chunk
+            table = ttnn.pad(page_table, ((0, 0), (0, tail_pages)), value=0) if tail_pages else page_table
+            return self.fused_body(
+                residual,
+                self.fused_layer_index,
+                residual=residual,
+                cache_inputs=(*kv_cache, current_pos, table, current_pos if rotary_pos is None else rotary_pos),
+            )
         if self.fusion_mode != "attention_tail":
             return super().decode_forward(
                 x, current_pos=current_pos, page_table=page_table, kv_cache=kv_cache, rotary_pos=rotary_pos
@@ -69,6 +85,7 @@ class ExperimentalDecoder(LlamaDecoder):
             "gather_norm_mlp_tail",
             "post_attention",
             "attention_tail",
+            "decoder",
         ):
             local_down = self.fused_body(
                 normalized,
@@ -76,7 +93,14 @@ class ExperimentalDecoder(LlamaDecoder):
                 residual=(
                     residual
                     if self.fusion_mode
-                    in ("mlp_tail", "norm_mlp_tail", "gather_norm_mlp_tail", "post_attention", "attention_tail")
+                    in (
+                        "mlp_tail",
+                        "norm_mlp_tail",
+                        "gather_norm_mlp_tail",
+                        "post_attention",
+                        "attention_tail",
+                        "decoder",
+                    )
                     else None
                 ),
             )
@@ -86,6 +110,7 @@ class ExperimentalDecoder(LlamaDecoder):
                 "gather_norm_mlp_tail",
                 "post_attention",
                 "attention_tail",
+                "decoder",
             ):
                 return local_down
             down = local_down if self.fusion_mode == "mlp_reduce" else self._rs(local_down, decode=True, site="down")
@@ -117,6 +142,7 @@ def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8
         "gather_norm_mlp_tail",
         "post_attention",
         "attention_tail",
+        "decoder",
     ):
         raise ValueError(f"Unknown experimental decode mode: {mode}")
     if not layers or any(layer.decode_workspace.batch != 1 for layer in layers):
@@ -126,11 +152,20 @@ def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8
             layers,
             reuse_scratch=reuse_scratch,
             fuse_reduce=mode
-            in ("mlp_reduce", "mlp_tail", "norm_mlp_tail", "gather_norm_mlp_tail", "post_attention", "attention_tail"),
-            fuse_norm=mode in ("norm_mlp_tail", "gather_norm_mlp_tail", "post_attention", "attention_tail"),
-            fuse_gather=mode in ("gather_norm_mlp_tail", "post_attention", "attention_tail"),
-            fuse_output=mode in ("post_attention", "attention_tail"),
-            fuse_attention=mode == "attention_tail",
+            in (
+                "mlp_reduce",
+                "mlp_tail",
+                "norm_mlp_tail",
+                "gather_norm_mlp_tail",
+                "post_attention",
+                "attention_tail",
+                "decoder",
+            ),
+            fuse_norm=mode in ("norm_mlp_tail", "gather_norm_mlp_tail", "post_attention", "attention_tail", "decoder"),
+            fuse_gather=mode in ("gather_norm_mlp_tail", "post_attention", "attention_tail", "decoder"),
+            fuse_output=mode in ("post_attention", "attention_tail", "decoder"),
+            fuse_attention=mode in ("attention_tail", "decoder"),
+            fuse_prepare=mode == "decoder",
             gu_workers=gu_workers,
         )
         if mode != "swiglu"

@@ -64,6 +64,7 @@ def copy_to(value, target, mesh):
         ("gather_norm_mlp_tail", False),
         ("post_attention", False),
         ("attention_tail", False),
+        ("decoder", False),
     ],
     ids=[
         "swiglu",
@@ -75,6 +76,7 @@ def copy_to(value, target, mesh):
         "gather_norm_mlp_tail",
         "post_attention",
         "attention_tail",
+        "decoder",
     ],
 )
 def test_fused_layer_real_weights(qb2_mesh, mode, reuse_scratch):

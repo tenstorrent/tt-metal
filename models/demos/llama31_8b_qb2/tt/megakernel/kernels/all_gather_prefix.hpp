@@ -3,7 +3,7 @@
 // Included inside the native minimal-direct writer after its invocation-start
 // barrier. Reuse its open fabric connections and packet headers for all-gather
 // before the downstream normalization/MLP/reduction phases consume them.
-#ifdef FUSE_OUTPUT
+#if defined(FUSE_OUTPUT) && !defined(FUSE_PREPARE)
 if (invocation & 1u)
 #endif
 {
@@ -54,15 +54,20 @@ if (invocation & 1u)
     // normalization. Native init_sync protects the single receive generation.
     if (tile_start == 0) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready), (
-#ifdef FUSE_OUTPUT
+#if defined(FUSE_OUTPUT) && !defined(FUSE_PREPARE)
             invocation / 2 + 1
 #else
             invocation + 1
 #endif
             ) * 8);
         for (uint32_t worker = 0; worker < 8; ++worker) {
-            const uint32_t x = get_arg_val<uint32_t>(AG_RT_OFFSET + 4 + 2 * worker);
-            const uint32_t y = get_arg_val<uint32_t>(AG_RT_OFFSET + 5 + 2 * worker);
+#ifdef FUSE_PREPARE
+            const uint32_t phase_offset = (invocation & 1u) ? 0 : 16;
+#else
+            constexpr uint32_t phase_offset = 0;
+#endif
+            const uint32_t x = get_arg_val<uint32_t>(AG_RT_OFFSET + 4 + phase_offset + 2 * worker);
+            const uint32_t y = get_arg_val<uint32_t>(AG_RT_OFFSET + 5 + phase_offset + 2 * worker);
             noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(12)), 1);
         }
         noc_async_atomic_barrier();

@@ -133,3 +133,16 @@ loop with weight/KV tables and embedding/head/sampling boundary. Current32
 layer calls are captured by a host trace: this is not yet a full decoder
 megakernel. Prefill remains native; batch>1, serving, persistent multi-token
 execution and broad accuracy are unqualified.
+
+## Compiler-only complete layer (15:20 UTC)
+
+Uncommitted `decoder` mode additionally includes first all-gather/RMSNorm,
+QKV projection, native RoPE arithmetic and native BFP8 paged-cache update
+conversion sequence. One mesh program now contains the complete single layer.
+It consults device position/page table on every invocation. Current SFPI mock
+compile/link/cache-row reuse passes (`compile-mock-decoder-v4.log`); maximum
+configuration49,488B including47,872B kernel text. **Still no hardware execution
+of new stages due to the ownership conflict.** Layer-loop/model boundary remains
+to implement; source progress continues using current cross-RISC CB-reset APIs.
+Parent receipt15:16 confirms compiler checkpoint8ee5264a pushed to the requested
+branch and conflict escalated to Mark.

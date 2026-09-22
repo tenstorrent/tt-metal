@@ -57,6 +57,7 @@ def parse_args():
             "gather_norm_mlp_tail",
             "post_attention",
             "attention_tail",
+            "decoder",
         ),
         required=True,
     )

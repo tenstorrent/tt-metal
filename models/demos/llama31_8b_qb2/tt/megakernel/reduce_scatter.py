@@ -48,6 +48,7 @@ class CompactReduceScatter:
         gathered=None,
         norm_cores=(),
         fuse_output=False,
+        pre_norm_cores=(),
     ):
         if tuple(input_tensor.shape) != (1, 1, 1, 4096) or input_tensor.dtype != ttnn.bfloat16:
             raise ValueError("Expected BF16 batch-one four-way reduction input")
@@ -75,6 +76,10 @@ class CompactReduceScatter:
                 ("FUSED_PREFIX_HEADER", '"models/demos/llama31_8b_qb2/tt/megakernel/kernels/all_gather_prefix.hpp"'),
                 ("AG_CT_OFFSET", str(gather_ct_offset)),
             ]
+        if pre_norm_cores:
+            if len(pre_norm_cores) != 8 or not fuse_output:
+                raise ValueError("Preparation needs eight norm workers and two reduction phases")
+            writer_defines.append(("FUSE_PREPARE", "1"))
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         kernel_base = len(program.kernels)
         additions = [
@@ -201,7 +206,7 @@ class CompactReduceScatter:
             if gathered is not None:
                 gather_rt_offset = len(args)
                 coordinator = self.mesh.worker_core_from_logical_core(self.cores[0])
-                coords = [self.mesh.worker_core_from_logical_core(c) for c in norm_cores]
+                coords = [self.mesh.worker_core_from_logical_core(c) for c in (*norm_cores, *pre_norm_cores)]
                 args.extend(
                     [
                         gathered.buffer_address(),

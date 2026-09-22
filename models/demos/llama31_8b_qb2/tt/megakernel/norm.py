@@ -9,10 +9,10 @@ from .mlp import _grid
 
 
 class FusedNorm:
-    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False):
+    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False, cores=None, output=None):
         self.mesh = mesh
         self.epsilon = struct.unpack("I", struct.pack("f", epsilon))[0]
-        self.cores = [ttnn.CoreCoord(x, 5) for x in range(8)]
+        self.cores = list(cores) if cores is not None else [ttnn.CoreCoord(x, 5) for x in range(8)]
         self.grid = _grid(self.cores)
         self.debug = {}
         if debug:
@@ -26,12 +26,16 @@ class FusedNorm:
                     device=mesh,
                     memory_config=_width_memory(self.cores, 4096 if index in (0, 5) else 256),
                 )
-        self.output = ttnn.empty(
-            (1, 1, 1, 4096),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=output_memory_config,
+        self.output = (
+            output
+            if output is not None
+            else ttnn.empty(
+                (1, 1, 1, 4096),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=output_memory_config,
+            )
         )
 
     def append(self, program, input_tensor, projection_cores=(), *, wait_for_gather=False):

@@ -46,6 +46,7 @@ class FusedMLP:
         fuse_gather=False,
         fuse_output=False,
         fuse_attention=False,
+        fuse_prepare=False,
     ):
         if not layers or len(layers) > 32:
             raise ValueError("Provide one to 32 decoder layers")
@@ -58,6 +59,9 @@ class FusedMLP:
         self.fuse_norm = fuse_norm
         self.fuse_gather = fuse_gather
         self.fuse_output = fuse_output
+        self.fuse_prepare = fuse_prepare
+        if fuse_prepare and not fuse_attention:
+            raise ValueError("Complete layer composition requires attention composition")
         self.fuse_attention = fuse_attention
         if fuse_attention and not fuse_output:
             raise ValueError("Attention composition requires the full post-attention body")
@@ -104,6 +108,8 @@ class FusedMLP:
                 ("gate_up", (4096, 7168), ttnn.bfloat4_b),
                 ("down", (3584, 4096), ttnn.bfloat8_b),
             ) + ((("o", (1024, 4096), ttnn.bfloat8_b),) if fuse_output else ())
+            if fuse_prepare:
+                roles += (("qkv", (4096, 1536), ttnn.bfloat8_b),)
             for role, shape, dtype in roles:
                 weight = layer.decode_weights[role]
                 if tuple(weight.shape) != shape or weight.dtype != dtype:
@@ -141,6 +147,11 @@ class FusedMLP:
             from .attention import FusedAttention
 
             self.attention_stage = FusedAttention(layers[0])
+        self.preparation = None
+        if fuse_prepare:
+            from .prepare import FusedPreparation
+
+            self.preparation = FusedPreparation(self)
         self.reduction = None
         if fuse_reduce:
             from .reduce_scatter import CompactReduceScatter
@@ -179,6 +190,8 @@ class FusedMLP:
             addresses[i, 1] = layer.decode_weights["down"].buffer_address()
             if fuse_output:
                 addresses[i, 2] = layer.decode_weights["o"].buffer_address()
+            if fuse_prepare:
+                addresses[i, 3] = layer.decode_weights["qkv"].buffer_address()
         self.address_table = ttnn.from_torch(
             addresses,
             dtype=ttnn.uint32,
@@ -327,9 +340,11 @@ class FusedMLP:
         ]
         return ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
 
-    def __call__(self, normalized, layer_index, residual=None, attention_inputs=None):
+    def __call__(self, normalized, layer_index, residual=None, attention_inputs=None, cache_inputs=None):
         if residual is not None and self.reduction is None:
             raise ValueError("Residual fusion requires four-chip reduction")
+        if self.preparation is not None:
+            attention_inputs = (self.preparation.heads[0], *cache_inputs[:4])
         attention = self.attention_stage.output if self.fuse_attention else normalized if self.fuse_output else None
         norm_input = self.gather_output if self.fuse_gather else normalized
         if self.normalizer is not None:
@@ -348,7 +363,11 @@ class FusedMLP:
                         local, norm_input, self.projection_cores, wait_for_gather=self.fuse_gather
                     )
                 if self.attention_stage is not None:
-                    local = self.attention_stage.append(local, attention_inputs, self.projection_cores)
+                    local = self.attention_stage.append(
+                        local, attention_inputs, self.projection_cores, wait_for_kv=self.fuse_prepare
+                    )
+                if self.preparation is not None:
+                    local = self.preparation.append(local, layer_index, cache_inputs)
                 descriptor[ttnn.MeshCoordinateRange(coord, coord)] = self.reduction.append(
                     local,
                     self.output,
@@ -358,10 +377,13 @@ class FusedMLP:
                     gathered=self.gather_output,
                     norm_cores=self.norm_cores,
                     fuse_output=self.fuse_output,
+                    pre_norm_cores=self.preparation.norm_cores if self.preparation is not None else (),
                 )
         # Keep every table-referenced weight resident; the returned scratch is
         # consumed by reduce-scatter before the next decoder invokes this body.
         io = [normalized, self.address_table, self.packed, self.product, *self.scratch_storage]
+        if self.preparation is not None:
+            io.extend(self.preparation.tensors(cache_inputs))
         if self.attention_stage is not None:
             io.extend([*attention_inputs, self.attention_stage.heads])
         if self.fuse_output:
