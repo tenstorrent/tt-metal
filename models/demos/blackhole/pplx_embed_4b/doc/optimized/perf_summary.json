@@ -29,11 +29,12 @@
     "Embeddings": 0.03
   },
   "named_limitations": [
-    "bs>=8 unimproved: the batched path runs minimal_matmul, which none of these changes reach (bs32 device 684.20 -> 674.09 ms, matmul 371.96 -> 371.75 ms = noise)",
-    "matmul is now 69-70% of measured BFP4/LoFi peak at bs=1 with no row marked SLOW, so matmul tuning is near exhausted; the remaining 45% is SDPA/LayerNorm/BinaryNg/Rotary",
-    "core count is not a lever: grid swept three ways at bs=1 (QWEN_MM_GRID, find_prefill_grid caps, QKV 8x8) all flat 28.8-29.0 ms despite tt-perf-report advising 'increase grid size (currently using 64 of 120)'",
-    "MLP prefill chunking rejected: bs32 705.8 ms off -> 746.1 at chunk 4096 -> 780.7 at 2048; raising TT_BATCHED_L1_PREFILL_MAX_BYTES to 64/96 MB alongside did not help (746-749 ms)",
-    "bs>=8 is not DRAM-bandwidth-bound (16-31% DRAM util at 42-51% FLOPs); the repeated 'place input 0 in L1' advice is an occupancy problem, not saturation",
+    "bs>=8 MinimalMatmul is 55% of device time at 48% of BFP4/LoFi peak; every block above (8,8,8) exceeds L1 (3.03 MB dataflow buffers vs 1.57 MB) and the grid is already at the device max of 120 cores",
+    "bs>=8 runs entirely dram_interleaved: a bs32 activation is 41.9 MB. Forcing TT_BATCHED_L1_PREFILL with caps of 24/32 MB and MM blocks shrunk to 4,4,4 / 4,8,8 / 6,8,8 all fail with 'statically allocated dataflow buffers clash with L1 buffer'",
+    "legacy MatmulMultiCoreReuseMultiCast rejected for batch: bs8 220.2 vs 189.3 ms, bs32 868.9 vs 707.2 ms, so minimal_matmul is correct at batch while legacy is correct at bs=1",
+    "MLP prefill chunking rejected: bs32 705.8 -> 746.1 (chunk 4096) -> 780.7 ms (2048), and raising the batched-L1 cap alongside did not help",
+    "core count is not a lever at bs=1: grid swept three ways (QWEN_MM_GRID, find_prefill_grid caps, QKV 8x8) all flat 28.8-29.0 ms; those rows already run at 69-70% of peak",
+    "bs=1 is device-bound with every op L1-resident (1.2 ms of 27.0 is dispatch), so fused-kernel approaches such as tt-blaze have little headroom to recover there",
     "device is harvested 120/130 cores, so absolute numbers are ~8% pessimistic vs a full P150"
   ],
   "optimization_steps_ms_best": {
@@ -46,12 +47,30 @@
   "accuracy_stsb_spearman": {
     "baseline": 0.8116,
     "optimized": 0.8125,
-    "note": "1379 STS-B pairs, ISL=512, pool=fast, single device; +0.0009 is noise-level"
+    "note": "1379 STS-B pairs, ISL=512, pool=fast, single device; unchanged by the SDPA q/k chunk change"
   },
   "batch_capability_ms_best": {
-    "bs1": 25.8,
-    "bs8": 189.1,
-    "bs32": 706.7,
-    "note": "bs>=8 unchanged: those use minimal_matmul, untouched by this pass"
+    "bs1": 25.9,
+    "bs8": 181.9,
+    "bs16": 355.4,
+    "bs32": 683.7,
+    "tok_s": {
+      "bs1": 19745,
+      "bs8": 22516,
+      "bs16": 23052,
+      "bs32": 23964
+    },
+    "h200_ms": {
+      "bs1": 5.437,
+      "bs8": 33.081,
+      "bs16": 67.225,
+      "bs32": 139.15
+    },
+    "x_h200": {
+      "bs1": 4.76,
+      "bs8": 5.5,
+      "bs16": 5.29,
+      "bs32": 4.91
+    }
   }
 }

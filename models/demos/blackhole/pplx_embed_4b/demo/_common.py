@@ -281,6 +281,21 @@ def apply_recommended_env(batched_l1: bool) -> None:
     #   chunk 256   25.7 ms  <- default
     #   chunk 512   fails: statically allocated circular buffers exceed L1
     os.environ.setdefault("QWEN_SDPA_CHUNK", "256")
+    # Direct q/k chunk. QWEN_SDPA_CHUNK only reaches the short-seq branch, so it
+    # cannot affect batched prefill at all: at bs>=8 the flattened seq is
+    # >= 2048, which pins q_chunk=256 unconditionally. Setting q/k directly is
+    # worth ~2-4% at every batch size and is neutral at bs=1 (where q=512 is
+    # simply the whole 512-token sequence in one chunk). Measured on P150,
+    # best prefill / best tok/s:
+    #   bs1   default 25.9 ms          q512/k256 25.9 ms   (neutral)
+    #   bs8   default 189.2 ms / 21.6k q512/k256 181.9 ms / 22.5k
+    #   bs16  default 362.9 ms / 22.6k q512/k256 355.7 ms / 23.0k
+    #   bs32  default 706.6 ms / 23.2k q512/k256 682.1 ms / 24.0k
+    # q=768 and q=1024 overflow L1 ("statically allocated circular buffers");
+    # k=128 ties k=256 at bs32 (681.1 vs 682.1 ms) so k=256 is kept as the safer
+    # of the two.
+    os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "512")
+    os.environ.setdefault("QWEN_SDPA_K_CHUNK", "256")
     if batched_l1:
         os.environ.setdefault("TT_BATCHED_L1_PREFILL", "1")
         # Lift the batched-L1 activation cap from the 8 MiB default to 12 MiB so
