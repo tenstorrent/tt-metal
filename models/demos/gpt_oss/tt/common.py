@@ -62,6 +62,26 @@ def create_tt_model(
     # state_dict == {}     -> explicit skip (--skip-model-load) or a prior DP model already skipped.
     # state_dict populated -> reuse across DP models (avoid reloading for every submesh).
     loaded_real_weights = False
+    if state_dict == {} and not gpt_oss_model_args.dummy_weights and num_layers is None:
+        # Explicit --skip-model-load: the ttnn weight cache is the only source of weights. A cache written by an
+        # older format (e.g. before the fused expert gate/up tensors, format v3) has no completion marker for the
+        # current version and lacks the renamed tensor files, so construction would fail minutes later inside
+        # ttnn.as_tensor(None, cache_file_name=...) with no hint; diagnose it here instead.
+        cache_path = gpt_oss_model_args.weight_cache_path(dtype)
+        if not gpt_oss_model_args.weight_cache_is_complete(dtype):
+            message = (
+                f"the ttnn weight cache at {cache_path} has no completion marker for weight-cache format "
+                f"v{gpt_oss_model_args.WEIGHT_CACHE_FORMAT_VERSION}; run once without --skip-model-load to "
+                "(re)generate it."
+            )
+            # Only the low-latency experts (built unless the throughput experts are used on a multi-row mesh, the
+            # same rule as MLP.__init__) read the renamed fused gate/up files; their absence is then certain failure.
+            builds_low_latency_experts = not (
+                use_throughput_experts and mesh_device.get_num_devices() > 1 and mesh_device.shape[0] > 1
+            )
+            if builds_low_latency_experts and next(cache_path.rglob("*gate_up_proj_fused_tp*"), None) is None:
+                raise RuntimeError("Cannot build the model from the weight cache only: " + message)
+            logger.warning("Building the model from the ttnn weight cache only, but " + message)
     if state_dict is None:
         if not gpt_oss_model_args.dummy_weights and gpt_oss_model_args.weight_cache_is_complete(dtype):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")

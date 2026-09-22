@@ -69,11 +69,26 @@ def decode_forward(
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
 
+    # One user per core on the grid RoPE and SDPA decode expect (see ProgramConfig.get_decode_user_grid).
+    # This placement is load-bearing: with a bare L1_HEIGHT_SHARDED_MEMORY_CONFIG the op falls back to
+    # the *device* compute grid, which is 8 wide on Wormhole but 13 wide on Blackhole, so for a batch
+    # that is a multiple of 32 user b would land on (b % 13, b // 13) while RotarySetup's cos/sin and
+    # the paged SDPA reducer live at (b % 8, b // 8): every downstream op silently reads another user's
+    # Q/K/V (no TT_FATAL). Batch 1 only worked because core (0, 0) coincides.
+    batch_grid, _ = program_config.get_decode_user_grid(mesh_device, batch_size)
+    qkv_heads_mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, head_dim),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
     tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,
         num_kv_heads=num_local_kv_heads,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        memory_config=qkv_heads_mem_config,
     )
 
     xqkv_fused.deallocate(True)
@@ -109,13 +124,16 @@ def decode_forward(
 
     tt_k.deallocate(True)
     tt_v.deallocate(True)
-    grid_size = ttnn.CoreCoord(8, 8)
-    batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
     # Calculate padded heads (must be tile-aligned, e.g., 32)
     # Use local heads per device, not global heads
     padded_heads = ((num_local_heads + 31) // 32) * 32
 
+    # SDPA writes to DRAM; reshard onto the same one-core-per-user grid RoPE/SDPA use (user b on the b-th core,
+    # row-major) for nlp_concat_heads_decode. For an input grid that is not one rectangle from (0, 0) (e.g. 13 + 9
+    # cores for 22 users on Blackhole's 13-wide grid) the op requires sub_core_grids (passed below) and then reads
+    # the users in row-major order of the input CoreRangeSet; with it, any 1 <= batch <= 32 works, so no separate
+    # rectangular 'concat grid' (and no batch sizes it could not hold) is needed.
     height_sharded_mem_config = ttnn.create_sharded_memory_config(
         shape=(padded_heads, head_dim),  # Shape per shard (tile-aligned)
         core_grid=batch_grid,
@@ -123,6 +141,10 @@ def decode_forward(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    concat_sub_core_grids = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))}
+    )  # output: the first num_local_heads cores of the compute grid, as in the op's default program
     # Scaled dot-product attention
     if page_table is not None:
         tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -134,7 +156,7 @@ def decode_forward(
             attention_sink=weights.decode_sinks,
             page_table_tensor=page_table,
             scale=config.scaling,
-            program_config=program_config.get_decode_sdpa_config(mesh_device),
+            program_config=program_config.get_decode_sdpa_config(mesh_device, batch_size),
             compute_kernel_config=program_config.get_compute_kernel_config(),
             # memory_config=height_sharded_mem_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -152,7 +174,7 @@ def decode_forward(
             sliding_window_size=config.sliding_window,
             attention_sink=weights.decode_sinks,
             scale=config.scaling,
-            program_config=program_config.get_decode_sdpa_config(mesh_device),
+            program_config=program_config.get_decode_sdpa_config(mesh_device, batch_size),
             compute_kernel_config=program_config.get_compute_kernel_config(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -160,7 +182,9 @@ def decode_forward(
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection
-    tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
+    tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(
+        tt_sdpa_tensor, num_heads=num_local_heads, sub_core_grids=concat_sub_core_grids
+    )
     tt_sdpa_tensor.deallocate(True)
 
     tt_out = ttnn.linear(
