@@ -54,9 +54,9 @@ enum class HalL1MemAddrType : uint8_t {
     ROUTER_STATE,
     ROUTER_COMMAND,
     ETH_FW_MAILBOX,
-    ETH_PTP_TRACE,  // Metal FW entry/exit PTP stamps (Blackhole only)
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
+    ETH_PTP_TRACE,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 

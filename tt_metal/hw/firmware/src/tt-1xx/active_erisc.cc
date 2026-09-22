@@ -263,7 +263,6 @@ int __attribute__((noinline)) main(void) {
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
-                // Any other path out of main() needs this too, or the core reads as still resident.
                 aerisc_ptp_trace_exit();
                 return 0;
             } else if (

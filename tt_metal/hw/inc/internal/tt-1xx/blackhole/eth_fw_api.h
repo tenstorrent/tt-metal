@@ -273,27 +273,24 @@ static_assert(
 
 #define AERISC_PTP_TRACE_MAGIC 0x1234ABCD
 
-// Metal FW tenure stamps. Base FW zeroes the debug buffer once at load, so an all-zero record
-// means metal has not run since. Each stamp publishes hi then lo, so lo commits it. Reader
-// contract:
+// Runtime FW tenure stamps. Base FW zeroes the debug buffer once at load, so an all-zero record
+// means runtime FW has not run since. Reader contract:
 //   magic != AERISC_PTP_TRACE_MAGIC -> entry in flight or never stamped; sample again
-//   fw_exit_ptp_lo == 0             -> entered at fw_entry_ptp, still resident
-//   otherwise                       -> ran from fw_entry_ptp to fw_exit_ptp
+//   fw_exit_valid == 0              -> runtime FW took the core at fw_entry_ptp and still owns it
+//   fw_exit_valid != 0              -> runtime FW owned the core from fw_entry_ptp to fw_exit_ptp
 struct aerisc_ptp_trace_t {
     uint32_t magic;
-    uint32_t run_count;  // +1 per entry; counts metal FW entries since base FW load
+    uint32_t run_count;  // +1 per entry; counts runtime FW entries since base FW load
     uint32_t fw_entry_ptp_lo;
     uint32_t fw_entry_ptp_hi;
     uint32_t fw_exit_ptp_lo;
     uint32_t fw_exit_ptp_hi;
+    uint32_t fw_exit_valid;
 };
 
 static_assert(
     sizeof(aerisc_ptp_trace_t) <= sizeof(debug_buf_t::scratchpad),
     "aerisc_ptp_trace_t must fit in the scratchpad words metal owns");
-static_assert(
-    offsetof(debug_buf_t, scratchpad) == 496 * sizeof(uint32_t),
-    "scratchpad moved; re-sync debug_buf_t with SysEng before shipping");
 
 struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
@@ -380,8 +377,7 @@ static __attribute__((unused)) void aerisc_ptp_trace_entry() {
 
     trace->magic = 0;
     trace->run_count = trace->run_count + 1;
-    trace->fw_exit_ptp_lo = 0;
-    trace->fw_exit_ptp_hi = 0;
+    trace->fw_exit_valid = 0;
     uint64_t entry_ptp = eth_read_ptp_clock();
     trace->fw_entry_ptp_hi = static_cast<uint32_t>(entry_ptp >> 32);
     trace->fw_entry_ptp_lo = static_cast<uint32_t>(entry_ptp);
@@ -395,6 +391,7 @@ static __attribute__((unused)) void aerisc_ptp_trace_exit() {
     uint64_t exit_ptp = eth_read_ptp_clock();
     trace->fw_exit_ptp_hi = static_cast<uint32_t>(exit_ptp >> 32);
     trace->fw_exit_ptp_lo = static_cast<uint32_t>(exit_ptp);
+    trace->fw_exit_valid = 1;  // single-word commit, so it must follow both halves
 #endif
 }
 

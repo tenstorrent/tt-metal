@@ -631,17 +631,20 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
 TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
     auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
 
-    // Outside 2-erisc mode bh_hal.cpp forces PHYSICAL_AERISC_ID=1, which compiles the trace out.
+    // PTP stamping is compiled out under watcher and outside
+    // 2-erisc mode.
+    const bool watcher_on = env.get_rtoptions().get_watcher_enabled();
     const auto erisc_count = env.get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
-    if (erisc_count < 2) {
-        GTEST_SKIP() << "Requires 2-erisc mode";
+    if (watcher_on || erisc_count < 2) {
+        GTEST_SKIP() << "PTP trace is compiled out: " << (watcher_on ? "watcher build" : "single-erisc mode");
     }
 
     const auto trace_addr =
         env.get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_PTP_TRACE);
 
+    // Must match AERISC_PTP_TRACE_MAGIC in eth_fw_api.h.
     constexpr uint32_t expected_magic = 0x1234ABCD;
-    enum : size_t { kMagic, kRunCount, kEntryLo, kEntryHi, kExitLo, kExitHi, kNumWords };
+    enum : size_t { kMagic, kRunCount, kEntryLo, kEntryHi, kExitLo, kExitHi, kExitValid, kNumWords };
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
@@ -654,9 +657,9 @@ TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
             if (trace[kMagic] != expected_magic) {
                 continue;
             }
-            // A previous session that ran to completion would have left an exit stamp, so a cleared
-            // one means this session's entry did the stamping.
-            EXPECT_EQ(trace[kExitLo], 0u) << "metal FW should still be resident on " << eth_noc_xy.str();
+            // A previous session that ran to completion would have left this set, so a cleared flag
+            // means this session's entry did the stamping.
+            EXPECT_EQ(trace[kExitValid], 0u) << "runtime FW should still be resident on " << eth_noc_xy.str();
         }
     }
 }
