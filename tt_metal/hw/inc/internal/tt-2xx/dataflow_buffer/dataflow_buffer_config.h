@@ -268,6 +268,177 @@ inline constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
     return static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t)) + ((tc_bytes + 3u) & ~3u);
 }
 
+// ---------------------------------------------------------------------------------------------
+// DM init via a host-built LocalDFBInterface image.
+//
+// The host already knows every value that ends up in a DM's LocalDFBInterface, so it emits the
+// finished interface bytes and the device copies them. The DM's per-entry work becomes a control
+// read plus a word copy: no unpack, no bit extraction, no per-field or per-TC-slot stores, and no
+// multiply to find the interface slot.
+//
+// DM entry layout:
+//   [0] u16 iface_byte_off        logical_dfb_id * sizeof(LocalDFBInterface), premultiplied
+//   [2] u8  flags
+//   [3] u8  sig_slot              precomputed dfb_signal[] index, 0xFF = consumer
+//   [4] u16 capacity
+//   [6] u8  remapper_pair_index
+//   [7] u8  num_tcs
+//   [8] LocalDFBInterface image, 24 + 20*num_tcs bytes, copied verbatim
+//
+// The 8B control prefix holds exactly what cannot be part of a copy: these five drive branches,
+// the remapper spin and tile-counter HW register writes rather than landing in the interface.
+//
+// Cost: the image materializes rd_ptr/wr_ptr/base_addr (the device used to store one loaded value
+// three times) plus slot padding, so a 1-TC entry grows 40B -> 52B. That enlarges the config
+// region, which DM0's central invalidate covers.
+//
+// TRISC is unaffected and keeps the 28B header + packed TC tail.
+#ifndef DFB_IFACE_IMAGE
+#define DFB_IFACE_IMAGE 1
+#endif
+
+// DM0 invalidates the whole DFB config region once, before releasing the subordinates, instead of
+// every worker invalidating its own blob. The single range is a superset of the per-worker ones.
+// Lives in this header so the worker (dataflow_buffer_init.h) and DM0 (dm.cc) agree on it.
+#ifndef DFB_CENTRAL_INVAL
+#define DFB_CENTRAL_INVAL 0
+#endif
+
+// DM LocalDFBInterface geometry. dataflow_buffer_init.h static_asserts these against the real
+// type; they are mirrored here so this header stays independent of the device interface header.
+constexpr uint32_t DFB_DM_IFACE_SCALAR_BYTES = 24u;  // offsetof(LocalDFBInterface, tc_slots)
+constexpr uint32_t DFB_DM_IFACE_SLOT_BYTES = 20u;    // sizeof(DFBTCSlot)
+constexpr uint32_t DFB_DM_IFACE_SIZE = 144u;         // sizeof(LocalDFBInterface)
+constexpr uint32_t DFB_IFACE_IMAGE_CTRL_BYTES = 8u;
+constexpr uint8_t DFB_SIG_SLOT_NONE = 0xFFu;
+// offsetof(LocalDFBInterface, num_tcs_to_rr) -- byte 0 of the third image word.
+constexpr uint32_t DFB_DM_IFACE_NUM_TCS_BYTE_OFF = 8u;
+
+// Control byte 7 carries the finished entry stride instead of num_tcs, so the device advances to
+// the next entry with an add instead of the multiply-add that sits on the pointer's dependency
+// chain. Fits a byte (32 + 20*6 = 152), and num_tcs is recovered from the image's own
+// num_tcs_to_rr, which the copy loads anyway -- so the blob does not grow.
+// Defaults on: it has no effect unless DFB_IFACE_IMAGE is also on (both the host store and the
+// device read are gated on it), and when the image is on it is strictly better -- it removes the
+// num_tcs duplication rather than adding a field, so it costs no blob bytes, and measured
+// -27 retired instructions and -1..-2 D$ misses.
+#ifndef DFB_PRECOMP_ENTRY_BYTES
+#define DFB_PRECOMP_ENTRY_BYTES 1
+#endif
+
+// A blob TC slot is NOT a full DFBTCSlot image. At init rd_ptr == wr_ptr == base_addr, so storing
+// the interface slot verbatim would carry base three times -- 8 redundant bytes per slot and two
+// extra loads. The blob stores {base, limit, ptc_word} and the device fans base out to the three
+// pointers from one register: 12 B and 3 loads per slot instead of 20 B and 5.
+//
+// ptc keeps its own word rather than being packed across slots the way the classic tail does.
+// That packing is what forces the guarded ptc_w0/ptc_w1 preloads plus a per-slot
+// select/variable-shift/mask, measured at +230 retired instructions -- far more than the 3 bytes
+// per slot it saves.
+constexpr uint32_t DFB_DM_BLOB_SLOT_BYTES = 12u;  // {base, limit, ptc_word}
+
+inline constexpr uint32_t dfb_dm_iface_image_bytes(uint32_t num_tcs) {
+    return DFB_DM_IFACE_SCALAR_BYTES + DFB_DM_BLOB_SLOT_BYTES * num_tcs;
+}
+inline constexpr uint32_t dfb_dm_image_entry_byte_size(uint32_t num_tcs) {
+    return DFB_IFACE_IMAGE_CTRL_BYTES + dfb_dm_iface_image_bytes(num_tcs);
+}
+
+// Entry size for a given hart class. TRISC always keeps the classic layout.
+inline constexpr uint32_t dfb_hart_init_entry_byte_size_for(
+    uint32_t num_tcs, [[maybe_unused]] bool is_dm) {
+#if DFB_IFACE_IMAGE
+    return is_dm ? dfb_dm_image_entry_byte_size(num_tcs) : dfb_hart_init_entry_byte_size(num_tcs);
+#else
+    return dfb_hart_init_entry_byte_size(num_tcs);
+#endif
+}
+
+// dfb_signal[] index for a producer, folded on the host: logical_dfb_id * MAX_PRODUCERS_PER_DFB +
+// bit. Max is 31*6+5 = 191 against a 192B signal region, so 0xFF stays free as the consumer
+// sentinel and the whole thing fits in one byte.
+inline uint8_t dfb_precomp_signal_slot(uint8_t logical_dfb_id, uint8_t producer_signal_bit) {
+    if (producer_signal_bit == DFB_SIG_SLOT_NONE) {
+        return DFB_SIG_SLOT_NONE;
+    }
+    return static_cast<uint8_t>(
+        logical_dfb_id * static_cast<uint8_t>(dfb::MAX_PRODUCERS_PER_DFB) + producer_signal_bit);
+}
+
+inline void dfb_put_u32_le(uint8_t* p, uint32_t v) {
+    p[0] = static_cast<uint8_t>(v);
+    p[1] = static_cast<uint8_t>(v >> 8);
+    p[2] = static_cast<uint8_t>(v >> 16);
+    p[3] = static_cast<uint8_t>(v >> 24);
+}
+
+// Build one DM entry: control prefix + the finished LocalDFBInterface bytes. Field placement
+// mirrors, byte for byte, what the device used to store one field at a time.
+inline void dfb_write_dm_image_entry(
+    uint8_t* entry,
+    uint16_t iface_byte_off,
+    uint8_t flags,
+    uint8_t sig_slot,
+    uint16_t capacity,
+    uint8_t remapper_pair_index,
+    uint8_t num_tcs,
+    uint32_t entry_size,
+    uint32_t stride_size,
+    const uint8_t txn_ids[dfb::NUM_TXN_IDS],
+    uint8_t threshold,
+    uint8_t num_entries_per_txn_id,
+    uint8_t num_entries_per_txn_id_per_tc,
+    uint8_t num_txn_ids,
+    uint8_t broadcast_tc,
+    uint16_t num_entries,
+    const uint32_t* tc_base_addrs,
+    const uint32_t* tc_limits,
+    const uint8_t* tc_ptcs) {
+    for (uint32_t i = 0; i < dfb_dm_image_entry_byte_size(num_tcs); i++) {
+        entry[i] = 0u;
+    }
+    entry[0] = static_cast<uint8_t>(iface_byte_off);
+    entry[1] = static_cast<uint8_t>(iface_byte_off >> 8);
+    entry[2] = flags;
+    entry[3] = sig_slot;
+    entry[4] = static_cast<uint8_t>(capacity);
+    entry[5] = static_cast<uint8_t>(capacity >> 8);
+    entry[6] = remapper_pair_index;
+#if DFB_PRECOMP_ENTRY_BYTES
+    // Finished stride, so the device does not multiply. Max 32 + 20*6 = 152, fits a byte.
+    entry[7] = static_cast<uint8_t>(dfb_dm_image_entry_byte_size(num_tcs));
+#else
+    entry[7] = num_tcs;
+#endif
+
+    uint8_t* img = entry + DFB_IFACE_IMAGE_CTRL_BYTES;
+    dfb_put_u32_le(img + 0, entry_size);   // iface.entry_size  (cb_addr_shift == 0 on DM)
+    dfb_put_u32_le(img + 4, stride_size);  // iface.stride_size
+    img[8] = num_tcs;                      // iface.num_tcs_to_rr
+    img[9] = 0u;                           // iface.tc_idx
+    img[10] = txn_ids[0];
+    img[11] = txn_ids[1];
+    img[12] = txn_ids[2];
+    img[13] = txn_ids[3];
+    img[14] = threshold;
+    img[15] = num_entries_per_txn_id;
+    img[16] = num_entries_per_txn_id_per_tc;
+    img[17] = num_txn_ids;
+    img[18] = broadcast_tc;
+    img[19] = 0u;  // iface._tc_align_pad
+    img[20] = static_cast<uint8_t>(num_entries);
+    img[21] = static_cast<uint8_t>(num_entries >> 8);
+    // img[22,24) keeps tc_slots 4B-aligned; already zero.
+
+    for (uint32_t t = 0; t < num_tcs; t++) {
+        uint8_t* s = img + DFB_DM_IFACE_SCALAR_BYTES + DFB_DM_BLOB_SLOT_BYTES * t;
+        dfb_put_u32_le(s + 0, tc_base_addrs[t]);  // base -> rd_ptr, wr_ptr and base_addr on device
+        dfb_put_u32_le(s + 4, tc_limits[t]);      // limit
+        s[8] = tc_ptcs[t];                        // packed_tile_counter, own word
+        // s[9,12) lands in DFBTCSlot::_align; already zero.
+    }
+}
+
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t num_entries_to_process_threshold; // entries each txn ID tracks before posting/acking

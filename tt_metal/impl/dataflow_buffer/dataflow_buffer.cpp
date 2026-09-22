@@ -268,7 +268,7 @@ static uint32_t hart_blob_byte_size(
         for (const auto& rc : dfb->groups[0].hw_risc_configs) {
             if (rc.risc_id == hartid) { num_tcs = rc.config.num_tcs_to_rr; break; }
         }
-        sz += dfb_hart_init_entry_byte_size(num_tcs);
+        sz += dfb_hart_init_entry_byte_size_for(num_tcs, hartid < ::dfb::TENSIX_RISC_OFFSET);
     }
     if (n == 0) {
         sz = 4u;  // minimal {0,0,0,0} blob for non-participating hart
@@ -367,6 +367,14 @@ void verify_dfb_hart_blobs(
             blob_off);
 
         const uint8_t* blob = config_bytes.data() + blob_off;
+
+#if DFB_IFACE_IMAGE
+        // Under DFB_IFACE_IMAGE a DM entry is an 8B control prefix + a LocalDFBInterface image,
+        // not a dfb_hart_init_entry_t, so the field checks below do not apply to it.
+        if (hartid < ::dfb::TENSIX_RISC_OFFSET) {
+            continue;
+        }
+#endif
 
         // Walk init entries and verify they are self-consistent with DFB data.
         uint32_t cursor = 0u;
@@ -648,7 +656,8 @@ size_t serialize_dfb_config_for_core(
                 "DFB {}: no risc_config for hart {} on core ({},{})", dfb->id, h, core.x, core.y);
             const DFBRiscConfig& rc = *rc_ptr;
             const uint8_t num_tcs = rc.config.num_tcs_to_rr;
-            const uint32_t entry_sz = dfb_hart_init_entry_byte_size(num_tcs);
+            const bool hart_is_dm = h < ::dfb::TENSIX_RISC_OFFSET;
+            const uint32_t entry_sz = dfb_hart_init_entry_byte_size_for(num_tcs, hart_is_dm);
             TT_FATAL(offset + entry_sz <= out.size(),
                 "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
 
@@ -711,6 +720,50 @@ size_t serialize_dfb_config_for_core(
             entry.intra_shadow_tc_id = (dfb->remapper_programmer == RemapperProgrammer::TENSIX_PACKER && rc.is_producer)
                                            ? rc.config.intra_shadow_tc_id
                                            : 0xFFu;
+
+#if DFB_IFACE_IMAGE
+            if (hart_is_dm) {
+                // Emit the control prefix + the finished LocalDFBInterface image. The device copies
+                // the image verbatim, so every value the interface needs is finalized here.
+                //
+                // The TC slots are carried as full interface slots, not as the shared
+                // dfb_blob_tc_pair_t tail. That duplicates base_addr three times (rd_ptr == wr_ptr
+                // == base_addr at init), 8 redundant bytes per slot -- but reusing the shared tail
+                // was measured at +230 retired instructions, because it brings back the guarded
+                // ptc_w0/ptc_w1 preloads and the per-slot select/variable-shift/mask that the image
+                // deletes. The bytes are the cheaper side of that trade.
+                uint32_t tc_bases[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                uint32_t tc_limits[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                uint8_t tc_ptcs[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                for (uint8_t t = 0; t < num_tcs; t++) {
+                    tc_bases[t] = rc.config.base_addr[t];
+                    tc_limits[t] = rc.config.limit[t];
+                    tc_ptcs[t] = rc.config.packed_tile_counter[t];
+                }
+                dfb_write_dm_image_entry(
+                    out.data() + offset,
+                    static_cast<uint16_t>(entry.logical_dfb_id * DFB_DM_IFACE_SIZE),
+                    entry.flags,
+                    dfb_precomp_signal_slot(entry.logical_dfb_id, producer_signal_bit[di][h]),
+                    entry.capacity,
+                    entry.remapper_pair_index,
+                    num_tcs,
+                    dfb->config.entry_size,  // cb_addr_shift == 0 on DM
+                    entry.stride_size_precomp,
+                    entry.txn_ids,
+                    entry.threshold,
+                    entry.num_entries_per_txn_id,
+                    entry.num_entries_per_txn_id_per_tc,
+                    entry.num_txn_ids,
+                    static_cast<uint8_t>((entry.flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u),
+                    entry.num_entries,
+                    tc_bases,
+                    tc_limits,
+                    tc_ptcs);
+                offset += entry_sz;
+                continue;
+            }
+#endif
 
             // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
             std::memset(out.data() + offset, 0, entry_sz);
@@ -1415,7 +1468,8 @@ uint32_t DataflowBufferImpl::serialized_size() const {
     TT_FATAL(!groups.empty(), "DFB {} has no groups (configs not finalized?)", id);
     uint32_t sz = 0;
     for (const auto& rc : groups[0].hw_risc_configs) {
-        sz += dfb_hart_init_entry_byte_size(rc.config.num_tcs_to_rr);
+        sz += dfb_hart_init_entry_byte_size_for(
+            rc.config.num_tcs_to_rr, rc.risc_id < ::dfb::TENSIX_RISC_OFFSET);
     }
     return sz;
 }
