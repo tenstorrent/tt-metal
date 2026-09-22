@@ -1930,6 +1930,14 @@ class ModelArgs:
                 )
             )
         )
+        # Direct q/k chunk overrides. The branches above pin q_chunk=256 whenever
+        # seq_len >= 2048, which is every batched prefill (bs=32 ISL=512 flattens
+        # to 16384), so QWEN_SDPA_CHUNK cannot reach the batched path at all.
+        _q_ov, _k_ov = os.getenv("QWEN_SDPA_Q_CHUNK"), os.getenv("QWEN_SDPA_K_CHUNK")
+        if _q_ov:
+            q_chunk = int(_q_ov)
+        if _k_ov:
+            k_chunk = int(_k_ov)
         # Blackhole exposes 8x10 compute cores (80 workers) vs Wormhole's 8x8 (64).
         # SDPA parallelises work units across this grid. Larger grid only helps
         # when the number of work units significantly exceeds the current grid
@@ -2139,6 +2147,15 @@ class ModelArgs:
         ``minimal_matmul`` wins for medium-to-long sequences because it exposes
         larger per-core block reuse.
         """
+        # QWEN_FORCE_LEGACY_MM=1 routes every prefill matmul to the legacy
+        # MatmulMultiCoreReuseMultiCast path instead. On pplx-embed-4B at bs=1
+        # the legacy path is much faster than minimal_matmul (33.1 vs 49.0 ms)
+        # and, with the in0_block_w cap lifted, reaches 69-70% of BFP4/LoFi peak
+        # while minimal_matmul sits at 42-51% on the batched shapes — so the
+        # batched path is worth re-testing on legacy.
+        if os.getenv("QWEN_FORCE_LEGACY_MM", "0") == "1":
+            return False
+
         # Qwen's 128-token prompts can run singly or be flattened into a larger
         # batched prefill.
         if not (
