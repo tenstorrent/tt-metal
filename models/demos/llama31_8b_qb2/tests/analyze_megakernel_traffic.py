@@ -82,7 +82,7 @@ def count_events(events, dram_coordinates, payload_cap):
     return dict(totals), dict(types)
 
 
-def analyze(logs, ops_csv, *, extended_payload=False):
+def analyze(logs, ops_csv, *, extended_payload=False, expected_dram_read_bytes=None):
     soc_path = logs / "soc_descriptor.yaml"
     soc = yaml.safe_load(soc_path.read_text())
     dram = {tuple(map(int, coordinate.split("-"))) for channel in soc["dram"] for coordinate in channel}
@@ -134,8 +134,14 @@ def analyze(logs, ops_csv, *, extended_payload=False):
     )
     for window in windows:
         window["operations_per_device"] = dict(Counter(o["device"] for o in window["operations"]))
+        window["expected_dram_read_bytes_per_device"] = expected_dram_read_bytes
+        window["expected_payload_matches"] = expected_dram_read_bytes is None or all(
+            counts.get("dram_read_payload_bytes", 0) == expected_dram_read_bytes
+            for counts in window["totals_per_device"].values()
+        )
         window["complete"] = (
-            set(window["operations_per_device"]) == {0, 1, 2, 3}
+            window["expected_payload_matches"]
+            and set(window["operations_per_device"]) == {0, 1, 2, 3}
             and len(set(window["operations_per_device"].values())) == 1
             and all(
                 "counts" in o and not any(o["counts"].get(k, 0) for k in disqualifiers) for o in window["operations"]
@@ -159,8 +165,14 @@ def main():
     parser.add_argument(
         "--extended-payload", action="store_true", help="Only for the matching extended payload runtime"
     )
+    parser.add_argument("--expected-dram-read-bytes", type=int, help="Independent expected bytes per chip/window")
     args = parser.parse_args()
-    result = analyze(args.logs, args.ops_csv, extended_payload=args.extended_payload)
+    result = analyze(
+        args.logs,
+        args.ops_csv,
+        extended_payload=args.extended_payload,
+        expected_dram_read_bytes=args.expected_dram_read_bytes,
+    )
     args.output.write_text(json.dumps(result, indent=2))
     print(json.dumps({k: v for k, v in result.items() if k != "windows"}, indent=2))
     if not result["complete"]:

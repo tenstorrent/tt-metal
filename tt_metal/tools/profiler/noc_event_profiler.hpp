@@ -120,7 +120,11 @@ FORCE_INLINE void recordNocEvent(
             kernel_profiler::DoingDispatch::DISPATCH,
             kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
     } else {
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+        // Match timeStampedData's complete four-word packet reservation. With
+        // only one to three words remaining, checking a single word never
+        // flushes and every following NoC event can be silently discarded.
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2 - 1);
         kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
     }
 }
@@ -165,7 +169,11 @@ FORCE_INLINE void recordMulticastNocEvent(
             kernel_profiler::DoingDispatch::DISPATCH,
             kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
     } else {
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+        // Match timeStampedData's complete four-word packet reservation. With
+        // only one to three words remaining, checking a single word never
+        // flushes and every following NoC event can be silently discarded.
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2 - 1);
         kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
     }
 }
