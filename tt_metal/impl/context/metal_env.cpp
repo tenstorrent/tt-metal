@@ -659,9 +659,8 @@ distributed::SystemMesh& MetalEnv::get_system_mesh() {
 
 namespace {
 
-// Holds a context that is in transit between MetalContext::create_instance() and the mesh device
-// that takes ownership of it, and destroys it if it never gets there. Inert when the env already
-// owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
+// Destroys a context created here if it never reaches the mesh device that takes ownership of it.
+// Inert when the env owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
 class TransitContextGuard {
 public:
     TransitContextGuard(ContextId context_id, bool env_owns_context) {
@@ -701,7 +700,6 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    // A context created here has no owner until it is handed to the mesh device below.
     TransitContextGuard context_guard(context_id, env_owns_context);
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
@@ -730,7 +728,6 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    // A context created here has no owner until it is handed to the mesh device below.
     TransitContextGuard context_guard(context_id, env_owns_context);
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
@@ -759,7 +756,6 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    // A context created here has no owner until it is handed to the mesh device below.
     TransitContextGuard context_guard(context_id, env_owns_context);
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
@@ -771,7 +767,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         l1_bank_remap,
         worker_l1_size);
     if (context_guard.holds_context() && !result.empty()) {
-        // Devices are live, so the context must outlive them: release even without a parent to own it.
+        // Devices are live: release even without a parent, so the context outlives them.
         context_guard.release();
         if (const auto& parent = result.begin()->second->get_parent_mesh()) {
             parent->impl().set_destroy_metal_context_instance_on_close(true);

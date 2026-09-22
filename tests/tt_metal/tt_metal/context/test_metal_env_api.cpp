@@ -253,12 +253,11 @@ TEST(MetalEnv, ReconfigureFabricForDispatch) {
     EXPECT_GT(mesh_after.shape().mesh_size(), 0);
 }
 
-// --- Context ownership on failed mesh device creation (GitHub #57286) ---
+// --- Context leaks on failed mesh device creation (#57286) ---
 
 namespace {
 
-// find_free_context_id_locked hands out the lowest free slot, so a leaked context shifts the next
-// allocation upward.
+// The lowest free slot is handed out first, so a leaked context shifts this upward.
 ContextId next_free_context_id(const std::string& mock_path) {
     MetalEnv probe{MetalEnvDescriptor(mock_path)};
     ContextId id = MetalContext::create_instance(probe);
@@ -274,8 +273,7 @@ TEST(MetalEnv, FailedCreateMeshDeviceDoesNotLeakContext) {
 
     for (int i = 0; i < 3; ++i) {
         MetalEnv env{MetalEnvDescriptor(mock_path)};
-        // physical_device_ids without a mesh_shape fatals inside MeshDeviceImpl::create, after the
-        // context is created and before ownership is handed to the mesh device.
+        // Fatals inside MeshDeviceImpl::create, after the context exists and before ownership transfers.
         EXPECT_THROW(
             env.create_mesh_device(distributed::MeshDeviceConfig(
                 /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
