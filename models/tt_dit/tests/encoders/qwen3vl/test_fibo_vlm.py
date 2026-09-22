@@ -5,9 +5,8 @@
 """Text-only generation for FIBO-vlm through `Qwen3VlEncoder`.
 
 FIBO-vlm turns a natural-language prompt into the structured JSON that FIBO consumes. Free-running
-greedy decoding cannot be compared token for token: the CPU bfloat16 reference is not even
-deterministic across its own runs, and one near-tie flip sends both models down different but
-equally valid continuations. So both prefill and decode are asserted teacher-forced on the
+greedy decoding cannot be compared token for token: one near-tie flip sends both models down
+different but equally valid continuations. So both prefill and decode are asserted teacher-forced on the
 reference's own token sequence, and free-running decode is asserted on what it is for -- emitting
 the JSON.
 """
@@ -51,7 +50,7 @@ def test_generation(*, mesh_device: ttnn.MeshDevice) -> None:
     )
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(CHECKPOINT)
-    torch_model = transformers.Qwen3VLForConditionalGeneration.from_pretrained(CHECKPOINT)
+    torch_model = transformers.Qwen3VLForConditionalGeneration.from_pretrained(CHECKPOINT, dtype=torch.float32)
     text_config = torch_model.config.text_config
 
     model = Qwen3VlCheckpoint(CHECKPOINT).build(

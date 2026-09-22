@@ -91,6 +91,7 @@ def test_text_only_forward(
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     parallel_config = EncoderParallelConfig.from_tuples(tp=tp, sp=None, fsdp=fsdp)
 
+    # Loaded in bfloat16 since that converts to ttnn faster, and upcast afterwards for the reference.
     torch_model = transformers.Qwen3VLForConditionalGeneration.from_pretrained(CHECKPOINT, dtype=torch.bfloat16)
     text_config = torch_model.config.text_config
 
@@ -101,6 +102,7 @@ def test_text_only_forward(
         ccl_manager=ccl_manager,
     )
     model.load_torch_state_dict(Qwen3VlEncoder.convert_state(torch_model.state_dict()))
+    torch_model.float()
 
     tokens = torch.randint(0, text_config.vocab_size, [batch_size, sequence_length])
     lengths = torch.randint(sequence_length // 4, 3 * sequence_length // 4, [batch_size])
@@ -144,7 +146,7 @@ def test_text_only_forward(
 
 def _reference_lm(weights: str):
     cfg = transformers.AutoConfig.from_pretrained(CHECKPOINT)
-    hf = transformers.AutoModel.from_config(cfg).to(torch.bfloat16)
+    hf = transformers.AutoModel.from_config(cfg, dtype=torch.bfloat16)
     lm = hf.language_model if hasattr(hf, "language_model") else hf.model.language_model
     if weights == "real":
         sd = dequant_fp8_state_dict(load_file(f"{FP8}/text_encoder/model.safetensors"))
@@ -185,14 +187,12 @@ def test_qwen3vl_text_encoder(
     tp_factor = tuple(submesh.shape)[tp_axis]
     fsdp_axis = 1 - tp_axis
 
+    # Built in bfloat16 so both sides share the same weights and the conversion to ttnn is faster, and
+    # upcast afterwards for the reference.
     lm = _reference_lm(weights)
     cfg = lm.config
 
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
-    with capture_layer_outputs(lm, QWEN3_VL_ACTIVATION_LAYERS) as caps:
-        with torch.no_grad():
-            lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
-    golden = [caps[i].float() for i in QWEN3_VL_ACTIVATION_LAYERS]
 
     # As the Ideogram 4 pipeline builds it: no head, and no final norm since the taps are raw layer outputs.
     enc = Qwen3VlEncoder(
@@ -208,6 +208,12 @@ def test_qwen3vl_text_encoder(
             {f"model.language_model.{k}": v for k, v in lm.state_dict().items() if k != "norm.weight"}
         )
     )
+    lm.float()
+
+    with capture_layer_outputs(lm, QWEN3_VL_ACTIVATION_LAYERS) as caps:
+        with torch.no_grad():
+            lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+    golden = [caps[i].float() for i in QWEN3_VL_ACTIVATION_LAYERS]
 
     tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
     attn_mask = tensor.from_torch(torch.ones(1, seq_len, dtype=torch.bool), device=submesh) if masked else None

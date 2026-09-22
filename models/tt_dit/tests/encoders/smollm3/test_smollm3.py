@@ -59,7 +59,9 @@ def test_transformer(*, mesh_device: ttnn.MeshDevice, sp_axis: int | None, maske
         ccl_manager=ccl_manager,
     )
 
-    torch_model = transformers.AutoModelForCausalLM.from_pretrained("briaai/FIBO", subfolder="text_encoder")
+    torch_model = transformers.AutoModelForCausalLM.from_pretrained(
+        "briaai/FIBO", subfolder="text_encoder", dtype=torch.float32
+    )
 
     tokens = torch.randint(0, torch_model.config.vocab_size, [batch_size, sequence_length])
     lengths = torch.randint(sequence_length // 4, 3 * sequence_length // 4, [batch_size])
