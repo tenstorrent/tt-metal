@@ -46,6 +46,19 @@ setup_precommit() {
 # --- Main Script ---
 
 main() {
+    # Human setup retains hook installation. Automated worktrees need only the
+    # pinned toolchain: installing hooks there rewrites the shared Git directory
+    # with an interpreter that disappears when the worktree is removed.
+    local toolchain_only=false
+    if [[ $# -gt 0 ]]; then
+        if [[ $# != 2 || "$1" != --toolchain-only || ! -d "$2" ]]; then
+            echo "Usage: $0 [--toolchain-only TESTS_DIR]" >&2
+            return 2
+        fi
+        toolchain_only=true
+        SCRIPT_DIR="$(cd "$2" && pwd)" || return 2
+    fi
+
     # Set up trap for cleanup on exit
     trap cleanup EXIT
 
@@ -58,11 +71,14 @@ main() {
         exit 1
     fi
 
-    # Setup pre-commit hooks
-    setup_precommit
+    if [[ "$toolchain_only" == true ]]; then
+        echo "Toolchain-only setup: preserving existing Git hook configuration"
+    else
+        setup_precommit
+    fi
 
     # shellcheck source=/dev/null
-    eval local $($version_file SHELL txz)
+    eval local $("$version_file" SHELL txz)
 
     # Check if SFPI is already installed and up to date
     if [[ -f "${SCRIPT_DIR}/sfpi/sfpi.version" ]] &&
@@ -104,8 +120,10 @@ main() {
     echo "$sfpi_version" > "${SCRIPT_DIR}/sfpi/sfpi.version"
     echo "SFPI successfully installed version $sfpi_version"
     echo "Setup complete. You can now run your tests."
-    echo "Pre-commit hooks have been configured for code quality checks."
+    if [[ "$toolchain_only" == false ]]; then
+        echo "Pre-commit hooks have been configured for code quality checks."
+    fi
 }
 
 # Execute the main function
-main
+main "$@"

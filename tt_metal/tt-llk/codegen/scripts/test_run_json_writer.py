@@ -2492,6 +2492,12 @@ def test_setup_worktree_records_exact_base_before_bootstrap(
     setup_env = llk_tests / "setup_testing_env.sh"
     setup_env.write_text("#!/bin/bash\nexit 0\n")
     setup_env.chmod(0o755)
+    # Versioned bootstrap reads the pinned worktree SFPI metadata and output.
+    sfpi_info = llk_tests / "sfpi-info.sh"
+    sfpi_info.write_text("#!/bin/bash\necho sfpi_version=fixture\n")
+    sfpi_info.chmod(0o755)
+    (llk_tests / "sfpi").mkdir()
+    (llk_tests / "sfpi/sfpi.version").write_text("fixture\n")
     (repo / "tt_metal" / "tt-llk" / ".gitignore").write_text("*.pyc\n")
     (repo / "source.txt").write_text("base\n")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -5237,3 +5243,192 @@ def test_legacy_v2_integer_spelling_load_and_reseal_preserve_old_manifest(tmp_pa
         == "8"
     )
     assert revision.read_bytes() == old_bytes
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("custom_hooks", [False, True])
+def test_worktree_toolchain_setup_preserves_live_shared_hooks(
+    tmp_path, cached, custom_hooks
+):
+    """Actual Git hooks survive setup and deletion; SFPI stays pinned to the child."""
+    import tarfile
+
+    repo = tmp_path / "repo"
+    tests = repo / "tt_metal/tt-llk/tests"
+    tests.mkdir(parents=True)
+    (tests.parent / ".gitignore").write_text("tests/sfpi/\n*.observed\n")
+    # An old base setup would install into the common Git directory. The caller
+    # must select the versioned toolchain entrypoint instead of executing this.
+    (tests / "setup_testing_env.sh").write_text("#!/bin/bash\npre-commit install\n")
+    (tests / "setup_testing_env.sh").chmod(0o755)
+    payload = tmp_path / "payload"
+    (payload / "sfpi").mkdir(parents=True)
+    (payload / "sfpi/compiler").write_text("pinned compiler\n")
+    archive = tmp_path / "pinned.txz"
+    with tarfile.open(archive, "w:xz") as output:
+        output.add(payload / "sfpi", arcname="sfpi")
+    sfpi = tests / "sfpi-info.sh"
+    sfpi.write_text(
+        "#!/bin/bash\n"
+        'printf "%s\\n" "$CHIP_ARCH:$*" > "$(dirname "$0")/sfpi.observed"\n'
+        f"echo sfpi_version=pinned-fixture sfpi_hash={hashlib.sha256(archive.read_bytes()).hexdigest()} "
+        "sfpi_hashtype=sha256 sfpi_url=https://fixture.invalid sfpi_filename=pinned.txz\n"
+    )
+    sfpi.chmod(0o755)
+    git = lambda *args: subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
+    )
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.invalid")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    # Cached case is provided by a tracked fixture path; real Git setup creates
+    # the child before this existing metadata check, just as retained SFPI does.
+    if cached:
+        git("add", "-f", "tt_metal/tt-llk/tests/sfpi-info.sh")
+        (tests / "sfpi").mkdir()
+        (tests / "sfpi/sfpi.version").write_text("pinned-fixture\n")
+        (tests / "sfpi/compiler").write_text("pinned compiler\n")
+        git("add", "-f", "tt_metal/tt-llk/tests/sfpi")
+        git("commit", "-qm", "cached fixture only")
+        base = git("rev-parse", "HEAD").stdout.strip()
+    hooks = tmp_path / "human-hooks" if custom_hooks else repo / ".git/hooks"
+    hooks.mkdir(exist_ok=True)
+    if custom_hooks:
+        git("config", "core.hooksPath", str(hooks))
+    hook = hooks / "pre-commit"
+    hook_bytes = b'#!/bin/sh\nprintf "human-hook\\n" >> "$HOOK_LOG"\n'
+    hook.write_bytes(hook_bytes)
+    hook.chmod(0o755)
+    hook_log = tmp_path / "hook.log"
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    installer = fakebin / "pre-commit"
+    installer.write_text(
+        "#!/bin/bash\n"
+        'printf "#!/deleted/worktree/python\\n" > "$(git rev-parse --git-path hooks)/pre-commit"\n'
+        'touch "$INSTALL_MARKER"\n'
+    )
+    installer.chmod(0o755)
+    wget = fakebin / "wget"
+    wget.write_text('#!/bin/bash\ncp "$SFPI_ARCHIVE" "$3/pinned.txz"\n')
+    wget.chmod(0o755)
+    worktrees = tmp_path / "worktrees"
+    child = worktrees / "issue-hooks-v1"
+    env = {
+        **os.environ,
+        "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
+        "INSTALL_MARKER": str(tmp_path / "installed"),
+        "HOOK_LOG": str(hook_log),
+        "SFPI_ARCHIVE": str(archive),
+        "CHIP_ARCH": "blackhole",
+    }
+    command = r"""
+source "$1"
+REPO_ROOT="$2"
+LLK_REL="tt_metal/tt-llk"
+CODEGEN_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)"
+CODEGEN_SETUP_LOCK="$CODEGEN_GIT_DIR/codegen-worktree-setup.lock"
+CODEGEN_WORKTREE_ROOT="$3"
+CODEGEN_BASE_COMMIT="$4"
+setup_worktree issue-hooks
+"""
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(SETUP_WORKTREE),
+            str(repo),
+            str(worktrees),
+            base,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not Path(env["INSTALL_MARKER"]).exists()
+    assert hook.read_bytes() == hook_bytes
+    child_tests = child / "tt_metal/tt-llk/tests"
+    assert (child_tests / "sfpi/sfpi.version").read_text().strip() == "pinned-fixture"
+    assert (child_tests / "sfpi/compiler").read_text() == "pinned compiler\n"
+    expected_arch = "blackhole" if Path("/dev/tenstorrent").exists() else "quasar"
+    assert (
+        child_tests / "sfpi.observed"
+    ).read_text().strip() == f"{expected_arch}:SHELL txz"
+    assert (child_tests / "setup_testing_env.sh").read_bytes() == (
+        tests / "setup_testing_env.sh"
+    ).read_bytes()
+    assert not (tests / "sfpi.observed").exists()
+    if not cached:
+        assert not (tests / "sfpi").exists()
+    subprocess.run(
+        ["git", "-C", str(child), "commit", "--allow-empty", "-qm", "child"],
+        env=env,
+        check=True,
+    )
+    git("worktree", "remove", "--force", str(child))
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "human after cleanup",
+        ],
+        env=env,
+        check=True,
+    )
+    assert hook.read_bytes() == hook_bytes
+    assert hook_log.read_text().splitlines() == ["human-hook", "human-hook"]
+
+
+def test_testing_setup_default_still_installs_hooks_and_rejects_bad_mode(tmp_path):
+    import shutil
+
+    source = SETUP_WORKTREE.parents[2] / "tests/setup_testing_env.sh"
+    repo = tmp_path / "human"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    tmp_path = repo / "tests"
+    tmp_path.mkdir()
+    script = tmp_path / "setup_testing_env.sh"
+    shutil.copyfile(source, script)
+    (tmp_path / "sfpi").mkdir()
+    (tmp_path / "sfpi/sfpi.version").write_text("fixture\n")
+    metadata = tmp_path / "sfpi-info.sh"
+    metadata.write_text("#!/bin/bash\necho sfpi_version=fixture\n")
+    metadata.chmod(0o755)
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    installer = fakebin / "pre-commit"
+    installer.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$INSTALL_LOG"\n')
+    installer.chmod(0o755)
+    log = tmp_path / "install.log"
+    env = {
+        **os.environ,
+        "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
+        "INSTALL_LOG": str(log),
+    }
+    default = subprocess.run(
+        ["bash", str(script)], env=env, capture_output=True, text=True
+    )
+    assert default.returncode == 0, default.stderr
+    assert log.read_text() == "install\n"
+    for args in [
+        ["--toolchain-only"],
+        ["--skip-hooks", str(tmp_path)],
+        ["--toolchain-only", str(tmp_path / "absent")],
+    ]:
+        invalid = subprocess.run(
+            ["bash", str(script), *args], env=env, capture_output=True, text=True
+        )
+        assert invalid.returncode == 2
+        assert "Usage:" in invalid.stderr
+    assert log.read_text() == "install\n"

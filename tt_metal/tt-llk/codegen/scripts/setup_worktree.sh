@@ -306,9 +306,10 @@ PY
     echo "[worktree] No test requirements found — using ambient python"
   fi
 
-  # Fetch only the arch-specific SFPI toolchain per worktree (setup_testing_env.sh
-  # is idempotent: skips if already at the pinned version). test_config resolves it
-  # at tests/sfpi/ relative to each worktree, so it cannot be shared.
+  # Use the versioned toolchain-only entrypoint with this worktree's pinned
+  # sfpi-info.sh and destination. Historical setup scripts install shared Git
+  # hooks; never run that installation from a disposable worktree. Existing
+  # commit hooks remain enabled and unchanged.
   echo "[worktree] Fetching SFPI toolchain in worktree"
   (
     cd "${wt_llk}/tests"
@@ -318,7 +319,7 @@ PY
       export CHIP_ARCH=quasar
     fi
     [[ -f .venv/bin/activate ]] && source .venv/bin/activate
-    ./setup_testing_env.sh
+    bash "${LLK_ROOT}/tests/setup_testing_env.sh" --toolchain-only "${wt_llk}/tests"
   )
 
   cat >> "${wt_llk}/.gitignore" <<'GITIGNORE'
