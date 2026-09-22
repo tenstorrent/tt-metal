@@ -23,16 +23,17 @@ void kernel_main() {
     constexpr uint32_t batch_size = get_arg(args::batch_size);
     constexpr uint32_t K_chunk_tiles = get_arg(args::K_chunk_tiles);
     constexpr uint32_t num_K_chunks = get_arg(args::num_K_chunks);
-    constexpr uint32_t C_slice_M_tiles = get_arg(args::C_slice_M_tiles);
-    constexpr uint32_t C_slice_N_tiles = get_arg(args::C_slice_N_tiles);
+    // C slice dims rounded up to subblock multiples; overshoot tiles are clipped by the writer.
+    constexpr uint32_t C_slice_M_padded_tiles = get_arg(args::C_slice_M_padded_tiles);
+    constexpr uint32_t C_slice_N_padded_tiles = get_arg(args::C_slice_N_padded_tiles);
     constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
     constexpr bool packer_l1_acc = get_arg(args::packer_l1_acc) != 0;
     constexpr bool partials_format_differs = get_arg(args::partials_format_differs) != 0;
 
-    constexpr uint32_t A_slice_tiles = C_slice_M_tiles * K_chunk_tiles;
-    constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_tiles;
-    constexpr uint32_t C_slice_tiles = C_slice_M_tiles * C_slice_N_tiles;
+    constexpr uint32_t A_slice_tiles = C_slice_M_padded_tiles * K_chunk_tiles;
+    constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
+    constexpr uint32_t C_slice_tiles = C_slice_M_padded_tiles * C_slice_N_padded_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what DST holds
 
     DataflowBuffer A_slice(dfb::A_slice);
@@ -66,9 +67,9 @@ void kernel_main() {
                 }
 
                 // (m_tile, n_tile) is the subblock's first tile within the C slice.
-                for (uint32_t m_tile = 0; m_tile < C_slice_M_tiles; m_tile += subblock_M_tiles) {
+                for (uint32_t m_tile = 0; m_tile < C_slice_M_padded_tiles; m_tile += subblock_M_tiles) {
                     const uint32_t A_subblock_first_tile = m_tile * K_chunk_tiles;  // A slice tile (m_tile, 0)
-                    for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles; n_tile += subblock_N_tiles) {
+                    for (uint32_t n_tile = 0; n_tile < C_slice_N_padded_tiles; n_tile += subblock_N_tiles) {
                         const uint32_t B_subblock_first_tile = n_tile;  // B slice tile (0, n_tile)
                         tile_regs_acquire();
                         if (reload_partials) {
@@ -106,7 +107,7 @@ void kernel_main() {
                                 subblock_M_tiles,
                                 K_chunk_tiles);
                             A_slice_tile += 1;                // next K tile along the A slice row
-                            B_slice_tile += C_slice_N_tiles;  // next K row of the B slice
+                            B_slice_tile += C_slice_N_padded_tiles;  // next K row of the B slice
                         }
                         tile_regs_commit();
 

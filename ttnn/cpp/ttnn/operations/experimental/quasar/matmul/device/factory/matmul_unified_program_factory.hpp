@@ -33,6 +33,10 @@ struct UnifiedMatmulPlan {
     uint32_t num_K_chunks = 0;  // K_tiles / K_chunk_tiles
     uint32_t subblock_M_tiles = 0;
     uint32_t subblock_N_tiles = 0;
+    // C slice dims rounded up to subblock multiples (equal when the subblock divides the slice).
+    // Buffers and kernel loops use these; overshoot rows/columns are clipped on write.
+    uint32_t C_slice_M_padded_tiles = 0;
+    uint32_t C_slice_N_padded_tiles = 0;
 
     // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
     // runs per active core (the factory derives the per-core RTAs).

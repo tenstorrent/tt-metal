@@ -88,6 +88,28 @@ struct DfbSizes {
     }
 };
 
+// Maximize subblock size regardless of divisibility (Borys's request on GH#41910, the SDPA
+// approach): pick the max-volume DST-filling subblock; the C slice is rounded up to subblock
+// multiples and the overshoot is clipped on write. Ties prefer the least padding waste.
+std::pair<uint32_t, uint32_t> maximize_subblock_size(
+    uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, uint32_t dst_capacity_tiles) {
+    std::pair<uint32_t, uint32_t> best{1, 1};
+    uint64_t best_volume = 0;
+    uint64_t best_padded_area = UINT64_MAX;
+    for (uint32_t h = 1; h <= dst_capacity_tiles; ++h) {
+        for (uint32_t w = 1; h * w <= dst_capacity_tiles; ++w) {
+            const uint64_t volume = h * w;
+            const uint64_t padded_area = (uint64_t)tt::round_up(C_slice_M_tiles, h) * tt::round_up(C_slice_N_tiles, w);
+            if (volume > best_volume || (volume == best_volume && padded_area < best_padded_area)) {
+                best = {h, w};
+                best_volume = volume;
+                best_padded_area = padded_area;
+            }
+        }
+    }
+    return best;
+}
+
 DfbSizes size_dfbs(
     const UnifiedMatmulPlan& plan,
     uint32_t K_chunk_tiles,
@@ -108,7 +130,7 @@ DfbSizes size_dfbs(
     r.C_entry_bytes = tt::tile_size(plan.C_format);
     r.C_partials_entry_bytes = tt::tile_size(r.C_partials_format);
 
-    const uint32_t C_slice_tiles = plan.C_slice_M_tiles * plan.C_slice_N_tiles;
+    const uint32_t C_slice_tiles = plan.C_slice_M_padded_tiles * plan.C_slice_N_padded_tiles;
     r.C_slice_entries = C_slice_tiles;
     r.C_partials_entries = C_slice_tiles;
 
@@ -124,9 +146,9 @@ DfbSizes size_dfbs(
     r.A_entry_bytes = tt::tile_size(plan.A_format);
     r.B_entry_bytes = tt::tile_size(plan.B_format);
     r.A_slice_entries = r.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles
-                                   : plan.C_slice_M_tiles * K_chunk_tiles * slice_buffering_factor;
+                                   : plan.C_slice_M_padded_tiles * K_chunk_tiles * slice_buffering_factor;
     r.B_slice_entries = r.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles
-                                   : K_chunk_tiles * plan.C_slice_N_tiles * slice_buffering_factor;
+                                   : K_chunk_tiles * plan.C_slice_N_padded_tiles * slice_buffering_factor;
 
     // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
     // (else compute packs slice i+1's partials over slice i before the writer drains it).
@@ -227,20 +249,21 @@ UnifiedMatmulPlan plan_unified_matmul(
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
     const bool packer_l1_acc =
         std::get<3>(get_compute_kernel_config_args(A.device()->arch(), attributes.compute_kernel_config.value()));
+    const uint32_t dst_capacity_tiles_for_choice = fp32_dest_acc_en ? 4 : 8;
     if (config.subblock_M_tiles == 0 && config.subblock_N_tiles == 0) {
-        // The chooser's (h, w) is (M tiles, N tiles) of the subblock.
-        const std::tuple<uint32_t, uint32_t> subblock =
-            operations::experimental::quasar::matmul::bmm_op_utils_qsr::get_matmul_subblock_params(
-                plan.C_slice_M_tiles,
-                plan.C_slice_N_tiles,
-                /*per_core_M_equals_subblock_h_constraint=*/false,
-                // A sharded C is packed straight into the shard when subblocks span the C slice width, so ask
-                // for that when it can fit DST; the chooser falls back to 1x1 otherwise.
-                /*per_core_N_equals_subblock_w_constraint=*/attributes.output_mem_config.is_sharded() &&
-                    plan.C_slice_N_tiles <= (fp32_dest_acc_en ? 4u : 8u),
-                fp32_dest_acc_en);
-        plan.subblock_M_tiles = std::get<0>(subblock);
-        plan.subblock_N_tiles = std::get<1>(subblock);
+        // A sharded C is packed straight into the shard only when subblocks span the C slice width and
+        // tile its height exactly; prefer that when it fits DST.
+        if (attributes.output_mem_config.is_sharded() && plan.C_slice_N_tiles <= dst_capacity_tiles_for_choice) {
+            plan.subblock_N_tiles = plan.C_slice_N_tiles;
+            plan.subblock_M_tiles =
+                std::min(dst_capacity_tiles_for_choice / plan.C_slice_N_tiles, plan.C_slice_M_tiles);
+            while (plan.C_slice_M_tiles % plan.subblock_M_tiles != 0) {
+                --plan.subblock_M_tiles;
+            }
+        } else {
+            std::tie(plan.subblock_M_tiles, plan.subblock_N_tiles) =
+                maximize_subblock_size(plan.C_slice_M_tiles, plan.C_slice_N_tiles, dst_capacity_tiles_for_choice);
+        }
     } else {
         TT_FATAL(
             config.subblock_M_tiles > 0 && config.subblock_N_tiles > 0,
@@ -248,13 +271,8 @@ UnifiedMatmulPlan plan_unified_matmul(
         plan.subblock_M_tiles = config.subblock_M_tiles;
         plan.subblock_N_tiles = config.subblock_N_tiles;
     }
-    TT_FATAL(
-        plan.C_slice_M_tiles % plan.subblock_M_tiles == 0 && plan.C_slice_N_tiles % plan.subblock_N_tiles == 0,
-        "subblock {}x{} must divide the per-core C slice {}x{}",
-        plan.subblock_M_tiles,
-        plan.subblock_N_tiles,
-        plan.C_slice_M_tiles,
-        plan.C_slice_N_tiles);
+    plan.C_slice_M_padded_tiles = tt::round_up(plan.C_slice_M_tiles, plan.subblock_M_tiles);
+    plan.C_slice_N_padded_tiles = tt::round_up(plan.C_slice_N_tiles, plan.subblock_N_tiles);
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
     TT_FATAL(
         plan.subblock_M_tiles * plan.subblock_N_tiles <= dst_capacity_tiles,
@@ -285,17 +303,20 @@ UnifiedMatmulPlan plan_unified_matmul(
     // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy path
     // zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
     const bool A_borrowable = one_C_slice_per_core_no_batch && C_slices_across_N == 1 &&
-                              A_last_K_tile_valid_columns == 0 && shard_matches(A, plan.C_slice_M_tiles, plan.K_tiles);
+                              plan.C_slice_M_padded_tiles == plan.C_slice_M_tiles && A_last_K_tile_valid_columns == 0 &&
+                              shard_matches(A, plan.C_slice_M_tiles, plan.K_tiles);
     // B: the C slice's columns for all of K; C slices must span M.
-    const bool B_borrowable =
-        one_C_slice_per_core_no_batch && C_slices_down_M == 1 && shard_matches(B, plan.K_tiles, plan.C_slice_N_tiles);
+    const bool B_borrowable = one_C_slice_per_core_no_batch && C_slices_down_M == 1 &&
+                              plan.C_slice_N_padded_tiles == plan.C_slice_N_tiles &&
+                              shard_matches(B, plan.K_tiles, plan.C_slice_N_tiles);
     // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order.
     const bool C_shard_matches = output.has_value()
                                      ? shard_matches(output.value(), plan.C_slice_M_tiles, plan.C_slice_N_tiles)
                                      : (attributes.output_mem_config.is_sharded() &&
                                         attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1);
-    const bool C_borrowable =
-        C_shard_matches && one_C_slice_per_core_no_batch && plan.subblock_N_tiles == plan.C_slice_N_tiles;
+    const bool C_borrowable = C_shard_matches && one_C_slice_per_core_no_batch &&
+                              plan.subblock_N_tiles == plan.C_slice_N_tiles &&
+                              plan.C_slice_M_padded_tiles == plan.C_slice_M_tiles;
 
     // ---- Formats, K chunk and DFB sizing ----
     plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
@@ -538,6 +559,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"B_batch_stride_tiles", plan.B_batch_stride_tiles},
                 {"C_slice_M_tiles", plan.C_slice_M_tiles},
                 {"C_slice_N_tiles", plan.C_slice_N_tiles},
+                {"C_slice_M_padded_tiles", plan.C_slice_M_padded_tiles},
+                {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
                 {"K_chunk_tiles", plan.K_chunk_tiles},
                 {"num_K_chunks", plan.num_K_chunks},
                 {"A_last_K_tile_valid_columns", A_last_K_tile_valid_columns},
@@ -563,6 +586,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"batch_size", plan.batch_size},
                 {"C_slice_M_tiles", plan.C_slice_M_tiles},
                 {"C_slice_N_tiles", plan.C_slice_N_tiles},
+                {"C_slice_M_padded_tiles", plan.C_slice_M_padded_tiles},
+                {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
                 {"subblock_M_tiles", plan.subblock_M_tiles},
                 {"subblock_N_tiles", plan.subblock_N_tiles},
                 {"C_borrowed", plan.borrow_C ? 1u : 0u},
@@ -622,8 +647,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"batch_size", plan.batch_size},
                 {"K_chunk_tiles", plan.K_chunk_tiles},
                 {"num_K_chunks", plan.num_K_chunks},
-                {"C_slice_M_tiles", plan.C_slice_M_tiles},
-                {"C_slice_N_tiles", plan.C_slice_N_tiles},
+                {"C_slice_M_padded_tiles", plan.C_slice_M_padded_tiles},
+                {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
                 {"subblock_M_tiles", plan.subblock_M_tiles},
                 {"subblock_N_tiles", plan.subblock_N_tiles},
                 {"packer_l1_acc", plan.packer_l1_acc_en ? 1u : 0u},
