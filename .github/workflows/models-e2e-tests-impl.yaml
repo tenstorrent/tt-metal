@@ -232,6 +232,8 @@ jobs:
         with:
           log-file: generated/test_logs/tt-check.log
           run: |
+            # --no-deps preserves the TTNN build under test; resolving tt-check's
+            # dependencies could install a different TTNN release from PyPI.
             uv pip install --upgrade --no-deps tt-check
             tt-check --json
       - name: ${{ matrix.test-group.name }}
