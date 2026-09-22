@@ -141,8 +141,10 @@ class PrefillModelAdapter(ABC):
     dflash_golden_default: str = ""
 
     def cache_kind(self, config_id: int) -> str:
-        """What migration-table config ``config_id`` holds: ``"kvpe"``, ``"index"`` (a DSA indexer key
-        cache) or ``"other"``. The default keeps the historical convention (config 1 of a multi-config
+        """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and
+        ``"index"`` (a DSA indexer key cache) and treat any other value as an opaque cache they neither
+        decode nor infer a width for; a model may return its own kinds (Kimi-K3: ``"kda_recurrent"``,
+        ``"kda_convolution"``). The default keeps the historical convention (config 1 of a multi-config
         table is the index cache); a model whose second config is something else overrides this so the
         producer and the migration driver stop inferring the kind from the config count."""
         if config_id == 0:

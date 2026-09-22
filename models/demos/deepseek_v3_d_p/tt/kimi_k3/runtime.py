@@ -48,11 +48,12 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         end = first + int(self.config.num_layers)
         return [layer for layer in KimiK3Config.mla_layer_ids() if first <= layer < end]
 
-    def _my_kda_layer_ids(self):
-        """The GLOBAL model layers in this rank's slice that carry a KDA state."""
-        first = int(self.config.first_layer_idx)
-        end = first + int(self.config.num_layers)
-        return [layer for layer in KimiK3Config.kda_layer_ids() if first <= layer < end]
+    def _schedule(self, first_layer_idx=None, num_my_layers=None):
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
+
+        first = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
+        count = self.config.num_layers if num_my_layers is None else int(num_my_layers)
+        return KimiK3LayerSchedule.build(KimiK3Config, first, count)
 
     def compile(self, kv_caches) -> None:
         """Bind the engine-owned KDA state slabs to the model's carries, then warm up as usual.
@@ -95,15 +96,13 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         """
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
-        first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
-        num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
-        last = first_layer_idx + num_my_layers
-        mla_ids = KimiK3Config.mla_layer_ids()
-        kda_ids = KimiK3Config.kda_layer_ids()
-        first_slot = sum(1 for layer in mla_ids if layer < first_layer_idx)
-        my_slots = [layer for layer in mla_ids if first_layer_idx <= layer < last]
-        first_kda = sum(1 for layer in kda_ids if layer < first_layer_idx)
-        my_kda = [layer for layer in kda_ids if first_layer_idx <= layer < last]
+        schedule = self._schedule(first_layer_idx, num_my_layers)
+        first_layer_idx, last = schedule.first_layer_idx, schedule.first_layer_idx + schedule.num_layers
+        # Compacted slot spaces: how many slabs / carries the ranks before this one own.
+        first_slot = sum(1 for layer in schedule.mla_layer_ids if layer < first_layer_idx)
+        my_slots = [layer for layer in schedule.mla_layer_ids if first_layer_idx <= layer < last]
+        first_kda = sum(1 for layer in KimiK3Config.kda_layer_ids() if layer < first_layer_idx)
+        my_kda = list(schedule.kda_layer_ids_local())
 
         if kv_caches.index is not None:
             raise RuntimeError("Kimi-K3 has no DSA index cache; a merged table here is unexpected")
@@ -157,7 +156,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
 
     def kda_table_layer_rows(self, stage_layout):
         """The KDA analogue of `kv_table_layer_rows`: compacted KDA slot i -> model layer."""
-        total = sum(stage["count"] for stage in stage_layout) if stage_layout else len(self._my_kda_layer_ids())
+        total = sum(stage["count"] for stage in stage_layout) if stage_layout else self._schedule().num_kda_layers
         return list(KimiK3Config.kda_layer_ids()[:total])
 
     def build_kv_chunk_table(
