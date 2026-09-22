@@ -39,6 +39,7 @@ ttnn::Tensor newtonschulz(const ttnn::Tensor& G, int steps, float eps, float a, 
     // Preallocate buffers: square shape [batch..., m_eff, m_eff] and X shape [batch..., m_eff, n_eff]
     const auto rank = shape.rank();
     std::vector<uint32_t> mm_dims;
+    mm_dims.reserve(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         mm_dims.push_back(shape[i]);
     }

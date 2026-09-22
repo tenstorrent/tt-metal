@@ -79,6 +79,7 @@ TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorLargeWithBatch) {
     std::vector<scalar_t> test_data;
     uint32_t batch_size = 16;
     uint32_t vec_size = 256 * batch_size;
+    test_data.reserve(vec_size);
     for (size_t i = 0; i < vec_size; i++) {
         test_data.push_back(static_cast<scalar_t>(i));
     }
@@ -160,6 +161,7 @@ TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorLargeWithBatch) {
     std::vector<scalar_t> test_data;
     uint32_t batch_size = 16;
     uint32_t vec_size = 256 * batch_size;
+    test_data.reserve(vec_size);
     for (size_t i = 0; i < vec_size; i++) {
         test_data.push_back(static_cast<scalar_t>((float)i / 100.0F));
     }
@@ -183,6 +185,7 @@ TYPED_TEST(TtmlFromVectorBf16Test, ToFromTensorLarge) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data;
     uint32_t vec_size = 1337;
+    test_data.reserve(vec_size);
     for (size_t i = 0; i < vec_size; i++) {
         test_data.push_back(static_cast<scalar_t>((float)i / 100.0F));
     }
@@ -302,6 +305,7 @@ TYPED_TEST(TtmlFromVectorBf16Test, VeryLargeTileLayout) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data;
     uint32_t vec_size = 1048576;
+    test_data.reserve(vec_size);
     for (size_t i = 0; i < vec_size; i++) {
         test_data.push_back(0);
     }
@@ -336,6 +340,7 @@ TEST_F(TtmlFromVectorFloat32Test, TestFloat32ToFromTensorLarge) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data;
     uint32_t vec_size = 50304;
+    test_data.reserve(vec_size);
     for (size_t i = 0; i < vec_size; i++) {
         test_data.push_back(1.0005F);
     }
@@ -356,6 +361,7 @@ TEST_F(TtmlFromVectorFloat32Test, TestFloat32ToFromTensorLargeWithBatch) {
     std::vector<float> test_data;
     uint32_t batch_size = 256;
     uint32_t vec_size = 256 * batch_size;
+    test_data.reserve(vec_size);
     for (size_t i = 0; i < vec_size; i++) {
         test_data.push_back(i / 100.f);
     }

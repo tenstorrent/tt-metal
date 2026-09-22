@@ -71,6 +71,7 @@ const char* noc_send_type_to_string(uint8_t type) {
         case NocSendType::NOC_MULTICAST_WRITE: return "NOC_MULTICAST_WRITE";
         case NocSendType::NOC_MULTICAST_ATOMIC_INC: return "NOC_MULTICAST_ATOMIC_INC";
         case NocSendType::NOC_UNICAST_READ: return "NOC_UNICAST_READ";
+        case NocSendType::NOC_SPARSE_MCAST_WRITE: return "NOC_SPARSE_MCAST_WRITE";
         default: return "UNKNOWN";
     }
 }
@@ -94,6 +95,8 @@ void emit_sender_channels(
             << fmt::format("0x{:04X}", used_bitfield);
 
     emitter << YAML::Key << "sender_channels" << YAML::Value << YAML::BeginSeq;
+    std::vector<size_t> forwarded_from_vcs;
+    forwarded_from_vcs.reserve(builder_config::MAX_NUM_VCS);
     for (size_t ch = 0; ch < builder_config::num_max_sender_channels; ch++) {
         if (!(used_bitfield & (1u << ch))) {
             continue;
@@ -106,7 +109,7 @@ void emit_sender_channels(
                 << capture.sender_channel_max_packet_size_seen_bytes_by_vc[ch];
 
         // Collect VCs that forward to this sender channel
-        std::vector<size_t> forwarded_from_vcs;
+        forwarded_from_vcs.clear();
         for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; vc++) {
             if (capture.sender_channel_forwarded_to_bitfield_by_vc[vc] & (1u << ch)) {
                 forwarded_from_vcs.push_back(vc);
@@ -157,7 +160,7 @@ void emit_noc_send_types(
         uint16_t type_bitfield = capture.used_noc_send_type_by_vc_bitfield[vc];
         emitter << YAML::Key << "types" << YAML::Value;
         emitter << YAML::Flow << YAML::BeginSeq;
-        for (uint8_t t = 0; t <= NocSendType::NOC_UNICAST_READ; t++) {
+        for (uint8_t t = 0; t <= NocSendType::NOC_SEND_TYPE_LAST; t++) {
             if (type_bitfield & (1u << t)) {
                 emitter << noc_send_type_to_string(t);
             }

@@ -4,6 +4,7 @@
 
 #include "fabric_tensix_builder_impl.hpp"
 
+#include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -149,7 +150,14 @@ FabricTensixDatamoverBaseConfig::FabricTensixDatamoverBaseConfig(
             MemoryRegion(current_address, noc_aligned_address_size_bytes_, config.num_channels);
         current_address = flow_control_regions_[type].get_end_address();
 
-        // Buffer index region: write pointer synchronization per channel
+        // Buffer index region: producer cursor handoff per channel. The producer reads and writes
+        // each entry as a whole SenderChannelProducerCursor, so the struct *is* the entry --
+        // require equality, not fit.
+        TT_FATAL(
+            sizeof(tt::tt_fabric::SenderChannelProducerCursor) == noc_aligned_address_size_bytes_,
+            "SenderChannelProducerCursor is {} B but the per-channel buffer index entry is {} B; they must match",
+            sizeof(tt::tt_fabric::SenderChannelProducerCursor),
+            noc_aligned_address_size_bytes_);
         buffer_index_regions_[type] =
             MemoryRegion(current_address, noc_aligned_address_size_bytes_, config.num_channels);
         current_address = buffer_index_regions_[type].get_end_address();
@@ -276,6 +284,7 @@ void FabricTensixDatamoverBaseConfig::set_fabric_endpoint_status_address(size_t 
 
 std::vector<std::pair<size_t, size_t>> FabricTensixDatamoverBaseConfig::get_memory_regions_to_clear() const {
     std::vector<std::pair<size_t, size_t>> regions;
+    regions.reserve(1 + 3 * channel_configs_.size());
 
     // Always clear termination signal region
     regions.push_back({termination_signal_region_.get_address(), termination_signal_region_.get_total_size()});
@@ -431,6 +440,7 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
     auto downstream_dirs = builder::get_all_other_directions(direction, /*exclude_z=*/true);
 
     std::vector<MuxConnectionInfo> mux_infos;
+    mux_infos.reserve(downstream_dirs.size());
 
     // Collect connection info for each downstream mux
     for (uint32_t i = 0; i < downstream_dirs.size(); i++) {
@@ -960,25 +970,32 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
             break;
         }
         case ChannelTypes::ROUTER_CHANNEL: {
-            // Router channels: topology-based fabric router stream IDs (only in Legacy MUX mode)
+            // Router channels: the free-slot registers of the fabric router's producer slots, read
+            // from the fabric's shared stream assignment in FabricBuilderContext -- this mux
+            // decrements them across the link, so the two must agree by construction, not by
+            // sharing a constant table. (Legacy MUX mode only; express + MUX is
+            // guarded-unsupported.)
             const auto topology = fabric_context.get_fabric_topology();
+            const StreamAssignment& assignment =
+                fabric_context.get_builder_context().get_stream_assignment(local_fabric_node_id_.mesh_id);
             switch (topology) {
                 case tt::tt_fabric::Topology::NeighborExchange:
                     TT_THROW("NeighborExchange topology has not been tested in MUX mode");
                     break;
                 case tt::tt_fabric::Topology::Linear:
                 case tt::tt_fabric::Topology::Ring:
-                    fabric_stream_ids = {
-                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id};
+                    // 1D: the single forwarding producer's free-slot register.
+                    fabric_stream_ids = {assignment.id(StreamRole::SENDER_FREE_SLOTS, 0, 1)};
                     break;
                 case tt::tt_fabric::Topology::Mesh:
                 case tt::tt_fabric::Topology::Torus:
+                    // 2D: the three non-self cardinal producers' free-slot registers.
                     fabric_stream_ids = {
-                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id,
-                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_2_free_slots_stream_id,
-                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_3_free_slots_stream_id};
+                        assignment.id(StreamRole::SENDER_FREE_SLOTS, 0, 1),
+                        assignment.id(StreamRole::SENDER_FREE_SLOTS, 0, 2),
+                        assignment.id(StreamRole::SENDER_FREE_SLOTS, 0, 3)};
                     break;
-                default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
+                default: TT_THROW("Unknown fabric topology: {}", enchantum::to_string(topology)); break;
             }
             break;
         }
@@ -1118,19 +1135,20 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
 }
 
 std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
-    std::vector<uint32_t> runtime_args;
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         TT_FATAL(
             upstream_routers_noc_x_.empty() && upstream_routers_noc_y_.empty(),
             "In UDM mode there should NOT be any upstream routers being set");
     }
-    runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
-    runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
 
     auto config_runtime_args =
         config_->get_run_time_args(local_fabric_node_id_, remote_fabric_node_id_, link_idx_, program, my_core_logical_);
 
+    std::vector<uint32_t> runtime_args;
+    runtime_args.reserve(upstream_routers_noc_x_.size() + upstream_routers_noc_y_.size() + config_runtime_args.size());
+    runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
+    runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
     runtime_args.insert(runtime_args.end(), config_runtime_args.begin(), config_runtime_args.end());
     return runtime_args;
 }
@@ -1232,6 +1250,7 @@ std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_runtime_args(tt::tt
     std::vector<uint32_t> runtime_args;
     // Memory regions to clear at startup
     auto regions_to_clear = config_->get_memory_regions_to_clear();
+    runtime_args.reserve(1 + 2 * regions_to_clear.size());
     runtime_args.push_back(static_cast<uint32_t>(regions_to_clear.size()));
     for (const auto& [address, size] : regions_to_clear) {
         runtime_args.push_back(static_cast<uint32_t>(address));

@@ -259,6 +259,7 @@ ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim) {
         case tt::tt_metal::DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::BFLOAT16: return adaptor::concat_impl<bfloat16>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::INT8: return adaptor::concat_impl<int8_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
@@ -298,6 +299,7 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(bfloat16)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(float)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(double)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(int32_t)
+EXPLICIT_INSTANTIATIONS_FOR_TYPE(int8_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint8_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint16_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint32_t)

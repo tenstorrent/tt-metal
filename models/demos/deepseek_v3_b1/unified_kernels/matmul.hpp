@@ -13,7 +13,7 @@
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "api/compute/experimental/custom_mm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
@@ -125,7 +125,7 @@ struct Matmul {
             constexpr bool read_transposed = transpose && true;
             constexpr bool fuse_activation = CTArgs::fuse_sigmoid || CTArgs::fuse_silu;
             if constexpr (!skip_reconfig) {
-                reconfig_data_format<SrcOrder::Reverse, true>(args.in0, args.in1);
+                reconfig_full_operand<SrcOrder::Reverse>(args.in0, args.in1);
                 pack_reconfig_data_format<true>(args.out);
             }
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);

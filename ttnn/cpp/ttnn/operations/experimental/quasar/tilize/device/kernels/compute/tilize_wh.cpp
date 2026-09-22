@@ -6,7 +6,6 @@
 
 #include "api/compute/tilize.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-// #include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "experimental/kernel_args.h"
 

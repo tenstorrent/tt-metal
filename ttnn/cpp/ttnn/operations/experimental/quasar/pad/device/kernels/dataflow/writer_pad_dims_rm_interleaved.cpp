@@ -38,7 +38,6 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_local_W; ++w) {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
-                // DPRINT("WR: w={} z={} y={}\n", w, z, y);
                 cb.wait_front(1);
                 noc.async_write(
                     cb,

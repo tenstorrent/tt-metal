@@ -35,7 +35,8 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
 
     const auto& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
-    const bool is_height_concat = 2 == operation_attributes.dim;
+    const uint32_t rank = input_tensors[0].logical_shape().rank();
+    const bool height_concat = is_height_concat(rank, operation_attributes.dim);
     ProgramDescriptor desc;
 
     const uint32_t num_input_tensors = input_tensors.size();
@@ -98,8 +99,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             .buffer = input_tensors[input_id].buffer(),
         });
 
-        curr_input_write_offset +=
-            page_size * (is_height_concat ? input_num_pages : input_num_pages_per_stick[input_id]);
+        curr_input_write_offset += page_size * (height_concat ? input_num_pages : input_num_pages_per_stick[input_id]);
     }
 
     // Output CB
@@ -123,6 +123,8 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
 
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
+    runtime_args_0.reserve(num_input_tensors * 4);
+    runtime_args_1.reserve(num_input_tensors * 4);
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto input_num_sticks_per_risc = tt::div_up(input_num_sticks[input_id], 2);
         runtime_args_0.push_back(input_num_pages_per_stick[input_id]);

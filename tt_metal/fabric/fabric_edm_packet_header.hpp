@@ -6,9 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <climits>
 #include <initializer_list>
-#include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "api/debug/assert.h"
@@ -93,7 +91,7 @@ enum EDMStatus : uint32_t {
     INITIALIZATION_COMPLETE = 0xBACADAEA
 };
 
-// 3 bits
+// 4 bits
 enum NocSendType : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_UNICAST_INLINE_WRITE = 1,
@@ -103,7 +101,16 @@ enum NocSendType : uint8_t {
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
     NOC_UNICAST_READ = 7,
-    NOC_SEND_TYPE_LAST = NOC_UNICAST_READ
+    // Chip-multicast a single payload to non-contiguous colinear chips, writing a distinct
+    // per-chip destination address (1D only). Unlike scatter (multiple addresses on one chip),
+    // each address here belongs to a different chip along the sparse-multicast line.
+    NOC_SPARSE_MCAST_WRITE = 8,
+    // Highest defined send type. Bounds telemetry iteration and is_valid on LowLatency headers (the
+    // only header type allowed to carry NOC_SPARSE_MCAST_WRITE). The dense standard local-write range
+    // still ends at NOC_UNICAST_SCATTER_WRITE; the reachability guard and non-LowLatency validation
+    // reference that directly, since the gap types (multicast/read) between it and sparse never reach
+    // those paths.
+    NOC_SEND_TYPE_LAST = NOC_SPARSE_MCAST_WRITE
 };
 // How to send the payload across the cluster
 // 1 bit
@@ -312,6 +319,22 @@ struct NocMulticastAtomicIncCommandHeader {
     uint8_t size_x;
     uint8_t size_y;
 };
+#define NOC_SPARSE_MCAST_WRITE_MAX_DESTS 4
+struct NocSparseMulticastWriteCommandHeader {
+    // Flat list of fully-resolved destination NOC addresses, one per page, grouped by writing chip in
+    // ascending hop order: counts[c] consecutive addresses belong to the c-th writing chip. A single
+    // payload is delivered to every address, so one chip can receive multiple pages. The router walks
+    // chip_idx over the writing hops; at each it writes counts[chip_idx] pages starting at write_idx,
+    // then advances write_idx by that count and chip_idx by one before forwarding the mutated header
+    // downstream. num_dests is the total page count (== sum of counts, <= MAX_DESTS); num_chips is the
+    // number of writing chips (== set bits in the hop mask).
+    uint64_t noc_address[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];
+    uint8_t counts[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];
+    uint8_t num_dests;
+    uint8_t num_chips;
+    uint8_t write_idx;
+    uint8_t chip_idx;
+};
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
 static_assert(
@@ -324,6 +347,9 @@ static_assert(
     sizeof(NocUnicastAtomicIncFusedCommandHeader) == 24, "NocUnicastAtomicIncFusedCommandHeader size is not 24 bytes");
 static_assert(
     sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
+static_assert(
+    sizeof(NocSparseMulticastWriteCommandHeader) <= sizeof(NocUnicastScatterCommandHeader),
+    "NocSparseMulticastWriteCommandHeader must fit within the NocCommandFields union");
 
 // NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 union NocCommandFields {
@@ -335,6 +361,7 @@ union NocCommandFields {
     NocUnicastAtomicIncFusedCommandHeader unicast_seminc_fused;
     NocMulticastAtomicIncCommandHeader mcast_seminc;
     NocUnicastScatterCommandHeader unicast_scatter_write;
+    NocSparseMulticastWriteCommandHeader sparse_mcast_write;
 };
 // NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 static_assert(sizeof(NocCommandFields) == 40, "CommandFields size is not 40 bytes");
@@ -647,6 +674,39 @@ public:
         this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return static_cast<volatile Derived*>(this);
+    }
+
+    // Pairs with to_chip_sparse_multicast: carries a flat, hop-ordered list of destination addresses
+    // grouped per writing chip by counts[]. Addresses must be listed nearest writing chip first, with a
+    // chip's pages contiguous, so the router's write_idx/chip_idx advance selects each chip's own pages.
+    volatile Derived* to_noc_sparse_mcast_write(
+        const NocSparseMulticastWriteCommandHeader& sparse_mcast_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        this->noc_send_type = NOC_SPARSE_MCAST_WRITE;
+        const uint8_t num_dests = sparse_mcast_command_header.num_dests;
+        ASSERT(num_dests > 0 && num_dests <= NOC_SPARSE_MCAST_WRITE_MAX_DESTS);
+        for (uint8_t i = 0; i < num_dests; i++) {
+            auto noc_address_components = get_noc_address_components(sparse_mcast_command_header.noc_address[i]);
+            this->command_fields.sparse_mcast_write.noc_address[i] = safe_get_noc_addr(
+                noc_address_components.first.x,
+                noc_address_components.first.y,
+                noc_address_components.second,
+                edm_to_local_chip_noc);
+        }
+        const uint8_t num_chips = sparse_mcast_command_header.num_chips;
+        ASSERT(num_chips > 0 && num_chips <= num_dests);
+        for (uint8_t i = 0; i < num_chips; i++) {
+            this->command_fields.sparse_mcast_write.counts[i] = sparse_mcast_command_header.counts[i];
+        }
+        this->command_fields.sparse_mcast_write.num_dests = num_dests;
+        this->command_fields.sparse_mcast_write.num_chips = num_chips;
+        this->command_fields.sparse_mcast_write.write_idx = 0;
+        this->command_fields.sparse_mcast_write.chip_idx = 0;
+        this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
+#else
+        TT_THROW("Calling to_noc_sparse_mcast_write from host is unsupported");
 #endif
         return static_cast<volatile Derived*>(this);
     }
@@ -1151,37 +1211,16 @@ using LowLatencyPacketHeader = LowLatencyPacketHeaderT<FABRIC_1D_PKT_HDR_EXTENSI
 using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
 #endif
 
-// 2D Mesh routing fields struct
-// This struct contains routing STATE (hop_index union) for 2D packet headers.
-// All constants are centralized in RoutingFieldsConstants::Mesh (fabric_common.h).
-// Access constants via: MeshRoutingFields (aliased from RoutingFieldsConstants::Mesh)
+// Reserved 2D routing word. Indexed action-map routing consumes route_buffer instead; this type remains only to
+// preserve the packet layout and the shared ROUTING_FIELDS_TYPE plumbing.
 struct LowLatencyMeshRoutingFields {
-    // Type alias to reference centralized constants
-    using MeshRoutingFields = RoutingFieldsConstants::Mesh;
-
-    // Routing state (the actual data members)
-    union {
-        uint32_t value;  // Referenced for fast increment when updating hop count in packet header.
-                         // Also used when doing noc inline dword write to update packet header in next hop
-                         // router.
-        struct {
-            uint16_t hop_index;
-            uint8_t branch_east_offset;  // Referenced when updating hop index for mcast east branch
-            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast west branch
-        };
-    };
+    uint32_t value;
 };
+static_assert(sizeof(LowLatencyMeshRoutingFields) == sizeof(uint32_t));
 
-// TODO: https://github.com/tenstorrent/tt-metal/issues/32237
 // Primary template for 2D routing headers with variable route buffer size
-template <int RouteBufferSize = 35>
+template <int RouteBufferSize = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE>
 struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
-    // Block route buffers >67 bytes until memory map is updated
-    static_assert(
-        RouteBufferSize <= 67,
-        "ERROR: 2D routing with >67-byte route buffer requires memory map updates.\n"
-        "Current L1 allocation (ROUTING_PATH_SIZE_2D = 1024 bytes) supports max 67 hops.");
-
     LowLatencyMeshRoutingFields routing_fields;
     uint8_t route_buffer[RouteBufferSize];
     union {
@@ -1195,7 +1234,6 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
         uint16_t mcast_params[4];  // Array representing the hops in each direction
         uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
     };
-    uint8_t is_mcast_active;
 
     // Type alias for Sparse Multicast Routing Command Header
     // NOTE: Sparse multicast is not currently supported for 2D routing, tracked in issue #35604
@@ -1228,27 +1266,25 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 } __attribute__((packed, aligned(16)));
 
 // Validate expected sizes for max-capacity tiers only (one per header size)
-// Base size = 61B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
-//              routing_fields:4 + dst_start:4 + mcast_params:8 + is_mcast_active:1)
-static_assert(sizeof(HybridMeshPacketHeaderT<19>) == 80, "19B buffer must result in 80B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<35>) == 96, "35B buffer must result in 96B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<51>) == 112, "51B buffer must result in 112B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer must result in 128B header (max capacity)");
+// Base size = 60 B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
+//              routing_fields:4 + dst_start:4 + mcast_params:8)
+//
+// routing_fields is a reserved 4 B compatibility word. Reclaim it once the shared 1D/2D type plumbing is split.
+// The 60 B base plus the maximum 68 B action map fills a 128 B header exactly.
+static_assert(sizeof(HybridMeshPacketHeaderT<20>) == 80, "20B buffer must result in 80B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<36>) == 96, "36B buffer must result in 96B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<52>) == 112, "52B buffer must result in 112B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<68>) == 128, "68B buffer must fill the 128B header");
 
 // Used to get the maximum number of hops that this packet header can support
 template <int RouteBufferSize>
 struct get_max_num_hops<HybridMeshPacketHeaderT<RouteBufferSize>> {
-    // Each byte in the packet header's route buffer represents a single hop
+    // Retains the legacy trait name; 2D route-buffer entries are action-map bytes.
     static constexpr uint32_t value = static_cast<uint32_t>(RouteBufferSize);
 };
 
-// Conditional type selection based on injected define
-#ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
-using HybridMeshPacketHeader = HybridMeshPacketHeaderT<FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE>;
-#else
-// Default: backward compatibility (96B header with 35B route buffer)
-using HybridMeshPacketHeader = HybridMeshPacketHeaderT<35>;
-#endif
+using HybridMeshPacketHeader = HybridMeshPacketHeaderT<>;
+static_assert(sizeof(HybridMeshPacketHeader) <= 128, "Configured 2D packet header exceeds the 128B allocation");
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
@@ -1294,6 +1330,20 @@ static_assert(false, "UDM mode does not support 1D routing - use 2D routing inst
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 // 2D routing with UDM
+#if defined(FABRIC_EXPRESS_ENABLED)
+// Express routing with UDM is not supported.
+//
+// UDM records the source's first-hop direction in the packet (udm_control.initial_direction) and uses
+// it to pick a downstream mux. The mux fabric is cardinal-only by construction --
+// NUM_DOWNSTREAM_MUX_CONNECTIONS is 3 ("all directions except self"), and the tensix builder skips Z
+// outright ("Skip Z direction - it's for 3D routing") -- so there is no Z mux to hand a packet to.
+// On an express mesh a first hop is often a chord, which would land in the zero-filled Z column of
+// direction_to_mux_index_map and be forwarded to mux 0: the wrong mux, silently.
+//
+// Supporting it means allocating a Z mux and widening NUM_DOWNSTREAM_MUX_CONNECTIONS to 4, which is a
+// tensix/mux builder change. Until then the combination is refused here rather than misrouting.
+static_assert(false, "UDM mode does not support express routing - the mux fabric is cardinal-only");
+#endif
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::UDMHybridMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields

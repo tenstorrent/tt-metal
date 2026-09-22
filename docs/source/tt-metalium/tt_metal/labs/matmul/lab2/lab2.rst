@@ -757,12 +757,12 @@ Follow these steps to complete the exercise:
      - ``copy_tile(in_cb_id, in_tile_index, dst_tile_index)`` defined in
        ``tt_metal/hw/inc/api/compute/tile_move_copy.h`` copies a tile from the intermediate
        CB to the destination register array at the specified index.
-     - Before calling this function, you need to call ``copy_tile_to_dst_init_short(in_cb_id)``
+     - Before calling this function, you need to call ``copy_init(in_cb_id)``
        to set up the Tensix Engine for the copy operation.
      - Since the compute kernel code will alternate between copying data and multiplying tiles,
        after the copy operation completes, we need to call ``matmul_init(in0_cb_id, in1_cb_id)``
        to set up the Tensix Engine for multiplication again.
-       Observe that ``matmul_init`` and ``copy_tile_to_dst_init_short`` are lightweight, per-operation
+       Observe that ``matmul_init`` and ``copy_init`` are lightweight, per-operation
        re-initializations. The one-time ``compute_kernel_hw_startup`` call at the start of the kernel
        performs the heavier hardware configuration that is common to both the copy and multiplication
        operations and is not repeated, which is why these lighter calls are sufficient when switching

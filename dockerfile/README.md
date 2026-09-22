@@ -174,7 +174,7 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
 ```json
 {
   "ccache-tag": "ghcr.io/.../tools/ccache:4.10.2-<hash>",
-  "mold-tag": "ghcr.io/.../tools/mold:2.40.4-<hash>",
+  "mold-tag": "ghcr.io/.../tools/mold:2.42.0-<hash>",
   "doxygen-tag": "ghcr.io/.../tools/doxygen:1.16.1-<hash>",
   "clangbuildanalyzer-tag": "ghcr.io/.../tools/clangbuildanalyzer:1.6.0-<hash>",
   "gdb-tag": "ghcr.io/.../tools/gdb:14.2-<hash>",

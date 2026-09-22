@@ -29,7 +29,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 
 #ifdef DECODE_MODE
     tile_regs_acquire();
-    mul_bcast_rows_init_short(in0_cb, in1_cb);
+    mul_bcast_rows_init(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
     tile_regs_commit();
     tile_regs_wait();
@@ -40,7 +40,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 // We don't pop in1 in decode which is sin/cos since we don't stream
 #else
     tile_regs_acquire();
-    mul_tiles_init(in0_cb, in1_cb);
+    mul_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
@@ -96,7 +96,7 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-    binary_op_init_common(in_cb, cos_cb, out_cb);
+    compute_kernel_hw_startup(in_cb, cos_cb, out_cb);
 
     cb_wait_front(scalar_cb, onetile);
 
@@ -128,7 +128,7 @@ void kernel_main() {
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
                 tile_regs_acquire();
-                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
+                mul_bcast_scalar_init(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
                 tile_regs_commit();
                 tile_regs_wait();
@@ -152,7 +152,7 @@ void kernel_main() {
             cb_reserve_back(out_cb, onetile);
 
             tile_regs_acquire();
-            add_tiles_init(cos_interm_cb, sin_interm_cb);
+            add_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             tile_regs_commit();
             tile_regs_wait();

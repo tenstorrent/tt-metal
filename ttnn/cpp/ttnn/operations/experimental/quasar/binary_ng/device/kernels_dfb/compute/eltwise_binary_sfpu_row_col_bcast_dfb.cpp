@@ -112,7 +112,8 @@ ALWI void process_tile(
         // llk_post with pack_init so pack_tile writes there.
         pack_init(dfb_llk_post_id);
 #endif
-        unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id, dfb_llk_post_id);
+        reconfig_data_format(dfb_raw_row_id, dfb_raw_row_id);
+        unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_raw_row_id, 0, 0);
@@ -129,11 +130,6 @@ ALWI void process_tile(
         // Retarget the packer destination ring back to dfb_out for the binary-op pack below (see above).
         pack_init(dfb_out_id);
 #endif
-#if defined(ARCH_BLACKHOLE)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#endif
 
         // ROW operand's activation chain (reads the expanded llk_post tile). No-op (post aliases llk_post)
         // when the ROW operand has no activation, in which case the binary op reads llk_post directly.
@@ -146,23 +142,13 @@ ALWI void process_tile(
         BINARY_SFPU_INIT;
 #endif
         tile_regs_acquire();
-#ifdef ARCH_QUASAR
-        // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-        // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor) to
-        // point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs to
-        // share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-        copy_tile_to_dst_init_short(dfb_post_lhs_id);
-#else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
-#endif
+        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+        copy_init(dfb_post_lhs_id);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_lhs_id, i, i * 2);
         }
-#ifdef ARCH_QUASAR
-        copy_tile_to_dst_init_short(dfb_post_rhs_id);
-#else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
-#endif
+        reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -232,9 +218,10 @@ void kernel_main() {
     constexpr auto dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

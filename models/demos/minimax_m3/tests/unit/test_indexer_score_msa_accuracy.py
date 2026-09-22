@@ -5,7 +5,7 @@
 
 GIVEN CORRECT INPUTS, how close is the device kernel's per-block scores to the fp32 reference?
 This deliberately isolates the *kernel's* numerical accuracy from the block-cyclic cache-read
-handling (the ``msa_sp_attention`` gather + the ops' in-kernel ``block_cyclic_*`` remap in
+handling (the ``msa_sp_attention_cache_read`` gather + the ops' in-kernel ``block_cyclic_*`` remap in
 ``tt/attention/msa.py``) that arranges ``index_k`` in the chunked path. Here ``index_k`` is built
 directly and handed to the op, so any divergence is the kernel's own (bf16 dot accumulation,
 bf16-scale gate fold, block-max-pool precision, causal-mask edges, k_chunk tiling).

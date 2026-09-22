@@ -789,7 +789,8 @@ ProgramDescriptor create_multi_tile_descriptor(
         (std::uint32_t)output_cb_index,
         (std::uint32_t)num_rows_per_core_group_1,
         (std::uint32_t)Wt,
-        (std::uint32_t)half_Wt};
+        (std::uint32_t)half_Wt,
+        (std::uint32_t)token_idx.has_value()};
     if (token_idx.has_value()) {
         compute_kernel_args_group_1.insert(
             compute_kernel_args_group_1.end(),
@@ -900,11 +901,11 @@ ProgramDescriptor RotaryEmbeddingProgramFactory::create_descriptor(
     return create_multi_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
 }
 
-void RotaryEmbeddingDeviceOperation::override_runtime_arguments(
+void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output,
+    const RotaryEmbeddingParams& operation_attributes,
+    const RotaryEmbeddingInputs& tensor_args,
+    Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Patch the cached program in place: only buffer addresses (never hashed) and the token_idx-derived
     // decode scalars (deliberately hash-excluded) can change across a cache hit.  Everything else is a

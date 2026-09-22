@@ -868,13 +868,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                          : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
                                                                     : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
-    const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
+    // Int8 input (dequant/requant operand A) is read through the UInt8 unpacker.
+    const auto a_data_format = cb_dataformat_for(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
+    // Int8 output is packed through the UInt8 packer path.
+    const auto c_pack_data_format = cb_dataformat_for(c_dtype);
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
-    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
+    uint32_t c_single_tile_size = tt::tile_size(c_pack_data_format);
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
@@ -894,13 +897,36 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
     // of the default fp32->int8. The packer narrows the int32 SFPU result to uint8.
-    if (c_dtype == DataType::UINT8) {
-        if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
-            compute_kernel_defines["BINARY_SFPU_INIT"] =
-                "quant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
-        } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
-            compute_kernel_defines["BINARY_SFPU_INIT"] =
-                "requant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    // For int8 output, the SFPU crafts an offset-128 byte and stores through the UInt8 packer path.
+    const char* quant_zp_arg = "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    const bool int8_in = is_quant_op && a_dtype == DataType::INT8;
+    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + quant_zp_arg;
+        compute_kernel_defines["BINARY_SFPU_OP"] = op_fn;
+    };
+    if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
+        if (c_dtype == DataType::UINT8) {
+            compute_kernel_defines["BINARY_SFPU_INIT"] = std::string("quant_uint8_tile_init") + quant_zp_arg;
+        } else if (c_dtype == DataType::INT8) {
+            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile");
+        }
+    } else if (operation_attributes.binary_op_type == BinaryOpType::DEQUANT) {
+        if (int8_in) {
+            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile");
+        }
+    } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
+        if (c_dtype == DataType::INT8) {
+            set_sfpu_op(
+                int8_in ? "requant_int8_in_int8_out_tile_init" : "requant_int8_tile_init",
+                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile");
+        } else if (c_dtype == DataType::UINT8) {
+            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), so it reuses
+            // the int32-output op body; only the init differs, to select FP32_TO_UINT8 rounding.
+            set_sfpu_op(
+                int8_in ? "requant_int8_in_uint8_out_tile_init" : "requant_uint8_tile_init",
+                int8_in ? "requant_int8_in_tile" : "requant_tile");
+        } else if (int8_in) {
+            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile");
         }
     }
 
@@ -917,12 +943,32 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
 
-        if (op_config.process_lhs.has_value()) {
-            lhs_activations.push_back(*op_config.process_lhs);
+        // Under a left-hand scalar the kernel evaluates op(c_1, c_0), so the mathematical
+        // operands are swapped relative to the physical CBs. The caller's per-operand
+        // activation lists and the op-derived preprocess steps are both stated against the
+        // mathematical operands, so both follow the same inversion: math LHS lands on c_1,
+        // math RHS on c_0.
+        //
+        // This is the single point where "lhs" changes meaning. Above it -- scalar_is_lhs,
+        // lhs_activations, OpConfig::process_lhs -- lhs is the mathematical operand. Below it,
+        // and in the kernels, LHS is physical CB c_0. A caller that rewrites operands into
+        // slots must leave the activation lists in mathematical order and let this inversion
+        // map them; inverting them there as well cancels out and lands operand-b activations
+        // on the scalar.
+        const bool scalar_first = operation_attributes.scalar_is_lhs;
+        if (scalar_first) {
+            std::swap(lhs_activations, rhs_activations);
         }
 
-        if (op_config.process_rhs.has_value()) {
-            rhs_activations.push_back(*op_config.process_rhs);
+        const auto& process_c0 = scalar_first ? op_config.process_rhs : op_config.process_lhs;
+        const auto& process_c1 = scalar_first ? op_config.process_lhs : op_config.process_rhs;
+
+        if (process_c0.has_value()) {
+            lhs_activations.push_back(*process_c0);
+        }
+
+        if (process_c1.has_value()) {
+            rhs_activations.push_back(*process_c1);
         }
 
         // LDEXP decomposes to EXP2(rhs) then MUL on the FPU path.  The RHS
@@ -986,6 +1032,20 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
+    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
+    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
+    // for broadcast multiply (issue 43196). Computed here because it also bounds the number of
+    // tiles a compute batch may hold in DST (below), not only the compute kernel config.
+    const bool fp32_dest_acc_en =
+        c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
+        c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
+        b_data_format == tt::DataFormat::Float32 ||
+        (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
+        (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32) ||
+        // Quant SFPU kernels compute on the fp32 input in DST; keep fp32 dest
+        // accumulation regardless of the (possibly narrow, e.g. uint8) output format.
+        operation_attributes.is_quant_op;
+
     // Determine max tiles per cycle based on sharding and output data type
     // Multi-tile processing only enabled when all tensors are sharded
     uint32_t num_tiles_per_cycle = 1;  // Conservative default
@@ -1003,8 +1063,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     if (enable_multi_tile && !is_where_op) {
         if (!is_sfpu_op) {
-            // FPU kernels: 16-bit types can handle 8 tiles,
-            num_tiles_per_cycle = 8;  // Default for 16-bit types (BF16, BF8, BF4)
+            // FPU kernels: in half-sync mode DST holds 8 tiles of 16-bit data but only 4 under fp32
+            // dest accumulation (same bound as layernorm/softmax/sdpa). An 8-tile batch with fp32
+            // dest wraps past the active half; with mixed fp32/bf16 operands that corrupted tile 4
+            // of each batch (and tiles 0-3 when a LHS activation preceded the op) — issue 56958.
+            num_tiles_per_cycle = fp32_dest_acc_en ? 4 : 8;
         } else {
             // SFPU kernel should handle 4, but for unknown reason, only 2 works
             // no document and example to show why 4 does not work, need further investigation
@@ -1116,7 +1179,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                .data_format = c_data_format,
+                .data_format = c_pack_data_format,
                 .page_size = c_single_tile_size,
             }}},
             .buffer = c_sharded ? c_buffer : nullptr,
@@ -1172,17 +1235,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // COMPUTE KERNEL
-    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
-    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
-    // for broadcast multiply (issue 43196).
-    bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
-                            b_data_format == tt::DataFormat::Float32 ||
-                            (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
-                            (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32) ||
-                            // Quant SFPU kernels compute on the fp32 input in DST; keep fp32 dest
-                            // accumulation regardless of the (possibly narrow, e.g. uint8) output format.
-                            operation_attributes.is_quant_op;
+    // (fp32_dest_acc_en is computed above, next to the batch-size selection it also bounds.)
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
@@ -1288,28 +1341,39 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         reader_defines["BCAST_LLK"] = "0";
     }
 
+    const bool fill_with_value_int = b_dtype == DataType::INT32 || b_dtype == DataType::UINT32;
     if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
         // Add common fill defines
         compute_kernel_defines["FILL_LLK"] = "fill_tile";
         if (b_dtype == DataType::INT32) {
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
-            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else if (b_dtype == DataType::UINT32) {
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::UInt32>";
-            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
         }
+        if (fill_with_value_int && compute_kernel != CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+        }
+        // where_tile<DataFormat::X> selector — mirrors get_sfpu_init_fn(WHERE, a_dtype)
+        // in binary_ng_utils.cpp so the eltwise_chain `Where` element can pick the
+        // exact same DataFormat the legacy BINARY_SFPU_OP macro baked in.
+        const char* where_df = (a_dtype == DataType::INT32)     ? "Int32"
+                               : (a_dtype == DataType::UINT32)  ? "UInt32"
+                               : (a_dtype == DataType::FLOAT32) ? "Float32"
+                                                                : "Float16_b";
+        compute_kernel_defines["WHERE_DATA_FORMAT"] = where_df;
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
+    compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_device_cores;
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
-    compute_desc.compile_time_args = {num_tiles_per_cycle};
+    compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
     compute_desc.config = ComputeConfigDescriptor{
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},

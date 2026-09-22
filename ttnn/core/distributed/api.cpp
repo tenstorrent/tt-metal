@@ -97,11 +97,9 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_shape);
     auto shard_it = tensor_shards.begin();
-    std::vector<distributed::MeshCoordinate> coords;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
         HostBuffer buffer = host_buffer::get_host_buffer(*(shard_it++));
         distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
-        coords.push_back(coord);
     }
 
     tt::tt_metal::TensorTopology topology =

@@ -4,18 +4,13 @@
 """KV-cache PCC validation for the DeepSeek / Kimi (MLA) prefill model.
 
 The single home for the block-cyclic KV-cache PCC check and its golden-trace
-loaders, plus the slot->slot and multi-pair migration validators. There is ONE
-PCC entrypoint, ``kv_cache_pcc_check``, used by both paths:
+loaders. There is ONE PCC entrypoint, ``kv_cache_pcc_check`` (reached via
+``TtPrefillRuntime.kv_cache_pcc_check``, which forwards here) — golden ``.pt`` or
+trace dir + ``real_len``.
 
-  * the runner's standalone bring-up loop, via ``TtPrefillRuntime.kv_cache_pcc_check``
-    (the runtime forwards here) — golden trace dir + per-rank ``first_layer_idx``;
-  * the migration validators here (``validate_after_prefill`` and friends) — golden
-    ``.pt`` or trace dir + ``real_len``.
-
-``validate_after_prefill`` / ``validate_migration_kv`` / ``validate_migrations_pairwise``
-have NO in-repo caller: they are driven by tt-llm-engine (the prefill scheduler /
-migration driver) after it issues migrations. Keep their signatures in sync with that
-caller. Everything prefixed ``_`` is internal.
+It has NO in-repo caller: the prefill runner never PCCs, so the callers are
+out-of-tree (tt-llm-engine) and bring-up scripts. Keep the signature in sync with
+them. Everything prefixed ``_`` is internal.
 """
 
 from __future__ import annotations
@@ -49,8 +44,8 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     here. `mmap=True` keeps it lazy on first touch; subsequent layers are zero-copy
     slices into the same backing storage.
 
-    Both `validate_migration_kv` PCC calls (BEFORE/AFTER) reuse one load via the
-    module-level cache; the cache lives for the runner's lifetime.
+    Repeated PCC calls against the same `.pt` reuse one load via the module-level
+    cache; the cache lives for the process's lifetime.
     """
     import torch
 
@@ -67,10 +62,14 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     return cached
 
 
-def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":
     """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
     - Kimi (vllm): kv_cache/layer_N/rows_<start>_<end>.safetensors shards, concatenated by start row.
+
+    `start` skips that many golden rows first. A head+tail capture stores the two windows back to
+    back, so its tail begins at the head length rather than at the prompt position it represents:
+    reaching it needs a row offset, not a longer read.
     """
     import torch
     from safetensors import safe_open
@@ -79,8 +78,12 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
     single = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}.safetensors"
     if single.exists():
         with safe_open(single, framework="pt") as f:
-            return f.get_slice(key)[:total_len].to(torch.float32)
+            return f.get_slice(key)[start : start + total_len].to(torch.float32)
     layer_dir = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}"
+    if start:
+        # The sharded layout would need the offset resolved against each shard's row range; no
+        # head+tail capture ships sharded, so refuse rather than silently score the wrong rows.
+        raise NotImplementedError(f"start={start} is not supported for the sharded layout at {layer_dir}")
     shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
     rows, have = [], 0
     for shard in shards:
@@ -91,6 +94,20 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
         if have >= total_len:
             break
     return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+
+
+def kvpe_golden_present(trace_dir, layer_idx: int) -> bool:
+    """True when ``trace_dir`` carries a KVPE golden for this layer.
+
+    A hybrid stack writes a KV slab on only some layers, so its golden holds only those: Kimi-K3's 1M
+    trace ships 24 files for a 93-layer model. A reader walking every layer has to tell "no reference
+    for this layer" apart from "reference missing", and both the single-file and the sharded (vllm)
+    layouts have to be checked -- the same two reads ``_load_golden_kv_post`` does.
+    """
+    root = Path(trace_dir) / "kv_cache"
+    if (root / f"layer_{layer_idx}.safetensors").exists():
+        return True
+    return any((root / f"layer_{layer_idx}").glob("rows_*.safetensors"))
 
 
 def index_golden_present(trace_dir) -> bool:
@@ -144,13 +161,13 @@ def kv_cache_pcc_check(
     Returns the min per-layer PCC and asserts (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when
     any layer is below threshold.
 
-    The single PCC entrypoint for both callers. Golden source, in priority order:
+    The single PCC entrypoint; its callers are out-of-tree (tt-llm-engine) or bring-up scripts.
+    Golden source, in priority order:
       1. `pt_path_override` / DEEPSEEK_PREFILL_TRACE_PT — a save_reference_cache .pt carrying
          ref_kvpe_list[layer] ([1, 1, seq, kv_lora + qk_rope_head_dim], already Meta-interleaved).
-         Used by the migration validators.
-      2. `trace_dir` (caller-resolved) — the runner's standalone loop passes the resolved
-         PREFILL_TRACE_DIR golden here; descended via resolve_trace_dir.
-      3. DEEPSEEK_PREFILL_TRACE_DIR env (default: the longbook_qa 56320 trace) — migration fallback.
+      2. `trace_dir` (caller-resolved) — the resolved PREFILL_TRACE_DIR golden, descended via
+         resolve_trace_dir.
+      3. DEEPSEEK_PREFILL_TRACE_DIR env (default: the longbook_qa 56320 trace) — last-resort fallback.
     A trace dir holds kv_cache/layer_*.safetensors (or a Kimi row-sharded dir) keyed by
     kv_post_transform_layer_<global_layer>.
 
@@ -170,6 +187,16 @@ def kv_cache_pcc_check(
     from tests.ttnn.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
+    # Assumes TP-REPLICATED twice over: `_to_host` keeps one TP column, and blockcyclic_positions
+    # un-rotates with an SP-only period.
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+
+    assert not resolve_has_indexer(pipeline.hf_config), (
+        "kv_cache_pcc_check has no TP-sharded reconstruction: it keeps one TP column and un-rotates with an "
+        "SP-only block-cyclic period, and every sparse/DSA model TP-dedups. Validate such a cache with the "
+        "mock-migration producer read-back (PREFILL_MOCK_MIGRATION=1) instead of PREFILL_STANDALONE_PCC / "
+        "PREFILL_VALIDATE_MIGRATION."
+    )
     mesh_device = pipeline.mesh_device
     sp = cfg.sp_factor
     chunk_size = cfg.chunk_size
@@ -195,7 +222,7 @@ def kv_cache_pcc_check(
             )
         resolved_dir = None
     elif trace_dir is not None:
-        # Standalone path: caller passes the PREFILL_TRACE_DIR golden; descend to the dir holding it.
+        # Caller passes the PREFILL_TRACE_DIR golden; descend to the dir holding it.
         resolved_dir = resolve_trace_dir(trace_dir)
         kv_pt = None
     else:

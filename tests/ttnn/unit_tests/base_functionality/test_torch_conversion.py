@@ -115,6 +115,7 @@ def create_from_torch_test_tensors(
         ttnn.bfloat16,
         ttnn.float32,
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -128,6 +129,7 @@ def create_from_torch_test_tensors(
         torch.float32,
         torch.float64,
         torch.uint8,
+        torch.int8,
         torch.int16,
         torch.int32,
         torch.int64,
@@ -169,6 +171,7 @@ def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layo
         ttnn.bfloat16,
         ttnn.float32,
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -182,6 +185,7 @@ def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layo
         torch.float32,
         torch.float64,
         torch.uint8,
+        torch.int8,
         torch.int16,
         torch.int32,
         torch.int64,
@@ -190,31 +194,43 @@ def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layo
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("convert_with_device", [True, False])
 def test_to_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
-    ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int32]
-    if ttnn_dtype_has_random:
-        for store_input_on_device in [True, False]:
+    torch.manual_seed(0)
+    for store_input_on_device in [True, False]:
+        layout = ttnn.TILE_LAYOUT if (ttnn_dtype in TTNN_MUST_TILE_TYPES) else ttnn_layout
+        if ttnn_dtype in TTNN_MUST_TILE_TYPES:
+            ttnn_input_tensor = ttnn.typecast(
+                ttnn.rand(shape, dtype=ttnn.float32, device=device, layout=layout), ttnn_dtype
+            )
+        elif is_ttnn_float_type(ttnn_dtype):
             ttnn_input_tensor = ttnn.rand(
                 shape,
                 dtype=ttnn_dtype,
                 device=device,
-                layout=ttnn.TILE_LAYOUT if (ttnn_dtype in TTNN_MUST_TILE_TYPES) else ttnn_layout,
+                layout=layout,
+            )
+        else:
+            ttnn_input_tensor = ttnn.from_torch(
+                torch.randint(0, 100, shape, dtype=torch.int64),
+                dtype=ttnn_dtype,
+                device=device,
+                layout=layout,
             )
 
-            if not store_input_on_device:
-                ttnn_input_tensor = ttnn.from_device(ttnn_input_tensor)
+        if not store_input_on_device:
+            ttnn_input_tensor = ttnn.from_device(ttnn_input_tensor)
 
-            torch_result_tensor = ttnn.to_torch(
-                ttnn_input_tensor, dtype=torch_dtype, device=device if convert_with_device else None
-            )
-            assert (
-                torch_result_tensor.dtype == torch_dtype
-            ), f"Expected result {torch_dtype}, got result tensor {torch_result_tensor.dtype} when converting TTNN tensor {ttnn_input_tensor.dtype}"
-
-        assert_with_pcc(
-            expected_pytorch_result=torch_result_tensor,
-            actual_pytorch_result=ttnn_input_tensor.cpu().to_torch(),
-            pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
+        torch_result_tensor = ttnn.to_torch(
+            ttnn_input_tensor, dtype=torch_dtype, device=device if convert_with_device else None
         )
+        assert (
+            torch_result_tensor.dtype == torch_dtype
+        ), f"Expected result {torch_dtype}, got result tensor {torch_result_tensor.dtype} when converting TTNN tensor {ttnn_input_tensor.dtype}"
+
+    assert_with_pcc(
+        expected_pytorch_result=torch_result_tensor,
+        actual_pytorch_result=ttnn_input_tensor.cpu().to_torch(),
+        pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
+    )
 
 
 @pytest.mark.parametrize("seed", list(range(6)))
@@ -379,6 +395,7 @@ def create_from_numpy_test_tensors(
         ttnn.bfloat4_b,
         ttnn.float32,
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -454,13 +471,11 @@ def test_torch_conversion_unsigned_edge_cases_random(device, shape, ttnn_dtype, 
         low = np.iinfo(np.uint32).min
         high = np.iinfo(np.uint32).max
 
-    ttnn_input_tensor = ttnn.rand(
-        shape,
+    ttnn_input_tensor = ttnn.from_torch(
+        torch.randint(low, high + 1, shape, dtype=torch.int64),
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn_layout,
-        low=low,
-        high=high,
     )
 
     torch_result_tensor: torch.Tensor = ttnn.to_torch(ttnn_input_tensor)
@@ -1123,12 +1138,10 @@ def test_from_torch_large_tensor_type_conversion_row_major_l1(device, torch_dtyp
 
 
 @skip_for_slow_dispatch()
-@pytest.mark.xfail(
-    reason="sharded buffer write dispatch crashes on dispatch-core-row shards (write path fix not implemented)",
-    strict=True,
-)
-def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
+def test_from_torch_sharded_tilize_dispatch_core_overlap(device, expect_error):
     """
+    ** FAILING TEST **
+
     Regression test for tilize with a shard grid that extends beyond the compute
     grid (e.g. includes dispatch cores).
 
@@ -1172,18 +1185,22 @@ def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
     )
     torch_tensor = torch.zeros(shape, dtype=torch.bfloat16)
 
-    result = ttnn.from_torch(
-        torch_tensor,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=sharded_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
+    # expect_error rather than xfail: it brackets the rejection so CI log triage does not
+    # read the fatal as a crash, and it fails once the write path accepts the shard grid.
+    # Restore the assertions below at that point.
+    with expect_error(RuntimeError, r"Invalid shard grid"):
+        result = ttnn.from_torch(
+            torch_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
 
-    assert result.layout == ttnn.TILE_LAYOUT
-    assert result.dtype == ttnn.bfloat16
-    assert list(result.shape) == list(shape)
+    # assert result.layout == ttnn.TILE_LAYOUT
+    # assert result.dtype == ttnn.bfloat16
+    # assert list(result.shape) == list(shape)
 
 
 @skip_for_slow_dispatch()

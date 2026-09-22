@@ -35,36 +35,133 @@
 //     previous iter. That's safe because the matching scalar lane is 0, so
 //     stale bytes contribute 0 to the accumulator.
 
-#include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/debug/assert.h"
 #include "api/tensor/noc_traits.h"
+#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 #include "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/msda_tile_layout.hpp"
 
 namespace {
 
-// Byte-identical to the `bfloat16_to_float` / `float_to_bfloat16` helpers in
-// ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/grid_sample_reader_common.hpp
-// and a handful of other reader kernels; duplicated here to keep the kernel
-// dependency-free.
-// TODO(#45742): consolidate these per-op copies into one shared kernel header.
-inline float bf16_to_float(uint16_t bf16) {
-    uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
-    float result;
-    std::memcpy(&result, &tmp, sizeof(result));
-    return result;
+// The RISC-V dataflow cores have no FPU, so every float operation here is a
+// software routine costing ~100 cycles. The bilinear geometry runs once per
+// (query row, point) and used to be ~47% of this kernel's time, so it is done
+// in Q16.16 fixed point instead: grid coords live in [-1, 1] and the pixel
+// coords they map to are bounded by the feature-map size, both of which fit
+// integers with room to spare, and the weights only ever feed a bf16 result.
+
+using fixed_point_arithmetic::fixed_frac;
+using fixed_point_arithmetic::FIXED_HALF;
+using fixed_point_arithmetic::fixed_mul;
+using fixed_point_arithmetic::FIXED_ONE;
+using fixed_point_arithmetic::fixed_one_minus;
+using fixed_point_arithmetic::fixed_to_int;
+
+// bf16 -> Q16.16, saturating at +-clamp_q16, which bounds the pixel-coord
+// multiply below to int32. Inf/NaN saturate the same way.
+//
+// The clamp has to sit far enough out that the clamped coordinate still maps
+// fully outside the feature map, or an out-of-range sample would come back
+// in-bounds. With align_corners the mapping scales by (size - 1), so a 2-wide
+// map needs +-3; without it the scale is size and +-2 is enough. The caller
+// passes the right one for its mapping.
+//
+// The shared header has float_to_fixed but no bf16 entry point and no
+// saturation, so this one stays local.
+inline int32_t bf16_to_q16(uint16_t bf16, int32_t clamp_q16) {
+    const int32_t exp = static_cast<int32_t>((bf16 >> 7) & 0xFFu);
+    if (exp == 0) {
+        return 0;  // zero or subnormal: below Q16.16 resolution anyway
+    }
+    const bool negative = (bf16 & 0x8000u) != 0;
+    // value = (0x80 | mantissa) * 2^(exp - 127 - 7), so scaling by 2^16 shifts
+    // the 8-bit significand left by (exp - 118).
+    const int32_t shift = exp - 118;
+    int32_t magnitude;
+    if (shift >= 16) {
+        // |value| >= 128 here, past any clamp this op passes, and shifting the
+        // 8-bit significand that far would overflow int32.
+        magnitude = clamp_q16;
+    } else if (shift >= 0) {
+        magnitude = static_cast<int32_t>((0x80u | (bf16 & 0x7Fu))) << shift;
+    } else if (shift > -32) {
+        magnitude = static_cast<int32_t>((0x80u | (bf16 & 0x7Fu))) >> (-shift);
+    } else {
+        magnitude = 0;
+    }
+    if (magnitude > clamp_q16) {
+        magnitude = clamp_q16;
+    }
+    return negative ? -magnitude : magnitude;
 }
 
-inline uint16_t float_to_bf16(float value) {
-    uint32_t tmp;
-    std::memcpy(&tmp, &value, sizeof(tmp));
-    return static_cast<uint16_t>(tmp >> 16);
+// __builtin_clz(0) is undefined, and the fallback loop below would never
+// terminate on zero.
+inline uint32_t count_leading_zeros(uint32_t v) {
+    ASSERT(v != 0);
+#if defined(__GNUC__) || defined(__clang__)
+    return static_cast<uint32_t>(__builtin_clz(v));
+#else
+    uint32_t n = 0;
+    while ((v & 0x80000000u) == 0) {
+        v <<= 1;
+        ++n;
+    }
+    return n;
+#endif
+}
+
+// (bf16 attention weight) * (Q16.16 corner weight) -> bf16, in integers.
+//
+// Non-finite attention weights come back as finite max magnitude with their
+// sign, where the float path this replaces emitted inf or propagated NaN. That
+// keeps a bad weight from poisoning the whole output tile, matching how the
+// grid side of this kernel already treats non-finite sampling locations, but it
+// does mean a caller debugging invalid weights sees a large finite number
+// rather than a non-finite one.
+//
+// The shared header's fixed_to_bf16 converts a Q16.16 value on its own; there
+// is no bf16-times-fixed entry point, and going through it would round the
+// corner weight to bf16 before the multiply rather than after.
+//
+// The corner weight is normalised to a 16-bit significand before the multiply,
+// so the 8-bit attention significand meets it with more precision than the
+// bf16 result can hold -- same end value as multiplying in float32 and
+// truncating, which is what this replaces.
+inline uint16_t attn_times_weight_bf16(uint16_t attn_bf16, uint32_t weight_q16) {
+    const int32_t attn_exp = static_cast<int32_t>((attn_bf16 >> 7) & 0xFFu);
+    if (attn_exp == 0 || weight_q16 == 0) {
+        return 0;
+    }
+    const uint32_t attn_significand = 0x80u | (attn_bf16 & 0x7Fu);  // 1.m, 8 bits
+
+    // Normalise the weight to [2^15, 2^16): weight = significand * 2^(msb - 31).
+    const int32_t weight_msb = 31 - static_cast<int32_t>(count_leading_zeros(weight_q16));
+    const uint32_t weight_significand =
+        (weight_msb >= 15) ? (weight_q16 >> (weight_msb - 15)) : (weight_q16 << (15 - weight_msb));
+
+    // attn = attn_significand * 2^(attn_exp - 134); weight = weight_significand * 2^(weight_msb - 31).
+    const uint32_t product = attn_significand * weight_significand;  // 23 or 24 bits
+    const int32_t product_msb = 31 - static_cast<int32_t>(count_leading_zeros(product));
+    const uint32_t mantissa = (product >> (product_msb - 7)) & 0x7Fu;
+    const int32_t out_exp = (attn_exp - 134) + (weight_msb - 31) + product_msb + 127;
+    if (out_exp <= 0) {
+        return 0;  // underflows bf16's normal range
+    }
+    const uint16_t sign = static_cast<uint16_t>(attn_bf16 & 0x8000u);
+    if (out_exp >= 0xFF) {
+        // Saturate rather than emit inf, keeping the sign: a non-finite attn
+        // weight would otherwise come back as +max and flip that corner's
+        // contribution.
+        return static_cast<uint16_t>(sign | (0xFEu << 7) | 0x7Fu);
+    }
+    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(out_exp) << 7) | mantissa);
 }
 
 }  // namespace
@@ -85,13 +182,27 @@ constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(11);
 constexpr uint32_t attn_stick_nbytes = get_compile_time_arg_val(12);
 constexpr bool ALIGN_CORNERS = get_compile_time_arg_val(13) != 0;
 
+// See bf16_to_q16: align_corners scales by (size - 1), so a 2-wide map needs a
+// wider clamp for an out-of-range coordinate to stay out of range.
+constexpr int32_t GRID_CLAMP_Q16 = ALIGN_CORNERS ? 3 * FIXED_ONE : 2 * FIXED_ONE;
+
 constexpr auto value_args = TensorAccessorArgs<14>();
 constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
 constexpr auto attn_args = TensorAccessorArgs<grid_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_MAX_ROWS = 32;
-constexpr uint32_t HALF_STICK_NBYTES = 32;  // 16 bf16 per row half (TL or TR portion of one row)
+constexpr uint32_t HALF_STICK_NBYTES = 32;  // one face-row half: 16 bf16 (TL or TR portion of one row)
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
+constexpr uint32_t TILE_NBYTES = 2048;  // bf16 32x32 tile
+
+// A value stick carries D bf16 values (= D/2 uint32 words). One tile row
+// holds 32 values (lo + hi face halves), so a stick spans N_D_TILES tiles
+// laid side by side; the trailing tile is half-filled when D % 32 == 16.
+// Derived from D (not value_stick_nbytes, which is alignment-padded).
+constexpr uint32_t STICK_WORDS = D / 2;
+constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
+constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
+static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
 
 void kernel_main() {
     const uint32_t value_addr = get_arg_val<uint32_t>(0);
@@ -122,17 +233,17 @@ void kernel_main() {
     const uint32_t attn_scratch_l1 = attn_cb.get_write_ptr();
 
     // Per-(p, corner) precompute scratch (one entry per row in the current tile).
-    float w_attn_arr[TILE_MAX_ROWS];
+    uint16_t attn_bits_arr[TILE_MAX_ROWS];
     int32_t x0_arr[TILE_MAX_ROWS];
     int32_t y0_arr[TILE_MAX_ROWS];
     bool x0v_arr[TILE_MAX_ROWS];
     bool x1v_arr[TILE_MAX_ROWS];
     bool y0v_arr[TILE_MAX_ROWS];
     bool y1v_arr[TILE_MAX_ROWS];
-    float w_nw_arr[TILE_MAX_ROWS];
-    float w_ne_arr[TILE_MAX_ROWS];
-    float w_sw_arr[TILE_MAX_ROWS];
-    float w_se_arr[TILE_MAX_ROWS];
+    int32_t w_nw_arr[TILE_MAX_ROWS];
+    int32_t w_ne_arr[TILE_MAX_ROWS];
+    int32_t w_sw_arr[TILE_MAX_ROWS];
+    int32_t w_se_arr[TILE_MAX_ROWS];
 
     uint32_t arg_idx = 4;
     for (uint32_t t = 0; t < num_output_tiles; ++t) {
@@ -163,26 +274,34 @@ void kernel_main() {
                 CoreLocalMem<volatile uint16_t> grid_ptr(grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
                 CoreLocalMem<volatile uint16_t> attn_ptr(attn_scratch_l1 + r * attn_stick_nbytes);
 
-                const float gx = bf16_to_float(grid_ptr[0]);
-                const float gy = bf16_to_float(grid_ptr[1]);
-                w_attn_arr[r] = bf16_to_float(attn_ptr[p]);
+                attn_bits_arr[r] = attn_ptr[p];
 
                 // align_corners selects the pixel-coord mapping (mmcv default
                 // is false: pixel = (g+1)*size/2 - 0.5; true variant uses
-                // pixel = (g+1)*(size-1)/2).
-                float px, py;
+                // pixel = (g+1)*(size-1)/2). Scale first and halve afterwards,
+                // through a 64-bit intermediate: halving (g + 1) up front would
+                // keep the product in int32 but drop its low bit, and that
+                // rounding is worth up to 0.5 * size / 2^16 of a pixel. For a
+                // coordinate near zero -- where bf16 resolves finely -- that
+                // exceeds the grid's own quantisation, so it is a real loss
+                // rather than a free one.
+                const int32_t gx_plus_one = bf16_to_q16(grid_ptr[0], GRID_CLAMP_Q16) + FIXED_ONE;
+                const int32_t gy_plus_one = bf16_to_q16(grid_ptr[1], GRID_CLAMP_Q16) + FIXED_ONE;
+                int32_t px_q16, py_q16;
                 if constexpr (ALIGN_CORNERS) {
-                    px = (gx + 1.0f) * 0.5f * static_cast<float>(w_in_i - 1);
-                    py = (gy + 1.0f) * 0.5f * static_cast<float>(h_in_i - 1);
+                    px_q16 = static_cast<int32_t>((static_cast<int64_t>(gx_plus_one) * (w_in_i - 1)) >> 1);
+                    py_q16 = static_cast<int32_t>((static_cast<int64_t>(gy_plus_one) * (h_in_i - 1)) >> 1);
                 } else {
-                    px = (gx + 1.0f) * 0.5f * static_cast<float>(w_in_i) - 0.5f;
-                    py = (gy + 1.0f) * 0.5f * static_cast<float>(h_in_i) - 0.5f;
+                    px_q16 = static_cast<int32_t>((static_cast<int64_t>(gx_plus_one) * w_in_i) >> 1) - FIXED_HALF;
+                    py_q16 = static_cast<int32_t>((static_cast<int64_t>(gy_plus_one) * h_in_i) >> 1) - FIXED_HALF;
                 }
 
-                const int32_t x0 = static_cast<int32_t>(std::floor(px));
-                const int32_t y0 = static_cast<int32_t>(std::floor(py));
-                const float dx = px - static_cast<float>(x0);
-                const float dy = py - static_cast<float>(y0);
+                // An arithmetic shift right is floor() for negatives too, and
+                // what is left below the point is the interpolation fraction.
+                const int32_t x0 = fixed_to_int(px_q16);
+                const int32_t y0 = fixed_to_int(py_q16);
+                const int32_t dx = fixed_frac(px_q16);
+                const int32_t dy = fixed_frac(py_q16);
 
                 x0_arr[r] = x0;
                 y0_arr[r] = y0;
@@ -190,10 +309,13 @@ void kernel_main() {
                 x1v_arr[r] = (x0 + 1 >= 0) && (x0 + 1 < w_in_i);
                 y0v_arr[r] = (y0 >= 0) && (y0 < h_in_i);
                 y1v_arr[r] = (y0 + 1 >= 0) && (y0 + 1 < h_in_i);
-                w_nw_arr[r] = (1.0f - dx) * (1.0f - dy);
-                w_ne_arr[r] = dx * (1.0f - dy);
-                w_sw_arr[r] = (1.0f - dx) * dy;
-                w_se_arr[r] = dx * dy;
+
+                const int32_t inv_dx = fixed_one_minus(dx);
+                const int32_t inv_dy = fixed_one_minus(dy);
+                w_nw_arr[r] = fixed_mul(inv_dx, inv_dy);
+                w_ne_arr[r] = fixed_mul(dx, inv_dy);
+                w_sw_arr[r] = fixed_mul(inv_dx, dy);
+                w_se_arr[r] = fixed_mul(dx, dy);
             }
 
             for (uint32_t c = 0; c < 4; ++c) {
@@ -204,10 +326,13 @@ void kernel_main() {
                 const int32_t dx_off = (c & 1) ? 1 : 0;
                 const bool* yv_arr = (c < 2) ? y0v_arr : y1v_arr;
                 const bool* xv_arr = (c & 1) ? x1v_arr : x0v_arr;
-                const float* w_corner_arr = (c == 0) ? w_nw_arr : (c == 1) ? w_ne_arr : (c == 2) ? w_sw_arr : w_se_arr;
+                const int32_t* w_corner_arr = (c == 0)   ? w_nw_arr
+                                              : (c == 1) ? w_ne_arr
+                                              : (c == 2) ? w_sw_arr
+                                                         : w_se_arr;
 
-                // ---- INPUT TILE ----
-                input_tile_cb.reserve_back(1);
+                // ---- INPUT TILES (N_D_TILES per (p, corner)) ----
+                input_tile_cb.reserve_back(N_D_TILES);
                 const uint32_t tile_l1 = input_tile_cb.get_write_ptr();
 
                 // Issue NoC reads for all valid rows.
@@ -223,21 +348,31 @@ void kernel_main() {
                 }
                 noc.async_read_barrier();
 
-                // Scatter sticks into face rows. Invalid corners have stale staging
-                // data but their scalar entry is zero — the multiply contributes 0.
+                // Scatter sticks into face rows. Stick words [k*32row .. ] land in
+                // d-tile k at the same row offsets. Invalid corners have stale
+                // staging data but their scalar entry is zero — the multiply
+                // contributes 0.
                 for (uint32_t r = 0; r < v_rows; ++r) {
                     if (!(yv_arr[r] && xv_arr[r])) {
                         continue;
                     }
                     const auto off = msda_tile_layout::tile_row_offsets(r);
                     CoreLocalMem<volatile uint32_t> s(value_scratch_l1 + r * value_stick_nbytes);
-                    CoreLocalMem<volatile uint32_t> dl(tile_l1 + off.lo);
-                    CoreLocalMem<volatile uint32_t> dh(tile_l1 + off.hi);
-                    for (uint32_t i = 0; i < HALF_WORDS; ++i) {
-                        dl[i] = s[i];
-                    }
-                    for (uint32_t i = 0; i < HALF_WORDS; ++i) {
-                        dh[i] = s[HALF_WORDS + i];
+                    for (uint32_t k = 0; k < N_D_TILES; ++k) {
+                        const uint32_t base = k * WORDS_PER_TILE_ROW;
+                        const uint32_t words_k =
+                            (STICK_WORDS - base < WORDS_PER_TILE_ROW) ? (STICK_WORDS - base) : WORDS_PER_TILE_ROW;
+                        const uint32_t lo_words = words_k < HALF_WORDS ? words_k : HALF_WORDS;
+                        const uint32_t hi_words = words_k - lo_words;
+                        const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
+                        CoreLocalMem<volatile uint32_t> dl(ktile_l1 + off.lo);
+                        CoreLocalMem<volatile uint32_t> dh(ktile_l1 + off.hi);
+                        for (uint32_t i = 0; i < lo_words; ++i) {
+                            dl[i] = s[base + i];
+                        }
+                        for (uint32_t i = 0; i < hi_words; ++i) {
+                            dh[i] = s[base + HALF_WORDS + i];
+                        }
                     }
                 }
 
@@ -245,8 +380,10 @@ void kernel_main() {
                 // their scalar entry is zero (see scalar tile below), so any stale
                 // bytes in input row r contribute 0 to L1 accumulation. Saves a
                 // 16-row × 64-byte memset for tail tiles and skips work on full
-                // tiles entirely.
-                input_tile_cb.push_back(1);
+                // tiles entirely. The same contract covers the unused hi halves of
+                // a trailing half-filled d-tile (D % 32 == 16): the writer never
+                // reads those lanes back.
+                input_tile_cb.push_back(N_D_TILES);
 
                 // ---- SCALAR TILE ----
                 // LLK COL bcast reads only col 0 of TL face (rows 0..15) and BL
@@ -260,9 +397,8 @@ void kernel_main() {
 
                 for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
                     uint16_t bf = 0;
-                    if (r < v_rows) {
-                        const float combined = (yv_arr[r] && xv_arr[r]) ? (w_attn_arr[r] * w_corner_arr[r]) : 0.0f;
-                        bf = float_to_bf16(combined);
+                    if (r < v_rows && yv_arr[r] && xv_arr[r]) {
+                        bf = attn_times_weight_bf16(attn_bits_arr[r], static_cast<uint32_t>(w_corner_arr[r]));
                     }
                     // Rows ≥ v_rows OR invalid corners: bf stays 0 — explicitly
                     // overwrite col 0 because the CB slot may contain non-zero

@@ -110,7 +110,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 13296
+#define MEM_MAILBOX_SIZE 13440
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -139,19 +139,20 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_CONNECTION_LOCK_BASE + MEM_FABRIC_CONNECTION_LOCK_SIZE)
-#define MEM_ROUTING_TABLE_SIZE 2576  // struct layout: base(516) + union(1024) + exit(1024) + pad(12)
+#define MEM_ROUTING_TABLE_SIZE 2704  // struct layout: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)
 #define MEM_OFFSET_OF_ROUTING_PATHS 516
-#define MEM_ROUTING_TABLE_PADDING 12
+// Tail of routing_l1_info_t after exit_node_table: my_mesh_coord_y/x (2 B) + mesh_y/x_size (2 B).
+// Must match the struct tail in hostdevcommon/fabric_common.h.
+#define MEM_ROUTING_TABLE_PADDING 4
 
 #define ROUTING_PATH_SIZE_1D 1024  // 64 chips × 16 bytes
-// 2D uncompressed size is too large to fit in L1 memory
-#define COMPRESSED_ROUTING_PATH_SIZE_1D 0     // sizeof(intra_mesh_routing_path_t<1, true>)
-#define COMPRESSED_ROUTING_PATH_SIZE_2D 1024  // sizeof(intra_mesh_routing_path_t<2, true>)
+#define COMPRESSED_ROUTING_PATH_SIZE_1D 0  // sizeof(intra_mesh_routing_path_t<1, true>)
+#define ROUTE_TABLE_SIZE_2D 1160           // sizeof(route_table_2d_t)
 // Union: 1D and 2D routing tables share the same offset
 #define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 516
 #define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // 516
-#define MEM_TENSIX_ROUTING_PATH_SIZE 1024                             // max(1024, 1024)
+#define MEM_TENSIX_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D
 
 #define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
 #define MEM_EXIT_NODE_TABLE_SIZE 1024  // sizeof(exit_node_table_t)
@@ -226,10 +227,10 @@
 #define MEM_AERISC_FABRIC_TELEMETRY_SIZE 160
 // Routing path sizes (union = same memory, consolidated from intermediate aliases)
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
-#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
+#define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
+// Must fit the largest erisc kernel config: the 2D-torus fabric_erisc_router needs 25680B.
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (26 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.
@@ -326,7 +327,14 @@
 #define MEM_DRISC_LOCAL_SIZE MEM_BRISC_LOCAL_SIZE  // 8KB private data at MEM_LOCAL_BASE (0xFFB00000)
 #define MEM_DRISC_RESERVED_SIZE 64                 // Reserved at address 0 for corruption detection
 #define MEM_DRISC_MAILBOX_BASE MEM_DRISC_RESERVED_SIZE
-#define MEM_DRISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
+// Magic size must be big enough to hold mailboxes_t as instantiated for DRISC (PROCESSOR_COUNT == 1); the
+// static_assert in bh_hal_dram.cpp fires if this is too small. Sized tight (not shared with ERISC, which is
+// sized for its 2 processors) to free L1 for the programmable-DRAM-core kernel working region.
+//
+// mailboxes_t is unconditional: every debug/profiling feature that lives in the mailbox reserves its space
+// whether or not it is enabled at runtime, so this number must cover the watcher, DPRINT and the kernel
+// profiler simultaneously.
+#define MEM_DRISC_MAILBOX_SIZE 4432
 #define MEM_DRISC_MAILBOX_END (MEM_DRISC_MAILBOX_BASE + MEM_DRISC_MAILBOX_SIZE)
 #define MEM_DRISC_L1_INLINE_BASE MEM_DRISC_MAILBOX_END
 #define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)

@@ -85,7 +85,7 @@ void BM_AdamW(benchmark::State& state) {
             beta2_pow,
             epsilon,
             weight_decay);
-        tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
         result.deallocate();
     }
 
@@ -105,7 +105,7 @@ void BM_AdamW(benchmark::State& state) {
                     beta2_pow,
                     epsilon,
                     weight_decay);
-                tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
+                tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
                 result.deallocate();
             });
         const double time_us = avg_time_s * 1e6;

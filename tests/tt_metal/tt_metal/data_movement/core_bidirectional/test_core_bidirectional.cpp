@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -40,9 +40,7 @@ struct CoreBidirectionalConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBidirectionalConfig& test_config) {
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->impl().get_device(0);
+bool run_dm(distributed::MeshDevice& mesh_device, const CoreBidirectionalConfig& test_config) {
     /* ================ SETUP ================ */
 
     // Program
@@ -67,7 +65,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
     uint32_t l1_base_read_address = l1_base_write_address + (master_l1_info.size / 2);
 
     // Physical Core Coordinates
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    CoreCoord physical_subordinate_core = mesh_device.worker_core_from_logical_core(test_config.subordinate_core_coord);
     uint32_t packed_subordinate_core_coordinates =
         physical_subordinate_core.x << 16 | (physical_subordinate_core.y & 0xFFFF);
 
@@ -158,9 +156,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
     std::vector<uint32_t> packed_golden = packed_input;
 
     // Write Input to Master L1
-    tt_metal::detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_write_address, packed_input);
-    tt_metal::detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_read_address, packed_input);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    slow_dispatch::WriteToL1(mesh_device, test_config.master_core_coord, l1_base_write_address, packed_input);
+    slow_dispatch::WriteToL1(mesh_device, test_config.subordinate_core_coord, l1_base_read_address, packed_input);
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
@@ -168,17 +166,25 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
     // Record Output from Subordinate L1
     std::vector<uint32_t> packed_sender_output;
     std::vector<uint32_t> packed_requestor_output;
-    tt_metal::detail::ReadFromDeviceL1(
-        device, test_config.subordinate_core_coord, l1_base_write_address, bytes_per_transaction, packed_sender_output);
-    tt_metal::detail::ReadFromDeviceL1(
-        device, test_config.master_core_coord, l1_base_read_address, bytes_per_transaction, packed_requestor_output);
+    slow_dispatch::ReadFromL1(
+        mesh_device,
+        test_config.subordinate_core_coord,
+        l1_base_write_address,
+        bytes_per_transaction,
+        packed_sender_output);
+    slow_dispatch::ReadFromL1(
+        mesh_device,
+        test_config.master_core_coord,
+        l1_base_read_address,
+        bytes_per_transaction,
+        packed_requestor_output);
 
     // Compare output with golden vector
     bool is_equal;
@@ -200,7 +206,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
 }
 
 void directed_ideal_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
@@ -232,7 +238,7 @@ void directed_ideal_test(
 }
 
 void same_vc_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
@@ -243,7 +249,7 @@ void same_vc_test(
 }
 
 void packet_sizes_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1},
@@ -253,10 +259,9 @@ void packet_sizes_test(
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
-    IDevice* device = mesh_device->impl().get_device(0);
     uint32_t max_transactions = 256;
     uint32_t max_pages_per_transaction =
-        device->arch() == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
+        mesh_device.arch() == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
@@ -287,7 +292,7 @@ void packet_sizes_test(
 
 // ========== Directed Ideal Tests ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealSameKernel) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalDirectedIdealSameKernel) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
@@ -298,10 +303,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdea
     uint32_t write_vc = 0;
 
     unit_tests::dm::core_to_and_from_core::directed_ideal_test(
-        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
+        this->device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
@@ -312,12 +317,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdea
     uint32_t write_vc = 0;
 
     unit_tests::dm::core_to_and_from_core::directed_ideal_test(
-        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
+        this->device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
 }
 
 // ========== Same VC Tests ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKernel) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalSameVCSameKernel) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
@@ -327,10 +332,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKe
     CoreCoord subordinate_core_coord = {0, 1};
 
     unit_tests::dm::core_to_and_from_core::same_vc_test(
-        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
+        this->device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
@@ -340,12 +345,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDiffer
     CoreCoord subordinate_core_coord = {0, 1};
 
     unit_tests::dm::core_to_and_from_core::same_vc_test(
-        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
+        this->device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
 }
 
 // ========== Write VC Sweep Tests ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID base
@@ -359,11 +364,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
         uint32_t test_id = test_id_base + write_vc;
 
         unit_tests::dm::core_to_and_from_core::directed_ideal_test(
-            get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
+            this->device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID base
@@ -377,13 +382,13 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
         uint32_t test_id = test_id_base + write_vc;
 
         unit_tests::dm::core_to_and_from_core::directed_ideal_test(
-            get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
+            this->device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
     }
 }
 
 // ========== Packet Sizes Tests ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
     // Test ID
     uint32_t test_id = 146;
     bool same_kernel = true;
@@ -391,10 +396,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesS
     CoreCoord subordinate_core_coord = {1, 1};
 
     unit_tests::dm::core_to_and_from_core::packet_sizes_test(
-        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
+        this->device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
     // Test ID
     uint32_t test_id = 147;
     bool same_kernel = false;
@@ -402,12 +407,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesD
     CoreCoord subordinate_core_coord = {1, 1};
 
     unit_tests::dm::core_to_and_from_core::packet_sizes_test(
-        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
+        this->device(), test_id, master_core_coord, subordinate_core_coord, same_kernel);
 }
 
 // ========== Custom Test Case ==========
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalCustom) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalCustom) {
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID
@@ -418,7 +423,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalCustom) {
     uint32_t write_vc = 0;
 
     unit_tests::dm::core_to_and_from_core::directed_ideal_test(
-        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
+        this->device(), test_id, master_core_coord, subordinate_core_coord, write_vc, same_kernel);
 }
 
 }  // namespace tt::tt_metal

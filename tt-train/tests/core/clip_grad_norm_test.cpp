@@ -34,6 +34,7 @@ TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
     const uint32_t num_tensors = 3U;
     const uint32_t tensor_size = 4U;
     std::vector<autograd::TensorPtr> tensors;
+    tensors.reserve(num_tensors);
     std::vector<xt::xarray<float>> expected_grads = {
         {1.0F, 2.0F, 3.0F, 4.0F}, {-2.0F, -3.0F, -4.0F, 5.0F}, {0.5F, -1.5F, 2.5F, -3.5F}};
 

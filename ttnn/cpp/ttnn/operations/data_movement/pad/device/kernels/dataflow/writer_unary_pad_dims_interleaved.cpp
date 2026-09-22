@@ -6,35 +6,30 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_unpadded_W = get_arg_val<uint32_t>(1);
-    const uint32_t num_padded_Wt = get_arg_val<uint32_t>(2);
-    const uint32_t num_unpadded_Z = get_arg_val<uint32_t>(3);
-    const uint32_t num_padded_Zt = get_arg_val<uint32_t>(4);
-    const uint32_t num_unpadded_Yt = get_arg_val<uint32_t>(5);
-    const uint32_t num_padded_Yt = get_arg_val<uint32_t>(6);
-    const uint32_t num_unpadded_Xt = get_arg_val<uint32_t>(7);
-    const uint32_t num_padded_Xt = get_arg_val<uint32_t>(8);
-    const uint32_t pad_value = get_arg_val<uint32_t>(9);
+    const auto num_unpadded_W = get_arg(args::num_unpadded_W);
+    const auto num_padded_Wt = get_arg(args::num_padded_Wt);
+    const auto num_unpadded_Z = get_arg(args::num_unpadded_Z);
+    const auto num_padded_Zt = get_arg(args::num_padded_Zt);
+    const auto num_unpadded_Yt = get_arg(args::num_unpadded_Yt);
+    const auto num_padded_Yt = get_arg(args::num_padded_Yt);
+    const auto num_unpadded_Xt = get_arg(args::num_unpadded_Xt);
+    const auto num_padded_Xt = get_arg(args::num_padded_Xt);
+    const auto pad_value = get_arg(args::pad_value);
 
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t dfb_id_out1 = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
-
-    const uint32_t tile_size = get_tile_size(cb_id_out0);
-
-    const auto s1 = TensorAccessor(dst_args, dst_addr);
+    const auto s1 = TensorAccessor(tensor::dst);
     Noc noc;
-    DataflowBuffer dfb_out0(cb_id_out0);
-    DataflowBuffer dfb_out1(dfb_id_out1);
+    DataflowBuffer dfb_out0(dfb::out0);
+    Scratchpad<uint32_t> pad(scratch::pad);
 
-    dfb_out1.reserve_back(1);  // in this kernel we are not pushing anything into CBs, just using the space
+    const uint32_t tile_size = dfb_out0.get_tile_size();
 
-    uint32_t pad_buffer_l1_addr = dfb_out1.get_write_ptr();
+    uint32_t pad_buffer_l1_addr = pad.get_base_address();
 
     // Fill pad tile with pad value
     volatile tt_l1_ptr uint32_t* pad_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_buffer_l1_addr);
@@ -42,6 +37,12 @@ void kernel_main() {
     for (uint32_t z = 0; z < num_elems; z++) {
         pad_buffer[z] = pad_value;
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: the fill above is CPU stores that land in L1D/L2; the NoC writes below source the pad tile
+    // from TL1 directly. Flush the filled tile so the NoC copies see the pad value. No-op on WH/BH. Matches
+    // fill_rm_interleaved.cpp (#51763).
+    flush_l2_cache_range(static_cast<uintptr_t>(pad_buffer_l1_addr), static_cast<size_t>(tile_size));
+#endif
 
     uint32_t src_tile_id = 0;
     uint32_t dst_tile_id = 0;

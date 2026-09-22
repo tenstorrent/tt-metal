@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_bmm_8bank_output_tiles_partitioned_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this
+// file serves the consumers still on the legacy API. Until the last of them migrates and this file
+// is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -12,23 +17,23 @@
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t MtKt = get_arg_val<uint32_t>(5);  // if 0
-    uint32_t KtNt = get_arg_val<uint32_t>(6);
-    uint32_t batch = get_arg_val<uint32_t>(7);
-    uint32_t bcast_B = get_arg_val<uint32_t>(8);  // if 1 we broadcast B to batch
-    uint32_t output_tile_start_id = get_arg_val<uint32_t>(9);
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
-    uint32_t MtNt = get_arg_val<uint32_t>(11);
+    const uint32_t src0_addr = get_arg_val<uint32_t>(0);
+    const uint32_t src1_addr = get_arg_val<uint32_t>(1);
+    const uint32_t Mt = get_arg_val<uint32_t>(2);
+    const uint32_t Kt = get_arg_val<uint32_t>(3);
+    const uint32_t Nt = get_arg_val<uint32_t>(4);
+    const uint32_t MtKt = get_arg_val<uint32_t>(5);  // if 0
+    const uint32_t KtNt = get_arg_val<uint32_t>(6);
+    const uint32_t batch = get_arg_val<uint32_t>(7);
+    const uint32_t bcast_B = get_arg_val<uint32_t>(8);  // if 1 we broadcast B to batch
+    const uint32_t output_tile_start_id = get_arg_val<uint32_t>(9);
+    const uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
+    const uint32_t MtNt = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(0);
     constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(1);
     constexpr auto src0_args = TensorAccessorArgs<2>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto src1_args = TensorAccessorArgs<decltype(src0_args)::next_compile_time_args_offset()>();
 
     // DPRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
     // DPRINT("src0={} src1={}\n", src0_addr, src1_addr);
@@ -37,9 +42,12 @@ void kernel_main() {
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
+
     constexpr uint32_t onetile = 1;
-    const uint32_t in0_tile_bytes = get_tile_size(dfb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(dfb_id_in1);
+    const uint32_t in0_tile_bytes = dfb_in0.get_tile_size();
+    const uint32_t in1_tile_bytes = dfb_in1.get_tile_size();
 
     uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 
@@ -54,9 +62,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src0_args, src0_addr);
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
-    Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_in1(dfb_id_in1);
+    const Noc noc;
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {

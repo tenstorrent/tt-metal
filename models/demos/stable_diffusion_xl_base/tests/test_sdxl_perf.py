@@ -109,10 +109,12 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 76_894_779 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled bh_p150 runs 2026-09-19..09-21 (74.85M..74.93M) after #56767 (nlp_create_qkv_heads kernels, 2026-09-18)
+        "blackhole": 74_890_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 81_200_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled wh_n150 runs 2026-09-19..09-21 (78.01M..78.29M) after #56767 (nlp_create_qkv_heads kernels, 2026-09-18)
+        "wormhole": 78_107_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
@@ -120,7 +122,8 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 114_154_100 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "refiner_unet_512x512": {
-        "wormhole": 79_843_092 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled wh_n150 runs 2026-09-19..09-21 (75.30M..75.42M) after #56767 (nlp_create_qkv_heads kernels, 2026-09-18)
+        "wormhole": 75_347_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_decode_1024x1024": {
@@ -128,7 +131,7 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 267_498_780,
     },
     "vae_decode_512x512": {
-        "wormhole": 171_560_642,
+        "wormhole": 167_473_541,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
@@ -136,16 +139,16 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 141_175_333,
     },
     "vae_encode_512x512": {
-        "wormhole": 85_005_572,  # Note: this is an average value of 30 test runs due to high variability
+        "wormhole": 82_885_000,  # mean of 10 scheduled wh_n150 runs 2026-09-05..09-14 (82.69M..83.09M, sigma 0.16%)
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
         "wormhole": 23_745_000,  # Average of 3 main CI runs (Jun 22, 2026); transformers 5.10.2 bump reduced CLIP encoder dispatch
-        "blackhole": 11_927_000,  # Average of 3 main CI runs (Jun 22, 2026)
+        "blackhole": 11_720_533,
     },
     "clip_encoder_2": {
         "wormhole": 88_529_000,  # Average of 3 main CI runs (Jun 22, 2026)
-        "blackhole": 43_810_000,  # Average of 3 main CI runs (Jun 22, 2026)
+        "blackhole": 42_895_094,
     },
 }
 

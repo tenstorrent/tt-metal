@@ -220,9 +220,8 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
         auto lock = lock_api_function_();
         this->read_sharded_buffer(*buffer, host_data);
     } else {
-        std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
-            distributed::ShardDataTransfer{MeshCoordinate::zero_coordinate(buffer->device()->shape().dims())}.host_data(
-                host_data)};
+        std::vector<ShardDataTransfer> shard_data_transfers = {
+            ShardDataTransfer{MeshCoordinate::zero_coordinate(buffer->device()->shape().dims())}.host_data(host_data)};
         // enqueue_read_shards will call lock_api_function_(), no need to call it here
         this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
     }
@@ -230,7 +229,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
 
 void MeshCommandQueueBase::enqueue_write_shards_nolock(
     MeshBuffer& buffer,
-    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
     bool blocking,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
@@ -287,7 +286,7 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
 
 void MeshCommandQueueBase::enqueue_write_shards(
     const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
     auto lock = lock_api_function_();
     this->enqueue_write_shards_nolock(*mesh_buffer, shard_data_transfers, blocking, nullptr);
@@ -305,11 +304,12 @@ void MeshCommandQueueBase::enqueue_write_with_core_filter(
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     auto lock = lock_api_function_();
     // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
-    std::vector<distributed::ShardDataTransfer> shard_data_transfers;
+    std::vector<ShardDataTransfer> shard_data_transfers;
+    shard_data_transfers.reserve(host_buffer.shard_coords().size());
     for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
         auto buf = host_buffer.get_shard(host_buffer_coord);
         if (buf.has_value()) {
-            auto shard_data_transfer = distributed::ShardDataTransfer{MeshCoordinate(host_buffer_coord)}
+            auto shard_data_transfer = ShardDataTransfer{MeshCoordinate(host_buffer_coord)}
                                            .host_data(buf->view_bytes().data())
                                            .region(BufferRegion(0, buf->view_bytes().size()));
             experimental::ShardDataTransferSetPinnedMemory(
@@ -322,7 +322,7 @@ void MeshCommandQueueBase::enqueue_write_with_core_filter(
 }
 
 void MeshCommandQueueBase::enqueue_read_shards_nolock(
-    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& buffer,
     bool blocking,
     std::vector<MemoryPin> memory_pins) {
@@ -359,7 +359,7 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
 }
 
 void MeshCommandQueueBase::enqueue_read_shards(
-    const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& mesh_buffer,
     bool blocking) {
     auto lock = lock_api_function_();
@@ -372,12 +372,16 @@ void MeshCommandQueueBase::enqueue_read(
     const std::optional<std::unordered_set<MeshCoordinate>>& shards,
     bool blocking) {
     auto lock = lock_api_function_();
-    std::vector<distributed::ShardDataTransfer> shard_data_transfers;
+    std::vector<ShardDataTransfer> shard_data_transfers;
+    shard_data_transfers.reserve(buffer->device()->shape().mesh_size());
     // For non-blocking reads, capture a MemoryPin for each shard so the host
     // buffer stays alive until the async reader thread finishes the memcpy
     // (fixes use-after-free, issue #43638). For blocking reads finish_nolock()
     // ensures the copy is complete before we return, so no pin is needed.
     std::vector<MemoryPin> memory_pins;
+    if (!blocking) {
+        memory_pins.reserve(buffer->device()->shape().mesh_size());
+    }
     for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
         if (shards.has_value() && !shards->contains(coord)) {
             continue;
@@ -388,7 +392,7 @@ void MeshCommandQueueBase::enqueue_read(
             if (!blocking) {
                 memory_pins.push_back(buf->pin());
             }
-            auto xfer = distributed::ShardDataTransfer{coord}
+            auto xfer = ShardDataTransfer{coord}
                             .host_data(buf->view_bytes().data())
                             .region(BufferRegion(0, buf->view_bytes().size()));
             experimental::ShardDataTransferSetPinnedMemory(xfer, experimental::HostBufferGetPinnedMemory(*buf));
@@ -397,34 +401,6 @@ void MeshCommandQueueBase::enqueue_read(
     }
 
     this->enqueue_read_shards_nolock(shard_data_transfers, buffer, blocking, std::move(memory_pins));
-}
-
-void MeshCommandQueue::enqueue_write_shards(
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const std::vector<ShardDataTransfer>& shard_data_transfers,
-    bool blocking) {
-    std::vector<distributed::ShardDataTransfer> distributed_shard_data_transfers;
-    distributed_shard_data_transfers.reserve(shard_data_transfers.size());
-    for (const auto& shard_data_transfer : shard_data_transfers) {
-        distributed_shard_data_transfers.push_back(distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
-                                                       .host_data(shard_data_transfer.host_data)
-                                                       .region(shard_data_transfer.region));
-    }
-    this->enqueue_write_shards(mesh_buffer, distributed_shard_data_transfers, blocking);
-}
-
-void MeshCommandQueue::enqueue_read_shards(
-    const std::vector<ShardDataTransfer>& shard_data_transfers,
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    bool blocking) {
-    std::vector<distributed::ShardDataTransfer> distributed_shard_data_transfers;
-    distributed_shard_data_transfers.reserve(shard_data_transfers.size());
-    for (const auto& shard_data_transfer : shard_data_transfers) {
-        distributed_shard_data_transfers.push_back(distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
-                                                       .host_data(shard_data_transfer.host_data)
-                                                       .region(shard_data_transfer.region));
-    }
-    this->enqueue_read_shards(distributed_shard_data_transfers, mesh_buffer, blocking);
 }
 
 }  // namespace tt::tt_metal::distributed

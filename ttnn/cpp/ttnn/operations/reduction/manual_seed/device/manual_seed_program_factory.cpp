@@ -5,15 +5,19 @@
 #include "manual_seed_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace ttnn::prim {
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace {
 // Helper function to compute core grid from device and operation attributes
@@ -35,53 +39,60 @@ CoreRangeSet compute_core_grid(
     return core_grid;
 }
 
-// Helper function to push a circular buffer descriptor for a tensor
-void push_tensor_circular_buffer(
-    ProgramDescriptor& desc, const CoreRangeSet& core_grid, const Tensor& tensor, uint32_t cb_index) {
-    // Circular buffer config
-    const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    const uint32_t tensor_tile_size = tensor.tensor_spec().tile().get_tile_size(cb_data_format);
+// Helper function to describe a dataflow buffer holding a single tile-sized entry laid out like a tensor
+DataflowBufferSpec make_tensor_dataflow_buffer(DFBSpecName unique_id, const MeshTensor& tensor) {
+    // Dataflow buffer config
+    const tt::DataFormat dfb_data_format =
+        tt::tt_metal::datatype_to_dataformat_converter(tensor.tensor_spec().data_type());
+    const uint32_t tensor_tile_size = tensor.tensor_spec().tile().get_tile_size(dfb_data_format);
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = tensor_tile_size,
-        .core_ranges = core_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_index),
-            .data_format = cb_data_format,
-            .page_size = tensor_tile_size,
-        }}},
-    });
+    return DataflowBufferSpec{
+        .unique_id = std::move(unique_id),
+        .entry_size = tensor_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = dfb_data_format,
+    };
 }
 
 }  // anonymous namespace
 
-tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedToAllCoresProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedToAllCoresProgramFactory::create_program_artifacts(
     const ManualSeedParams& operation_attributes, const ManualSeedInputs& /*tensor_args*/, Tensor& /*output_tensor*/) {
-    ProgramDescriptor desc;
+    const KernelSpecName COMPUTE{"compute"};
 
     // Calculate core grid
     uint32_t num_cores{};
     CoreRangeSet core_grid = compute_core_grid(operation_attributes, operation_attributes.device, num_cores);
 
     // Create compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {operation_attributes.seeds.value_or(0)};
     const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/reduction/manual_seed/device/kernels/compute/manual_seed_set_seed.cpp";
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kernel_path;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_grid;
-    compute_desc.compile_time_args = compute_compile_time_args;
-    compute_desc.config = ComputeConfigDescriptor{};
-    desc.kernels.push_back(std::move(compute_desc));
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = kernel_path,
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compile_time_args = {{"seed", operation_attributes.seeds.value_or(0)}},
+        .hw_config = ComputeGen1Config{},
+    };
 
-    return desc;
+    ProgramSpec spec{
+        .name = "manual_seed_single_seed_to_all_cores",
+        .kernels = {compute},
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {COMPUTE},
+            .target_nodes = core_grid,
+        }},
+    };
+
+    // The compute kernel takes no runtime arguments, so it needs no ProgramRunArgs entry.
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec)};
 }
 
-tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSingleCoreProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedSingleCoreProgramFactory::create_program_artifacts(
     const ManualSeedParams& operation_attributes, const ManualSeedInputs& /*tensor_args*/, Tensor& /*output_tensor*/) {
-    ProgramDescriptor desc;
+    const KernelSpecName COMPUTE{"compute"};
 
     uint32_t num_cores{};
     CoreRangeSet core_grid = compute_core_grid(operation_attributes, operation_attributes.device, num_cores);
@@ -90,24 +101,38 @@ tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSingleCoreProgramFactory::cr
     CoreRangeSet chosen_core_ranges{CoreRange(core_chosen, core_chosen)};
 
     // Create compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {operation_attributes.seeds.value_or(0)};
     const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/reduction/manual_seed/device/kernels/compute/manual_seed_set_seed.cpp";
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kernel_path;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = chosen_core_ranges;
-    compute_desc.compile_time_args = compute_compile_time_args;
-    compute_desc.config = ComputeConfigDescriptor{};
-    desc.kernels.push_back(std::move(compute_desc));
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = kernel_path,
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compile_time_args = {{"seed", operation_attributes.seeds.value_or(0)}},
+        .hw_config = ComputeGen1Config{},
+    };
 
-    return desc;
+    ProgramSpec spec{
+        .name = "manual_seed_single_seed_single_core",
+        .kernels = {compute},
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {COMPUTE},
+            .target_nodes = chosen_core_ranges,
+        }},
+    };
+
+    // The compute kernel takes no runtime arguments, so it needs no ProgramRunArgs entry.
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec)};
 }
 
-tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSetCoresProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedSetCoresProgramFactory::create_program_artifacts(
     const ManualSeedParams& operation_attributes, const ManualSeedInputs& tensor_args, Tensor& /*output_tensor*/) {
-    ProgramDescriptor desc;
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName USER_IDS_DFB{"user_ids"};
+    const DFBSpecName KERNEL_COMMUNICATION_DFB{"kernel_communication"};
+    const TensorParamName USER_IDS_TENSOR{"user_ids"};
 
     // Safety check
     TT_FATAL(
@@ -119,16 +144,8 @@ tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSetCoresProgramFactory::crea
     const std::vector<CoreCoord>& cores = corerange_to_cores(core_grid, num_cores, true);
 
     // Tensor config info
-    const auto& user_ids_tensor = tensor_args.user_ids.value();
-    const auto& user_ids_mesh = user_ids_tensor.mesh_tensor();
+    const auto& user_ids_mesh = tensor_args.user_ids.value().mesh_tensor();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_mesh.logical_volume());
-
-    // Create circular buffer for user_ids
-    constexpr uint32_t user_ids_cb_index = tt::CBIndex::c_0;
-    push_tensor_circular_buffer(desc, core_grid, user_ids_tensor, user_ids_cb_index);
-
-    constexpr uint32_t kernel_communication_cb_index = tt::CBIndex::c_1;
-    push_tensor_circular_buffer(desc, core_grid, user_ids_tensor, kernel_communication_cb_index);
 
     // Create core kernels
     const std::string reader_kernel_path =
@@ -139,43 +156,91 @@ tt::tt_metal::ProgramDescriptor ManualSeedSingleSeedSetCoresProgramFactory::crea
         "manual_seed_single_seed_receive_user_id.cpp";
 
     // Create reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {user_ids_cb_index, kernel_communication_cb_index, number_of_ids};
-    TensorAccessorArgs(user_ids_mesh).append_to(reader_compile_time_args);
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = reader_kernel_path,
+        .dfb_bindings =
+            {// The user_ids buffer is a landing area for one NoC read: the reader fills it and then reads
+             // the landed ids straight back out. No other kernel touches it, so the reader holds both ends.
+             DFBBinding{
+                 .dfb_spec_name = USER_IDS_DFB,
+                 .accessor_name = "user_ids",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = USER_IDS_DFB,
+                 .accessor_name = "user_ids",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             },
+             // The reader writes the match flag the compute kernel waits on.
+             DFBBinding{
+                 .dfb_spec_name = KERNEL_COMMUNICATION_DFB,
+                 .accessor_name = "kernel_communication",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = USER_IDS_TENSOR,
+            .accessor_name = "user_ids",
+        }},
+        .compile_time_args = {{"number_of_ids", number_of_ids}},
+        .runtime_arg_schema = {.runtime_arg_names = {"core_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(operation_attributes.device->arch()),
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = reader_kernel_path;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_grid;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.config = ReaderConfigDescriptor{};
-
+    KernelRunArgs reader_run_args{.kernel = READER};
     for (uint32_t core_id = 0; core_id < cores.size(); ++core_id) {
         // Get core
         const auto& core = cores[core_id];
 
         // Set runtime args for reader kernel
-        reader_desc.emplace_runtime_args(core, {user_ids_mesh, core_id});
+        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"core_id", core_id}});
     }
-    desc.kernels.push_back(std::move(reader_desc));
 
     // Create compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {
-        kernel_communication_cb_index, operation_attributes.seeds.value_or(0)};
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = compute_kernel_path,
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = KERNEL_COMMUNICATION_DFB,
+            .accessor_name = "kernel_communication",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .compile_time_args = {{"seed", operation_attributes.seeds.value_or(0)}},
+        .hw_config = ComputeGen1Config{},
+    };
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = compute_kernel_path;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_grid;
-    compute_desc.compile_time_args = compute_compile_time_args;
-    compute_desc.config = ComputeConfigDescriptor{};
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramSpec spec{
+        .name = "manual_seed_single_seed_set_cores",
+        .kernels = {reader, compute},
+        .dataflow_buffers =
+            {make_tensor_dataflow_buffer(USER_IDS_DFB, user_ids_mesh),
+             make_tensor_dataflow_buffer(KERNEL_COMMUNICATION_DFB, user_ids_mesh)},
+        .tensor_parameters = {TensorParameter{.unique_id = USER_IDS_TENSOR, .spec = user_ids_mesh.tensor_spec()}},
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {READER, COMPUTE},
+            .target_nodes = core_grid,
+        }},
+    };
 
-    return desc;
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(reader_run_args)},
+        .tensor_args = {{USER_IDS_TENSOR, user_ids_mesh}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::ProgramDescriptor ManualSeedSetSeedsSetCoresProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ManualSeedSetSeedsSetCoresProgramFactory::create_program_artifacts(
     const ManualSeedParams& operation_attributes, const ManualSeedInputs& tensor_args, Tensor& /*output_tensor*/) {
-    ProgramDescriptor desc;
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName USER_IDS_DFB{"user_ids"};
+    const DFBSpecName SEEDS_DFB{"seeds"};
+    const DFBSpecName KERNEL_COMMUNICATION_DFB{"kernel_communication"};
+    const TensorParamName USER_IDS_TENSOR{"user_ids"};
+    const TensorParamName SEEDS_TENSOR{"seeds"};
 
     // Safety checks
     TT_FATAL(
@@ -189,22 +254,10 @@ tt::tt_metal::ProgramDescriptor ManualSeedSetSeedsSetCoresProgramFactory::create
     const std::vector<CoreCoord>& cores = corerange_to_cores(core_grid, num_cores, true);
 
     // Tensor config info
-    const auto& user_ids_tensor = tensor_args.user_ids.value();
-    const auto& user_ids_mesh = user_ids_tensor.mesh_tensor();
+    const auto& user_ids_mesh = tensor_args.user_ids.value().mesh_tensor();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_mesh.logical_volume());
 
-    const auto& seeds_tensor = tensor_args.seeds.value();
-    const auto& seeds_mesh = seeds_tensor.mesh_tensor();
-
-    // Create circular buffers
-    constexpr uint32_t user_ids_cb_index = tt::CBIndex::c_0;
-    push_tensor_circular_buffer(desc, core_grid, user_ids_tensor, user_ids_cb_index);
-
-    constexpr uint32_t seeds_cb_index = tt::CBIndex::c_1;
-    push_tensor_circular_buffer(desc, core_grid, seeds_tensor, seeds_cb_index);
-
-    constexpr uint32_t kernel_communication_cb_index = tt::CBIndex::c_2;
-    push_tensor_circular_buffer(desc, core_grid, seeds_tensor, kernel_communication_cb_index);
+    const auto& seeds_mesh = tensor_args.seeds.value().mesh_tensor();
 
     // Create core kernels
     const std::string reader_kernel_path =
@@ -215,37 +268,98 @@ tt::tt_metal::ProgramDescriptor ManualSeedSetSeedsSetCoresProgramFactory::create
         "manual_seed_receive_all_data.cpp";
 
     // Create reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {
-        user_ids_cb_index, seeds_cb_index, kernel_communication_cb_index, number_of_ids};
-    TensorAccessorArgs(user_ids_mesh).append_to(reader_compile_time_args);
-    TensorAccessorArgs(seeds_mesh).append_to(reader_compile_time_args);
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = reader_kernel_path,
+        .dfb_bindings =
+            {// The user_ids and seeds buffers are landing areas for one NoC read each: the reader fills
+             // each one and then reads the landed data straight back out. No other kernel touches them,
+             // so the reader holds both ends of each.
+             DFBBinding{
+                 .dfb_spec_name = USER_IDS_DFB,
+                 .accessor_name = "user_ids",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = USER_IDS_DFB,
+                 .accessor_name = "user_ids",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = SEEDS_DFB,
+                 .accessor_name = "seeds",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             },
+             DFBBinding{
+                 .dfb_spec_name = SEEDS_DFB,
+                 .accessor_name = "seeds",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+             },
+             // The reader writes the match flag and the selected seed that the compute kernel waits on.
+             DFBBinding{
+                 .dfb_spec_name = KERNEL_COMMUNICATION_DFB,
+                 .accessor_name = "kernel_communication",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+             }},
+        .tensor_bindings =
+            {TensorBinding{
+                 .tensor_parameter_name = USER_IDS_TENSOR,
+                 .accessor_name = "user_ids",
+             },
+             TensorBinding{
+                 .tensor_parameter_name = SEEDS_TENSOR,
+                 .accessor_name = "seeds",
+             }},
+        .compile_time_args = {{"number_of_ids", number_of_ids}},
+        .runtime_arg_schema = {.runtime_arg_names = {"core_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(operation_attributes.device->arch()),
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = reader_kernel_path;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_grid;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.config = ReaderConfigDescriptor{};
-
+    KernelRunArgs reader_run_args{.kernel = READER};
     for (uint32_t core_id = 0; core_id < cores.size(); ++core_id) {
         // Get core
         const auto& core = cores[core_id];
 
         // Set runtime args for reader kernel
-        reader_desc.emplace_runtime_args(core, {user_ids_mesh, seeds_mesh, core_id});
+        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"core_id", core_id}});
     }
-    desc.kernels.push_back(std::move(reader_desc));
 
     // Create compute kernel
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = compute_kernel_path;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_grid;
-    compute_desc.compile_time_args = {kernel_communication_cb_index};
-    compute_desc.config = ComputeConfigDescriptor{};
-    desc.kernels.push_back(std::move(compute_desc));
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = compute_kernel_path,
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = KERNEL_COMMUNICATION_DFB,
+            .accessor_name = "kernel_communication",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .hw_config = ComputeGen1Config{},
+    };
 
-    return desc;
+    ProgramSpec spec{
+        .name = "manual_seed_set_seeds_set_cores",
+        .kernels = {reader, compute},
+        .dataflow_buffers =
+            {make_tensor_dataflow_buffer(USER_IDS_DFB, user_ids_mesh),
+             make_tensor_dataflow_buffer(SEEDS_DFB, seeds_mesh),
+             make_tensor_dataflow_buffer(KERNEL_COMMUNICATION_DFB, seeds_mesh)},
+        .tensor_parameters =
+            {TensorParameter{.unique_id = USER_IDS_TENSOR, .spec = user_ids_mesh.tensor_spec()},
+             TensorParameter{.unique_id = SEEDS_TENSOR, .spec = seeds_mesh.tensor_spec()}},
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {READER, COMPUTE},
+            .target_nodes = core_grid,
+        }},
+    };
+
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(reader_run_args)},
+        .tensor_args = {{USER_IDS_TENSOR, user_ids_mesh}, {SEEDS_TENSOR, seeds_mesh}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

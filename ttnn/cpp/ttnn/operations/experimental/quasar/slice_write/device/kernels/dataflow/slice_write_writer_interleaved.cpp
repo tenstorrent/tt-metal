@@ -48,13 +48,7 @@ void kernel_main() {
 
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
-    DPRINT(
-        "SWW enter per_core={} per_read={} per_barrier={}\n",
-        num_sticks_per_core,
-        num_sticks_per_core_read,
-        num_read_per_barrier);  // [#48552 DEBUG] writer localizer
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
-        DPRINT("SWW wf iter={} read={}\n", iter, sticks_read);
         cb_in0.wait_front(num_read_per_barrier);
         uint32_t src_offset = 0;
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
@@ -78,8 +72,6 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        DPRINT("SWW wrote iter, popping\n");  // [#48552 DEBUG]
         cb_in0.pop_front(num_read_per_barrier);
     }
-    DPRINT("SWW end\n");  // [#48552 DEBUG]
 }

@@ -8,6 +8,7 @@ Ring Joint Attention SDPA Tests for Video Generation and MLA Models on Blackhole
 Tests Ring Joint Attention accuracy and determinism using:
 - WAN 2.2 model shapes: standard attention with non-causal, non-balanced mode
 - DeepSeek MLA (Multi-Latent Attention): causal attention with balanced zigzag work distribution
+- GPT-OSS attention sinks: 64Q/8KV/64D causal GQA on a dedicated TP8/SP4 mesh
 
 Runs on BH multi-chip setups (single ring 1xN or Galaxy 4x8 mesh).
 Perf table generation is included but skipped on CI.
@@ -16,6 +17,7 @@ Model Configurations:
 - WAN: nhq == nhk == nhv, d_q == d_k == d_v == 128, bfloat16 for all tensors
 - MLA: nhk == 1, d_q == d_k == 576, d_v == 128, bfloat16 for Q, bfloat8_b for K/V
 - Minimax3 GQA: nhk == nhv < nhq, d_q == d_k == d_v == 128, bfloat16 for Q, bfloat8_b for K/V
+- GPT-OSS: 64Q/8KV, d_q == d_k == d_v == 64, bfloat16 for Q, bfloat8_b for K/V
 
 BH adaptation: uses init_device_compute_kernel_config instead of WormholeComputeKernelConfig.
 """
@@ -35,6 +37,7 @@ from ttnn.operations.ccl import Topology
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.gpt_oss_d_p.tt.attention.kv_cache import bounded_blockcyclic_positions, sliding_capacity_tokens
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
@@ -56,6 +59,31 @@ MESH_CONFIG = MeshConfig.detect()
 # See test_instructions.md for full parallelization context.
 
 BATCH_SIZE = 1
+
+# Experimental LLK-assert override: shrink user-allocatable worker L1 by 16 KiB so the
+# kernel-config staging region grows from 69 KiB to 85 KiB on Blackhole.
+LLK_ASSERT_WORKER_L1_SIZE = 1_444_992
+
+
+@dataclass(frozen=True)
+class GPTOSSRingSinkConfig:
+    """Operator-only GPT-OSS attention geometry; intentionally separate from MODEL_CONFIGS."""
+
+    global_q_heads: int = 64
+    global_kv_heads: int = 8
+    head_dim: int = 64
+    tp_size: int = 8
+    sp_size: int = 4
+    sliding_window_size: int = 128
+    q_dtype: ttnn.DataType = ttnn.bfloat16
+    kv_dtype: ttnn.DataType = ttnn.bfloat8_b
+
+
+GPT_OSS_RING_SINK_CONFIG = GPTOSSRingSinkConfig()
+GPT_OSS_Q_CHUNK_SIZE = 128
+GPT_OSS_K_CHUNK_SIZE = 128
+GPT_OSS_CHUNKED_CHUNK_SIZE = 5120
+GPT_OSS_CHUNKED_TOTAL_SEQ = 56320
 
 
 @dataclass
@@ -277,6 +305,43 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # LTX-2.3 distilled video self-attention (spatial, non-causal)
+    if mesh_config.is_galaxy:
+        configs.append(
+            ModelConfig(
+                name="ltx_s1",
+                nhq=8,
+                nhk=8,
+                nhv=8,
+                d_q=128,
+                d_k=128,
+                d_v=128,
+                is_causal=False,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat16,
+                q_chunk_sizes=[96],
+                k_chunk_sizes=[256],
+                seq_len=1216,
+            )
+        )
+        configs.append(
+            ModelConfig(
+                name="ltx_s2",
+                nhq=8,
+                nhk=8,
+                nhv=8,
+                d_q=128,
+                d_k=128,
+                d_v=128,
+                is_causal=False,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat16,
+                q_chunk_sizes=[192],
+                k_chunk_sizes=[512],
+                seq_len=4864,
+            )
+        )
+
     return {config.name: config for config in configs}
 
 
@@ -363,7 +428,7 @@ def deterministic_input_tensor(*shape, offset=0.0):
     return (seq_pattern + head_pattern + dim_pattern + offset).expand(shape).contiguous()
 
 
-def torch_sdpa_reference(q, k, v, is_causal=False):
+def torch_sdpa_reference(q, k, v, is_causal=False, attention_sink=None):
     """
     Memory-efficient PyTorch reference for ring joint attention.
 
@@ -385,7 +450,33 @@ def torch_sdpa_reference(q, k, v, is_causal=False):
         kv_indices = torch.arange(h_start, h_end, device=t.device) // heads_per_kv
         return t[:, kv_indices]
 
-    if total_seq <= SEQ_CHUNK and H <= HEAD_CHUNK:
+    if attention_sink is not None:
+        assert is_causal, "attention sink reference is defined for causal attention only"
+        # Unlike PyTorch SDPA, the virtual sink key has no V row. Compute the
+        # sink-aware softmax explicitly, using compact blocks to keep the
+        # full-causal M3 reference bounded in host memory.
+        SEQ_CHUNK = 512
+        HEAD_CHUNK = 4
+        scale = q.shape[-1] ** -0.5
+        attn_out = torch.empty(B, H, total_seq, Dv, dtype=q.dtype)
+        for h_start in range(0, H, HEAD_CHUNK):
+            h_end = min(h_start + HEAD_CHUNK, H)
+            q_heads = q[:, h_start:h_end]
+            k_heads = take_heads(k, h_start, h_end)
+            v_heads = take_heads(v, h_start, h_end)
+            sink_scores = attention_sink[:, h_start:h_end].float() * scale
+            for seq_start in range(0, total_seq, SEQ_CHUNK):
+                seq_end = min(seq_start + SEQ_CHUNK, total_seq)
+                scores = (
+                    q_heads[:, :, seq_start:seq_end].float() @ k_heads[:, :, :seq_end].transpose(-2, -1).float()
+                ) * scale
+                q_pos = torch.arange(seq_start, seq_end, device=q.device).unsqueeze(1)
+                k_pos = torch.arange(seq_end, device=q.device).unsqueeze(0)
+                scores = scores.masked_fill(k_pos > q_pos, float("-inf"))
+                expanded_sink = sink_scores.expand(B, h_end - h_start, seq_end - seq_start, 1)
+                weights = torch.softmax(torch.cat([scores, expanded_sink], dim=-1), dim=-1)[..., :-1]
+                attn_out[:, h_start:h_end, seq_start:seq_end] = (weights @ v_heads[:, :, :seq_end].float()).to(q.dtype)
+    elif total_seq <= SEQ_CHUNK and H <= HEAD_CHUNK:
         attn_out = torch.nn.functional.scaled_dot_product_attention(
             q,
             take_heads(k, 0, H),
@@ -492,10 +583,25 @@ class RingJointSDPARuntime:
     compute_kernel_config: object
 
 
-def open_ring_joint_sdpa_runtime(mesh_config, *, fp32_dest_acc_en: bool = False, trace_region_size: int = 0):
-    use_ring = mesh_config.sp_size > 2
-    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
-    topology = Topology.Ring if use_ring else Topology.Linear
+def open_ring_joint_sdpa_runtime(
+    mesh_config,
+    *,
+    fp32_dest_acc_en: bool = False,
+    trace_region_size: int = 0,
+    topology: Topology = None,
+    reserve_llk_kernel_config: bool = True,
+    full_mesh: bool = False,
+    num_global_semaphores: int = 3,
+    fabric_config: ttnn.FabricConfig = None,
+):
+    if full_mesh:
+        # The caller asks for a full-mesh gather; the op resolves whether that route closes.
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if fabric_config is None else fabric_config
+        topology = Topology.Ring
+    else:
+        use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
+        fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
+        topology = Topology.Ring if use_ring else Topology.Linear
 
     sp_axis = 1
     tp_axis = 0
@@ -518,7 +624,10 @@ def open_ring_joint_sdpa_runtime(mesh_config, *, fp32_dest_acc_en: bool = False,
         mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
         # trace_region_size defaults to 0 (no trace region), leaving every existing caller unchanged; only
         # the trace-replay test asks for one.
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+        mesh_device_kwargs = {"mesh_shape": mesh_shape, "trace_region_size": trace_region_size}
+        if reserve_llk_kernel_config and os.getenv("TT_METAL_LLK_ASSERTS"):
+            mesh_device_kwargs["worker_l1_size"] = LLK_ASSERT_WORKER_L1_SIZE
+        mesh_device = ttnn.open_mesh_device(**mesh_device_kwargs)
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -539,7 +648,9 @@ def open_ring_joint_sdpa_runtime(mesh_config, *, fp32_dest_acc_en: bool = False,
             sdpa_compute_grid=(mesh_config.sdpa_cols, mesh_config.grid_rows),
             ccl_column=mesh_config.ccl_column,
             worker_sub_device_id=worker_sub_device_id,
-            ccl_semaphore_handles=create_global_semaphores(mesh_device, ccl_sub_device_crs, 0),
+            ccl_semaphore_handles=create_global_semaphores(
+                mesh_device, ccl_sub_device_crs, 0, count=num_global_semaphores
+            ),
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -656,9 +767,9 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
     return configs, config_ids
 
 
-def create_global_semaphores(mesh_device, cores, initial_value):
+def create_global_semaphores(mesh_device, cores, initial_value, *, count=2):
     """Create global semaphore handles for CCL coordination."""
-    return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(count)]
 
 
 def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
@@ -698,6 +809,20 @@ def to_balanced_growing_cache_layout(src_full, sp_size, chunk_size, last_uploade
     return perm
 
 
+def to_circular_cache_layout(src_full, sp_size, chunk_size, chunk_idx, total_seq, sliding_window_size):
+    """Pack the resident chunks into the circular per-device K/V cache exactly as the model lays it out:
+    capacity from ``sliding_capacity_tokens`` (whole chunk slabs, chunk group g in slab g mod n_slabs) and
+    each shard row's global position from ``bounded_blockcyclic_positions``, after chunks 0..chunk_idx were
+    written. Rows never written stay zero. Device-major like to_balanced_growing_cache_layout."""
+    capacity = sliding_capacity_tokens(total_seq, (chunk_size,), sliding_window=sliding_window_size)
+    pos = bounded_blockcyclic_positions(sp_size, chunk_size, capacity, (chunk_idx + 1) * chunk_size)
+    b, nh, _, d = src_full.shape
+    perm = torch.zeros(b, nh, pos.numel(), d, dtype=src_full.dtype, device=src_full.device)
+    valid = pos >= 0
+    perm[:, :, valid, :] = src_full[:, :, pos[valid], :]
+    return perm
+
+
 def call_sdpa(
     tt_q,
     tt_k,
@@ -721,6 +846,13 @@ def call_sdpa(
     kv_cache_batch_idx=None,
     kv_actual_isl=None,
     is_cross=False,
+    attention_sink=None,
+    sliding_window_size=None,
+    slot_id=None,
+    kv_actual_isl_tensor=None,
+    kv_cache_num_layers=None,
+    kv_cache_layer_idx=None,
+    circular_kv_cache=False,
 ):
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -750,8 +882,50 @@ def call_sdpa(
         scale=scale,
         kv_cache_batch_idx=kv_cache_batch_idx,
         kv_actual_isl=kv_actual_isl,
+        attention_sink=attention_sink,
+        sliding_window_size=sliding_window_size,
+        slot_id=slot_id,
+        kv_actual_isl_tensor=kv_actual_isl_tensor,
+        kv_cache_num_layers=kv_cache_num_layers,
+        kv_cache_layer_idx=kv_cache_layer_idx,
+        circular_kv_cache=circular_kv_cache,
     )
     return tt_out
+
+
+def gpt_oss_tp8_sp4_mesh_config():
+    cfg = GPT_OSS_RING_SINK_CONFIG
+    if MESH_CONFIG.num_devices != cfg.tp_size * cfg.sp_size:
+        pytest.skip(
+            f"GPT-OSS ring-sink tests require {cfg.tp_size * cfg.sp_size} devices for "
+            f"TP={cfg.tp_size}, SP={cfg.sp_size}; detected {MESH_CONFIG.num_devices}"
+        )
+    mesh_config = replace(MESH_CONFIG, tp_size=cfg.tp_size, sp_size=cfg.sp_size)
+    assert mesh_config.num_devices == mesh_config.tp_size * mesh_config.sp_size
+    assert cfg.global_q_heads % mesh_config.tp_size == 0
+    assert cfg.global_kv_heads % mesh_config.tp_size == 0
+    return mesh_config
+
+
+def gpt_oss_chunked_mesh_config():
+    """Use production TP8/SP4 on Galaxy and the supported native-ring surrogate elsewhere."""
+    if MESH_CONFIG.num_devices == GPT_OSS_RING_SINK_CONFIG.tp_size * GPT_OSS_RING_SINK_CONFIG.sp_size:
+        return gpt_oss_tp8_sp4_mesh_config()
+    if MESH_CONFIG.num_devices not in (4, 8):
+        pytest.skip(f"GPT-OSS chunked sliding requires a 4- or 8-device ring, got {MESH_CONFIG.num_devices}")
+    return replace(MESH_CONFIG, tp_size=1, sp_size=MESH_CONFIG.num_devices)
+
+
+def gpt_oss_native_ring_batch_size(mesh_config: MeshConfig) -> int:
+    """Scale the native-ring GPT-OSS surrogate batch with its SP ring size.
+
+    QuietBox's SP4 ring covers the B1 surrogate; LoudBox's SP8 ring covers the
+    corresponding B2 schedule.  Keeping the total work per ring group constant
+    lets the same coverage run on both systems.
+    """
+    if mesh_config.sp_size not in (4, 8):
+        pytest.skip(f"GPT-OSS native-ring surrogate requires SP4 or SP8, got SP{mesh_config.sp_size}")
+    return mesh_config.sp_size // 4
 
 
 def run_ring_joint_sdpa(
@@ -775,6 +949,9 @@ def run_ring_joint_sdpa(
     rmse_threshold=None,
     do_check=True,
     num_iterations=1,
+    # logical_n as a device tensor instead of a host int. Pure transport change, so the accuracy check
+    # below must pass identically.
+    logical_as_tensor=False,
 ):
     """
     Run Ring Joint Attention SDPA using direct ttnn operations with auto-detected devices.
@@ -947,6 +1124,14 @@ def run_ring_joint_sdpa(
 
         # Set logical_n to the original full sequence length
         corrected_logical_n = sq
+        if logical_as_tensor:
+            corrected_logical_n = ttnn.from_torch(
+                torch.tensor([sq], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
 
         # Precompute mesh composer dims
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
@@ -1035,6 +1220,7 @@ def run_ring_joint_sdpa_model_configs(
     num_iterations=1,
     runtime: RingJointSDPARuntime = None,
     fp32_dest_acc_en: bool = False,
+    use_attention_sink: bool = False,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -1048,6 +1234,8 @@ def run_ring_joint_sdpa_model_configs(
     d_q, d_k, d_v = model.d_q, model.d_k, model.d_v
     q_dtype, kv_dtype = model.q_dtype, model.kv_dtype
     is_causal, is_balanced = model.is_causal, model.is_balanced
+    if use_attention_sink:
+        assert is_causal, "attention sink coverage requires causal attention"
 
     logger.debug(
         f"run_ring_joint_sdpa_model_configs params: model={model.name}, b={b}, "
@@ -1091,6 +1279,11 @@ def run_ring_joint_sdpa_model_configs(
             K = fa_rand(b, nhk, sq, d_k)
             V = fa_rand(b, nhv, sq, d_v)
         Q_original, K_original, V_original = Q, K, V
+        operator_sink = None
+        if use_attention_sink:
+            scale = d_q**-0.5
+            model_sink = torch.linspace(-4.0, 12.0, nhq).reshape(1, nhq, 1, 1)
+            operator_sink = model_sink / scale
 
         chunk_order = None
         if is_balanced:
@@ -1146,6 +1339,20 @@ def run_ring_joint_sdpa_model_configs(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
             ),
         )
+        tt_attention_sink = None
+        if operator_sink is not None:
+            sink_shard_dims = [None, None]
+            if mesh_config.tp_size > 1:
+                sink_shard_dims[tp_axis] = 1
+            tt_attention_sink = ttnn.from_torch(
+                operator_sink,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sink_shard_dims
+                ),
+            )
 
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
         main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
@@ -1153,7 +1360,9 @@ def run_ring_joint_sdpa_model_configs(
 
         gt_main = None
         if do_check and num_iterations == 1:
-            gt_main = torch_sdpa_reference(Q_original, K_original, V_original, is_causal=is_causal)
+            gt_main = torch_sdpa_reference(
+                Q_original, K_original, V_original, is_causal=is_causal, attention_sink=operator_sink
+            )
 
         use_device_determinism_compare = num_iterations > 1 and sq % ttnn.TILE_SIZE == 0 and d_v % ttnn.TILE_SIZE == 0
 
@@ -1215,6 +1424,7 @@ def run_ring_joint_sdpa_model_configs(
                     topology=topology,
                     worker_sub_device_id=worker_sub_device_id,
                     ccl_column=ccl_column,
+                    attention_sink=tt_attention_sink,
                 )
 
                 if use_device_determinism_compare:
@@ -1479,6 +1689,7 @@ def get_chunked_only_chunk_id(n_chunks: int):
 def run_ring_joint_sdpa_chunked(
     mesh_config,
     model: ModelConfig,
+    batch_size: int = BATCH_SIZE,
     chunk_size: int = CHUNKED_PREFILL_CHUNK_SIZE,
     total_seq: int = CHUNKED_PREFILL_TOTAL_SEQ,
     pcc_threshold: float = CHUNKED_PREFILL_PCC_THRESHOLD,
@@ -1495,7 +1706,11 @@ def run_ring_joint_sdpa_chunked(
     do_check: bool = True,
     reuse_kv_buffer: bool = False,
     fp32_dest_acc_en: bool = False,
+    sliding_window_size: int = None,
+    use_attention_sink: bool = False,
     runtime: RingJointSDPARuntime = None,
+    reserve_llk_kernel_config: bool = True,
+    circular_kv_cache: bool = False,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1530,6 +1745,16 @@ def run_ring_joint_sdpa_chunked(
         assert model.nhk == 1, f"ring_mla requires one shared latent K/V head, got nhk={model.nhk}"
         assert not indexed_nd_sharded_kv_cache, "ring_mla chunked path here does not use the indexed ND-sharded cache"
         assert model.d_v <= model.d_k, f"latent V (d_v={model.d_v}) must fit within the K/V latent (d_k={model.d_k})"
+    if use_attention_sink:
+        assert not use_ring_mla, "attention sink coverage requires separate K/V ring joint SDPA"
+    # circular_kv_cache: the per-device K/V input is the 2-slab circular cache of the bounded
+    # sliding-window layout (current chunk + predecessor at slab g % 2) instead of the full growing
+    # prefix; logical_n / kv_actual_isl stay absolute and the op derives the wrap on-device.
+    if circular_kv_cache:
+        assert sliding_window_size is not None, "circular_kv_cache is a sliding-window layout"
+        assert not use_ring_mla and not reuse_kv_buffer and not indexed_nd_sharded_kv_cache
+        assert persistent_buffer_mode == "exact_per_chunk", "circular_kv_cache builds a fresh 2-slab cache per chunk"
+        assert chunk_size >= sliding_window_size, "the predecessor slab must hold the whole window"
 
     # reuse_kv_buffer: reuse one fixed, oversized KV cache across all chunks (logical_n / kv_actual_isl
     # grow per chunk) instead of a fresh right-sized input each chunk. Perf-only (pad-rotation permutes
@@ -1540,7 +1765,7 @@ def run_ring_joint_sdpa_chunked(
         assert num_iterations == 1, "reuse_kv_buffer is a single-pass perf path"
         assert not indexed_nd_sharded_kv_cache, "reuse_kv_buffer uses its own oversized cache layout"
     if indexed_nd_sharded_kv_cache:
-        assert BATCH_SIZE == 1, "Indexed K/V cache test path assumes query batch is 1"
+        assert batch_size == 1, "Indexed K/V cache test path assumes query batch is 1"
         assert (
             0 <= kv_cache_batch_idx < cache_batch
         ), f"kv_cache_batch_idx {kv_cache_batch_idx} must be in [0, {cache_batch})"
@@ -1574,11 +1799,15 @@ def run_ring_joint_sdpa_chunked(
     # Chunked cache growth is linear in sequence order; balanced zigzag applies only to full prefill.
     is_balanced = False
 
-    b = BATCH_SIZE
+    b = batch_size
 
     owns_runtime = runtime is None
     if runtime is None:
-        runtime = open_ring_joint_sdpa_runtime(mesh_config, fp32_dest_acc_en=fp32_dest_acc_en)
+        runtime = open_ring_joint_sdpa_runtime(
+            mesh_config,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            reserve_llk_kernel_config=reserve_llk_kernel_config,
+        )
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -1607,12 +1836,34 @@ def run_ring_joint_sdpa_chunked(
         else:
             V_full = fa_rand(b, nhv, total_seq, d_v)
 
+        operator_sink = None
+        if use_attention_sink:
+            scale = d_q**-0.5
+            model_sink = torch.linspace(-4.0, 12.0, nhq).reshape(1, nhq, 1, 1)
+            operator_sink = model_sink / scale
+
         # do_check=False (perf/profiling) skips the full-sequence CPU torch reference: it is an
         # O(total_seq^2) host SDPA that dominates wall-clock, while the device kernel — the only
         # thing the profiler measures — still runs below. Mirrors run_ring_joint_sdpa's do_check.
         ref_full = None
         if num_iterations == 1 and do_check:
-            ref_full = torch_sdpa_reference(Q_full, K_full, V_full, is_causal=True)
+            if sliding_window_size is None and operator_sink is None:
+                ref_full = torch_sdpa_reference(Q_full, K_full, V_full, is_causal=True)
+            else:
+                ref_full = torch.cat(
+                    [
+                        torch_chunked_causal_sdpa_reference(
+                            Q_full[:, :, s:e, :],
+                            K_full[:, :, :e, :],
+                            V_full[:, :, :e, :],
+                            s,
+                            sliding_window_size=sliding_window_size,
+                            attention_sink=operator_sink,
+                        )
+                        for s, e in ((i * chunk_size, (i + 1) * chunk_size) for i in range(n_chunks))
+                    ],
+                    dim=2,
+                )
 
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
@@ -1690,6 +1941,21 @@ def run_ring_joint_sdpa_chunked(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
                 ),
                 **kwargs,
+            )
+
+        tt_attention_sink = None
+        if operator_sink is not None:
+            sink_shard_dims = [None, None]
+            if mesh_config.tp_size > 1:
+                sink_shard_dims[tp_axis] = 1
+            tt_attention_sink = ttnn.from_torch(
+                operator_sink,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sink_shard_dims
+                ),
             )
 
         def to_host(tt_out, expected_q_len):
@@ -1810,7 +2076,14 @@ def run_ring_joint_sdpa_chunked(
                 )
 
             Q_chunk = Q_full[:, :, s:e, :].contiguous()
-            K_balanced = to_balanced_growing_cache_layout(K_full, sp_size, chunk_size, i)
+            if circular_kv_cache:
+                assert i >= 1, "circular_kv_cache runs need a predecessor chunk (select chunk >= 1)"
+                cache_layout = lambda full: to_circular_cache_layout(
+                    full, sp_size, chunk_size, i, total_seq, sliding_window_size
+                )
+            else:
+                cache_layout = lambda full: to_balanced_growing_cache_layout(full, sp_size, chunk_size, i)
+            K_balanced = cache_layout(K_full)
             kv_buffer_batch = b
             kv_cache_batch_idx_arg = None
 
@@ -1825,7 +2098,7 @@ def run_ring_joint_sdpa_chunked(
                     None,
                 )
 
-            V_balanced = to_balanced_growing_cache_layout(V_full, sp_size, chunk_size, i)
+            V_balanced = cache_layout(V_full)
             if indexed_nd_sharded_kv_cache:
                 kv_buffer_batch = cache_batch
                 kv_cache_batch_idx_arg = kv_cache_batch_idx
@@ -1909,7 +2182,10 @@ def run_ring_joint_sdpa_chunked(
                     worker_sub_device_id=worker_sub_device_id,
                     ccl_column=ccl_column,
                     kv_cache_batch_idx=kv_cache_batch_idx_arg,
-                    kv_actual_isl=s if reuse_kv_buffer else None,
+                    kv_actual_isl=s if (reuse_kv_buffer or circular_kv_cache) else None,
+                    sliding_window_size=sliding_window_size,
+                    attention_sink=tt_attention_sink,
+                    circular_kv_cache=circular_kv_cache,
                 )
             except Exception as exc:
                 op_name = "ring_mla" if use_ring_mla else "SDPA"
@@ -1928,15 +2204,37 @@ def run_ring_joint_sdpa_chunked(
                 f"{config_id} chunk {i:2d} [{s:6d}, {e:6d}) logical_n={e}: PCC={pcc} RMSE={rmse:.6f} "
                 f"-> {'PASS' if pcc_passed and rmse_passed else 'FAIL'}"
             )
+            if sliding_window_size is not None and not (pcc_passed and rmse_passed):
+                q_rows_per_device = chunk_size // sp_size
+                for device_index in range(sp_size):
+                    row_start = device_index * q_rows_per_device
+                    row_end = row_start + q_rows_per_device
+                    device_pcc, device_rmse = compute_pcc_rmse(
+                        expected_i[:, :, row_start:row_end, :], out_i[:, :, row_start:row_end, :]
+                    )
+                    logger.info(
+                        f"{config_id} device {device_index}: rows=[{row_start}, {row_end}), "
+                        f"PCC={device_pcc}, RMSE={device_rmse:.6f}"
+                    )
             per_chunk_results.append((i, e, pcc_passed, pcc, rmse_passed, rmse))
 
         config_ids = {(q, k): get_test_case_id(model, q, k) for q, k in qk_configs}
         per_chunk_results_by_config = {config_id: [] for config_id in config_ids.values()}
         determinism_mismatch_marker = None
         shared_persistent_buffers = None
+        compact_sliding_seq = None
+        if sliding_window_size is not None:
+            max_halo_tokens = max(math.ceil((sliding_window_size - 1) / k_chunk) * k_chunk for _, k_chunk in qk_configs)
+            compact_sliding_seq = max(max_halo_tokens, ttnn.TILE_SIZE)
         if persistent_buffer_mode == "reuse_max":
             # The gather buffer must hold the full physical input — the oversized cache under reuse_kv_buffer.
-            reuse_seq = reuse_kv_stable_seq if reuse_kv_buffer else total_seq
+            reuse_seq = (
+                compact_sliding_seq
+                if compact_sliding_seq is not None
+                else reuse_kv_stable_seq
+                if reuse_kv_buffer
+                else total_seq
+            )
             shared_persistent_buffers = (
                 create_ring_mla_kv_buffer(reuse_seq, b) if use_ring_mla else create_persistent_buffers(reuse_seq, b)
             )
@@ -1957,9 +2255,9 @@ def run_ring_joint_sdpa_chunked(
             chunk_persistent_buffers = None
             if persistent_buffer_mode != "reuse_max":
                 chunk_persistent_buffers = (
-                    create_ring_mla_kv_buffer(e, kv_buffer_batch)
+                    create_ring_mla_kv_buffer(compact_sliding_seq or e, kv_buffer_batch)
                     if use_ring_mla
-                    else create_persistent_buffers(e, kv_buffer_batch)
+                    else create_persistent_buffers(compact_sliding_seq or e, kv_buffer_batch)
                 )
 
             for q_chunk_size, k_chunk_size in qk_configs:
@@ -2079,20 +2377,65 @@ def run_ring_joint_sdpa_chunked(
             close_ring_joint_sdpa_runtime(runtime)
 
 
-def torch_chunked_causal_sdpa_reference(q, k, v, q_abs_offset, scale=None):
+def torch_chunked_causal_sdpa_reference(
+    q, k, v, q_abs_offset, scale=None, sliding_window_size=None, attention_sink=None
+):
     """Chunked causal SDPA reference where Q rows start at absolute position q_abs_offset."""
     nhq = q.shape[1]
-    k = k.expand(-1, nhq, -1, -1) if k.shape[1] == 1 else k
-    v = v.expand(-1, nhq, -1, -1) if v.shape[1] == 1 else v
+
+    def take_q_heads(t):
+        if t.shape[1] == nhq:
+            return t
+        assert nhq % t.shape[1] == 0
+        heads_per_kv = nhq // t.shape[1]
+        kv_indices = torch.arange(nhq) // heads_per_kv
+        return t[:, kv_indices]
+
     if scale is None:
         scale = q.shape[-1] ** -0.5
 
     sq = q.shape[2]
     sk = k.shape[2]
+    if sliding_window_size is not None:
+        block_size = 256
+        out = torch.empty_like(q)
+        for q_start in range(0, sq, block_size):
+            q_end = min(q_start + block_size, sq)
+            abs_q_start = q_abs_offset + q_start
+            abs_q_end = q_abs_offset + q_end
+            k_start = max(0, abs_q_start - sliding_window_size + 1)
+            k_end = min(sk, abs_q_end)
+            q_block = q[:, :, q_start:q_end, :].float()
+            k_block = take_q_heads(k[:, :, k_start:k_end, :]).float()
+            v_block = take_q_heads(v[:, :, k_start:k_end, :]).float()
+            scores = (q_block @ k_block.transpose(-2, -1)) * scale
+            q_pos = torch.arange(abs_q_start, abs_q_end)
+            k_pos = torch.arange(k_start, k_end)
+            scores = scores.masked_fill(k_pos.unsqueeze(0) > q_pos.unsqueeze(1), float("-inf"))
+            scores = scores.masked_fill(
+                k_pos.unsqueeze(0) < q_pos.unsqueeze(1) - sliding_window_size + 1,
+                float("-inf"),
+            )
+            if attention_sink is not None:
+                sink_scores = attention_sink.float() * scale
+                sink_scores = sink_scores.expand(q.shape[0], nhq, q_end - q_start, 1)
+                weights = torch.softmax(torch.cat([scores, sink_scores], dim=-1), dim=-1)[..., :-1]
+            else:
+                weights = torch.softmax(scores, dim=-1)
+            out[:, :, q_start:q_end, :] = (weights @ v_block).to(q.dtype)
+        return out
+
+    k = take_q_heads(k)
+    v = take_q_heads(v)
     scores = (q.float() @ k.transpose(-2, -1).float()) * scale
     q_pos = torch.arange(sq) + q_abs_offset
     k_pos = torch.arange(sk)
     scores = scores.masked_fill(k_pos.unsqueeze(0) > q_pos.unsqueeze(1), float("-inf"))
+    if attention_sink is not None:
+        sink_scores = attention_sink.float() * scale
+        sink_scores = sink_scores.expand(q.shape[0], nhq, sq, 1)
+        weights = torch.softmax(torch.cat([scores, sink_scores], dim=-1), dim=-1)[..., :-1]
+        return (weights @ v.float()).to(q.dtype)
     return (torch.softmax(scores, dim=-1) @ v.float()).to(q.dtype)
 
 
@@ -2128,9 +2471,11 @@ def build_kv_pad_rotation_inputs(
     chunk_size_local,
 ):
     """Build padded Q/K/V host tensors for one KV-pad-aware Ring SDPA call."""
-    assert old_cache_k.shape[0] == 1
-    assert old_cache_v.shape[0] == 1
-    assert new_tokens_q.shape[0] == 1
+    batch_size = new_tokens_q.shape[0]
+    assert old_cache_k.shape[0] == batch_size
+    assert old_cache_v.shape[0] == batch_size
+    assert new_tokens_k.shape[0] == batch_size
+    assert new_tokens_v.shape[0] == batch_size
 
     nhq = new_tokens_q.shape[1]
     nhk = new_tokens_k.shape[1]
@@ -2144,30 +2489,30 @@ def build_kv_pad_rotation_inputs(
     num_cache_slabs = max(2, math.ceil(logical_n / chunk_size_global))
     cache_seq_per_dev = num_cache_slabs * chunk_size_local
 
-    k_per_dev = torch.zeros(sp_size, nhk, cache_seq_per_dev, d_k, dtype=torch.bfloat16)
-    v_per_dev = torch.zeros(sp_size, nhv, cache_seq_per_dev, d_v, dtype=torch.bfloat16)
+    k_per_dev = torch.zeros(batch_size, sp_size, nhk, cache_seq_per_dev, d_k, dtype=torch.bfloat16)
+    v_per_dev = torch.zeros(batch_size, sp_size, nhv, cache_seq_per_dev, d_v, dtype=torch.bfloat16)
     for global_pos in range(kv_actual_isl):
         group = global_pos // chunk_size_global
         within_group = global_pos % chunk_size_global
         dev = within_group // chunk_size_local
         cell = within_group % chunk_size_local
         cache_row = group * chunk_size_local + cell
-        k_per_dev[dev, :, cache_row, :] = old_cache_k[0, :, global_pos, :]
-        v_per_dev[dev, :, cache_row, :] = old_cache_v[0, :, global_pos, :]
+        k_per_dev[:, dev, :, cache_row, :] = old_cache_k[:, :, global_pos, :]
+        v_per_dev[:, dev, :, cache_row, :] = old_cache_v[:, :, global_pos, :]
 
-    q_per_dev = torch.zeros(sp_size, nhq, chunk_size_local, d_q, dtype=torch.bfloat16)
+    q_per_dev = torch.zeros(batch_size, sp_size, nhq, chunk_size_local, d_q, dtype=torch.bfloat16)
     q_global_pos_per_dev = [[None] * chunk_size_local for _ in range(sp_size)]
     destinations = kv_pad_rotation_destinations(kv_actual_isl, new_actual_isl, sp_size, chunk_size_local)
     assert len(destinations) == new_actual_isl
     for token_idx, dev, cache_row, q_row, global_pos in destinations:
-        k_per_dev[dev, :, cache_row, :] = new_tokens_k[0, :, token_idx, :]
-        v_per_dev[dev, :, cache_row, :] = new_tokens_v[0, :, token_idx, :]
-        q_per_dev[dev, :, q_row, :] = new_tokens_q[0, :, token_idx, :]
+        k_per_dev[:, dev, :, cache_row, :] = new_tokens_k[:, :, token_idx, :]
+        v_per_dev[:, dev, :, cache_row, :] = new_tokens_v[:, :, token_idx, :]
+        q_per_dev[:, dev, :, q_row, :] = new_tokens_q[:, :, token_idx, :]
         q_global_pos_per_dev[dev][q_row] = global_pos
 
-    q_host = q_per_dev.permute(1, 0, 2, 3).reshape(1, nhq, chunk_size_global, d_q)
-    k_host = k_per_dev.permute(1, 0, 2, 3).reshape(1, nhk, sp_size * cache_seq_per_dev, d_k)
-    v_host = v_per_dev.permute(1, 0, 2, 3).reshape(1, nhv, sp_size * cache_seq_per_dev, d_v)
+    q_host = q_per_dev.permute(0, 2, 1, 3, 4).reshape(batch_size, nhq, chunk_size_global, d_q)
+    k_host = k_per_dev.permute(0, 2, 1, 3, 4).reshape(batch_size, nhk, sp_size * cache_seq_per_dev, d_k)
+    v_host = v_per_dev.permute(0, 2, 1, 3, 4).reshape(batch_size, nhv, sp_size * cache_seq_per_dev, d_v)
 
     combined_q_global_pos = []
     for dev in range(sp_size):
@@ -2407,6 +2752,284 @@ def run_ring_joint_sdpa_kv_pad_rotation_case(
         close_ring_joint_sdpa_runtime(runtime)
 
 
+def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+    mesh_config,
+    batch_size,
+    expect_error,
+    chunk_size_local=128,
+    sliding_window_size=128,
+    local_q_heads=8,
+    local_kv_heads=1,
+    head_dim=GPT_OSS_RING_SINK_CONFIG.head_dim,
+    prefix_group_counts=(0, 1, 2, 10),
+    num_iterations=2,
+    pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
+    rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+):
+    """Numerically validate compact GQA sliding attention over a fixed, garbage-padded KV cache.
+
+    The first case is the cache-backed first complete group (``logical_n == G``). It exercises the
+    physical chunk-0 condition used by GPT-OSS and Gemma: Q is shorter than an oversized K/V cache,
+    while the ignored group-0 wrap payload and device-0 causal clipping are checked against torch.
+    """
+    sp_size = mesh_config.sp_size
+    if sp_size < 2:
+        pytest.skip(f"sliding KV-pad reuse requires at least 2 devices in ring, got SP={sp_size}")
+
+    tile_height = ttnn.TILE_SIZE
+    assert chunk_size_local % tile_height == 0
+    assert sliding_window_size > 0
+
+    assert local_q_heads > 0 and local_kv_heads > 0
+    assert local_q_heads % local_kv_heads == 0
+    assert head_dim % tile_height == 0
+    assert prefix_group_counts and prefix_group_counts[0] == 0
+    assert all(groups >= 0 for groups in prefix_group_counts)
+    nhq = local_q_heads * mesh_config.tp_size
+    nhk = local_kv_heads * mesh_config.tp_size
+    nhv = nhk
+    gqa_ratio = local_q_heads // local_kv_heads
+    d_q = head_dim
+    d_k = d_q
+    d_v = d_q
+    q_dtype = GPT_OSS_RING_SINK_CONFIG.q_dtype
+    kv_dtype = GPT_OSS_RING_SINK_CONFIG.kv_dtype
+    chunk_size_global = chunk_size_local * sp_size
+    # A complete first group is valid even though it has no predecessor *group*: device 0
+    # clips at token zero while all other devices consume a predecessor within the group.
+    # Exercise that path and the requested cache-growth cases. Partial/wrapped Q groups remain outside
+    # this specialization.
+    prefix_lengths = tuple(groups * chunk_size_global for groups in prefix_group_counts)
+    logical_lengths = tuple(prefix + chunk_size_global for prefix in prefix_lengths)
+    max_logical_n = max(logical_lengths)
+
+    # Keep one physical input shape across every logical length and leave a complete extra slab
+    # filled with high-magnitude garbage. Correct logical_n/kv_actual_isl runtime patching must keep
+    # every trailing invalid slab out of the result.
+    stable_cache_slabs = math.ceil(max_logical_n / chunk_size_global) + 1
+    stable_cache_seq_per_dev = stable_cache_slabs * chunk_size_local
+    stable_kv_seq_len = sp_size * stable_cache_seq_per_dev
+    k_chunk_size = 128
+    q_chunk_size = 64
+    halo_tokens = math.ceil((sliding_window_size - 1) / k_chunk_size) * k_chunk_size
+    compact_persistent_seq_len = max(halo_tokens, tile_height)
+
+    torch.manual_seed(CHUNKED_PREFILL_SEED + batch_size)
+    q_full = fa_rand(batch_size, nhq, max_logical_n, d_q)
+    k_full = fa_rand(batch_size, nhk, max_logical_n, d_k)
+    v_full = fa_rand(batch_size, nhv, max_logical_n, d_v)
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    try:
+        input_shard_dims = [None, None]
+        input_shard_dims[runtime.sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            input_shard_dims[runtime.tp_axis] = 1
+        persistent_shard_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            persistent_shard_dims[runtime.tp_axis] = 1
+
+        def upload(host_tensor, dtype, shard_dims):
+            return ttnn.from_torch(
+                host_tensor,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
+
+        persistent_output_buffer_k = upload(
+            torch.zeros(batch_size, nhk, compact_persistent_seq_len, d_k),
+            kv_dtype,
+            persistent_shard_dims,
+        )
+        persistent_output_buffer_v = upload(
+            torch.zeros(batch_size, nhv, compact_persistent_seq_len, d_v),
+            kv_dtype,
+            persistent_shard_dims,
+        )
+        mesh_device.enable_program_cache()
+        mesh_device.clear_program_cache()
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+        main_row_dim = input_shard_dims[0] if input_shard_dims[0] is not None else -1
+        main_col_dim = input_shard_dims[1] if input_shard_dims[1] is not None else -1
+
+        logger.info(
+            f"sliding KV-pad reuse: B={batch_size}, TP={mesh_config.tp_size}, SP={sp_size}, "
+            f"local_heads={local_q_heads}Q/{local_kv_heads}KV, chunk_global={chunk_size_global}, "
+            f"window={sliding_window_size}, prefixes={prefix_lengths}, "
+            f"physical_kv={stable_kv_seq_len}, compact_persistent={compact_persistent_seq_len}"
+        )
+
+        reference_outputs = None
+        accuracy_results = []
+        cache_entries_after_first_call = None
+        for iteration in range(num_iterations):
+            iteration_outputs = []
+            for case_index, kv_actual_isl in enumerate(prefix_lengths):
+                logical_n = logical_lengths[case_index]
+                new_tokens_q = q_full[:, :, kv_actual_isl:logical_n, :].contiguous()
+                new_tokens_k = k_full[:, :, kv_actual_isl:logical_n, :].contiguous()
+                new_tokens_v = v_full[:, :, kv_actual_isl:logical_n, :].contiguous()
+                q_host, k_host, v_host, valid_rows, num_cache_slabs = build_kv_pad_rotation_inputs(
+                    k_full[:, :, :kv_actual_isl, :],
+                    v_full[:, :, :kv_actual_isl, :],
+                    new_tokens_q,
+                    new_tokens_k,
+                    new_tokens_v,
+                    kv_actual_isl,
+                    sp_size,
+                    chunk_size_local,
+                )
+                cache_seq_per_dev = k_host.shape[2] // sp_size
+                assert stable_cache_seq_per_dev > cache_seq_per_dev
+
+                valid_per_dev = torch.zeros(sp_size, cache_seq_per_dev, dtype=torch.bool)
+                for global_pos in range(kv_actual_isl):
+                    group = global_pos // chunk_size_global
+                    within_group = global_pos % chunk_size_global
+                    dev = within_group // chunk_size_local
+                    cache_row = group * chunk_size_local + within_group % chunk_size_local
+                    valid_per_dev[dev, cache_row] = True
+                for _, dev, cache_row, _, _ in kv_pad_rotation_destinations(
+                    kv_actual_isl, chunk_size_global, sp_size, chunk_size_local
+                ):
+                    valid_per_dev[dev, cache_row] = True
+
+                def add_garbage_tail(host, num_heads, head_dim):
+                    padded = (
+                        torch.randn(
+                            batch_size,
+                            num_heads,
+                            sp_size,
+                            stable_cache_seq_per_dev,
+                            head_dim,
+                            dtype=host.dtype,
+                        )
+                        * 100
+                    )
+                    active = padded[:, :, :, :cache_seq_per_dev, :]
+                    source = host.reshape(batch_size, num_heads, sp_size, cache_seq_per_dev, head_dim)
+                    active.copy_(
+                        torch.where(
+                            valid_per_dev.reshape(1, 1, sp_size, cache_seq_per_dev, 1),
+                            source,
+                            active,
+                        )
+                    )
+                    return padded.reshape(batch_size, num_heads, stable_kv_seq_len, head_dim)
+
+                tt_q = upload(q_host, q_dtype, input_shard_dims)
+                tt_k = upload(add_garbage_tail(k_host, nhk, d_k), kv_dtype, input_shard_dims)
+                tt_v = upload(add_garbage_tail(v_host, nhv, d_v), kv_dtype, input_shard_dims)
+
+                def run_device_call(logical_n_arg, kv_actual_isl_arg, sliding_window_size_arg=sliding_window_size):
+                    return call_sdpa(
+                        tt_q,
+                        tt_k,
+                        tt_v,
+                        logical_n_arg,
+                        is_causal=True,
+                        is_balanced=False,
+                        p_buf_k=persistent_output_buffer_k,
+                        p_buf_v=persistent_output_buffer_v,
+                        program_config=program_config,
+                        compute_kernel_config=runtime.compute_kernel_config,
+                        ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                        num_links=runtime.num_links,
+                        sp_axis=runtime.sp_axis,
+                        mesh_device=mesh_device,
+                        topology=runtime.topology,
+                        worker_sub_device_id=runtime.worker_sub_device_id,
+                        ccl_column=runtime.ccl_column,
+                        kv_actual_isl=kv_actual_isl_arg,
+                        sliding_window_size=sliding_window_size_arg,
+                    )
+
+                tt_out = run_device_call(logical_n, kv_actual_isl)
+
+                if iteration == 0 and case_index == 0:
+                    with expect_error(RuntimeError, "sliding_window_size > 1"):
+                        # Same physical tensors after a W=128 cache entry. This locks both the
+                        # early zero-halo rejection and sliding_window_size's program-cache key.
+                        run_device_call(logical_n, kv_actual_isl, sliding_window_size_arg=1)
+
+                if iteration == 0 and case_index == 2:
+                    with expect_error(RuntimeError, "complete ring-group boundary"):
+                        # Same tensor specs and KV-pad specialization: this must be rejected by
+                        # cache-hit scalar validation before the halo source group can underflow.
+                        run_device_call(logical_n - tile_height, kv_actual_isl)
+                if iteration == 0 and case_index == 3:
+                    with expect_error(RuntimeError, "complete ring-group boundary"):
+                        # Without KV-pad rotation logical_n is hash-pinned, so this exercises the
+                        # ordinary cache-miss validation for a partial final ring group.
+                        run_device_call(logical_n - tile_height, None)
+
+                cache_entries = mesh_device.num_program_cache_entries()
+                if cache_entries_after_first_call is None:
+                    assert cache_entries > 0
+                    cache_entries_after_first_call = cache_entries
+                else:
+                    assert cache_entries == cache_entries_after_first_call, (
+                        f"sliding KV-pad calls must reuse one physical-shape program; got {cache_entries} entries "
+                        f"for kv_actual_isl={kv_actual_isl}, expected {cache_entries_after_first_call}"
+                    )
+
+                out_host = ttnn.to_torch(
+                    tt_out,
+                    mesh_composer=ttnn.create_mesh_composer(
+                        mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+                    ),
+                )
+                out_valid_natural = out_host[:, :, valid_rows, :]
+                iteration_outputs.append(out_valid_natural)
+
+                if iteration == 0:
+                    natural_k = k_full[:, :, :logical_n, :].repeat_interleave(gqa_ratio, dim=1)
+                    natural_v = v_full[:, :, :logical_n, :].repeat_interleave(gqa_ratio, dim=1)
+                    ref_out = torch_chunked_causal_sdpa_reference(
+                        new_tokens_q,
+                        natural_k,
+                        natural_v,
+                        kv_actual_isl,
+                        sliding_window_size=sliding_window_size,
+                    )
+                    passed, pcc = comp_pcc(ref_out, out_valid_natural, pcc_threshold)
+                    rmse = torch.sqrt(((ref_out - out_valid_natural) ** 2).mean()).item()
+                    rmse_passed = rmse_threshold is None or rmse < rmse_threshold
+                    logger.info(
+                        f"sliding KV-pad B{batch_size} case {case_index}: kv_actual_isl={kv_actual_isl}, "
+                        f"logical_n={logical_n}, cache_slabs={num_cache_slabs}, "
+                        f"PCC={pcc}, RMSE={rmse:.6f} -> "
+                        f"{'PASS' if passed and rmse_passed else 'FAIL'}"
+                    )
+                    accuracy_results.append((case_index, kv_actual_isl, logical_n, passed, pcc, rmse_passed, rmse))
+
+            if reference_outputs is None:
+                reference_outputs = iteration_outputs
+            else:
+                for case_index, (expected, actual) in enumerate(zip(reference_outputs, iteration_outputs)):
+                    assert torch.equal(expected, actual), (
+                        f"sliding KV-pad cache replay is not bit-exact for B{batch_size}, "
+                        f"case={case_index}, iteration={iteration}"
+                    )
+
+        failures = [result for result in accuracy_results if not result[3] or not result[5]]
+        assert not failures, f"sliding KV-pad GQA accuracy failures for B{batch_size}: " + "; ".join(
+            f"case={case_index}, kv_actual_isl={kv_actual_isl}, logical_n={logical_n}, " f"PCC={pcc}, RMSE={rmse:.6f}"
+            for case_index, kv_actual_isl, logical_n, _, pcc, _, rmse in failures
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     mesh_config,
     chunk_size_local=32,
@@ -2416,8 +3039,9 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     cache_batch=2,
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+    full_mesh=False,
 ):
-    sp_size = mesh_config.sp_size
+    sp_size = mesh_config.num_devices if full_mesh else mesh_config.sp_size
     if sp_size < 2:
         pytest.skip(f"ring_mla chunked kv_actual_isl requires at least 2 devices in ring, got SP={sp_size}")
 
@@ -2430,7 +3054,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
 
     b = BATCH_SIZE
     local_heads = 4
-    nhq = local_heads * mesh_config.tp_size
+    nhq = local_heads if full_mesh else local_heads * mesh_config.tp_size
     nhk = 1
     d_q = 64
     d_k = 64
@@ -2452,12 +3076,14 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         max(2, math.ceil(((i + 1) * new_actual_isl) / chunk_size_global)) for i in range(num_chunks)
     )
     stable_kv_input_seq_len = sp_size * max_input_cache_slabs * chunk_size_local
+    if full_mesh:
+        persistent_seq_len = stable_kv_input_seq_len
 
     torch.manual_seed(CHUNKED_PREFILL_SEED)
     q_full = fa_rand(b, nhq, total_seq, d_q)
     kv_full = fa_rand(b, nhk, total_seq, d_k)
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=full_mesh)
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -2479,8 +3105,20 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         sdpa_kv_shard_dims[sp_axis] = 2
 
         persistent_kv_shard_dims = [None, None]
-        main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
-        main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+        if full_mesh:
+            sequence_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+            persistent_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            output_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+        else:
+            sequence_mapper = None
+            persistent_mapper = ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_kv_shard_dims
+            )
+            main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+            main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+            output_composer = ttnn.create_mesh_composer(
+                mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+            )
 
         def upload(host_tensor, dtype, shard_dims):
             return ttnn.from_torch(
@@ -2488,7 +3126,11 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+                mesh_mapper=(
+                    sequence_mapper
+                    if full_mesh
+                    else ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+                ),
             )
 
         persistent_output_buffer_kv = ttnn.from_torch(
@@ -2496,9 +3138,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
             dtype=kv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_kv_shard_dims
-            ),
+            mesh_mapper=persistent_mapper,
         )
         mesh_device.enable_program_cache()
         mesh_device.clear_program_cache()
@@ -2537,10 +3177,13 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                     sp_size,
                     chunk_size_local,
                 )
-                assert persistent_seq_len > kv_host.shape[2], (
-                    f"test requires oversized persistent buffer, got persistent_seq_len={persistent_seq_len}, "
-                    f"input KV seq={kv_host.shape[2]}"
-                )
+                if full_mesh:
+                    assert persistent_seq_len == stable_kv_input_seq_len
+                else:
+                    assert persistent_seq_len > kv_host.shape[2], (
+                        f"test requires oversized persistent buffer, got persistent_seq_len={persistent_seq_len}, "
+                        f"input KV seq={kv_host.shape[2]}"
+                    )
                 assert stable_kv_input_seq_len >= kv_host.shape[2], (
                     f"stable physical KV input is too small, got stable_kv_input_seq_len={stable_kv_input_seq_len}, "
                     f"input KV seq={kv_host.shape[2]}"
@@ -2580,7 +3223,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                         dim=2,
                         multi_device_global_semaphore=ccl_semaphore_handles,
                         num_links=num_links,
-                        cluster_axis=sp_axis,
+                        cluster_axis=None if full_mesh else sp_axis,
                         mesh_device=mesh_device,
                         topology=topology,
                         subdevice_id=worker_sub_device_id,
@@ -2612,9 +3255,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
 
                 out_host = ttnn.to_torch(
                     tt_out,
-                    mesh_composer=ttnn.create_mesh_composer(
-                        mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
-                    ),
+                    mesh_composer=output_composer,
                 )
                 out_valid_natural = out_host[:, :, valid_rows, :]
                 iter_outputs.append(out_valid_natural)
@@ -2684,6 +3325,7 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
     num_iterations: int = 2,
     kv_cache_batch_idx: int = 1,
     cache_batch: int = 2,
+    full_mesh: bool = False,
 ):
     """
     Validate ring_mla chunked-prefill with an indexed shared K/V cache.
@@ -2695,7 +3337,7 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
     """
     torch.manual_seed(CHUNKED_PREFILL_SEED)
 
-    sp_size = mesh_config.sp_size
+    sp_size = mesh_config.num_devices if full_mesh else mesh_config.sp_size
     if sp_size < 2:
         pytest.skip(f"ring_mla chunked prefill requires at least 2 devices in ring, got SP={sp_size}")
     if model.nhk != 1:
@@ -2716,12 +3358,12 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
         k_chunk_size = model.k_chunk_sizes[0]
 
     b = BATCH_SIZE
-    nhq = model.nhq * mesh_config.tp_size
+    nhq = model.nhq if full_mesh else model.nhq * mesh_config.tp_size
     nhk = model.nhk
     d_q, d_k, d_v = model.d_q, model.d_k, model.d_v
     q_dtype, kv_dtype = model.q_dtype, model.kv_dtype
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=full_mesh)
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -2739,17 +3381,34 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
         V_full = KV_full[:, :, :, :d_v]
         ref_full = torch_sdpa_reference(Q_full, KV_full, V_full, is_causal=True)
 
-        sdpa_input_shard_dims = [None, None]
-        sdpa_input_shard_dims[sp_axis] = 2
-        if mesh_config.tp_size > 1:
-            sdpa_input_shard_dims[tp_axis] = 1
+        if full_mesh:
+            sequence_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+            kv_mapper = sequence_mapper
+            persistent_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            output_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+        else:
+            sdpa_input_shard_dims = [None, None]
+            sdpa_input_shard_dims[sp_axis] = 2
+            if mesh_config.tp_size > 1:
+                sdpa_input_shard_dims[tp_axis] = 1
 
-        sdpa_kv_shard_dims = [None, None]
-        sdpa_kv_shard_dims[sp_axis] = 2
-
-        persistent_kv_shard_dims = [None, None]
-        main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
-        main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+            sdpa_kv_shard_dims = [None, None]
+            sdpa_kv_shard_dims[sp_axis] = 2
+            persistent_kv_shard_dims = [None, None]
+            sequence_mapper = ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
+            )
+            kv_mapper = ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_kv_shard_dims
+            )
+            persistent_mapper = ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_kv_shard_dims
+            )
+            main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+            main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+            output_composer = ttnn.create_mesh_composer(
+                mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+            )
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_compute_grid,
@@ -2766,9 +3425,7 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
                 dtype=q_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
-                ),
+                mesh_mapper=sequence_mapper,
             )
 
         def upload_kv(kv_host):
@@ -2778,28 +3435,28 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=kv_memory_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_kv_shard_dims
-                ),
+                mesh_mapper=kv_mapper,
             )
 
         def to_host(tt_out, expected_q_len):
             out = ttnn.to_torch(
                 tt_out,
-                mesh_composer=ttnn.create_mesh_composer(
-                    mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
-                ),
+                mesh_composer=output_composer,
             )
             return out[:, :, :expected_q_len, :d_v]
 
         logger.info(
             f"ring_mla chunked indexed cache: model={model.name}, total_seq={total_seq}, "
             f"chunk_size={chunk_size}, n_chunks={n_chunks}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, "
-            f"kv_cache_batch_idx={kv_cache_batch_idx}, cache_batch={cache_batch}"
+            f"kv_cache_batch_idx={kv_cache_batch_idx}, cache_batch={cache_batch}, full_mesh={full_mesh}"
         )
+        if full_mesh:
+            mesh_device.enable_program_cache()
+            mesh_device.clear_program_cache()
 
         reference_outputs = None
         per_chunk_results = []
+        program_cache_entries_after_first_iteration = None
         for it in range(num_iterations):
             iter_outputs = []
             for i in range(n_chunks):
@@ -2816,9 +3473,7 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
                     dtype=kv_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh_device,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_kv_shard_dims
-                    ),
+                    mesh_mapper=persistent_mapper,
                 )
 
                 try:
@@ -2834,7 +3489,7 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
                         dim=2,
                         multi_device_global_semaphore=ccl_semaphore_handles,
                         num_links=num_links,
-                        cluster_axis=sp_axis,
+                        cluster_axis=None if full_mesh else sp_axis,
                         mesh_device=mesh_device,
                         topology=topology,
                         subdevice_id=worker_sub_device_id,
@@ -2876,6 +3531,17 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
                     details = "; ".join(f"chunk {i}: {n} diffs, max={m}" for i, n, m in diffs)
                     pytest.fail(f"ring_mla chunked indexed-cache determinism failed at iter {it}: {details}")
 
+            if full_mesh:
+                program_cache_entries = mesh_device.num_program_cache_entries()
+                if program_cache_entries_after_first_iteration is None:
+                    assert program_cache_entries > 0
+                    program_cache_entries_after_first_iteration = program_cache_entries
+                else:
+                    assert program_cache_entries == program_cache_entries_after_first_iteration, (
+                        "full-mesh ring_mla replay must reuse its cached programs; "
+                        f"got {program_cache_entries} entries, expected {program_cache_entries_after_first_iteration}"
+                    )
+
         failures = [
             (i, e, pcc, rmse)
             for i, e, passed, pcc, rmse_passed, rmse in per_chunk_results
@@ -2892,7 +3558,7 @@ def run_ring_mla_sdpa_chunked_indexed_kv_cache(
         logger.info(f"ring_mla chunked indexed-cache verified: {n_chunks} chunks replayed {num_iterations} times")
 
     finally:
-        close_ring_joint_sdpa_runtime(runtime)
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=full_mesh)
 
 
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
@@ -2960,6 +3626,20 @@ def test_ring_joint_attention_kv_pad_aware_rotation_accuracy(case_name):
         new_actual_isl=new_actual_isl,
         seed=4321 + list(cases).index(case_name),
         chunk_size_local=chunk_size_local,
+    )
+
+
+def test_ring_joint_attention_gpt_oss_first_complete_group_sliding_kv_pad_reuse_accuracy_and_determinism(
+    expect_error,
+):
+    """GPT-OSS-shaped numerical regression for chunk 0 plus cache growth/replay.
+
+    The 256-token local Q slab is deliberately larger than the 128-token halo: this exercises the
+    nonzero first-group predecessor tail, rather than the degenerate full-slab halo case.
+    """
+    batch_size = gpt_oss_native_ring_batch_size(MESH_CONFIG)
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        MESH_CONFIG, batch_size=batch_size, expect_error=expect_error, chunk_size_local=256
     )
 
 
@@ -3035,6 +3715,284 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
     )
 
 
+@pytest.mark.parametrize("mesh_scope", ["2x2", "complete"], ids=["2x2", "complete_mesh"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["unbalanced", "balanced"])
+@pytest.mark.parametrize(
+    "fabric_config",
+    [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
+    ids=["torus_xy", "fabric_2d"],
+)
+def test_ring_mla_full_mesh_accuracy_row_major_gather_and_cache_reuse(mesh_scope, is_balanced, fabric_config):
+    """Run one snake across the complete 2D mesh and verify canonical KV placement.
+
+    A torus closes the snake; a plain 2D fabric has no closing edge and resolves the same walk as
+    an open path. The gathered KV placement must be identical either way."""
+    if mesh_scope == "2x2":
+        if MESH_CONFIG.num_devices != 4:
+            pytest.skip("2x2 full-mesh ring_mla requires an exact four-device physical mesh")
+        mesh_config = replace(MESH_CONFIG, is_galaxy=False, num_devices=4, tp_size=2, sp_size=2)
+    else:
+        mesh_config = (
+            MESH_CONFIG
+            if MESH_CONFIG.is_galaxy
+            else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+        )
+    if mesh_config.tp_size < 2 or mesh_config.sp_size < 2:
+        pytest.skip(f"full-mesh ring_mla requires a non-degenerate 2D mesh, got {mesh_config}")
+    if mesh_config.tp_size % 2 and mesh_config.sp_size % 2:
+        pytest.skip(f"full-mesh ring_mla requires at least one even mesh dimension, got {mesh_config}")
+    if fabric_config == ttnn.FabricConfig.FABRIC_2D_TORUS_XY and not (
+        MESH_CONFIG.is_galaxy and mesh_scope == "complete"
+    ):
+        pytest.skip(f"a torus needs the complete 8x4; {mesh_scope} has no closing edge")
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True, fabric_config=fabric_config)
+    try:
+        mesh_device = runtime.mesh_device
+        ring_size = mesh_device.get_num_devices()
+        local_seq = 64
+        global_seq = local_seq * ring_size
+        b, nhq, nhk, d_q, d_k, d_v = 1, 4, 1, 64, 64, 32
+        torch.manual_seed(2026)
+        q = fa_rand(b, nhq, global_seq, d_q)
+        kv = fa_rand(b, nhk, global_seq, d_k)
+        reference_q = q
+        reference_kv = kv
+        if is_balanced:
+            chunk_order = create_balanced_chunk_order(ring_size)
+            q = reorder_tensor_chunks(q, chunk_order)
+            kv = reorder_tensor_chunks(kv, chunk_order)
+        else:
+            chunk_order = None
+
+        flat_sequence_shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+        tt_q = ttnn.from_torch(
+            q,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=flat_sequence_shard,
+        )
+        tt_kv = ttnn.from_torch(
+            kv,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=flat_sequence_shard,
+        )
+        gathered_kv = ttnn.from_torch(
+            torch.zeros(b, nhk, global_seq, d_k),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+
+        outputs = []
+        mesh_device.enable_program_cache()
+        mesh_device.clear_program_cache()
+        cache_entries_after_first_call = None
+        for _ in range(2):
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_q,
+                tt_kv,
+                persistent_output_buffer_kv=gathered_kv,
+                head_dim_v=d_v,
+                logical_n=global_seq,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=None,
+                mesh_device=mesh_device,
+                topology=Topology.Ring,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                is_balanced=is_balanced,
+            )
+            ttnn.synchronize_device(mesh_device)
+            output = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))[
+                :, :, :global_seq, :d_v
+            ]
+            if chunk_order is not None:
+                output = reverse_reorder_tensor_chunks(output, chunk_order)
+            outputs.append(output)
+            cache_entries = mesh_device.num_program_cache_entries()
+            if cache_entries_after_first_call is None:
+                assert cache_entries > 0
+                cache_entries_after_first_call = cache_entries
+            else:
+                assert cache_entries == cache_entries_after_first_call, (
+                    f"full-mesh replay added program-cache entries: {cache_entries} vs "
+                    f"{cache_entries_after_first_call}"
+                )
+
+        assert torch.equal(outputs[0], outputs[1]), "full-mesh ring_mla cache-hit output is not deterministic"
+        reference = torch_sdpa_reference(reference_q, reference_kv, reference_kv[:, :, :, :d_v], is_causal=True)
+        output_pass, output_pcc = comp_pcc(reference, outputs[0], DEFAULT_PCC_THRESHOLD)
+        logger.info(f"full-mesh ring_mla output PCC: {output_pcc}")
+        assert output_pass, f"full-mesh ring_mla PCC {output_pcc} below threshold {DEFAULT_PCC_THRESHOLD}"
+
+        local_kv_shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tt_kv)]
+        gathered_kv_shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(gathered_kv)]
+        assert len(local_kv_shards) == len(gathered_kv_shards) == ring_size
+        for destination_rank, gathered_shard in enumerate(gathered_kv_shards):
+            for tensor_rank, local_shard in enumerate(local_kv_shards):
+                slot = gathered_shard[:, :, tensor_rank * local_seq : (tensor_rank + 1) * local_seq, :]
+                if tensor_rank == destination_rank:
+                    continue
+                assert torch.equal(
+                    slot, local_shard
+                ), f"destination {destination_rank} stores tensor rank {tensor_rank} in the wrong KV slot"
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+def test_ring_mla_full_mesh_chunked_indexed_cache_accuracy_and_determinism():
+    """Exercise indexed cache selection and changing logical lengths on one complete-mesh snake."""
+    mesh_config = (
+        MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+    )
+    if mesh_config.tp_size < 2 or mesh_config.sp_size < 2:
+        pytest.skip(f"full-mesh ring_mla requires a non-degenerate 2D mesh, got {mesh_config}")
+    if mesh_config.tp_size % 2 and mesh_config.sp_size % 2:
+        pytest.skip(f"full-mesh ring_mla requires at least one even mesh dimension, got {mesh_config}")
+
+    local_chunk_seq_len = 32
+    local_total_seq_len = 64
+    model = ModelConfig(
+        name="mla_full_mesh_chunked_indexed_kv",
+        nhq=4,
+        nhk=1,
+        nhv=4,
+        d_q=64,
+        d_k=64,
+        d_v=32,
+        is_causal=True,
+        q_dtype=ttnn.bfloat16,
+        kv_dtype=ttnn.bfloat16,
+        q_chunk_sizes=[32],
+        k_chunk_sizes=[32],
+        seq_len=local_total_seq_len,
+    )
+
+    run_ring_mla_sdpa_chunked_indexed_kv_cache(
+        mesh_config,
+        model,
+        chunk_size=local_chunk_seq_len * mesh_config.num_devices,
+        total_seq=local_total_seq_len * mesh_config.num_devices,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        q_chunk_size=model.q_chunk_sizes[0],
+        k_chunk_size=model.k_chunk_sizes[0],
+        num_iterations=2,
+        kv_cache_batch_idx=1,
+        cache_batch=2,
+        full_mesh=True,
+    )
+
+
+def test_ring_mla_full_mesh_kv_actual_isl_cache_patch_accuracy_and_determinism():
+    """Exercise nonzero rotated starts and tensor-rank scalar patching on cache hits."""
+    mesh_config = (
+        MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+    )
+    if mesh_config.tp_size < 2 or mesh_config.sp_size < 2:
+        pytest.skip(f"full-mesh ring_mla requires a non-degenerate 2D mesh, got {mesh_config}")
+    if mesh_config.tp_size % 2 and mesh_config.sp_size % 2:
+        pytest.skip(f"full-mesh ring_mla requires at least one even mesh dimension, got {mesh_config}")
+
+    run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
+        mesh_config,
+        chunk_size_local=32,
+        num_chunks=3,
+        num_iterations=2,
+        kv_cache_batch_idx=1,
+        cache_batch=2,
+        full_mesh=True,
+    )
+
+
+def test_ring_mla_full_mesh_rejects_invalid_placements(expect_error):
+    """Full-mesh-only preconditions must fail on the host before any device dispatch."""
+    mesh_config = (
+        MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+    )
+    if mesh_config.tp_size < 2 or mesh_config.sp_size < 2:
+        pytest.skip(f"full-mesh ring_mla requires a non-degenerate 2D mesh, got {mesh_config}")
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=True)
+    try:
+        mesh_device = runtime.mesh_device
+        ring_size = mesh_device.get_num_devices()
+        local_seq = 32
+        global_seq = local_seq * ring_size
+        torch.manual_seed(2026)
+        q = fa_rand(1, 4, global_seq, 64)
+        kv = fa_rand(1, 1, global_seq, 64)
+        flat_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+        replicated_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        axis_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 2])
+
+        def upload(host, mapper):
+            return ttnn.from_torch(
+                host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=mapper,
+            )
+
+        tt_q = upload(q, flat_mapper)
+        tt_kv = upload(kv, flat_mapper)
+        tt_persistent = upload(torch.zeros(1, 1, global_seq, 64), replicated_mapper)
+        tt_axis_q = upload(q, axis_mapper)
+        tt_axis_kv = upload(kv, axis_mapper)
+        tt_sharded_persistent = upload(torch.zeros(1, 1, global_seq, 64), flat_mapper)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+
+        def invoke(q_tensor, kv_tensor, persistent_tensor, topology):
+            return ttnn.transformer.ring_mla(
+                q_tensor,
+                kv_tensor,
+                persistent_output_buffer_kv=persistent_tensor,
+                head_dim_v=32,
+                logical_n=global_seq,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=None,
+                mesh_device=mesh_device,
+                topology=topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+            )
+
+        with expect_error(RuntimeError, "requires Q sequence dim 2 and KV gather dim"):
+            invoke(tt_axis_q, tt_axis_kv, tt_persistent, Topology.Ring)
+        with expect_error(RuntimeError, "persistent gathered-KV buffer to be replicated"):
+            invoke(tt_q, tt_kv, tt_sharded_persistent, Topology.Ring)
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 # ============================================================================
 # TRACE-SAFE METADATA PATH: metadata-path == scalar-path (bit-exact)
 # ============================================================================
@@ -3084,7 +4042,8 @@ def _make_ring_mla_metadata(mesh_device, slot_id, actual_start):
 
 
 @pytest.mark.parametrize("kv_cache_batch_idx", [0, 1], ids=["slot0", "slot1"])
-def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
+@pytest.mark.parametrize("full_mesh", [False, True], ids=["axis", "full_mesh"])
+def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx, full_mesh):
     """Indexed K/V cache (no rotation): the metadata path (slot read on-device from metadata[0])
     must produce a bit-identical output to the scalar path (kv_cache_batch_idx host arg).
 
@@ -3093,20 +4052,25 @@ def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
     META_PATH_HOST_SCALARS the metadata path also passes the host scalar, so the only thing under
     test today is the metadata plumbing (nanobind kwarg + tensor_args + program hash). Once the
     on-device read lands, drop it from the set and this asserts the on-device slot select."""
-    mesh_config = MESH_CONFIG
-    if mesh_config.sp_size < 2:
-        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
+    mesh_config = (
+        MESH_CONFIG
+        if not full_mesh or MESH_CONFIG.is_galaxy
+        else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+    )
+    sp_size = mesh_config.num_devices if full_mesh else mesh_config.sp_size
+    if sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={sp_size}")
 
     b, local_heads, per_device_seq_len = 1, 4, 128
-    nhq = local_heads * mesh_config.tp_size
+    nhq = local_heads if full_mesh else local_heads * mesh_config.tp_size
     nhk = 1
-    sq = per_device_seq_len * mesh_config.sp_size
+    sq = per_device_seq_len * sp_size
     d_q, d_k, d_v = 64, 64, 32
     cache_batch = 2
     assert 0 <= kv_cache_batch_idx < cache_batch
 
     torch.manual_seed(1234)
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=full_mesh)
     mesh_device = runtime.mesh_device
     sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
     try:
@@ -3131,19 +4095,34 @@ def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
         kv_shard_dims[sp_axis] = 2
         persistent_shard_dims = [None, None]  # gathered KV replicated (single latent head)
 
+        if full_mesh:
+            q_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+            kv_mapper = q_mapper
+            persistent_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            composer = ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+        else:
+            q_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims)
+            kv_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims)
+            persistent_mapper = ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
+            )
+            main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+            main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+            composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
         tt_Q = ttnn.from_torch(
             Q,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+            mesh_mapper=q_mapper,
         )
         tt_KV = ttnn.from_torch(
             KV_input,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+            mesh_mapper=kv_mapper,
         )
 
         # ring_mla writes into the persistent gather buffer, so each run gets its OWN freshly-zeroed
@@ -3155,17 +4134,11 @@ def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
-                ),
+                mesh_mapper=persistent_mapper,
             )
 
         # No rotation here: the whole sq is valid, so actual_start=0.
         tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, slot_id=kv_cache_batch_idx, actual_start=0)
-
-        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
-        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
-        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
 
         def run(use_metadata):
             # On the metadata path, a scalar still in META_PATH_HOST_SCALARS is also passed as a host
@@ -3183,7 +4156,7 @@ def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
                 dim=2,
                 multi_device_global_semaphore=runtime.ccl_semaphore_handles,
                 num_links=runtime.num_links,
-                cluster_axis=sp_axis,
+                cluster_axis=None if full_mesh else sp_axis,
                 mesh_device=mesh_device,
                 topology=runtime.topology,
                 subdevice_id=runtime.worker_sub_device_id,
@@ -3208,17 +4181,22 @@ def test_ring_mla_metadata_matches_scalar_indexed(kv_cache_batch_idx):
 
 
 @pytest.mark.parametrize("kv_actual_isl", [64, 256, 320], ids=["kv64", "kv256", "kv320"])
-def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
+@pytest.mark.parametrize("full_mesh", [False, True], ids=["axis", "full_mesh"])
+def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl, full_mesh):
     """KV-pad rotation: the metadata path (kv_actual_isl read on-device from metadata[1], with logical_nt
     / q-mapping / ring masks derived in the reader and handed to compute via cb_kv_pad_derived) must be
     bit-identical to the scalar path (host kv_actual_isl). This is the discriminating test for the task-4
     on-device derivation: on the metadata path kv_actual_isl is dropped, so the host CANNOT compute the
     q-mapping -- it comes solely from the reader's metadata-driven derivation. Both paths run indexed
     (single-slot) mode at slot 0 so the only difference under test is where kv_actual_isl comes from."""
-    mesh_config = MESH_CONFIG
-    if mesh_config.sp_size < 2:
-        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
-    sp_size = mesh_config.sp_size
+    mesh_config = (
+        MESH_CONFIG
+        if not full_mesh or MESH_CONFIG.is_galaxy
+        else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+    )
+    sp_size = mesh_config.num_devices if full_mesh else mesh_config.sp_size
+    if sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={sp_size}")
     tile = 32
     chunk_size_local = 64
     chunk_size_global = chunk_size_local * sp_size
@@ -3226,7 +4204,7 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
     assert kv_actual_isl % tile == 0
 
     b, local_heads = 1, 4
-    nhq = local_heads * mesh_config.tp_size
+    nhq = local_heads if full_mesh else local_heads * mesh_config.tp_size
     nhk = 1
     d_q, d_k, d_v = 64, 64, 32
     logical_n = kv_actual_isl + new_actual_isl
@@ -3240,7 +4218,7 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
     )
     cache_seq_per_dev = num_cache_slabs * chunk_size_local
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=full_mesh)
     mesh_device = runtime.mesh_device
     sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
     try:
@@ -3252,19 +4230,34 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
         kv_shard_dims[sp_axis] = 2  # latent K/V sharded along seq across the ring
         persistent_shard_dims = [None, None]  # gathered KV replicated
 
+        if full_mesh:
+            q_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+            kv_mapper = q_mapper
+            persistent_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            composer = ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+        else:
+            q_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims)
+            kv_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims)
+            persistent_mapper = ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
+            )
+            main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+            main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+            composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
         tt_q = ttnn.from_torch(
             q_host,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims),
+            mesh_mapper=q_mapper,
         )
         tt_kv = ttnn.from_torch(
             kv_host,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims),
+            mesh_mapper=kv_mapper,
         )
 
         # Own instance per run -- ring_mla writes this buffer, so sharing it between the two runs would let
@@ -3275,9 +4268,7 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
-                ),
+                mesh_mapper=persistent_mapper,
             )
 
         program_config = ttnn.SDPAProgramConfig(
@@ -3288,10 +4279,6 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
         )
         # metadata tensors: slot_id=0, kv_actual_isl tensor = kv_actual_isl.
         tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, slot_id=0, actual_start=kv_actual_isl)
-
-        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
-        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
-        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
 
         def run(use_metadata):
             tt_out, _ = ttnn.transformer.ring_mla(
@@ -3306,7 +4293,7 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl):
                 dim=2,
                 multi_device_global_semaphore=runtime.ccl_semaphore_handles,
                 num_links=runtime.num_links,
-                cluster_axis=sp_axis,
+                cluster_axis=None if full_mesh else sp_axis,
                 mesh_device=mesh_device,
                 topology=runtime.topology,
                 subdevice_id=runtime.worker_sub_device_id,
@@ -3593,6 +4580,248 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
         close_ring_joint_sdpa_runtime(runtime)
 
 
+RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
+
+
+def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores():
+    """Replay changing prefixes and cache slots through mixed sliding/dense CCL."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    sp_size = mesh_config.sp_size
+    chunk_local = 256
+    chunk_global = chunk_local * sp_size
+    prefix_groups = (0, 1, 2)
+    stable_groups = max(prefix_groups) + 2
+    stable_kv_seq = sp_size * stable_groups * chunk_local
+
+    local_q_heads, local_kv_heads, head_dim = 8, 1, 64
+    nhq = local_q_heads * mesh_config.tp_size
+    nhk = local_kv_heads * mesh_config.tp_size
+    cache_user_slots = (1, 0, 2)
+    num_layers, layer_idx = 2, 1
+    cache_batch = max(cache_user_slots) * num_layers + layer_idx + 1
+
+    torch.manual_seed(CHUNKED_PREFILL_SEED + 701)
+    total_seq = (max(prefix_groups) + 1) * chunk_global
+    q_full = fa_rand(1, nhq, total_seq, head_dim)
+    k_full = fa_rand(1, nhk, total_seq, head_dim)
+    v_full = fa_rand(1, nhk, total_seq, head_dim)
+    chunks = []
+    for prefix_group, cache_user_slot in zip(prefix_groups, cache_user_slots, strict=True):
+        cache_batch_idx = cache_user_slot * num_layers + layer_idx
+        kv_actual_isl = prefix_group * chunk_global
+        logical_n = kv_actual_isl + chunk_global
+        q_host, k_host, v_host, valid_rows, _ = build_kv_pad_rotation_inputs(
+            k_full[:, :, :kv_actual_isl, :],
+            v_full[:, :, :kv_actual_isl, :],
+            q_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            k_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            v_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            kv_actual_isl,
+            sp_size,
+            chunk_local,
+        )
+        # Pad each device slab independently. Padding the already-flattened sequence would move later
+        # devices into an earlier device's stable-capacity tail and invalidate the physical cache layout.
+        stable_seq_per_dev = stable_kv_seq // sp_size
+        active_seq_per_dev = k_host.shape[2] // sp_size
+        k_cache_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_seq_per_dev, head_dim) * 100
+        v_cache_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_seq_per_dev, head_dim) * 100
+        k_cache_per_dev[cache_batch_idx, :, :, :active_seq_per_dev, :].copy_(
+            k_host[0].reshape(nhk, sp_size, active_seq_per_dev, head_dim)
+        )
+        v_cache_per_dev[cache_batch_idx, :, :, :active_seq_per_dev, :].copy_(
+            v_host[0].reshape(nhk, sp_size, active_seq_per_dev, head_dim)
+        )
+        k_cache = k_cache_per_dev.reshape(cache_batch, nhk, stable_kv_seq, head_dim)
+        v_cache = v_cache_per_dev.reshape(cache_batch, nhk, stable_kv_seq, head_dim)
+        chunks.append(
+            (kv_actual_isl, logical_n, q_host, k_cache, v_cache, valid_rows, cache_user_slot, cache_batch_idx)
+        )
+
+    runtime = open_ring_joint_sdpa_runtime(
+        mesh_config, trace_region_size=RING_JOINT_TRACE_REGION_SIZE, num_global_semaphores=3
+    )
+    mesh_device = runtime.mesh_device
+    trace_id = None
+    try:
+        mesh_device.enable_program_cache()
+        input_dims = [None, None]
+        input_dims[runtime.sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            input_dims[runtime.tp_axis] = 1
+        persistent_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            persistent_dims[runtime.tp_axis] = 1
+
+        def make_tensor(host, dtype, dims, *, device=None):
+            return ttnn.from_torch(
+                host,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        def upload(host, dtype, dims):
+            return make_tensor(host, dtype, dims, device=mesh_device)
+
+        tt_q = upload(chunks[0][2], ttnn.bfloat16, input_dims)
+        tt_k = upload(chunks[0][3], ttnn.bfloat8_b, input_dims)
+        tt_v = upload(chunks[0][4], ttnn.bfloat8_b, input_dims)
+        sliding_shape = (1, nhk, 128, head_dim)
+        dense_shape = (1, nhk, stable_kv_seq, head_dim)
+        sliding_k = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
+        sliding_v = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
+        dense_k = upload(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims)
+        dense_v = upload(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims)
+        zero_buffers = (
+            make_tensor(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims),
+        )
+        device_buffers = (sliding_k, sliding_v, dense_k, dense_v)
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, chunks[0][6], chunks[0][0])
+
+        def stage(chunk_index):
+            kv_actual_isl, _, q_host, k_host, v_host, _, cache_user_slot, _ = chunks[chunk_index]
+            ttnn.copy_host_to_device_tensor(make_tensor(q_host, ttnn.bfloat16, input_dims), tt_q)
+            ttnn.copy_host_to_device_tensor(make_tensor(k_host, ttnn.bfloat8_b, input_dims), tt_k)
+            ttnn.copy_host_to_device_tensor(make_tensor(v_host, ttnn.bfloat8_b, input_dims), tt_v)
+            for zero, buffer in zip(zero_buffers, device_buffers):
+                ttnn.copy_host_to_device_tensor(zero, buffer)
+            ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, cache_user_slot), tt_slot_id)
+            ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, kv_actual_isl), tt_kv_actual_isl)
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=64,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        composer = ttnn.create_mesh_composer(
+            mesh_device,
+            ttnn.MeshComposerConfig(
+                input_dims[0] if input_dims[0] is not None else -1,
+                input_dims[1] if input_dims[1] is not None else -1,
+            ),
+        )
+
+        def invoke(*, use_metadata, logical_n, kv_actual_isl, cache_batch_idx=None):
+            common = dict(
+                logical_n=logical_n,
+                is_causal=True,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+                kv_cache_batch_idx=None if use_metadata else cache_batch_idx,
+                kv_actual_isl=None if use_metadata else kv_actual_isl,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
+                kv_cache_num_layers=num_layers if use_metadata else None,
+                kv_cache_layer_idx=layer_idx if use_metadata else None,
+            )
+            sliding = call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                p_buf_k=sliding_k,
+                p_buf_v=sliding_v,
+                sliding_window_size=128,
+                **common,
+            )
+            dense = call_sdpa(tt_q, tt_k, tt_v, p_buf_k=dense_k, p_buf_v=dense_v, **common)
+            return sliding, dense
+
+        def read_outputs(outputs, chunk_index):
+            rows = chunks[chunk_index][5]
+            return tuple(ttnn.to_torch(out, mesh_composer=composer)[:, :, rows, :] for out in outputs)
+
+        references = []
+        for chunk_index, (kv_actual_isl, logical_n, *_, cache_batch_idx) in enumerate(chunks):
+            stage(chunk_index)
+            outputs = invoke(
+                use_metadata=False,
+                logical_n=logical_n,
+                kv_actual_isl=kv_actual_isl,
+                cache_batch_idx=cache_batch_idx,
+            )
+            ttnn.synchronize_device(mesh_device)
+            references.append(read_outputs(outputs, chunk_index))
+            for output in outputs:
+                ttnn.deallocate(output)
+
+        gqa_ratio = local_q_heads // local_kv_heads
+        torch_sliding_ref = torch_chunked_causal_sdpa_reference(
+            q_full[:, :, :chunk_global, :],
+            k_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
+            v_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
+            0,
+            sliding_window_size=128,
+        )
+        scalar_rmse = torch.sqrt(((torch_sliding_ref - references[0][0]) ** 2).mean()).item()
+        assert scalar_rmse < DEFAULT_RMSE_THRESHOLD, f"scalar sliding reference RMSE={scalar_rmse}"
+
+        # The host value remains fixed at the stable cache capacity. Cache-slot selection, prefix growth,
+        # and halo relocation must therefore come exclusively from the two metadata tensors refreshed by stage().
+        capture_logical_n = stable_kv_seq
+        stage(0)
+        warm = invoke(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
+        ttnn.synchronize_device(mesh_device)
+        for mode, got, expected in zip(("sliding", "dense"), read_outputs(warm, 0), references[0]):
+            mismatch = got != expected
+            assert not mismatch.any(), (
+                f"eager {mode} metadata differs from scalar path: mismatches={mismatch.sum().item()}, "
+                f"first={mismatch.nonzero()[0].tolist()}, "
+                f"heads={mismatch.any(dim=(0, 2, 3)).nonzero().flatten().tolist()}, "
+                f"rows={mismatch.any(dim=(0, 1, 3)).nonzero().flatten().tolist()}, "
+                f"max abs diff={(got - expected).abs().max().item()}"
+            )
+        for output in warm:
+            ttnn.deallocate(output)
+
+        stage(0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_outputs = invoke(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        for chunk_index in (0, 1, 2, 1, 0):
+            stage(chunk_index)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            for mode, got, expected in zip(
+                ("sliding", "dense"), read_outputs(traced_outputs, chunk_index), references[chunk_index]
+            ):
+                assert torch.equal(got, expected), (
+                    f"{mode} metadata replay differs from scalar path at prefix group {chunk_index}; "
+                    f"max abs diff={(got - expected).abs().max().item()}"
+                )
+
+        # Avoid intermediate readbacks here: they used to add enough settling to hide the CCL race.
+        for replay in range(32):
+            stage(replay % len(chunks))
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+
+        stage(2)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        for mode, got, expected in zip(("sliding", "dense"), read_outputs(traced_outputs, 2), references[2]):
+            assert torch.equal(got, expected), f"{mode} output changed after the readback-free stress loop"
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 # Generate perf test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
 TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, RING_JOINT_PERF_MODEL_CONFIGS)
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
@@ -3635,6 +4864,30 @@ STANDARD_MODEL_GROUPS, STANDARD_MODEL_GROUP_IDS = _generate_standard_model_group
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
+# Causal / balanced-zigzag coverage for the logical_n tensor transport, where the ring-work masks
+# additionally carry the causal skip rule. models/tt_dit covers the non-causal shapes.
+@pytest.mark.parametrize(
+    "is_causal, is_balanced", [(True, False), (True, True), (False, False)], ids=["causal", "balanced", "noncausal"]
+)
+def test_ring_joint_attention_logical_tensor_accuracy(is_causal, is_balanced):
+    """logical_n read on-device must clear the same accuracy bar as the host scalar: run_ring_joint_sdpa
+    checks the CPU reference, so a mis-derived logical_nt or a missed tail mask shows up as a PCC failure."""
+    run_ring_joint_sdpa(
+        MESH_CONFIG,
+        1,  # b
+        8,  # nhq
+        8,  # nhk
+        256 * MESH_CONFIG.sp_size,  # sq: 256 per device, so half the local seq divides q_chunk_size (balanced case)
+        128,  # d_q
+        128,  # q_chunk_size
+        128,  # k_chunk_size
+        ttnn.bfloat16,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        logical_as_tensor=True,
+    )
+
+
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
@@ -4102,9 +5355,11 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+# Galaxy only: the gate guards the exabox.tenstorrent.com/power=14kw label. QuietBox reports a
+# sub-130W TDP, so an unconditional gate skipped every ring-4 entry below on every CI run.
 @pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+    MESH_CONFIG.is_galaxy and not is_high_power(),
+    reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
 def test_ring_joint_attention_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
@@ -4240,7 +5495,7 @@ def test_ring_mla_perf_better_than_separate_v_ring_joint():
 
 
 # === TEST 6: CHUNKED-PREFILL ACCURACY ===
-# Chunked-prefill tests use a kimi-K2.6-style MLA config (16 Q heads, single KV head,
+# Chunked-prefill tests use a kimi-K2.7-style MLA config (16 Q heads, single KV head,
 # DeepSeek V3 dims) kept separate from the global MODEL_CONFIGS so the kimi parameters
 # don't leak into the non-chunked sweep/perf/determinism tests.
 CHUNKED_PREFILL_MODEL_CONFIGS = {
@@ -4270,6 +5525,26 @@ RING_MLA_CHUNKED_MODEL_CONFIGS = {
     name: replace(cfg, d_v=RING_MLA_CHUNKED_LATENT_D_V) for name, cfg in CHUNKED_PREFILL_MODEL_CONFIGS.items()
 }
 
+# Kimi-K3 MLA: K2.7's latent geometry (d_q = d_k = 576, latent d_v = 512, one MQA KV head), with
+# nhq pinned to the production 96 / TP=4 = 24 -- no galaxy split, unlike CHUNKED_PREFILL_HEADS_PER_RING.
+KIMI_K3_HEADS_PER_DEVICE = 24
+RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
+    name="kimi_k3",
+    nhq=KIMI_K3_HEADS_PER_DEVICE,
+    nhk=1,
+    nhv=KIMI_K3_HEADS_PER_DEVICE,
+    d_q=576,
+    d_k=576,
+    d_v=RING_MLA_CHUNKED_LATENT_D_V,
+    is_causal=True,
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat8_b,
+    q_chunk_sizes=[32],
+    # K2.6's list. 640 is what K3 deploys; a wider k sweep is a local run, not CI cost.
+    k_chunk_sizes=[512, 640],
+    seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+)
+
 # Minimax3 production chunked-prefill GQA shape. The full model is 64 Q heads and 4 K/V
 # heads. With TP=4, each chip sees one KV head; keep the config per-ring so the generic
 # TP scaling produces 64Q/4KV globally on Galaxy and still exercises one-KV-head GQA locally.
@@ -4290,6 +5565,22 @@ MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS = {
         seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
     ),
 }
+
+GPT_OSS_CHUNKED_MODEL = ModelConfig(
+    name="gpt_oss_55k_sliding",
+    nhq=8,
+    nhk=1,
+    nhv=1,
+    d_q=GPT_OSS_RING_SINK_CONFIG.head_dim,
+    d_k=GPT_OSS_RING_SINK_CONFIG.head_dim,
+    d_v=GPT_OSS_RING_SINK_CONFIG.head_dim,
+    is_causal=True,
+    q_dtype=GPT_OSS_RING_SINK_CONFIG.q_dtype,
+    kv_dtype=GPT_OSS_RING_SINK_CONFIG.kv_dtype,
+    q_chunk_sizes=[GPT_OSS_Q_CHUNK_SIZE],
+    k_chunk_sizes=[GPT_OSS_K_CHUNK_SIZE],
+    seq_len=GPT_OSS_CHUNKED_CHUNK_SIZE,
+)
 
 
 def _generate_chunked_configs(model_configs):
@@ -4367,6 +5658,287 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, qk_configs, chun
     )
 
 
+def test_ring_joint_attention_gpt_oss_chunked_sliding_native_ring_gqa_accuracy_and_determinism():
+    """Validate GPT-OSS grouped-schedule accuracy and cache-hit determinism on the native ring."""
+    batch_size = gpt_oss_native_ring_batch_size(MESH_CONFIG)
+    chunk_size = 1024
+    total_seq = 3 * chunk_size
+    final_chunk = total_seq // chunk_size - 1
+    model = replace(
+        GPT_OSS_CHUNKED_MODEL,
+        name="gpt_oss_chunked_sliding_multibatch_gqa",
+        q_chunk_sizes=[64],
+        seq_len=chunk_size,
+    )
+
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                batch_size=batch_size,
+                chunk_size=chunk_size,
+                total_seq=total_seq,
+                qk_configs=[(64, 128)],
+                persistent_buffer_mode="exact_per_chunk",
+                sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                runtime=runtime,
+            )
+
+            # Reuse the exact runtime and physical shapes from the PCC pass. This is a real
+            # program-cache hit, rather than merely a disk-JIT-cache hit after reopening the mesh.
+            # The determinism comparison itself adds its own tiny comparison program.
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                batch_size=batch_size,
+                chunk_size=chunk_size,
+                total_seq=total_seq,
+                qk_configs=[(64, 128)],
+                num_iterations=3,
+                persistent_buffer_mode="exact_per_chunk",
+                sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                runtime=runtime,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+def test_ring_joint_attention_gemma_complete_group_sliding_geometry(expect_error):
+    """Numerically validate the generalized Gemma sliding geometry on the native SP ring.
+
+    This validates Gemma's D256, 4Q:2K:2V and W1024 geometry, where the
+    K-chunk-rounded halo exactly fills one local 1024-token slab.
+    """
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        gpt_oss_chunked_mesh_config(),
+        batch_size=1,
+        expect_error=expect_error,
+        # The helper keeps the physical K/V cache oversized even for group 0, so both
+        # first-group and cache-growth layouts are checked numerically.
+        chunk_size_local=1024,
+        sliding_window_size=1024,
+        local_q_heads=4,
+        local_kv_heads=2,
+        head_dim=256,
+        prefix_group_counts=(0, 1),
+        num_iterations=1,
+    )
+
+
+def test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy():
+    """Validate sliding halo reads from each requested indexed K/V-cache slot on a cache hit."""
+    chunk_size = 1024
+    total_seq = 2 * chunk_size
+    final_chunk = total_seq // chunk_size - 1
+    model = replace(
+        GPT_OSS_CHUNKED_MODEL,
+        name="gpt_oss_chunked_sliding_indexed_kv_cache",
+        q_chunk_sizes=[64],
+        seq_len=chunk_size,
+    )
+
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+            for kv_cache_batch_idx in (0, 1):
+                # The runner fills non-selected slots with conspicuously different data. Both calls
+                # have identical program-cache keys (the key records only that indexing is enabled),
+                # so slot 1 verifies that the cached neighbor-halo reader patches its batch base.
+                run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    batch_size=1,
+                    chunk_size=chunk_size,
+                    total_seq=total_seq,
+                    qk_configs=[(64, 128)],
+                    indexed_nd_sharded_kv_cache=True,
+                    kv_cache_batch_idx=kv_cache_batch_idx,
+                    cache_batch=2,
+                    persistent_buffer_mode="exact_per_chunk",
+                    sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                    runtime=runtime,
+                )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+def test_ring_joint_attention_gpt_oss_chunked_sliding_linear_topology_accuracy():
+    """Validate the compact cyclic predecessor halo over a physical linear fabric."""
+    chunk_size = 1024
+    total_seq = 2 * chunk_size
+    final_chunk = total_seq // chunk_size - 1
+    model = replace(
+        GPT_OSS_CHUNKED_MODEL,
+        name="gpt_oss_chunked_sliding_linear",
+        q_chunk_sizes=[64],
+        seq_len=chunk_size,
+    )
+
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=Topology.Linear)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                batch_size=1,
+                chunk_size=chunk_size,
+                total_seq=total_seq,
+                qk_configs=[(64, 128)],
+                persistent_buffer_mode="exact_per_chunk",
+                sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                runtime=runtime,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_attention_gpt_oss_chunked_sliding_production_accuracy():
+    """Validate the final 5K Q chunk against the 55K KV cache with the GPT-OSS sink and dtypes."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    final_chunk = GPT_OSS_CHUNKED_TOTAL_SEQ // GPT_OSS_CHUNKED_CHUNK_SIZE - 1
+    with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+        run_ring_joint_sdpa_chunked(
+            mesh_config,
+            GPT_OSS_CHUNKED_MODEL,
+            chunk_size=GPT_OSS_CHUNKED_CHUNK_SIZE,
+            total_seq=GPT_OSS_CHUNKED_TOTAL_SEQ,
+            qk_configs=[(GPT_OSS_Q_CHUNK_SIZE, GPT_OSS_K_CHUNK_SIZE)],
+            persistent_buffer_mode="exact_per_chunk",
+            sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+            use_attention_sink=True,
+        )
+
+
+def test_ring_joint_attention_gpt_oss_chunked_sliding_circular_cache_accuracy():
+    """Production sliding+sink config read from the 2-slab CIRCULAR K/V cache of the bounded
+    sliding-window layout: the chunk and its predecessor sit at slab g % 2 (after several wraps),
+    logical_n / kv_actual_isl stay absolute, circular_kv_cache=True. Both slab parities run through
+    ONE runtime: the first call creates the program, the second is a program-cache hit whose scalar
+    runtime args must relocate the circular halo for a new logical_n and parity. Same reference as
+    the unbounded production test."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    n_chunks = GPT_OSS_CHUNKED_TOTAL_SEQ // GPT_OSS_CHUNKED_CHUNK_SIZE
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        cache_entries = None
+        for chunk in (n_chunks - 2, n_chunks - 1):  # slab parity g % 2 = 1, then 0
+            with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk)}):
+                run_ring_joint_sdpa_chunked(
+                    mesh_config,
+                    GPT_OSS_CHUNKED_MODEL,
+                    chunk_size=GPT_OSS_CHUNKED_CHUNK_SIZE,
+                    total_seq=GPT_OSS_CHUNKED_TOTAL_SEQ,
+                    qk_configs=[(GPT_OSS_Q_CHUNK_SIZE, GPT_OSS_K_CHUNK_SIZE)],
+                    persistent_buffer_mode="exact_per_chunk",
+                    sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                    use_attention_sink=True,
+                    circular_kv_cache=True,
+                    runtime=runtime,
+                )
+            if cache_entries is None:
+                cache_entries = runtime.mesh_device.num_program_cache_entries()
+                assert cache_entries > 0, "circular-cache dispatch did not populate the program cache"
+            else:
+                assert runtime.mesh_device.num_program_cache_entries() == cache_entries, (
+                    "second circular-cache chunk (other slab parity) must hit the cached program, not "
+                    "create a new one"
+                )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_circular_kv_cache_rejects_metadata_path(expect_error):
+    """circular_kv_cache is rejected on the trace-safe metadata path (its halo derivation has no slab
+    wrap and kv_actual_isl is clamped to the physical capacity). The check fires on the host before any
+    value is read, so zero tensors of the right shapes (Q one chunk, K/V two chunk slabs) suffice."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    sp_size, tp_size = mesh_config.sp_size, mesh_config.tp_size
+    chunk_global, head_dim = 256 * sp_size, 64
+    nhq, nhk = 8 * tp_size, 1 * tp_size
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, num_global_semaphores=3)
+    mesh_device = runtime.mesh_device
+    try:
+
+        def zeros_on_mesh(shape, dtype, seq_sharded):
+            dims = [None, None]
+            if seq_sharded:
+                dims[runtime.sp_axis] = 2
+            if tp_size > 1:
+                dims[runtime.tp_axis] = 1
+            mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+            return ttnn.from_torch(
+                torch.zeros(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+            )
+
+        tt_q = zeros_on_mesh((1, nhq, chunk_global, head_dim), ttnn.bfloat16, True)
+        tt_k = zeros_on_mesh((1, nhk, 2 * chunk_global, head_dim), ttnn.bfloat8_b, True)
+        tt_v = zeros_on_mesh((1, nhk, 2 * chunk_global, head_dim), ttnn.bfloat8_b, True)
+        p_buf_k = zeros_on_mesh((1, nhk, 128, head_dim), ttnn.bfloat8_b, False)
+        p_buf_v = zeros_on_mesh((1, nhk, 128, head_dim), ttnn.bfloat8_b, False)
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, 0, chunk_global)
+        with expect_error(RuntimeError, "does not support the trace-safe metadata path"):
+            call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                slot_id=tt_slot_id,
+                kv_actual_isl_tensor=tt_kv_actual_isl,
+                kv_cache_num_layers=1,
+                kv_cache_layer_idx=0,
+                logical_n=2 * chunk_global,
+                is_causal=True,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=p_buf_v,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                    q_chunk_size=64,
+                    k_chunk_size=128,
+                    exp_approx_mode=False,
+                ),
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+                sliding_window_size=128,
+                circular_kv_cache=True,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_attention_gpt_oss_chunked_full_causal_attention_sink_accuracy():
+    """GPT-OSS-shaped full-attention layer: no window, but the same per-head sink as sliding layers."""
+    chunk_size = 1024
+    total_seq = 3 * chunk_size
+    final_chunk = total_seq // chunk_size - 1
+    model = replace(
+        GPT_OSS_CHUNKED_MODEL,
+        name="gpt_oss_chunked_full_causal_sink",
+        q_chunk_sizes=[64],
+        seq_len=chunk_size,
+    )
+
+    with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+        run_ring_joint_sdpa_chunked(
+            gpt_oss_chunked_mesh_config(),
+            model,
+            chunk_size=chunk_size,
+            total_seq=total_seq,
+            qk_configs=[(64, 128)],
+            persistent_buffer_mode="exact_per_chunk",
+            use_attention_sink=True,
+        )
+
+
 @pytest.mark.parametrize(
     "nhq, nhk, nhv, supported",
     [
@@ -4391,10 +5963,19 @@ def test_is_supported_ring_joint_head_mode(nhq, nhk, nhv, supported):
     assert is_supported_ring_joint_head_mode(nhq, nhk, nhv) == supported
 
 
-def test_ring_joint_attention_gqa_with_joint_tensors_rejected(expect_error):
-    """GQA grouped-K/V is unsupported with joint tensors; the device op must reject it (validation-only,
-    so no kernel runs). Covers ring_joint_sdpa_device_operation.cpp's GQA-with-joint TT_FATAL, which the
-    host head-mode guard does not catch."""
+@pytest.mark.parametrize(
+    "use_attention_sink,include_joint_tensors,is_causal,expected_message",
+    [
+        (False, True, False, "GQA with joint tensors"),
+        (True, True, True, "attention_sink does not support joint attention tensors"),
+        (True, False, False, "attention_sink is supported only for causal attention"),
+    ],
+    ids=["gqa_joint", "sink_joint", "sink_noncausal"],
+)
+def test_ring_joint_attention_gqa_with_joint_tensors_rejected(
+    expect_error, use_attention_sink, include_joint_tensors, is_causal, expected_message
+):
+    """Validation-only coverage for GQA joints and unsupported attention-sink combinations."""
     mesh_config = MESH_CONFIG
     b, nhq, nhk, nhv, d = 1, 16, 2, 2, 128  # GQA grouped K/V (nhk == nhv < nhq)
     sq = 512 * mesh_config.sp_size
@@ -4442,11 +6023,23 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(expect_error):
         tt_q = sharded(fa_rand(b, nhq, sq, d), shard_heads=True)
         tt_k = sharded(fa_rand(b, nhk, sq, d), shard_heads=True)
         tt_v = sharded(fa_rand(b, nhv, sq, d), shard_heads=True)
-        # Joint tensors only need to exist with valid shapes to reach the GQA-with-joint check.
-        joint_q = replicated(fa_rand(b, nhq, joint_l, d))
-        joint_k = replicated(fa_rand(b, nhk, joint_l, d))
-        joint_v = replicated(fa_rand(b, nhv, joint_l, d))
+        # Joint tensors only need to exist with valid shapes to reach the validation checks.
+        joint_q = replicated(fa_rand(b, nhq, joint_l, d)) if include_joint_tensors else None
+        joint_k = replicated(fa_rand(b, nhk, joint_l, d)) if include_joint_tensors else None
+        joint_v = replicated(fa_rand(b, nhv, joint_l, d)) if include_joint_tensors else None
         p_buf_k, p_buf_v = persistent(torch.zeros(b, nhk, sq, d)), persistent(torch.zeros(b, nhv, sq, d))
+        tt_attention_sink = None
+        if use_attention_sink:
+            sink_shard_dims = [None, None]
+            if mesh_config.tp_size > 1:
+                sink_shard_dims[tp_axis] = 1
+            tt_attention_sink = ttnn.from_torch(
+                torch.zeros(1, nhq, 1, 1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=sink_shard_dims),
+            )
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=runtime.sdpa_compute_grid,
@@ -4455,9 +6048,7 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(expect_error):
             exp_approx_mode=False,
         )
 
-        # Joint tensors require non-causal (causal+joint is rejected earlier), so this is the
-        # non-causal GQA + joint case that the GQA-with-joint TT_FATAL is meant to catch.
-        with expect_error(RuntimeError, "GQA with joint tensors"):
+        with expect_error(RuntimeError, expected_message):
             ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_q,
                 tt_k,
@@ -4469,8 +6060,9 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(expect_error):
                 persistent_output_buffer_v=p_buf_v,
                 joint_strategy="rear",
                 logical_n=sq,
-                is_causal=False,
+                is_causal=is_causal,
                 is_balanced=False,
+                attention_sink=tt_attention_sink,
                 program_config=program_config,
                 compute_kernel_config=runtime.compute_kernel_config,
                 dim=2,
@@ -4497,6 +6089,46 @@ def test_ring_joint_attention_minimax3_gqa_chunked_accuracy():
         qk_configs=[(128, 512)],
         persistent_buffer_mode="reuse_max",
     )
+
+
+def test_ring_joint_attention_minimax3_gqa_full_causal_attention_sink_accuracy_and_determinism():
+    """Balanced M3 full-causal GQA consumes sinks without the sliding-window specialization."""
+    model = replace(MODEL_CONFIGS["minimax3_gqa_smoke"], name="minimax3_gqa_full_causal_sink", seq_len=512)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        # Accuracy covers the balanced normalize-only path on the final ring iteration.
+        run_ring_joint_sdpa_model_configs(
+            MESH_CONFIG,
+            model,
+            qk_configs=[(128, 256)],
+            runtime=runtime,
+            use_attention_sink=True,
+        )
+        cache_entries = runtime.mesh_device.num_program_cache_entries()
+        assert cache_entries > 0, "full-causal attention-sink dispatch did not populate the program cache"
+        # A fresh sink allocation on the cached program validates runtime-address rebinding.
+        run_ring_joint_sdpa_model_configs(
+            MESH_CONFIG,
+            model,
+            qk_configs=[(128, 256)],
+            runtime=runtime,
+            use_attention_sink=True,
+            do_check=False,
+        )
+        assert runtime.mesh_device.num_program_cache_entries() == cache_entries
+        # The deterministic replay below also adds device comparison programs to the cache.
+        run_ring_joint_sdpa_model_configs(
+            MESH_CONFIG,
+            model,
+            qk_configs=[(128, 256)],
+            runtime=runtime,
+            use_attention_sink=True,
+            do_check=False,
+            num_iterations=3,
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
 def test_ring_joint_attention_minimax3_gqa_chunked_reuse_kv_hang_regression():
@@ -4573,6 +6205,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     )
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
     "model_name,qk_configs",
@@ -4590,6 +6223,7 @@ def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
         use_ring_mla=True,
+        reserve_llk_kernel_config=False,
     )
 
 
@@ -4682,6 +6316,7 @@ def test_ring_mla_chunked_determinism(model_name, qk_configs, chunk_size):
         qk_configs=qk_configs,
         num_iterations=3,
         use_ring_mla=True,
+        reserve_llk_kernel_config=False,
     )
 
 
@@ -4932,7 +6567,7 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 
 
 # === TEST 9: CHUNKED-PREFILL ring_mla PERF CHECK ===
-# Profiles the kimi 50k+5k galaxy chunk (final, most compute-bound chunk of the kimi50k chunked
+# Profiles each ring_mla model's 50k+5k chunk (final, most compute-bound chunk of its chunked
 # prefill): natively on Galaxy (sp=8, tp=4) and simulated on the 4-device QuietBox (sp=4, tp=1).
 # Symmetric +/- band, same as the ring joint perf check.
 if MESH_CONFIG.is_galaxy:
@@ -4940,12 +6575,18 @@ if MESH_CONFIG.is_galaxy:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
         ("kimi50k", 32, 640, 8, 68.5),
+        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
+        # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
+        ("kimi_k3", 32, 640, 8, 61.03),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
+        # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
+        # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
+        ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
 
@@ -4971,9 +6612,11 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+# Galaxy only: the gate guards the exabox.tenstorrent.com/power=14kw label. QuietBox reports a
+# sub-130W TDP, so an unconditional gate skipped every ring-4 entry below on every CI run.
 @pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+    MESH_CONFIG.is_galaxy and not is_high_power(),
+    reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
@@ -5093,6 +6736,80 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )
+
+
+# Calibrated on the 8-chip single-ring CI target. Keep this separate from Minimax: GPT-OSS uses
+# D=64, 8Q:1KV per chip, a 128-token window, and an attention sink. Direct per-core K/V reads
+# measure about 35 us / 1.75% median utilization; the wider band reflects quantization and host
+# noise at this very short duration.
+GPT_OSS_CHUNKED_PERF_MARGIN = 0.10
+GPT_OSS_CHUNKED_PERF_CHECK_CONFIGS = [
+    # (q_chunk_size, k_chunk_size, expected_util, margin)
+    (128, 128, 1.75, GPT_OSS_CHUNKED_PERF_MARGIN),
+]
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance gate is not part of CI correctness coverage")
+@pytest.mark.parametrize(
+    "q_chunk_size,k_chunk_size,expected_util,margin",
+    GPT_OSS_CHUNKED_PERF_CHECK_CONFIGS,
+    ids=[f"gpt-oss-55k-q{q}-k{k}" for q, k, _, _ in GPT_OSS_CHUNKED_PERF_CHECK_CONFIGS],
+)
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_ring_joint_attention_gpt_oss_chunked_sliding_perf_check(q_chunk_size, k_chunk_size, expected_util, margin):
+    """Measure the final 5K GPT-OSS Q chunk against its 55K sliding KV cache on the CI target."""
+    if MESH_CONFIG.num_devices != 8:
+        pytest.skip(f"GPT-OSS sliding perf target is calibrated for the 8-chip CI ring, got {MESH_CONFIG.num_devices}")
+    mesh_config = gpt_oss_chunked_mesh_config()
+    final_chunk = GPT_OSS_CHUNKED_TOTAL_SEQ // GPT_OSS_CHUNKED_CHUNK_SIZE - 1
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    mesh_config,
+                    GPT_OSS_CHUNKED_MODEL,
+                    chunk_size=GPT_OSS_CHUNKED_CHUNK_SIZE,
+                    total_seq=GPT_OSS_CHUNKED_TOTAL_SEQ,
+                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    persistent_buffer_mode="reuse_max",
+                    do_check=False,
+                    reuse_kv_buffer=True,
+                    sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                    use_attention_sink=True,
+                    runtime=runtime,
+                ),
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+    q_per_device = GPT_OSS_CHUNKED_CHUNK_SIZE // mesh_config.sp_size
+    utilization = compute_ring_joint_utilization(
+        q_per_device,
+        GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+        GPT_OSS_RING_SINK_CONFIG.head_dim,
+        GPT_OSS_RING_SINK_CONFIG.head_dim,
+        GPT_OSS_CHUNKED_MODEL.nhq,
+        duration_ns,
+        mesh_config.sdpa_cores,
+        is_causal=False,
+    )
+    lower = expected_util * (1 - margin)
+    upper = expected_util * (1 + margin)
+    logger.info(
+        f"GPT-OSS sliding 5K-on-55K perf: q={q_chunk_size}, k={k_chunk_size}, "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}%, "
+        f"expected={expected_util:.2f}% [{lower:.2f}, {upper:.2f}], "
+        f"profiler_records={len(perf_records)}"
+    )
+
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
     )
 
 

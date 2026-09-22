@@ -199,7 +199,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
 
     // Helper to run warmup iteration with barrier synchronization
     auto barrier = [&]() {
-        Synchronize(mesh_device_.get(), std::nullopt);
+        Synchronize(*mesh_device_, std::nullopt);
         distributed_context->barrier();
     };
 

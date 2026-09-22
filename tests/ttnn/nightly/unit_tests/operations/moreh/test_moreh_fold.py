@@ -9,6 +9,9 @@ import ttnn
 from loguru import logger
 from models.common.utility_functions import comp_allclose_and_pcc
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def run_fold_test(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
     if dtype == torch.float:
@@ -31,6 +34,27 @@ def run_fold_test(device, input_shape, output_size, kernel_size, dilation, paddi
     elif dtype == torch.bfloat16:
         passing, out = comp_allclose_and_pcc(expected, actual, rtol=0.05, atol=0.05)
     assert passing
+
+
+def test_moreh_fold_golden_accepts_bound_positional_arguments():
+    input_tensor = torch.randn(1, 4, 4)
+    output_size = (3, 3)
+    kernel_size = (2, 2)
+    golden_function = ttnn.get_golden_function(ttnn.moreh_fold)
+
+    actual = golden_function(
+        input_tensor,
+        None,
+        output_size,
+        kernel_size,
+        (1, 1),
+        (0, 0),
+        (1, 1),
+        None,
+    )
+    expected = torch.nn.functional.fold(input_tensor, output_size=output_size, kernel_size=kernel_size)
+
+    torch.testing.assert_close(actual, expected)
 
 
 @pytest.mark.parametrize(
@@ -76,6 +100,8 @@ def test_fold(device, input_shape, output_size, kernel_size, dilation, padding, 
 )
 def test_fold_callback(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
     torch.manual_seed(0)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_fold_test(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype)

@@ -317,6 +317,45 @@ def get_batch_timeout(target, sku, module_selector, default=DEFAULT_JOB_TIMEOUT_
     return max(1, int(round(total)))
 
 
+# Floor for a device-key batch's timeout. The weighted model below charges each op a FRACTION
+# of its ceiling, so a batch holding a couple of vectors of one op lands near `overhead` alone
+# -- but `overhead` (6 min for lead_models) was calibrated when batches were large and fixed
+# cost was amortised across many ops. A 1-module device-key batch pays the full fixed cost:
+# container start (cheapest job observed 3.1 min), artifact download (one step observed
+# 6.5 min), kernel-cache clear, then a Galaxy mesh open (~4 min). Lead-models run 30702184301
+# stamped mesh4x8_col_2d_rms_norm_pre_all_gather at 7 min; it was killed at 7.1 min wall clock
+# having executed ZERO vectors. The floor covers fixed cost so a small batch gets a chance to
+# run; op time above it still comes from the weighted share.
+MIN_DEVICE_KEY_BATCH_TIMEOUT_MIN = 18
+
+
+def get_weighted_batch_timeout(target, sku, module_shares, default=DEFAULT_JOB_TIMEOUT_MIN, sizing_minutes=0):
+    """Per-batch timeout for a batch holding a FRACTION of each of its ops' vectors.
+
+    Device-key batches are sized by vector count, so one batch can touch 40 modules while
+    carrying only a slice of each. Charging every module its full per-op ceiling (what
+    get_batch_timeout does, correctly, for module-sized batches) would bill an op once per
+    batch it appears in and blow the SKU budget. Here each module is charged its ceiling
+    scaled by the share of that op's vectors present in this batch, so summed over a whole
+    run every op is still billed exactly once.
+
+    ``module_shares`` maps module token -> that op's share of its own vectors in this batch
+    (0..1, summing to 1 across the run).
+
+    ``sizing_minutes`` is what the SPLITTER's time model says this batch costs (its vector
+    count at SECONDS_PER_VECTOR, plus device open). A device-key batch is sized by that model
+    but timed by the per-op shares above, and the two can disagree: model_traced run
+    30702189957 stamped mesh1x2_row_1d at 29 min for 562 vectors (3.1 s/vector), and it was
+    killed at 29.2 min having passed 432 -- still executing, at ~4 s/vector. Taking the max
+    keeps the budget consistent with the model that chose the batch size in the first place."""
+    policy = _sweep_batch_policy_map().get((target, sku)) or DEFAULT_BATCH_POLICY
+    if not module_shares:
+        return default
+    overhead = policy.get("overhead", DEFAULT_BATCH_OVERHEAD_MIN)
+    total = overhead + sum(_op_timeout_min(token, policy) * share for token, share in module_shares.items())
+    return max(MIN_DEVICE_KEY_BATCH_TIMEOUT_MIN, int(round(max(total, overhead + sizing_minutes))))
+
+
 def get_sku_total_budget(target, sku):
     """Total per-run budget (minutes) declared for a (target, sku), or None if the
     pair is not budget-tracked in the yaml (e.g. nightly / comprehensive)."""

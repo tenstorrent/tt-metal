@@ -13,6 +13,9 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#if defined(MASK_SYNTHESIZE)
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t TILE_HW = TILE_HW_VAL;
@@ -36,8 +39,8 @@ void kernel_main() {
     // compile_time_arg 12: reduce_factor_c (unused in welford path)
 
     constexpr auto gamma_args = TensorAccessorArgs<13>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<decltype(gamma_args)::next_compile_time_args_offset()>();
+    constexpr auto input_mask_args = TensorAccessorArgs<decltype(beta_args)::next_compile_time_args_offset()>();
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
     const uint32_t beta_addr = get_arg_val<uint32_t>(2);
@@ -53,24 +56,51 @@ void kernel_main() {
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_gamma_id);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
+    const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
+
+#if defined(MASK_SYNTHESIZE)
+    // Full group size (num_channels / num_groups). The row_offset wrapping
+    // recurrence mirrors groupnorm_input_mask.cpp:60-72.
+    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr uint32_t MASK_TILE_W = tt::constants::TILE_WIDTH;
+    constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W = num_channels_per_group % MASK_TILE_W;
+#endif
 
     constexpr uint32_t eps_dfb_id = tt::CBIndex::c_3;
     const uint32_t eps = get_arg_val<uint32_t>(0);
     generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
 
     uint32_t input_mask_tile_id = input_mask_tile_start_id;
+#if defined(MASK_SYNTHESIZE)
+    // start_stride for the first group on this core is 0. Subsequent
+    // groups advance row_offset by group_size_mod_tile_w with wrapping.
+    uint32_t mask_row_offset = 0;
+#endif
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
         dfb_input_mask.reserve_back(block_w);
         uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
+#if defined(MASK_SYNTHESIZE)
+        // Write face 0 row 0 + face 1 row 0 of each of the block_w mask
+        // tiles directly, no DRAM read.
+        tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+            l1_write_addr_input_mask,
+            mask_row_offset,
+            num_channels_per_group,
+            block_w,
+            input_mask_single_tile_size_bytes,
+            MASK_TILE_W,
+            tt::tt_metal::groupnorm::BF16_ONE,
+            tt::tt_metal::groupnorm::BF16_ZERO);
+        mask_row_offset =
+            tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, MASK_TILE_W);
+#else
         for (uint32_t j = 0; j < block_w; ++j) {
             noc.async_read(
                 mask,
@@ -82,6 +112,7 @@ void kernel_main() {
             input_mask_tile_id += 1;
         }
         noc.async_read_barrier();
+#endif  // MASK_SYNTHESIZE
         dfb_input_mask.push_back(block_w);
     }
 
@@ -103,7 +134,7 @@ void kernel_main() {
         // L1-L1 NOC transactions only need 16 byte alignment on BH, so this is legal after data is loaded
         // to L1
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            uint32_t tile_id = gamma_tile_start_id + w;
+            const uint32_t tile_id = gamma_tile_start_id + w;
 
             // Read the first 64 bytes of the tile into the first face
 #ifdef ARCH_BLACKHOLE
@@ -156,7 +187,7 @@ void kernel_main() {
         auto l1_write_addr_beta = dfb_beta.get_write_ptr();
 
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            uint32_t tile_id = beta_tile_start_id + w;
+            const uint32_t tile_id = beta_tile_start_id + w;
 
             // Read the first 64 bytes of the tile into the first face
 #ifdef ARCH_BLACKHOLE

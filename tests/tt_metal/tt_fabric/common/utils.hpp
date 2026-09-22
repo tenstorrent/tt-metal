@@ -53,6 +53,7 @@ void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane)
 void expect_galaxy_rank_group_1x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_1x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_2x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_2x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
@@ -85,5 +86,8 @@ void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 // MGD host_topology slices (MeshGraph), and topology-mapper runtime state (discovery/mapping).
 // Rank binding order is not checked here (verify visually vs MGD when adding tests).
 void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control_plane);
+
+// Writes an inline descriptor to a PID-qualified temporary file and returns its path.
+std::string write_temp_descriptor(const std::string& name, const std::string& text_proto);
 
 }  // namespace tt::tt_fabric::fabric_router_tests

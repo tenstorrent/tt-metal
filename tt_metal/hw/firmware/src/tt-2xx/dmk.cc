@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "risc_common.h"
@@ -17,6 +16,7 @@
 #include "hostdev/dev_msgs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #include "api/kernel_thread_globals.h"
@@ -40,8 +40,9 @@ uint32_t _start() {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    // TODO: initialize globals and bss
-    uint32_t hartid = internal_::get_hw_thread_idx();
+    // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
+    // it lives in, so caching it any earlier would just be discarded.
+    uint32_t hartid = internal_::read_hw_thread_idx();
 
     // Obtain launch message from mailbox and derive thread 0 (lowest hartid with same kernel).
     uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
@@ -79,6 +80,8 @@ uint32_t _start() {
     }
 
     do_thread_crt1(tdata_lma);
+    // .tbss has been zeroed: cache this thread's hw index.
+    internal_::init_hw_thread_idx();
 
     // Wait until first thread in the group has set its slot to GO.
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[thread_0_hartid] != SHARED_GLOBALS_READY_GO) {
@@ -104,8 +107,19 @@ uint32_t _start() {
         EARLY_RETURN_FOR_DEBUG
 
         WAYPOINT("K");
+#ifdef TT_DM_CACHED_SEM_STUBS
+        // When the kernel binds DM_LOCAL_CACHED semaphores: seed their
+        // pool rows once per program, and restore them on the way out.
+        sem_internal::init_dm_local_cached();
+#endif
         kernel_main();
+#ifdef TT_DM_CACHED_SEM_STUBS
+        sem_internal::finish_dm_local_cached();
+#endif
         WAYPOINT("KD");
+        // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
+        // DFBs stays trivially copyable.
+        RECORD_DFB_REGION_CLEAR();
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // TODO enable once NOC is ready

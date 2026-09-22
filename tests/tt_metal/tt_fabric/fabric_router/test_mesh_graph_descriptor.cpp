@@ -1978,12 +1978,13 @@ TEST(MeshGraphDescriptorTests, PinningsParsing) {
 
     MeshGraphDescriptor desc(text_proto);
 
-    // Check that pinnings were extracted as one group per entry
+    // Check that pinnings were extracted as one group per entry (both on mesh 0)
     const auto& pinnings = desc.get_pinnings();
-    EXPECT_EQ(pinnings.size(), 2) << "Should have 2 pinning groups";
+    ASSERT_EQ(pinnings.size(), 1u);
+    ASSERT_EQ(pinnings.at(MeshId{0}).size(), 2u) << "Should have 2 pinning groups";
 
     // Check first pinning: (mesh 0, chip 0) -> (tray 1, location 1)
-    const auto& pinning1 = pinnings[0];
+    const auto& pinning1 = pinnings.at(MeshId{0})[0];
     ASSERT_EQ(pinning1.fabric_nodes.size(), 1) << "First pinning should have 1 fabric node";
     ASSERT_EQ(pinning1.asic_positions.size(), 1) << "First pinning should have 1 ASIC position";
     EXPECT_EQ(*pinning1.asic_positions[0].first, 1) << "First pinning should have tray_id 1";
@@ -1992,7 +1993,7 @@ TEST(MeshGraphDescriptorTests, PinningsParsing) {
     EXPECT_EQ(pinning1.fabric_nodes[0].chip_id, 0) << "First pinning should have chip_id 0";
 
     // Check second pinning: (mesh 0, chip 31) -> (tray 4, location 1)
-    const auto& pinning2 = pinnings[1];
+    const auto& pinning2 = pinnings.at(MeshId{0})[1];
     ASSERT_EQ(pinning2.fabric_nodes.size(), 1) << "Second pinning should have 1 fabric node";
     ASSERT_EQ(pinning2.asic_positions.size(), 1) << "Second pinning should have 1 ASIC position";
     EXPECT_EQ(*pinning2.asic_positions[0].first, 4) << "Second pinning should have tray_id 4";
@@ -2031,7 +2032,7 @@ TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexRangeExpandsPerMesh) {
     const auto& pinnings = desc.get_pinnings();
     ASSERT_EQ(pinnings.size(), 3u) << "One group per matched mesh (0,1,2)";
     for (uint32_t m = 0; m < 3; ++m) {
-        const auto& g = pinnings[m];
+        const auto& g = pinnings.at(MeshId{m}).front();
         ASSERT_EQ(g.fabric_nodes.size(), 2u);
         EXPECT_EQ(*g.fabric_nodes[0].mesh_id, m);
         EXPECT_EQ(g.fabric_nodes[0].chip_id, 0u);
@@ -2069,12 +2070,12 @@ TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexEvenOddParity) {
     MeshGraphDescriptor desc(text_proto);
     const auto& pinnings = desc.get_pinnings();
     ASSERT_EQ(pinnings.size(), 2u) << "Even meshes 0 and 2";
-    EXPECT_EQ(*pinnings[0].fabric_nodes.front().mesh_id, 0u);
-    EXPECT_EQ(*pinnings[1].fabric_nodes.front().mesh_id, 2u);
+    EXPECT_EQ(*pinnings.at(MeshId{0}).front().fabric_nodes.front().mesh_id, 0u);
+    EXPECT_EQ(*pinnings.at(MeshId{2}).front().fabric_nodes.front().mesh_id, 2u);
     // chip_id_regex "0-3" over a 2x2 (4-chip) mesh -> chips 0,1,2,3.
-    ASSERT_EQ(pinnings[0].fabric_nodes.size(), 4u);
+    ASSERT_EQ(pinnings.at(MeshId{0}).front().fabric_nodes.size(), 4u);
     for (uint32_t c = 0; c < 4; ++c) {
-        EXPECT_EQ(pinnings[0].fabric_nodes[c].chip_id, c);
+        EXPECT_EQ(pinnings.at(MeshId{0}).front().fabric_nodes[c].chip_id, c);
     }
 }
 
@@ -2165,12 +2166,14 @@ TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexExpands) {
 
     MeshGraphDescriptor desc(text_proto);
     const auto& pinnings = desc.get_pinnings();
-    ASSERT_EQ(pinnings.size(), 2u);
+    ASSERT_EQ(pinnings.size(), 1u);
+    const auto& groups = pinnings.at(MeshId{0});
+    ASSERT_EQ(groups.size(), 2u);
 
-    ASSERT_EQ(pinnings[0].asic_positions.size(), 4u);
+    ASSERT_EQ(groups[0].asic_positions.size(), 4u);
     for (uint32_t tray : {1u, 2u, 3u, 4u}) {
         bool found = false;
-        for (const auto& pos : pinnings[0].asic_positions) {
+        for (const auto& pos : groups[0].asic_positions) {
             if (*pos.first == tray && *pos.second == 3u) {
                 found = true;
             }
@@ -2178,10 +2181,10 @@ TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexExpands) {
         EXPECT_TRUE(found) << "Expected tray " << tray << " asic_location 3";
     }
 
-    ASSERT_EQ(pinnings[1].asic_positions.size(), 4u);
+    ASSERT_EQ(groups[1].asic_positions.size(), 4u);
     for (uint32_t loc : {2u, 3u, 6u, 7u}) {
         bool found = false;
-        for (const auto& pos : pinnings[1].asic_positions) {
+        for (const auto& pos : groups[1].asic_positions) {
             if (*pos.first == 1u && *pos.second == loc) {
                 found = true;
             }
@@ -2219,17 +2222,19 @@ TEST(MeshGraphDescriptorTests, PinningsRepeatedNodeKeptAsSeparateGroups) {
     MeshGraphDescriptor desc(text_proto);
     const auto& pinnings = desc.get_pinnings();
 
-    ASSERT_EQ(pinnings.size(), 2u);
+    ASSERT_EQ(pinnings.size(), 1u);
+    const auto& groups = pinnings.at(MeshId{0});
+    ASSERT_EQ(groups.size(), 2u);
     const FabricNodeId node(MeshId{0}, 0);
-    for (const auto& group : pinnings) {
+    for (const auto& group : groups) {
         ASSERT_EQ(group.fabric_nodes.size(), 1u);
         EXPECT_EQ(group.fabric_nodes[0], node);
         ASSERT_EQ(group.asic_positions.size(), 1u);
     }
-    EXPECT_EQ(*pinnings[0].asic_positions[0].first, 1u);
-    EXPECT_EQ(*pinnings[0].asic_positions[0].second, 1u);
-    EXPECT_EQ(*pinnings[1].asic_positions[0].first, 2u);
-    EXPECT_EQ(*pinnings[1].asic_positions[0].second, 2u);
+    EXPECT_EQ(*groups[0].asic_positions[0].first, 1u);
+    EXPECT_EQ(*groups[0].asic_positions[0].second, 1u);
+    EXPECT_EQ(*groups[1].asic_positions[0].first, 2u);
+    EXPECT_EQ(*groups[1].asic_positions[0].second, 2u);
 }
 
 TEST(MeshGraphDescriptorTests, PinningsEmpty) {
@@ -2332,7 +2337,7 @@ TEST(MeshGraphDescriptorTests, PinningsAllToAll) {
     const auto& pinnings = desc.get_pinnings();
     ASSERT_EQ(pinnings.size(), 1) << "The entry should be stored as a single many-to-many group";
 
-    const auto& group = pinnings[0];
+    const auto& group = pinnings.at(MeshId{0}).front();
     ASSERT_EQ(group.fabric_nodes.size(), 2) << "Group should list 2 fabric nodes";
     ASSERT_EQ(group.asic_positions.size(), 2) << "Group should list 2 ASIC positions";
 
@@ -2449,17 +2454,221 @@ TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsExpandPerMesh) {
     const auto& pinnings = desc.get_pinnings();
 
     // Meshes 0, 1, 2 from the first entry plus meshes 2, 3 from the second.
-    ASSERT_EQ(pinnings.size(), 5u);
+    ASSERT_EQ(pinnings.size(), 4u);
     std::map<uint32_t, uint32_t> groups_per_mesh;
-    for (const auto& group : pinnings) {
-        ASSERT_EQ(group.fabric_nodes.size(), 1u);
-        EXPECT_EQ(group.fabric_nodes[0].chip_id, 0u);
-        groups_per_mesh[*group.fabric_nodes[0].mesh_id]++;
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            ASSERT_EQ(group.fabric_nodes.size(), 1u);
+            EXPECT_EQ(group.fabric_nodes[0].chip_id, 0u);
+            groups_per_mesh[*group.fabric_nodes[0].mesh_id]++;
+        }
     }
     EXPECT_EQ(groups_per_mesh[0], 1u);
     EXPECT_EQ(groups_per_mesh[1], 1u);
     EXPECT_EQ(groups_per_mesh[2], 2u);
     EXPECT_EQ(groups_per_mesh[3], 1u);
+}
+
+TEST(MeshGraphDescriptorTests, PinningsLiteralMultiMeshSplitsByMesh) {
+    // A non-regex entry that lists nodes from two meshes must emit one group per mesh, matching the
+    // regex path, so get_pinnings() can look up without filtering mixed-mesh groups.
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 3 }
+          logical_fabric_node_id: { mesh_id: 1 chip_id: 0 }
+          physical_asic_position: { tray_id: 1 asic_location: 3 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& pinnings = desc.get_pinnings();
+    ASSERT_EQ(pinnings.size(), 2u);
+
+    const auto& mesh0 = pinnings.at(MeshId{0});
+    ASSERT_EQ(mesh0.size(), 1u);
+    ASSERT_EQ(mesh0[0].fabric_nodes.size(), 2u);
+    EXPECT_EQ(*mesh0[0].fabric_nodes[0].mesh_id, 0u);
+    EXPECT_EQ(mesh0[0].fabric_nodes[0].chip_id, 0u);
+    EXPECT_EQ(*mesh0[0].fabric_nodes[1].mesh_id, 0u);
+    EXPECT_EQ(mesh0[0].fabric_nodes[1].chip_id, 3u);
+
+    const auto& mesh1 = pinnings.at(MeshId{1});
+    ASSERT_EQ(mesh1.size(), 1u);
+    ASSERT_EQ(mesh1[0].fabric_nodes.size(), 1u);
+    EXPECT_EQ(*mesh1[0].fabric_nodes[0].mesh_id, 1u);
+    EXPECT_EQ(mesh1[0].fabric_nodes[0].chip_id, 0u);
+
+    EXPECT_FALSE(pinnings.contains(MeshId{2}));
+}
+
+TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path path_4x4 =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_single_4x4_mesh.textproto";
+    const std::filesystem::path path_dual =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_2x4_intermesh.textproto";
+    ASSERT_TRUE(std::filesystem::exists(path_4x4));
+    ASSERT_TRUE(std::filesystem::exists(path_dual));
+
+    std::vector<MeshGraphDescriptor> mgds;
+    // No reserve(): second emplace typically reallocates and move-constructs elements — connection-by-type keys must
+    // remain valid (owning std::string keys, not string_views into moved-from InstanceData).
+    mgds.emplace_back(path_4x4);
+    const size_t mesh_conn_count = mgds[0].connections_by_type("MESH").size();
+    EXPECT_GT(mesh_conn_count, 0u) << "4x4 grid MGD should synthesize intra-mesh MESH connections";
+
+    mgds.emplace_back(path_dual);
+
+    EXPECT_EQ(mgds[0].connections_by_type("MESH").size(), mesh_conn_count)
+        << "First MGD's MESH connection index must survive vector reallocation";
+    EXPECT_FALSE(mgds[1].connections_by_type("FABRIC").empty())
+        << "Dual MGD should retain FABRIC connections after emplace";
+}
+
+// express_links expands into the expected intra-mesh Z edges on the 8x4 [RING, RING] descriptor.
+TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 32u);  // 8x4 = 32 chips
+
+    // wrap: LINE on the step-4 pattern keeps only block [2,5]; the wrapping block is dropped even
+    // though the row axis is RING. Row 0 <-> row 7 is the ordinary wrap, not an express link. chip = row*4 + col.
+    const std::vector<std::pair<int, int>> expected_express_edges = {{8, 20}, {9, 21}, {10, 22}, {11, 23}};
+
+    for (const auto& [a, b] : expected_express_edges) {
+        EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
+        EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
+        if (m0[a].contains(b) && m0[b].contains(a)) {
+            EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+        }
+    }
+
+    EXPECT_EQ(m0[4].count(24), 0u);  // row 1 is not a block endpoint, so it gets no express link
+
+    // chip 8 keeps its 4 base-grid neighbors plus the one express edge
+    EXPECT_EQ(m0[8].count(4), 1u);
+    EXPECT_EQ(m0[8].count(12), 1u);
+    EXPECT_EQ(m0[8].count(9), 1u);
+    EXPECT_EQ(m0[8].count(11), 1u);
+    EXPECT_EQ(m0[8].size(), 5u);
+
+    // 4 bidirectional express edges = 8 directed Z entries, no others
+    int z_directed = 0;
+    for (int c = 0; c < 32; ++c) {
+        for (const auto& [nb, edge] : m0[c]) {
+            if (edge.port_direction == tt::tt_fabric::RoutingDirection::Z) {
+                ++z_directed;
+            }
+        }
+    }
+    EXPECT_EQ(z_directed, 8) << "expected exactly 4 bidirectional express edges (8 directed Z entries)";
+}
+
+TEST(MeshGraphDescriptorTests, PlainFabric2DDowngradesExpressMgdToMesh) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
+
+    const tt::tt_fabric::MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D);
+    const auto& m0 = mesh_graph.get_intra_mesh_connectivity().at(0);
+    ASSERT_EQ(m0.size(), 32u);
+
+    int z_directed = 0;
+    for (const auto& edges_by_destination : m0) {
+        for (const auto& [_, edge] : edges_by_destination) {
+            z_directed += edge.port_direction == tt::tt_fabric::RoutingDirection::Z ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(z_directed, 0);
+    EXPECT_EQ(m0[8].count(20), 0u);  // the descriptor's row 2 <-> row 5 express chord is absent
+    EXPECT_EQ(m0[0].count(28), 0u);  // plain FABRIC_2D also removes the ordinary row 0 <-> row 7 wrap
+    EXPECT_EQ(m0[0].at(4).port_direction, tt::tt_fabric::RoutingDirection::S);
+    EXPECT_EQ(m0[0].at(1).port_direction, tt::tt_fabric::RoutingDirection::E);
+}
+
+// express_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.
+TEST(MeshGraphDescriptorTests, ExpressLinks32x4) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto";
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 128u);  // 32x4 = 128 chips
+
+    // dim 0 (32 rows, RING). chip = row*4 + col. Two patterns:
+    //   start=2 step=4 -> 8 row pairs (last wraps)
+    //   start=0 step=8 -> 4 row pairs
+    const std::vector<std::pair<int, int>> row_blocks = {
+        {2, 5},
+        {6, 9},
+        {10, 13},
+        {14, 17},
+        {18, 21},
+        {22, 25},
+        {26, 29},
+        {30, 1},  // start=2 step=4
+        {0, 7},
+        {8, 15},
+        {16, 23},
+        {24, 31}};  // start=0 step=8
+    for (const auto& [ra, rb] : row_blocks) {
+        for (int col = 0; col < 4; ++col) {
+            const int a = ra * 4 + col;
+            const int b = rb * 4 + col;
+            EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
+            EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
+            if (m0[a].contains(b) && m0[b].contains(a)) {
+                EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+                EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            }
+        }
+    }
+
+    // (8 + 4) blocks x 4 columns = 48 bidirectional express edges = 96 directed Z entries, no others
+    int z_directed = 0;
+    for (int c = 0; c < 128; ++c) {
+        for (const auto& [nb, edge] : m0[c]) {
+            if (edge.port_direction == tt::tt_fabric::RoutingDirection::Z) {
+                ++z_directed;
+            }
+        }
+    }
+    EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -46,6 +46,9 @@ int parse_noc_send_type(const std::string& name) {
     if (name == "NOC_UNICAST_READ") {
         return NocSendType::NOC_UNICAST_READ;
     }
+    if (name == "NOC_SPARSE_MCAST_WRITE") {
+        return NocSendType::NOC_SPARSE_MCAST_WRITE;
+    }
     return -1;
 }
 
@@ -311,6 +314,7 @@ ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std:
         }
         if (vc_node["force_enable_sender_channels"]) {
             std::vector<size_t> indices;
+            indices.reserve(vc_node["force_enable_sender_channels"].size());
             for (const auto& idx_node : vc_node["force_enable_sender_channels"]) {
                 indices.push_back(idx_node.as<size_t>());
             }
@@ -318,6 +322,7 @@ ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std:
         }
         if (vc_node["force_enable_receiver_channels"]) {
             std::vector<size_t> indices;
+            indices.reserve(vc_node["force_enable_receiver_channels"].size());
             for (const auto& idx_node : vc_node["force_enable_receiver_channels"]) {
                 indices.push_back(idx_node.as<size_t>());
             }

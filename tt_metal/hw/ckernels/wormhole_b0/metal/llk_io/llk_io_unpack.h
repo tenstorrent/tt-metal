@@ -74,10 +74,13 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 
     uint16_t num_tiles_recv;
-    do {
-        tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
-        num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
-    } while (num_tiles_recv < num_tiles_u);
+    {
+        SYNC_WAIT("SYNC-CB-WAIT", operand);
+        do {
+            tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
+            num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
+        } while (num_tiles_recv < num_tiles_u);
+    }
 
     apply_mm_stagger(operand);
 }
@@ -85,16 +88,18 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 // Pop N tiles from the incoming stream
 inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
+    SYNC_SIGNAL("SYNC-CB-POP", operand);
     std::uint32_t input = operand;
 
-    volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
-        (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
+    // Convert the counter's byte address to a Tensix 4-byte word address, masked to 18 bits.
+    const std::uint32_t tiles_acked_addr_tensix =
+        static_cast<std::uint32_t>((reinterpret_cast<std::uintptr_t>(get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
     std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
 
     get_local_cb_interface(input).tiles_acked += num_tiles;
     TT_SETDMAREG(0, get_local_cb_interface(input).tiles_acked, 0, LO_16(4));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
+    TT_STOREREG(4, tiles_acked_addr_tensix);
     auto& cb = get_local_cb_interface(input);
 
     LLK_ASSERT(cb.fifo_rd_ptr < cb.fifo_limit, "CB pop_front: fifo_rd_ptr already at or past fifo_limit");

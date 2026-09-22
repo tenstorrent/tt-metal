@@ -46,6 +46,7 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
               continue;
           }
 
+          tunnels_from_mmio.reserve(all_eth_connections.at(mmio_chip_id).size());
           for (const auto& [eth_chan, connected_chip_chan] : all_eth_connections.at(mmio_chip_id)) {
               const auto& other_chip_id = std::get<0>(connected_chip_chan);
               if (device_ids.contains(other_chip_id)) {
@@ -53,7 +54,7 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
                   std::vector<ChipId> first_stop = {other_chip_id};
                   auto it = std::find(tunnels_from_mmio.begin(), tunnels_from_mmio.end(), first_stop);
                   TT_FATAL(it == tunnels_from_mmio.end(), "Duplicate first tunnel stop found.");
-                  tunnels_from_mmio.push_back(first_stop);
+                  tunnels_from_mmio.push_back(std::move(first_stop));
               }
           }
 
@@ -91,7 +92,7 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
               }
               dev_vec.insert(dev_vec.begin(), mmio_chip_id);
           }
-          tunnels_from_mmio_device.insert({mmio_chip_id, tunnels_from_mmio});
+          tunnels_from_mmio_device.insert({mmio_chip_id, std::move(tunnels_from_mmio)});
       }
 
       return tunnels_from_mmio_device;

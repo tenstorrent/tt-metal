@@ -2,11 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 from collections import defaultdict
 
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.llama_models import (
@@ -24,12 +26,14 @@ from models.common.sampling import (
     broadcast_sampling_params,
     chunk_sampling_params,
     format_sampling_params,
+    scatter_sampling_params_to_slots,
 )
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
+    get_all_padded_prefill_lengths,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
@@ -43,10 +47,79 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
+
+def batched_prefill_fits_token_budget(padded_batch, seq_len, max_prefill_chunk_size):
+    """Bound the combined activation footprint by the model/device's prefill budget.
+
+    The MLP flattens the batch and sequence dimensions. Checking each sequence
+    alone admits e.g. 32 x 1024 on Llama-8B N150, whose single-pass budget is
+    4096 tokens, and runs out of DRAM even before capturing a trace.
+    """
+    total_tokens = padded_batch * seq_len
+    return total_tokens <= max_prefill_chunk_size and total_tokens < MAX_BATCHED_PREFILL_SEQ_LEN
+
+
+def batched_prefill_padded_batch(batch_size, empty_slots, max_batch_size):
+    """Rows the batched-prefill device batch needs for ``empty_slots``.
+
+    A batched prefill places request ``i`` at device row ``empty_slots[i]``, its
+    physical slot, and every slot-indexed buffer (``prefill_ids``,
+    ``padded_last_token_idx``, the padded page table) is bounded by the returned
+    value. The batch must therefore span the highest slot in use, not just the
+    request count: vLLM hands out the slot that already owns a request's per-slot
+    state, so a batch of N requests can legitimately land on slots above N.
+
+    A span no bucket covers returns at least the span itself, so the caller's
+    ``padded_batch > max_batch_size`` guard fires and sends the batch down the
+    sequential path. Reporting ``max_batch_size`` there would re-enable the very
+    out-of-bounds slot write this bound exists to prevent.
+    """
+    span = batch_size
+    if empty_slots is not None and len(empty_slots) > 0:
+        span = max(span, max(int(s) for s in empty_slots) + 1)
+    return next((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= span), max(span, max_batch_size))
+
+
+def gather_batched_prefill_samples(
+    empty_slots,
+    tokens_host,
+    tt_log_probs,
+    plain_log_probs_host,
+    output_tokens,
+    output_log_probs,
+):
+    """Move a batched prefill's sampled rows back into the caller's prefill order.
+
+    The device sampled row ``empty_slots[i]`` for request ``i`` (batched prefill is
+    laid out by physical slot), while ``output_tokens``/``output_log_probs`` are sized
+    by the request count and returned in prefill order. Read by slot, write by
+    position: indexing the outputs by slot overflows them once a slot reaches the
+    request count, and silently hands one request another's token before that.
+    """
+    for local_idx, slot in enumerate(empty_slots):
+        slot = int(slot)
+        output_tokens[local_idx] = tokens_host[slot]
+        if isinstance(tt_log_probs, LogProbsResult):
+            output_log_probs[local_idx] = tt_log_probs.extract_user(slot)
+        elif plain_log_probs_host is not None:
+            output_log_probs[local_idx] = plain_log_probs_host[slot]
+
+
 # Position of the page table within the decode input tuple produced by
 # Transformer.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
 # Used to refresh only the page-table trace input when KV blocks are reallocated.
 DECODE_PAGE_TABLE_INPUT_IDX = 3
+
+
+def _maybe_acknowledge_trace_buffers_corruptible(owner, value):
+    """Acknowledge opt-in trace I/O that another live trace may overwrite."""
+    if not getattr(owner, "_tt_allow_decode_trace_buffer_reuse", False) or value is None:
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _maybe_acknowledge_trace_buffers_corruptible(owner, item)
+        return
+    trace_allocation_tracker.acknowledge_corruptible(value)
 
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
@@ -104,11 +177,43 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
         self.mode = None
+        # Set for the duration of the first traced prefill call: its decode trace is prepared before that
+        # call's prefill captures anything, and recorded once the prefill is done. That call's
+        # prefill traces are also deferred until its output processing has compiled.
+        self._defer_trace_recording = False
+        # Prefill-side deferral, kept separate from the decode latch above: warmup arms this across
+        # its whole sweep so no bucket compiles behind an earlier bucket's trace.
+        self._defer_prefill_recording = False
+        self._pending_prefill_traces = {}
+        self._prepared_prefill_traces = {}
+        self._prepared_prefill_sampling_traces = {}
+        self._pending_decode_trace = None
+        # The eager warmup phase stages decode I/O as well as programs. Keep it
+        # until the capture phase, which may follow prefill trace recording.
+        self._prepared_decode_traces = {}
 
-    # Class-level capabilities (VLLM specific, to be overridden by subclasses)
+    # Class-level capabilities (VLLM specific, to be overridden by subclasses).
+    # A subclass dict replaces this one rather than merging into it, so a default
+    # of True would be claimed by every subclass that declares nothing at all.
     model_capabilities = {
-        "supports_prefix_caching": True,
+        "supports_prefix_caching": False,
     }
+
+    def _any_trace_captured(self):
+        """True once any trace has been captured, i.e. once allocations are no longer unconditionally safe.
+
+        Used to decide whether a prefill call may still arm capture deferral: the point of deferring is to
+        keep every compile pass and every persistent allocation ahead of the first capture, which is only
+        achievable while nothing has been captured yet.
+        """
+        return any(
+            any(getattr(self, name, {}).values())
+            for name in ("trace_id_prefill", "trace_id_prefill_sampling", "trace_ids_decode")
+        ) or any(
+            slot["id"] is not None
+            for model in self.model
+            for slot in getattr(getattr(model, "sampling", None), "_trace_states", {}).values()
+        )
 
     def _get_sampling_contract(self, model_id: int):
         sampling_module = getattr(self.model[model_id], "sampling", None)
@@ -135,12 +240,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return ret
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
+        self.warmup_vision_encoder()
         if self.already_warmed_up_prefill:
             return
-        self.already_warmed_up_prefill = True
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
         warmup_batch_sizes = (1,)
+        _, sampling_dp, _, _ = self._get_sampling_contract(0)
+        if (
+            self.data_parallel == 1
+            and not getattr(self.model_args[0], "disable_batched_prefill", False)
+            and (not can_sample_on_device or sampling_dp == 1)
+            and not self._overrides_prefill_capture()
+            and not self._uses_prefetcher()
+        ):
+            warmup_batch_sizes = tuple(
+                batch for batch in SUPPORTED_PREFILL_BATCH_SIZES if batch <= self.model_args[0].max_batch_size
+            )
 
         skip_sequence_lengths = False
 
@@ -148,7 +264,149 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         sampling_parameters_sweeped = False
 
         if enable_trace:
-            logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
+            logger.info("Warming traced prefill batch sizes {}", warmup_batch_sizes)
+
+        # Compile every bucket before recording any of them; see _easy_trace_prefill.
+        self._defer_prefill_recording = enable_trace and not self._overrides_prefill_capture()
+        self.already_warmed_up_prefill = True
+        try:
+            self._warmup_prefill_sweep(
+                kv_cache=kv_cache,
+                enable_trace=enable_trace,
+                can_sample_on_device=can_sample_on_device,
+                greedy_only=greedy_only,
+                sequence_lengths_to_warmup=sequence_lengths_to_warmup,
+                warmup_batch_sizes=warmup_batch_sizes,
+                skip_sequence_lengths=skip_sequence_lengths,
+                sampling_parameters_sweeped=sampling_parameters_sweeped,
+            )
+            # Resumed buckets must also compile before any sp0 or sp1 trace is live.
+            resumes_prefill = self.model_capabilities.get(
+                "supports_prefix_caching", False
+            ) or self.model_capabilities.get("supports_chunked_prefill", False)
+            if enable_trace and resumes_prefill:
+                self._warmup_prefill_resumed_sweep(kv_cache=kv_cache)
+            self._defer_prefill_recording = False
+            self._record_pending_prefill_traces()
+        except BaseException:
+            self.already_warmed_up_prefill = False
+            self._prepared_prefill_traces.clear()
+            self._prepared_prefill_sampling_traces.clear()
+            raise
+        finally:
+            self._defer_prefill_recording = False
+            self._pending_prefill_traces.clear()
+
+    def _warmup_prefill_resumed_sweep(self, kv_cache):
+        """Capture the resumed-prefill ("sp1") traces, batch 1, one per traced length.
+
+        The sweep above never passes ``start_pos``, so it only ever captures the
+        ``sp0`` half of the prefill trace key. A resumed prefill -- prefix caching,
+        or a prompt split across engine steps -- takes the ``sp1`` half, which
+        would otherwise be captured lazily on whichever request happens to resume
+        first, allocating trace region nobody sized for. Reserving them here makes
+        the requirement a function of configuration instead of traffic.
+
+        Mirrors the phase-2 warmup in
+        ``models/demos/llama3_70b_galaxy/tt/generator.py``.
+        """
+        if kv_cache is None or kv_cache[0] is None:
+            # Resumed prefill needs a page table, so there is nothing to capture.
+            return
+        block_size = self._paged_prefill_block_size(kv_cache[0])
+
+        for model_id in range(self.data_parallel):
+            model_args = self.model_args[model_id]
+            for prefill_seq_len in model_args.trace_prefill_supported_seq_lens:
+                # A nonzero probe: ``can_enable_trace`` reads this argument only to
+                # test it against zero, and a model that refuses a resumed prefill
+                # refuses it for every offset. The declaration alone is not enough,
+                # because the model args can reject what the capability allows.
+                if not model_args.can_enable_trace(prefill_seq_len, 1):
+                    continue
+                # The offset a real request will be floored to for this length, so
+                # the captured program config is the one those replays need.
+                num_cached = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
+                # Only the suffix after the offset is padded into the bucket, so
+                # the prompt has to clear the offset by a full bucket to land on
+                # this key. ``capped_warmup_seq_len`` is the ceiling the rest of
+                # warmup uses: past it the call would be split into chunks and
+                # capture something else.
+                total_seq_len = self._resumed_warmup_prompt_len(
+                    prefill_seq_len, num_cached, model_args.capped_warmup_seq_len
+                )
+                suffix = total_seq_len - num_cached
+                if suffix <= 0 or get_padded_prefill_len(suffix) != prefill_seq_len:
+                    logger.warning(
+                        f"Skipping resumed prefill warmup for sequence length {prefill_seq_len}: "
+                        f"offset {num_cached} leaves no suffix padding back to it within "
+                        f"{model_args.capped_warmup_seq_len} tokens. Its trace is captured on first use."
+                    )
+                    continue
+
+                num_blocks = num_blocks_in_seq(total_seq_len, block_size)
+                logger.info(
+                    f"Warming up resumed prefill for sequence length: {prefill_seq_len}, " f"num_cached: {num_cached}"
+                )
+                self.prefill_forward_text(
+                    tokens=torch.zeros(1, total_seq_len, dtype=torch.long),
+                    prompt_lens=torch.tensor([total_seq_len], dtype=torch.long),
+                    empty_slots=[0],
+                    page_table=torch.zeros(1, num_blocks, dtype=torch.int32),
+                    start_pos=[num_cached],
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    model_id_warmup=model_id,
+                    sampling_params=None,
+                )
+
+    def finalize_deferred_traces(self):
+        """Record the prefill and decode traces that this call deferred.
+
+        The first traced prefill call prepares decode (compile pass, persistent inputs, sampling
+        pre-compile) before its own prefill captures anything, then records it here once that prefill is
+        done. Prefill recording also waits for the call's output processing to compile.
+        Recording binds only to the already prepared inputs in the pending trace stores.
+        """
+        if not self._defer_trace_recording:
+            return
+        try:
+            # Prefill first: its traces were prepared during this call, and the tail that runs
+            # between preparation and here has now compiled.
+            self._defer_prefill_recording = False
+            self._record_pending_prefill_traces()
+            # Deliberately no prepare fallback here: the decode trace was prepared up front by
+            # _prefill_forward_text_impl, before this call's prefill filled the KV cache. Preparing at
+            # this point instead would run the decode compile pass -- a real decode step at position 0
+            # with mock inputs -- over the prefilled cache, overwriting real K/V with mock values. If
+            # nothing was prepared (_prepare_decode_trace_for_warmup declined and returned None),
+            # recording is a no-op and the decode trace is set up lazily on the first decode step, as
+            # on main.
+            self._record_pending_traces()
+        finally:
+            # Cleared even if recording raised, and the stash is dropped with it: leaving the latch armed
+            # would make every later prefill defer a capture that nothing flushes.
+            self._defer_trace_recording = False
+            self._pending_decode_trace = None
+            self._defer_prefill_recording = False
+            self._pending_prefill_traces.clear()
+
+    def _warmup_prefill_sweep(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device,
+        greedy_only,
+        sequence_lengths_to_warmup,
+        warmup_batch_sizes,
+        skip_sequence_lengths,
+        sampling_parameters_sweeped,
+    ):
+        # Once per data-parallel group, not once overall. The sweep is sequence-length agnostic,
+        # but every group is a separate device with its own program cache, so sweeping only on the
+        # first one left groups 1..N-1 compiling the sampling path on their first real request -
+        # after warmup had recorded its traces. Measured on DP-32: 31 stranded argmax programs.
+        swept_sampling_model_ids = set(range(self.data_parallel)) if sampling_parameters_sweeped else set()
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
@@ -157,13 +415,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 ):
                     continue
 
-                # Token-limit guard below skips combinations that would
-                # exceed MAX_BATCHED_PREFILL_SEQ_LEN.
+                # Use the same combined-token budget as runtime routing. Warming
+                # larger batches would OOM on shapes runtime handles sequentially.
                 for batch_size in warmup_batch_sizes:
-                    if batch_size > 1 and batch_size * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
+                    if batch_size > 1 and not batched_prefill_fits_token_budget(
+                        batch_size, supported_length, self.model_args[model_id].max_prefill_chunk_size
+                    ):
                         logger.info(
                             f"Skipping batched prefill warmup for batch_size={batch_size}, "
-                            f"seq_len={supported_length}: exceeds token limit"
+                            f"seq_len={supported_length}: exceeds model/device token budget"
                         )
                         continue
 
@@ -179,14 +439,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         skip_sequence_lengths = True
                         break
 
-                    if not sampling_parameters_sweeped:
+                    if model_id not in swept_sampling_model_ids:
                         sampling_params = self._create_sampling_params(
                             can_sample_on_device=can_sample_on_device,
                             batch_size=batch_size,
                             greedy_only=greedy_only,
                         )
                     else:
-                        sampling_params = [None]
+                        # Not [None]: that path skips the on-device-sampling tail, so its
+                        # programs (last-token slice, and the untilize after it - both keyed on
+                        # the prefill bucket) never compile here and land on the first real
+                        # request instead, behind the traces warmup is about to record.
+                        sampling_params = self._create_sampling_params(
+                            can_sample_on_device=can_sample_on_device,
+                            batch_size=batch_size,
+                            greedy_only=True,
+                        )
 
                     for param in sampling_params:
                         logger.info(
@@ -200,7 +468,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             sampling_params=param,
                         )
 
-                    sampling_parameters_sweeped = True
+                    swept_sampling_model_ids.add(model_id)
 
                 if skip_sequence_lengths:
                     break
@@ -232,7 +500,175 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             logger.info("Vision encoder warmup completed")
 
-    def _capture_trace_prefill(
+    def _prepare_decode_trace_for_warmup(self, kv_cache, page_table, on_device_sampling):
+        """Full decode trace preparation (compile pass + trace inputs), run before any trace is captured.
+
+        The model has to be in decode mode for the compile pass to pick the right configs.
+        """
+        # Gate lives here rather than only in _prepare_decode_trace_once because this function has a
+        # second caller that bypasses that wrapper. Returning None leaves _pending_decode_trace unset,
+        # which is exactly the "nothing hoisted" state the original path expects.
+        if self._uses_prefetcher():
+            return None
+        if page_table is None:
+            # Nothing here pins down the decode batch size, and guessing wrong would leave the trace inputs
+            # the wrong shape for the first decode step. Fall back to setting it up lazily, as before.
+            logger.info("No page table available at warmup; decode trace will be set up on first decode")
+            return None
+
+        batch_size = page_table.shape[0]
+        # Values do not matter: the trace inputs are refreshed from host on the first real decode step
+        # (reset_batch=True). Only the shapes have to match what decode_forward will supply.
+        tokens = torch.chunk(torch.zeros(batch_size, 1, dtype=torch.int64), self.data_parallel, 0)
+        current_pos = torch.chunk(torch.zeros(batch_size, dtype=torch.int64), self.data_parallel, 0)
+        chunked_page_table = torch.chunk(page_table, self.data_parallel, 0)
+
+        previous_mode = self.mode
+        self.mode = Mode.DECODE
+        for i in range(len(self.model)):
+            self.model[i].switch_mode(Mode.DECODE)
+        try:
+            return self._prepare_decode_trace_text(
+                tokens,
+                current_pos,
+                page_table=chunked_page_table,
+                kv_cache=kv_cache,
+                on_device_sampling=on_device_sampling,
+            )
+        finally:
+            # Restore only the generator's own mode. No switch_mode(Mode.PREFILL): that drives
+            # Prefetcher.init(), whose Mode.PREFILL branch has never run on main (main only ever calls
+            # switch_mode(Mode.DECODE)) and is not functional -- it reads an unassigned all_core_range_set,
+            # and supplying one trips "Statically allocated circular buffers ... clash with L1 buffers on
+            # core range". Leaving it in DECODE matches main.
+            self.mode = previous_mode
+
+    def _will_row_shard_prefill(self, tokens, sampling_params):
+        """Whether this prefill will be dispatched to the model's row-sharded batched path.
+
+        Single source of truth for that decision -- both the dispatch itself and the choice of where to
+        hoist decode trace preparation depend on it, and they must not drift apart.
+
+        Only used when device sampling is active (sampling_params is not None) and the prompt uses the
+        harmony chat template (first token is <|start|>=200006). Host sampling needs the single-user
+        prefill path that returns full logits per user.
+        """
+        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
+        return bool(
+            getattr(self.model[0], "users_row_sharded", False)
+            and tokens.shape[0] > 1
+            and sampling_params is not None
+            and is_harmony
+        )
+
+    def _overrides_prefill_capture(self):
+        """Whether a subclass replaces _capture_trace_prefill (see the warmup-less deferral gate)."""
+        return type(self)._capture_trace_prefill is not Generator._capture_trace_prefill
+
+    def _uses_prefetcher(self):
+        """Whether any model instance drives the DRAM prefetcher.
+
+        The prefetcher owns sub-device managers that differ per mode, so hoisting decode setup into the
+        prefill phase cannot work for it: switching to DECODE and back reaches the prefetcher's
+        Mode.PREFILL branch, which has never run on main and is not functional, while staying in DECODE
+        leaves prefill running against decode sub-devices ("Kernel group cores do not match sub device
+        cores", program.cpp:2205). The prefetcher is Blackhole-only and GPT-OSS does not use it, so
+        keeping these models on the original non-hoisted path costs this change nothing it targets.
+        """
+        uses = any(getattr(m, "prefetcher", None) is not None for m in self.model)
+        if uses and not getattr(self, "_logged_prefetcher_hoist_skip", False):
+            self._logged_prefetcher_hoist_skip = True
+            logger.info(
+                "DRAM prefetcher detected: keeping the original (non-hoisted) decode trace setup. "
+                "This model does not get the hoisted trace-allocation path, because the prefetcher's "
+                "per-mode sub-device managers are incompatible with preparing decode setup during the "
+                "prefill phase (see _uses_prefetcher). Trace I/O buffers for this model may still be "
+                "allocated while a trace is live."
+            )
+        return uses
+
+    def _prepare_decode_trace_once(self, kv_cache, page_table, on_device_sampling):
+        """Prepare the decode trace unless it is already prepared. Safe to call from either hoist point."""
+        if self._uses_prefetcher():
+            return
+        if self._pending_decode_trace is None:
+            self._pending_decode_trace = self._prepare_decode_trace_for_warmup(
+                kv_cache=kv_cache,
+                page_table=page_table,
+                on_device_sampling=on_device_sampling,
+            )
+
+    def _post_prefill_tail(self, model_id, logits, sampling_enabled):
+        """The part of the post-prefill body that runs on already-computed logits."""
+        if sampling_enabled:
+            return self.model[model_id].sampling.sample(logits, enable_trace=False)
+        return ttnn.untilize(logits, use_multicore=True)
+
+    def _append_prefill_result(self, prefill_results, idx, model_id, last_token_idx, tail_out, sampling_enabled):
+        """Queue a per-prompt prefill result for readback, in whichever shape the tail produced."""
+        if sampling_enabled:
+            tt_tokens, tt_log_probs = tail_out
+            queued = [
+                tt_tokens.cpu(blocking=False),
+                tt_log_probs.cpu(blocking=False) if tt_log_probs is not None else None,
+            ]
+        else:
+            queued = tail_out.cpu(blocking=False)
+        prefill_results.append(
+            {
+                "idx": idx,
+                "model_id": model_id,
+                "last_token_idx": last_token_idx,
+                "logits": queued,
+                "sampling": sampling_enabled,
+            }
+        )
+
+    def _record_pending_traces(self):
+        """Capture the decode trace prepared while recording was deferred.
+
+        Its compile pass, persistent inputs and sampling pre-compile all ran in
+        :meth:`_prepare_decode_trace_text` before this call's prefill captured anything, so this binds only
+        to buffers that already existed and allocates nothing itself.
+        """
+        if self._pending_decode_trace is not None:
+            prepared, self._pending_decode_trace = self._pending_decode_trace, None
+            on_device_sampling = prepared["on_device_sampling"]
+            previous_mode = self.mode
+            self.mode = Mode.DECODE
+            for i in range(len(self.model)):
+                self.model[i].switch_mode(Mode.DECODE)
+            try:
+                trace_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prepared)
+            finally:
+                # See _prepare_decode_trace_for_warmup: no switch_mode(Mode.PREFILL) here either.
+                self.mode = previous_mode
+            self.trace_ids_decode[on_device_sampling] = trace_ids
+            self.trace_inputs_decode[on_device_sampling] = device_inputs
+            self.trace_output_decode[on_device_sampling] = tt_out_trace
+            # A warmup-less call can hoist its own preparation after an eager
+            # warmup staged this key. The hoisted trace owns the active inputs.
+            getattr(self, "_prepared_decode_traces", {}).pop(on_device_sampling, None)
+
+    def _prefill_trace_forward(self, prepared, device_inputs):
+        """Run the prefill body for a prepared trace variant.
+
+        Shared verbatim by the compile pass and the capture pass so the two can never drift.
+        """
+        model_id = prepared["model_id"]
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+        return self.model[model_id].ttnn_prefill_forward(
+            x=transformed_inputs[0],
+            rot_mats_global=prepared["rot_mats_global"],
+            rot_mats_local=prepared["rot_mats_local"],
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
+            chunk_start_idx=transformed_inputs[3],
+            kv_cache=prepared["kv_cache"],
+            **prepared["forward_kwargs"],
+        )
+
+    def _prepare_trace_prefill(
         self,
         prefill_ids,
         page_table=None,
@@ -244,103 +680,110 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         user_id=0,
         start_pos=0,
     ):
+        """Phase 1 of prefill trace setup: run the compile pass and allocate the persistent trace inputs.
+
+        Both of those allocate device memory, and neither may happen while another trace is live: once a
+        trace is captured its recorded buffer addresses are invisible to the allocator, so a buffer handed
+        out afterwards can land inside a live trace's scratch and be clobbered on replay. Capture is split
+        out into :meth:`_record_trace_prefill` so every trace variant can be prepared first, and only then
+        captured back to back.
+        """
+        prefill_kwargs = {
+            "page_table": page_table,
+            "chunk_page_table": chunk_page_table,
+            "chunk_start_idx": start_pos,
+            "user_id": user_id,
+        }
+        # Batched prefill threads the batch through the model; single-user prefill does not.
+        forward_kwargs = {"batch_size": batch_size, "user_id": user_id} if batch_size > 1 else {}
         if batch_size > 1:
-            prefill_kwargs = {
-                "page_table": page_table,
-                "chunk_page_table": chunk_page_table,
-                "chunk_start_idx": start_pos,
-                "batch_size": batch_size,
-                "user_id": user_id,
-            }
-            if global_user_id is not None:
-                prefill_kwargs["global_user_id"] = global_user_id
-            host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+            prefill_kwargs["batch_size"] = batch_size
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+        prepared = {
+            "model_id": model_id,
+            "kv_cache": kv_cache,
+            "forward_kwargs": forward_kwargs,
             # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
-            tt_rot_mats_prefill_global = host_inputs[1]
-            tt_rot_mats_prefill_local = host_inputs[2]
-            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
+            "rot_mats_global": host_inputs[1],
+            "rot_mats_local": host_inputs[2],
+        }
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
-            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-            transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-            tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-                x=transformed_inputs[0],
-                rot_mats_global=tt_rot_mats_prefill_global,
-                rot_mats_local=tt_rot_mats_prefill_local,
-                page_table=transformed_inputs[1],
-                chunk_page_table=transformed_inputs[2],
-                chunk_start_idx=transformed_inputs[3],
-                kv_cache=kv_cache,
-                batch_size=batch_size,
-                user_id=user_id,
-            )
-            ttnn.synchronize_device(self.model_args[model_id].mesh_device)
-            logger.info("Done Compiling Model")
+        mesh_device = self.model_args[model_id].mesh_device
 
-            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-            trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
-            transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-            tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-                x=transformed_inputs[0],
-                rot_mats_global=tt_rot_mats_prefill_global,
-                rot_mats_local=tt_rot_mats_prefill_local,
-                page_table=transformed_inputs[1],
-                chunk_page_table=transformed_inputs[2],
-                chunk_start_idx=transformed_inputs[3],
-                kv_cache=kv_cache,
-                batch_size=batch_size,
-                user_id=user_id,
-            )
-            ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
-            ttnn.synchronize_device(self.model_args[model_id].mesh_device)
-            logger.info("Done Capturing Prefill Trace")
-            return trace_id, tt_out_trace, *device_inputs
-        else:
-            prefill_kwargs = {
-                "page_table": page_table,
-                "chunk_page_table": chunk_page_table,
-                "chunk_start_idx": start_pos,
-                "user_id": user_id,
-            }
-            if global_user_id is not None:
-                prefill_kwargs["global_user_id"] = global_user_id
-            host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
-            tt_rot_mats_prefill_global = host_inputs[1]
-            tt_rot_mats_prefill_local = host_inputs[2]
-            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
+        # Persistent trace inputs: these outlive the capture and are refreshed in place on every replay.
+        # Allocated before the compile pass so that the compile pass can run over them directly.
+        prepared["device_inputs"] = copy_host_to_device(host_inputs, mesh_device=mesh_device)
 
-            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-            transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-            tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-                x=transformed_inputs[0],
-                rot_mats_global=tt_rot_mats_prefill_global,
-                rot_mats_local=tt_rot_mats_prefill_local,
-                page_table=transformed_inputs[1],
-                chunk_page_table=transformed_inputs[2],
-                chunk_start_idx=transformed_inputs[3],
-                kv_cache=kv_cache,
-            )
-            ttnn.synchronize_device(self.model_args[model_id].mesh_device)
-            logger.info("Done Compiling Model")
+        # Compile run, over the *persistent* inputs -- the exact buffers the capture will bind to, so every
+        # program it needs is cached against the specs it will actually see. Compiling over a separate
+        # transient copy would leave any program whose cache key differs between the two uncached, and it
+        # would then load inside the capture window, which the runtime rejects outright: "Cannot load new
+        # binaries during trace capture" (mesh_workload.cpp). Gemma-4's LM head hit this.
+        # The output is a real prefill result for these ids, so deferred warmup callers can consume it
+        # instead of replaying a trace that has not been captured yet.
+        prepared["compile_output"] = self._prefill_trace_forward(prepared, prepared["device_inputs"])
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Done Compiling Model")
+        return prepared
 
-            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-            trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
-            transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-            tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-                x=transformed_inputs[0],
-                rot_mats_global=tt_rot_mats_prefill_global,
-                rot_mats_local=tt_rot_mats_prefill_local,
-                page_table=transformed_inputs[1],
-                chunk_page_table=transformed_inputs[2],
-                chunk_start_idx=transformed_inputs[3],
-                kv_cache=kv_cache,
-            )
-            ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
-            ttnn.synchronize_device(self.model_args[model_id].mesh_device)
-            logger.info("Done Capturing Prefill Trace")
-            return trace_id, tt_out_trace, *device_inputs
+    def _record_pending_prefill_traces(self):
+        """Record single-user traces; retain prepared batched inputs for capture on first use."""
+        if not self._pending_prefill_traces:
+            return
+        logger.info(f"Recording {len(self._pending_prefill_traces)} deferred prefill trace(s)")
+        for trace_key, prepared in self._pending_prefill_traces.items():
+            if prepared["forward_kwargs"].get("batch_size", 1) > 1:
+                # Compilation and persistent allocation have already finished.
+                # Capture this bucket only when requested so unused batch sizes
+                # do not consume the model's reserved trace region.
+                self._prepared_prefill_traces[trace_key] = prepared
+                continue
+            trace_id, tt_out_trace, *device_inputs = self._record_trace_prefill(prepared)
+            self.trace_id_prefill[trace_key] = trace_id
+            self.trace_inputs_prefill[trace_key] = device_inputs
+            self.trace_output_prefill[trace_key] = tt_out_trace
+        self._pending_prefill_traces = {}
 
-    def _capture_trace_prefill_sampling(self, model_id, sampling_batch):
-        """Capture a trace for batched prefill post-processing: norm + lm_head + sampling.
+    def _record_trace_prefill(self, prepared):
+        """Phase 2 of prefill trace setup: capture the trace.
+
+        Allocation-free outside the capture window by construction -- everything it binds to was allocated
+        by :meth:`_prepare_trace_prefill` before any trace existed.
+        """
+        mesh_device = self.model_args[prepared["model_id"]].mesh_device
+        device_inputs = prepared["device_inputs"]
+        # Release our handle on the compile-pass output before capturing, matching the pre-split behaviour.
+        # A deferred warmup caller may still be holding it; that is its own reference to keep or drop.
+        prepared.pop("compile_output", None)
+        # Everything allocated between begin/end_trace_capture belongs to the trace being recorded -
+        # the decoder's residual add and friends - and must stay allocated for replay. Recording N
+        # traces means capture N runs while 1..N-1 are live, which reordering cannot avoid, so scope
+        # the window instead. Acknowledgement, not elimination: it tells the checker the program is
+        # prepared for these, it does not stop a replay writing them. Matches llama3_70b_galaxy.
+        # No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            tt_out_trace = self._prefill_trace_forward(prepared, device_inputs)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Done Capturing Prefill Trace")
+        return trace_id, tt_out_trace, *device_inputs
+
+    def _capture_trace_prefill(self, *args, **kwargs):
+        """Prepare and immediately capture a prefill trace.
+
+        Only safe when no other trace is live on the device. :meth:`warmup_model_prefill` drives the
+        two-phase form instead so that every variant is prepared before the first capture; this single-shot
+        form remains for callers (e.g. vLLM) that capture exactly one trace.
+        """
+        return self._record_trace_prefill(self._prepare_trace_prefill(*args, **kwargs))
+
+    def _prepare_trace_prefill_sampling(self, model_id, sampling_batch):
+        """Compile batched prefill post-processing (norm + lm_head + sampling) and allocate its trace input.
 
         Input buffer: [1, 1, sampling_batch, full_dim] host → column-sharded to
         [1, 1, sampling_batch, dim_per_device].
@@ -358,7 +801,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         )
 
         logits = self.model[model_id]._apply_norm_and_lm_head(dummy_input)
-        tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
+        # count_tokens=False: this pass samples off dummy zeros. Counting it and then zeroing the
+        # counters would also discard the caller's real output history, which sample() may have built up
+        # before this variant was first prepared.
+        self.model[model_id].sampling.precompile(logits, all_configs=not self._any_trace_captured())
         ttnn.synchronize_device(mesh_device)
         logger.info("Done compiling prefill sampling")
 
@@ -369,15 +815,33 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         )
+        return {"model_id": model_id, "input": trace_input}
 
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        logits = self.model[model_id]._apply_norm_and_lm_head(trace_input)
-        tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    def _record_trace_prefill_sampling(self, prepared):
+        """Capture the batched prefill sampling trace prepared by :meth:`_prepare_trace_prefill_sampling`."""
+        model_id = prepared["model_id"]
+        mesh_device = self.model_args[model_id].mesh_device
+        trace_input = prepared["input"]
+
+        # count_tokens stays on (the default) inside the capture window: capture only records the commands,
+        # so the update runs on replays, over real sampled tokens -- exactly like SamplingGenerator's own
+        # capture_trace. Only the eager compile pass in _prepare_trace_prefill_sampling passes
+        # count_tokens=False, because it actually executes, over dummy logits.
+        # As with the prefill trace, these outputs are scratch shared with
+        # other captured graphs and are consumed immediately after replay.
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            logits = self.model[model_id]._apply_norm_and_lm_head(trace_input)
+            tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         logger.info("Done capturing prefill sampling trace")
 
         return trace_id, (tt_tokens, tt_log_probs), trace_input
+
+    def _capture_trace_prefill_sampling(self, model_id, sampling_batch):
+        """Prepare and immediately capture the batched prefill sampling trace."""
+        return self._record_trace_prefill_sampling(self._prepare_trace_prefill_sampling(model_id, sampling_batch))
 
     def _row_sharded_batched_prefill(
         self,
@@ -458,17 +922,70 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
 
         if self.trace_id_prefill[trace_key] is None:
-            trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
-                prefill_ids,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                kv_cache=kv_cache,
-                model_id=model_id,
-                global_user_id=global_user_id,
-                batch_size=batch_size,
-                user_id=user_id,
-                start_pos=chunk_start_idx,
-            )
+            if self._defer_prefill_recording:
+                # Compile and stage only. Recording here would put this bucket's trace on device
+                # before the remaining warmup buckets have compiled, so every one of those compiles -
+                # and the trace inputs they stage - would land behind it. warmup_model_prefill
+                # records the whole set afterwards.
+                if trace_key not in self._pending_prefill_traces:
+                    self._pending_prefill_traces[trace_key] = self._prepare_trace_prefill(
+                        prefill_ids,
+                        page_table=page_table,
+                        chunk_page_table=chunk_page_table,
+                        kv_cache=kv_cache,
+                        model_id=model_id,
+                        global_user_id=global_user_id,
+                        batch_size=batch_size,
+                        user_id=user_id,
+                        start_pos=chunk_start_idx,
+                    )
+                else:
+                    # A pending bucket has no trace to replay yet. Refresh its inputs and
+                    # execute for this user too; the previous compile output belongs to
+                    # the previous request and did not fill this user's KV rows.
+                    prepared = self._pending_prefill_traces[trace_key]
+                    prefill_kwargs = dict(
+                        page_table=page_table,
+                        chunk_page_table=chunk_page_table,
+                        chunk_start_idx=chunk_start_idx,
+                        user_id=user_id,
+                    )
+                    if batch_size > 1:
+                        prefill_kwargs["batch_size"] = batch_size
+                        prepared["forward_kwargs"] = {"batch_size": batch_size, "user_id": user_id}
+                    if global_user_id is not None:
+                        prefill_kwargs["global_user_id"] = global_user_id
+                    host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
+                    prepared["rot_mats_global"], prepared["rot_mats_local"] = host_inputs[1:3]
+                    prepared["device_inputs"] = copy_host_to_device(
+                        (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5]),
+                        device_tensors=prepared["device_inputs"],
+                        mesh_device=self.model_args[model_id].mesh_device,
+                    )
+                    prepared["compile_output"] = self._prefill_trace_forward(prepared, prepared["device_inputs"])
+                # The compile pass produced a real prefill result for these ids, so the caller's
+                # output processing runs (and compiles) exactly as it would have.
+                # Only that caller needs the result and keeping it in the pending
+                # store would retain every bucket's activations until capture.
+                return self._pending_prefill_traces[trace_key].pop("compile_output")
+
+            if trace_key in self._prepared_prefill_traces:
+                trace_id, tt_out_trace, *device_inputs = self._record_trace_prefill(
+                    self._prepared_prefill_traces.pop(trace_key)
+                )
+            else:
+                trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
+                    prefill_ids,
+                    page_table=page_table,
+                    chunk_page_table=chunk_page_table,
+                    kv_cache=kv_cache,
+                    model_id=model_id,
+                    global_user_id=global_user_id,
+                    batch_size=batch_size,
+                    user_id=user_id,
+                    start_pos=chunk_start_idx,
+                )
+
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
@@ -525,7 +1042,36 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return tt_out_trace
 
     # Note: This function is called by vLLM
-    def prefill_forward_text(
+    def prefill_forward_text(self, *args, **kwargs):
+        """Flush deferred trace captures once the prefill that armed them ends successfully.
+
+        The first traced prefill call defers only its own decode-trace recording: it prepares decode
+        (compile pass, persistent inputs, sampling pre-compile) before its prefill captures anything, then
+        records both prefill and decode here once output processing is done. Only the call that armed
+        the deferral flushes it -- nested calls must not.
+        """
+        already_pending = self._defer_trace_recording
+        try:
+            result = self._prefill_forward_text_impl(*args, **kwargs)
+        except BaseException:
+            # A failed prefill must not capture traces while unwinding: the capture would bind whatever
+            # state the failure left behind, and an error raised during recording would mask the original
+            # exception. Drop the deferred state instead; the decode trace is then set up lazily on the
+            # first decode step, as on main.
+            if not already_pending:
+                self._defer_trace_recording = False
+                self._pending_decode_trace = None
+                self._defer_prefill_recording = False
+                self._pending_prefill_traces.clear()
+                if not self._any_trace_captured():
+                    self._prepared_prefill_traces.clear()
+                    self._prepared_prefill_sampling_traces.clear()
+            raise
+        if not already_pending and self._defer_trace_recording:
+            self.finalize_deferred_traces()
+        return result
+
+    def _prefill_forward_text_impl(
         self,
         tokens: torch.Tensor,  # All tokens, including the cached ones
         page_table=None,
@@ -559,16 +1105,76 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         on_device_sampling_requested = sampling_params is not None
 
         # we need this here because of tt-metal tests
+        on_device_sampling_enabled = (
+            getattr(self.model[0], "_supports_on_device_sampling", False)
+            and getattr(self.model[0], "sampling", None) is not None
+        )
         if warmup_prefill:
-            on_device_sampling_enabled = (
-                getattr(self.model[0], "_supports_on_device_sampling", False)
-                and getattr(self.model[0], "sampling", None) is not None
+            # The prefill sweep records its traces before returning. Stage decode
+            # programs and persistent inputs first, otherwise the first decode
+            # allocates behind those traces and a later request cannot replay them.
+            prepare_decode = (
+                enable_trace
+                and not self.already_warmed_up_prefill
+                and not self._defer_trace_recording
+                and not self._defer_prefill_recording
+                and not self._any_trace_captured()
+                and not self._will_row_shard_prefill(tokens, sampling_params)
+                and not self._overrides_prefill_capture()
+                and not self._uses_prefetcher()
             )
-
+            if prepare_decode:
+                self._prepare_decode_trace_once(
+                    kv_cache=kv_cache,
+                    page_table=page_table,
+                    on_device_sampling=on_device_sampling_requested and on_device_sampling_enabled,
+                )
             self.warmup_model_prefill(
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
+            )
+            if prepare_decode:
+                # Finish deferred capture as part of warmup so real requests
+                # can refresh and replay the prepared decode trace directly.
+                self._record_pending_traces()
+        elif (
+            enable_trace
+            and not self._defer_trace_recording
+            and not self._defer_prefill_recording
+            and not self._any_trace_captured()
+            # Excluded: the row-sharded batched path deadlocks either way round -- once a decode program is
+            # compiled its MoE dispatch can no longer be trace-captured, and compiling decode before any
+            # prefill deadlocks in the MoE combine. It keeps main's late decode compile.
+            and not self._will_row_shard_prefill(tokens, sampling_params)
+            # Excluded: models that customise the capture step. Deferred recording prepares through the
+            # base helper and records later, which skips whatever a _capture_trace_prefill override does
+            # between its compile pass and its capture.
+            and not self._overrides_prefill_capture()
+        ):
+            # Models that skip prefill warmup (GPT-OSS sets warmup_prefill=False everywhere) would otherwise
+            # capture their prefill trace part way through this call and then compile the whole decode graph
+            # -- plus its long-lived trace inputs and its sampling state -- with that trace already live.
+            # Defer this call's decode capture so it only *prepares* here; the wrapper flushes once the
+            # prefill is done. First call only: after that the ordering is fixed and re-arming would defer a
+            # capture later calls expect to exist.
+            self._defer_trace_recording = True
+            # Also hold this call's prefill trace back. Without a warmup sweep this call both
+            # compiles and records, so _post_prefill_tail - which runs after the prefill and
+            # compiles the tail's bucket-keyed programs - would otherwise do so behind the trace
+            # just recorded. Deferring lets the tail compile first; the wrapper records both once
+            # the prefill is done.
+            self._defer_prefill_recording = True
+            # Prepare decode before this call's prefill, not at the flush: the compile pass is a real decode
+            # step at position 0 with mock inputs, so it writes mock K/V that the following prefill then
+            # overwrites. At the flush it would instead corrupt the prefilled cache. The position-0 write
+            # relies on this being the first traced prefill call (nothing captured yet), so no earlier
+            # request can have left a cached prefix in these page-table rows -- a cached prefix
+            # (num_cached > 0) would not be rewritten by the prefill and would stay corrupted.
+            self._prepare_decode_trace_once(
+                kv_cache=kv_cache,
+                page_table=page_table,
+                on_device_sampling=on_device_sampling_enabled,
             )
 
         batch_size, batch_seq_len = tokens.shape
@@ -603,6 +1209,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert len(num_cached_per_user) == len(
             prompt_lens
         ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
+        if start_pos is not None:
+            num_cached_per_user = self._align_resume_offsets(num_cached_per_user, prompt_lens, kv_cache)
+            # The per-user loop below re-reads the offset from ``start_pos``, so the
+            # aligned list has to replace it: otherwise the padded length computed
+            # here would not match the token slice the kernel receives.
+            start_pos = num_cached_per_user
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
         prefill_seq_lens = [
@@ -610,18 +1222,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
         ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
-        # Only used when device sampling is active (sampling_params is not None)
-        # and the prompt uses the harmony chat template (first token is <|start|>=200006).
-        # Host sampling (sampling_params=None) needs the single-user prefill path
-        # that returns full logits per user.
-        model_0 = self.model[0]
-        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
-        if (
-            getattr(model_0, "users_row_sharded", False)
-            and batch_size > 1
-            and sampling_params is not None
-            and is_harmony
-        ):
+        # See _will_row_shard_prefill for when this path is taken.
+        if self._will_row_shard_prefill(tokens, sampling_params):
             return self._row_sharded_batched_prefill(
                 tokens,
                 page_table,
@@ -677,20 +1279,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 use_batched_prefill = False
 
         if use_batched_prefill:
-            padded_batch = next(
-                (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
-                self.model_args[0].max_batch_size,
-            )
+            padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
             if padded_batch > self.model_args[0].max_batch_size:
                 logger.info(
                     f"Batched prefill disabled: padded_batch {padded_batch} exceeds "
                     f"max_batch_size {self.model_args[0].max_batch_size}"
                 )
                 use_batched_prefill = False
-            elif padded_batch * prefill_seq_lens[0] >= MAX_BATCHED_PREFILL_SEQ_LEN:
+            elif not batched_prefill_fits_token_budget(
+                padded_batch, prefill_seq_lens[0], self.model_args[0].max_prefill_chunk_size
+            ):
                 logger.info(
                     f"Batched prefill disabled: {padded_batch} x {prefill_seq_lens[0]} = "
-                    f"{padded_batch * prefill_seq_lens[0]} tokens exceeds limit {MAX_BATCHED_PREFILL_SEQ_LEN}"
+                    f"{padded_batch * prefill_seq_lens[0]} tokens exceeds model/device token budget "
+                    f"{self.model_args[0].max_prefill_chunk_size} or reaches kernel limit {MAX_BATCHED_PREFILL_SEQ_LEN}"
                 )
                 use_batched_prefill = False
 
@@ -767,6 +1369,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # For batched prefill: pass full page_table (function handles slot placement)
                 # For non-batched prefill: pass sliced page_table for current user (like original code)
                 page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
+                # A resumed chunk needs a page table spanning the cached tokens
+                # too: ``prefill_forward_single_user_text`` slices
+                # ``chunk_page_table`` at an absolute block offset, so a
+                # chunk-width table leaves that slice inside its own zero pad and
+                # ``paged_fill_cache`` writes the chunk into physical block 0.
+                # ``seq_len`` is the cumulative prompt length; ``prefill_seq_len``
+                # is only this chunk's padded width.
+                page_table_use_full_len = bool(
+                    not use_batched_prefill and not enable_trace_current_prompt and num_cached_tokens
+                )
                 page_table_user = self._get_prefill_user_page_table(
                     page_table_for_user,
                     kv_cache[model_id],
@@ -776,6 +1388,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     use_batched_prefill=use_batched_prefill,
                     user_id=batch_user_ids if use_batched_prefill else user_id,
                     padded_batch_size=padded_batch if use_batched_prefill else None,
+                    use_full_prompt_len=page_table_use_full_len,
                 )
                 full_page_table_user = None
                 if enable_trace_current_prompt and not use_batched_prefill:
@@ -877,7 +1490,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         plen = int(prompt_lens[local_idx])
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
-                    combined_params = format_sampling_params(sampling_params, sampling_batch)
+                    # ``combined_prompt_tokens`` above and the extracted hidden states
+                    # are both laid out by slot, so the params have to be as well.
+                    combined_params = scatter_sampling_params_to_slots(
+                        format_sampling_params(sampling_params, sampling_batch),
+                        empty_slots,
+                        sampling_batch,
+                    )
                     sampling_module.apply_prefill_state(
                         sampling_params=combined_params,
                         prompt_tokens=combined_prompt_tokens,
@@ -893,20 +1512,47 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         target_batch=sampling_batch,
                     )
 
-                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
-                    if enable_trace_current_prompt:
+                    sampling_input_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
+                    sampling_trace_key = (
+                        f"{sampling_input_key}_{sampling_module._penalties_active}_"
+                        f"{sampling_module.tt_sampling.log_probs_calculator.enable_log_probs}_"
+                        f"{sampling_module.tt_sampling.force_argmax_sampling}"
+                    )
+
+                    if enable_trace_current_prompt and self._defer_prefill_recording:
+                        if sampling_input_key not in self._prepared_prefill_sampling_traces:
+                            self._prepared_prefill_sampling_traces[
+                                sampling_input_key
+                            ] = self._prepare_trace_prefill_sampling(model_id, sampling_batch)
+                        # Consume this warmup's actual hidden states. Capture
+                        # waits until every batched extraction/sampling program
+                        # has compiled and all persistent inputs exist.
+                        batched_logits = self.model[model_id]._apply_norm_and_lm_head(user_hidden)
+                        tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
+                            batched_logits, enable_trace=False
+                        )
+                    elif enable_trace_current_prompt:
                         if self.trace_id_prefill_sampling[sampling_trace_key] is None:
                             (
                                 s_trace_id,
                                 s_trace_output,
                                 s_trace_input,
-                            ) = self._capture_trace_prefill_sampling(model_id, sampling_batch)
+                            ) = (
+                                self._record_trace_prefill_sampling(
+                                    self._prepared_prefill_sampling_traces[sampling_input_key]
+                                )
+                                if sampling_input_key in self._prepared_prefill_sampling_traces
+                                else self._capture_trace_prefill_sampling(model_id, sampling_batch)
+                            )
                             self.trace_id_prefill_sampling[sampling_trace_key] = s_trace_id
                             self.trace_output_prefill_sampling[sampling_trace_key] = s_trace_output
                             self.trace_input_prefill_sampling[sampling_trace_key] = s_trace_input
 
                         s_trace_input = self.trace_input_prefill_sampling[sampling_trace_key]
                         user_hidden_host = user_hidden.cpu()
+                        # Readback is blocking; the sampling trace only needs
+                        # the host copy and its persistent input from here.
+                        del user_hidden
                         ttnn.copy_host_to_device_tensor(user_hidden_host, s_trace_input)
                         ttnn.execute_trace(
                             self.model_args[model_id].mesh_device,
@@ -933,12 +1579,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         if tt_log_probs is not None and not isinstance(tt_log_probs, LogProbsResult)
                         else None
                     )
-                    for local_idx, slot in enumerate(empty_slots):
-                        output_tokens[slot] = tokens_host[slot]
-                        if isinstance(tt_log_probs, LogProbsResult):
-                            output_log_probs[slot] = tt_log_probs.extract_user(slot)
-                        elif plain_log_probs_host is not None:
-                            output_log_probs[slot] = plain_log_probs_host[slot]
+                    gather_batched_prefill_samples(
+                        empty_slots,
+                        tokens_host,
+                        tt_log_probs,
+                        plain_log_probs_host,
+                        output_tokens,
+                        output_log_probs,
+                    )
                 else:
                     if return_hidden_states:
                         # Embedding models: trace returns hidden states; extract last-token hidden per slot
@@ -948,16 +1596,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             slot_hidden = self.model[model_id].process_hidden_states_after_prefill_trace(
                                 user_hidden, last_token_idx[slot]
                             )
-                            slot_hidden_list.append((slot, slot_hidden, last_token_idx[slot]))
+                            slot_hidden_list.append((local_idx, slot_hidden, last_token_idx[slot]))
                         ttnn.synchronize_device(self.model[model_id].mesh_device)
                         dim = self.model[model_id].args.dim
-                        for slot, slot_hidden, lt_idx in slot_hidden_list:
+                        for local_idx, slot_hidden, lt_idx in slot_hidden_list:
                             slot_hidden_torch = ttnn.to_torch(ttnn.get_device_tensors(slot_hidden)[0]).float()
                             pos = int(lt_idx % 32)
                             out = slot_hidden_torch[0, 0, pos, :dim].clone()
                             if out.device.type != "cpu":
                                 out = out.cpu()
-                            output_tensor[slot] = out
+                            output_tensor[local_idx] = out
                     else:
                         for local_idx, slot in enumerate(empty_slots):
                             user_logits = logits[slot : slot + 1, :, :, :]
@@ -967,7 +1615,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             _logits = ttnn.to_layout(
                                 _logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
                             )
-                            output_tensor[slot] = self.model[model_id].process_output_prefill(
+                            output_tensor[local_idx] = self.model[model_id].process_output_prefill(
                                 _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
                             )
                 break
@@ -997,34 +1645,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
 
-            if sampling_enabled:
-                tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
-                    logits,
-                    enable_trace=False,
-                )
-                prefill_results.append(
-                    {
-                        "idx": idx,
-                        "model_id": model_id,
-                        "last_token_idx": last_token_idx,
-                        "logits": [
-                            tt_tokens.cpu(blocking=False),
-                            tt_log_probs.cpu(blocking=False) if tt_log_probs is not None else None,
-                        ],
-                        "sampling": sampling_enabled,
-                    }
-                )
-            else:
-                logits = ttnn.untilize(logits, use_multicore=True)
-                prefill_results.append(
-                    {
-                        "idx": idx,
-                        "model_id": model_id,
-                        "last_token_idx": last_token_idx,
-                        "logits": logits.cpu(blocking=False),
-                        "sampling": sampling_enabled,
-                    }
-                )
+            self._append_prefill_result(
+                prefill_results,
+                idx,
+                model_id,
+                last_token_idx,
+                self._post_prefill_tail(model_id, logits, sampling_enabled),
+                sampling_enabled,
+            )
+            # Only host results are queued above. Release this user's temporary
+            # logits before the next user's prefill trace can overwrite them.
+            del logits
 
         if len(prefill_results) > 0:
             for elem_idx, res in enumerate(prefill_results):
@@ -1067,6 +1698,136 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
+
+    def _traced_sdpa_q_chunk_size(self, prefill_seq_len, model_id=0):
+        """q_chunk_size a traced prefill of this length is captured with, or None.
+
+        The traced path hands the op a ``chunk_start_idx`` device tensor that is
+        refreshed per replay, so the captured program config cannot be derived
+        from the offset. It is built with ``chunk_start_idx=0`` instead, which is
+        what this reproduces.
+        """
+        get_config = getattr(self.model_args[model_id], "get_attn_sdpa_program_config", None)
+        if get_config is None:
+            return None
+        # Deliberately unguarded: a model whose program config this signature does
+        # not describe must say so by not exposing the method. Swallowing the error
+        # here would drop back to block-only alignment and reinstate the wrong
+        # prefix reads this exists to prevent.
+        return get_config(Mode.PREFILL, prefill_seq_len, 0, None).q_chunk_size
+
+    def _resume_offset_alignment(self, prefill_seq_len, block_size, model_id=0):
+        """Multiple a resume offset must land on for this padded suffix length.
+
+        The paged ops need ``block_size``; the traced SDPA needs the q_chunk_size
+        its program was captured with. Their least common multiple satisfies both.
+
+        The q_chunk_size is taken from the model's own program config where it
+        exposes one, so a short suffix keeps its smaller alignment instead of
+        being rounded away. A model without one must declare
+        ``resumed_prefill_token_alignment``: there is no safe default, and
+        guessing block_size is what produces the silent wrong prefix.
+        """
+        q_chunk = self._traced_sdpa_q_chunk_size(prefill_seq_len, model_id)
+        if q_chunk is None:
+            q_chunk = self.model_capabilities.get("resumed_prefill_token_alignment")
+        if q_chunk is None:
+            raise ValueError(
+                f"{type(self).__name__} resumes a prefill but neither exposes "
+                "`get_attn_sdpa_program_config` on its model_args nor declares "
+                "`model_capabilities['resumed_prefill_token_alignment']`, so the "
+                "alignment its chunked-SDPA program requires cannot be determined."
+            )
+        return math.lcm(block_size, int(q_chunk))
+
+    def _assert_uniform_resume_alignment(self, prefill_seq_len, block_size, expected):
+        """Replica 0's alignment stands for every replica. Fail if it stops doing so.
+
+        ``create_submeshes`` splits the mesh into submeshes of one shape, and
+        ``initialize_vllm_model`` builds every replica's ``ModelArgs`` from the same
+        arguments, so they all pin the same q_chunk_size. The per-user offsets are
+        therefore aligned once against replica 0 rather than per replica. Nothing in
+        the type system holds that, so check it instead of trusting it.
+        """
+        for model_id in range(1, self.data_parallel):
+            other = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
+            assert other == expected, (
+                f"replica {model_id} needs resume alignment {other} where replica 0 needs "
+                f"{expected} at padded length {prefill_seq_len}; offsets are aligned once "
+                "against replica 0 and would be wrong for this replica."
+            )
+
+    def _align_resume_offsets(self, num_cached_per_user, prompt_lens, kv_cache):
+        """Floor each resume offset to what the paged ops and the traced SDPA need.
+
+        ``block_size`` covers the page-table slice the chunk's K/V is written
+        through: an offset off that multiple shifts every write by
+        ``chunk_start % block_size`` positions.
+
+        ``q_chunk_size`` covers the SDPA op, which requires ``chunk_start_idx`` to
+        be a multiple of the value its program was built with and answers from the
+        wrong prefix rather than raising when it is not. Under tracing that value
+        is pinned at capture, so it has to be satisfied by the offset.
+
+        Flooring recomputes at most ``alignment - 1`` tokens whose K/V is rewritten
+        identically into the same blocks, so it is semantically a no-op. Mirrors
+        the ``SDPA_CHUNK_ALIGN`` round-down in
+        ``models/demos/llama3_70b_galaxy/tt/generator.py``.
+        """
+        if kv_cache is None or kv_cache[0] is None:
+            # Non-paged prefill: there is no page table to slice.
+            return num_cached_per_user
+        block_size = self._paged_prefill_block_size(kv_cache[0])
+        aligned = []
+        for i, (num_cached, seq_len) in enumerate(zip(num_cached_per_user, prompt_lens)):
+            if int(num_cached) == 0:
+                # Not a resume. Callers pass a zero-filled start_pos for an
+                # ordinary prefill, so this is the common path and must not
+                # require the model to describe an alignment it never uses.
+                aligned.append(0)
+                continue
+            floored = (int(num_cached) // block_size) * block_size
+            # The alignment depends on the padded suffix length, which depends on
+            # the offset, so it has to settle: flooring lengthens the suffix, a
+            # longer suffix can pin a larger q_chunk_size, and that can demand a
+            # smaller offset again.
+            #
+            # The bound is exact, not generous. A pass that does not break must
+            # lower the offset, which lengthens the suffix, which moves it to a
+            # strictly higher padded bucket: an equal bucket would give an equal
+            # alignment and the pass would have broken. So the bucket count bounds
+            # the passes. It is a loose ceiling in practice, because
+            # get_attn_sdpa_prefill_program_config pins only 64 or 256 and two
+            # passes always suffice.
+            for _ in range(len(get_all_padded_prefill_lengths(int(seq_len))) + 1):
+                padded_suffix = get_padded_prefill_len(int(seq_len) - floored)
+                alignment = self._resume_offset_alignment(padded_suffix, block_size)
+                self._assert_uniform_resume_alignment(padded_suffix, block_size, alignment)
+                settled = (int(num_cached) // alignment) * alignment
+                if settled == floored:
+                    break
+                floored = settled
+            else:
+                raise RuntimeError(
+                    f"user {i}: resume offset alignment did not settle for "
+                    f"start_pos={num_cached}, seq_len={seq_len}, block_size={block_size}"
+                )
+            if floored != num_cached:
+                logger.debug(f"Resume offset alignment: user {i} start_pos {num_cached} -> {floored}")
+            aligned.append(floored)
+        return aligned
+
+    @staticmethod
+    def _resumed_warmup_prompt_len(prefill_seq_len, num_cached, capped_warmup_seq_len):
+        """Prompt length whose suffix after ``num_cached`` pads back to this bucket.
+
+        Only the suffix reaches the kernel, so the prompt has to clear the offset by
+        a full bucket. Spanning the bucket alone leaves no suffix at all once
+        ``block_size`` reaches the smallest traced length. ``capped_warmup_seq_len``
+        is the ceiling the rest of warmup uses: past it the call is split into chunks
+        and captures a different trace.
+        """
+        return min(num_cached + prefill_seq_len, capped_warmup_seq_len)
 
     def _paged_prefill_block_size(self, kv_cache):
         """Block size for chunked-prefill page-table padding/slicing.
@@ -1269,6 +2030,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         defer_device_sampling: bool = False,
+        skip_trace_precompile: bool = False,
+        prepare_trace: bool = False,
         **kwargs,
     ):
         mode_switched = False
@@ -1283,9 +2046,37 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
         B = tokens.shape[0]
 
+        # Are the host tokens/positions authoritative this step, or is the device
+        # copy ahead? Trace reload and seed alignment must agree, so compute it
+        # once here instead of privately in the trace path (#51981).
+        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
+        self._prev_on_device_sampling = on_device_sampling
+        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
+        reload_inputs = (
+            not enable_trace
+            or not self.trace_ids_decode[on_device_sampling]
+            or not on_device_sampling
+            or reset_batch
+            or mode_switched
+            or sampling_mode_changed
+            or any(
+                getattr(self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False)
+                for i in range(self.data_parallel)
+            )
+        )
+        # vLLM sees re-admissions the model cannot (tenstorrent/vllm#456), so
+        # either side asserting authority is enough.
+        if kwargs.get("reload_inputs"):
+            reload_inputs = True
+        # Deferred sampling calls sample_decode_on_device() out of band; stash the
+        # flag so that call need not thread it.
+        self._decode_reload_inputs = reload_inputs
+
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+
+        supports_async_decode = self.model_capabilities.get("supports_async_decode", False)
 
         # vLLM under async scheduling supplies a one-step-stale last token at
         # reset steps (its host state lags device sampling). The device token
@@ -1295,6 +2086,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # decode submit (their last token came from prefill, not decode).
         if (
             on_device_sampling
+            and supports_async_decode
             and (reset_batch or mode_switched)
             and enable_trace
             and self.trace_inputs_decode[on_device_sampling]
@@ -1376,13 +2168,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         }
 
         if enable_trace:
-            # A real batch reset / slot remap (reset_batch) also makes the device
-            # token/current_pos trace buffers stale, not just a prefill->decode
-            # mode switch, so both must force a full traced-input reset.
+            # reset_batch (real reset / slot remap) and a prefill->decode switch
+            # both stale the device buffers; both are folded into reload_inputs.
             tt_decode_output = self._decode_forward_trace_text(
                 **decode_kwargs,
-                reset_batch=reset_batch or mode_switched,
+                reload_inputs=reload_inputs,
+                skip_precompile=skip_trace_precompile,
             )
+        elif prepare_trace:
+            tt_decode_output = self._prepare_decode_trace_variant(**decode_kwargs)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
                 **decode_kwargs,
@@ -1402,6 +2196,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                skip_precompile=skip_trace_precompile,
+                reload_inputs=reload_inputs,
             )
         # Host sampling
         if read_from_device:
@@ -1463,70 +2259,145 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return tt_output
 
-    def _capture_decode_trace_text(
+    def _decode_trace_key(self, on_device_sampling, tokens):
+        return on_device_sampling
+
+    def _prepare_decode_trace_variant(
+        self, tokens, current_pos, page_table=None, kv_cache=None, on_device_sampling=False
+    ):
+        """Stage a decode variant during an eager warmup call, inside the model's input routing."""
+        if self._uses_prefetcher():
+            return self._decode_forward_no_trace_text(
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, on_device_sampling=on_device_sampling
+            )
+        key = self._decode_trace_key(on_device_sampling, tokens)
+        if not hasattr(self, "_prepared_decode_traces"):
+            self._prepared_decode_traces = {}
+        if key not in self._prepared_decode_traces and not self.trace_ids_decode[key]:
+            prepared = self._prepare_decode_trace_text(
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                on_device_sampling=on_device_sampling,
+                return_compile_output=True,
+            )
+            self._prepared_decode_traces[key] = prepared
+            return prepared.pop("compile_output")
+        return self._decode_forward_no_trace_text(
+            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, on_device_sampling=on_device_sampling
+        )
+
+    def _prepare_decode_trace_text(
         self,
         tokens,
         current_pos,
         page_table=None,
         kv_cache=None,
         on_device_sampling=False,
+        skip_precompile=False,
+        return_compile_output=False,
     ):
-        """
-        Captures a trace for the decode_forward method.
-        """
+        """Phase 1 of decode trace setup: run the compile pass and stage the persistent trace inputs.
 
-        # Compile run
-        self._decode_forward_no_trace_text(
-            tokens,
-            current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            on_device_sampling=on_device_sampling,
-        )
-        logger.info("Done Compiling Model")
+        The trace inputs are long-lived -- refreshed in place for the whole decode loop -- so allocating
+        them after the prefill traces were captured could place them inside a live trace's scratch and let
+        every later prefill replay corrupt them. The first traced prefill call runs this before any
+        capture (via _prepare_decode_trace_once); finalize_deferred_traces only records afterwards.
+        """
+        # Compile run. Skipped when the caller already has a warmed program cache for this variant
+        # (decode bucketing threads skip_precompile through from main).
+        compile_output = None
+        if not skip_precompile:
+            compile_output = self._decode_forward_no_trace_text(
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                on_device_sampling=on_device_sampling,
+            )
+            logger.info("Done Compiling Model")
 
-        # Get inputs ready for trace run
+        # Get inputs ready for trace run.
         device_inputs = []
-        tt_out_trace = []
-        trace_ids = {}
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
 
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
-
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+            _maybe_acknowledge_trace_buffers_corruptible(self, device_inputs_i)
             device_inputs.append(device_inputs_i)
 
+        # Eager warmup stages this variant before the first capture, including
+        # all sampling programs. Recording then consumes the staged inputs.
+        all_sampling_configs = not self._any_trace_captured()
+        for i in range(self.data_parallel):
+            sampling_module = getattr(self.model[i], "sampling", None)
+            if not on_device_sampling or sampling_module is None or compile_output is None:
+                continue
+            sampling_module.precompile(
+                logits=compile_output[i][0],
+                tt_out_tok=self._decode_token_feedback_buffer(self.model[i], device_inputs[i]),
+                all_configs=all_sampling_configs,
+            )
+
+        prepared = {
+            "device_inputs": device_inputs,
+            "kv_cache": kv_cache,
+            "on_device_sampling": on_device_sampling,
+        }
+        if return_compile_output:
+            prepared["compile_output"] = compile_output
+        return prepared
+
+    def _record_decode_trace_text(self, prepared):
+        """Phase 2 of decode trace setup: capture the trace.
+
+        Allocation-free outside the capture window -- it binds only to buffers allocated by
+        :meth:`_prepare_decode_trace_text`.
+        """
+        device_inputs = prepared["device_inputs"]
+        prepared.pop("compile_output", None)
+        kv_cache = prepared["kv_cache"]
+        on_device_sampling = prepared["on_device_sampling"]
+
+        tt_out_trace = []
+        trace_ids = {}
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             sampling_trace_enabled = on_device_sampling and sampling_module is not None
-            trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
-            trace_ids[i] = trace_id
-            user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            model_inputs = device_inputs[i][:4] if len(device_inputs[i]) > 4 else device_inputs[i]
-            # Models that produce extra device inputs beyond the first
-            # four (e.g. Gemma4's host-precomputed per-layer-input at
-            # index 4) feed them into ``ttnn_decode_forward`` via a
-            # model-side stash rather than through the call signature.
-            # Give the model a chance to bind that stash to the
-            # *trace-input* device tensors here, before the trace is
-            # captured — otherwise traced ops stay pointed at whatever
-            # device buffer the compile run produced, and trace replay
-            # reads stale data because ``copy_host_to_device`` only
-            # refreshes ``trace_inputs_decode``.
-            bind_trace_inputs = getattr(self.model[i], "bind_decode_trace_inputs", None)
-            if bind_trace_inputs is not None:
-                bind_trace_inputs(device_inputs[i])
-            tt_out_trace.append(
-                self.model[i].ttnn_decode_forward(
-                    *model_inputs,
-                    kv_cache=user_kv_cache,
-                    on_device_logits=on_device_sampling,
+            # Same reasoning as _record_trace_prefill: whatever the model allocates inside the capture
+            # window belongs to the trace being recorded, and recording lane/variant N necessarily runs
+            # while 1..N-1 are live. Acknowledge the window rather than flag it.
+            with trace_allocation_tracker.corruptible_allocation_scope(self.model_args[i].mesh_device):
+                trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+                trace_ids[i] = trace_id
+                user_kv_cache = kv_cache[i] if kv_cache is not None else None
+                model_inputs = device_inputs[i][:4] if len(device_inputs[i]) > 4 else device_inputs[i]
+                # Models that produce extra device inputs beyond the first
+                # four (e.g. Gemma4's host-precomputed per-layer-input at
+                # index 4) feed them into ``ttnn_decode_forward`` via a
+                # model-side stash rather than through the call signature.
+                # Give the model a chance to bind that stash to the
+                # *trace-input* device tensors here, before the trace is
+                # captured — otherwise traced ops stay pointed at whatever
+                # device buffer the compile run produced, and trace replay
+                # reads stale data because ``copy_host_to_device`` only
+                # refreshes ``trace_inputs_decode``.
+                bind_trace_inputs = getattr(self.model[i], "bind_decode_trace_inputs", None)
+                if bind_trace_inputs is not None:
+                    bind_trace_inputs(device_inputs[i])
+                tt_out_trace.append(
+                    self.model[i].ttnn_decode_forward(
+                        *model_inputs,
+                        kv_cache=user_kv_cache,
+                        on_device_logits=on_device_sampling,
+                    )
                 )
-            )
-            ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+                ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+            _maybe_acknowledge_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
                 # NOTE: sampling trace can be keyed depending on sampling params,
@@ -1540,10 +2411,91 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
                 # pass None so sampling allocates its own output.
                 tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok)
+                # skip_precompile=True in both cases: either _prepare_decode_trace_text pre-compiled the
+                # sampling pipeline (before any trace was live), or the caller passed skip_precompile and
+                # is asserting the program cache is already warm for this variant.
+                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok, skip_precompile=True)
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
+
+    def precapture_decode_trace_variants(self, sampling_params, tokens, start_pos, page_table, kv_cache):
+        """Record every decode trace variant a warmup sweep will need, preparing all of them first.
+
+        Decode traces are keyed by on-device sampling on/off. A sweep that captures the second variant
+        lazily does so with the first variant's traces already live, so its compile pass, its persistent
+        trace inputs and its sampling pre-compile all allocate behind a live trace (measured on Gemma-3-27B
+        DP-4: 58 stranded buffers). Prepare each missing variant before recording any of them, then record
+        in one go. Returns False when nothing could be pre-captured (caller keeps its lazy path).
+        """
+        variants = []
+        for param in sampling_params:
+            variant = param is not None
+            if variant not in variants:
+                variants.append(variant)
+        if not variants or page_table is None or self._uses_prefetcher():
+            return False
+        if self.mode != Mode.DECODE:
+            self.mode = Mode.DECODE
+        for i in range(len(self.model)):
+            self.model[i].switch_mode(Mode.DECODE)
+        tokens = torch.chunk(tokens, self.data_parallel, 0)
+        start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+        page_table = torch.chunk(page_table, self.data_parallel, 0)
+        variants = [(v, self._decode_trace_key(v, tokens)) for v in variants]
+        variants = [(v, key) for v, key in variants if not self.trace_ids_decode[key]]
+        if not variants:
+            return False
+        staged = getattr(self, "_prepared_decode_traces", {})
+        prepared = []
+        for variant, key in variants:
+            if key in staged:
+                prep = staged.pop(key)
+            else:
+                prep = self._prepare_decode_trace_text(
+                    tokens, start_pos, page_table=page_table, kv_cache=kv_cache, on_device_sampling=variant
+                )
+            prepared.append((key, prep))
+        for key, prep in prepared:
+            trace_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prep)
+            self.trace_ids_decode[key] = trace_ids
+            self.trace_inputs_decode[key] = device_inputs
+            self.trace_output_decode[key] = tt_out_trace
+        return True
+
+    def _capture_decode_trace_text(
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        on_device_sampling=False,
+        skip_precompile=False,
+    ):
+        """Prepare and immediately capture the decode trace.
+
+        Only safe when no other trace is live on the device. The demo path pre-captures via
+        :meth:`warmup_model_decode` during warmup; this single-shot form is the fallback for callers that
+        reach decode without having warmed up.
+
+        ``skip_precompile`` is forwarded to the prepare phase, where main's decode-bucketing callers use
+        it to state that the program cache is already warm for this variant.
+        """
+        key = self._decode_trace_key(on_device_sampling, tokens)
+        staged = getattr(self, "_prepared_decode_traces", {})
+        prepared = (
+            staged.pop(key)
+            if key in staged
+            else self._prepare_decode_trace_text(
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                on_device_sampling=on_device_sampling,
+                skip_precompile=skip_precompile,
+            )
+        )
+        return self._record_decode_trace_text(prepared)
 
     def _decode_forward_trace_text(
         self,
@@ -1552,33 +2504,36 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         on_device_sampling=False,
-        reset_batch=False,
+        reload_inputs=False,
+        skip_precompile=False,
     ):
         """
         Run decode forward text with tracing
+
+        ``reload_inputs`` (from decode_forward): host token/position inputs are
+        authoritative this step and must overwrite the device-resident ones.
         """
         # The trace is different depending on whether we are doing device sampling or not
         if not self.trace_ids_decode[on_device_sampling]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, on_device_sampling=on_device_sampling
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                on_device_sampling=on_device_sampling,
+                skip_precompile=skip_precompile,
             )
             self.trace_ids_decode[on_device_sampling] = trace_ids
             self.trace_inputs_decode[on_device_sampling] = device_inputs
             self.trace_output_decode[on_device_sampling] = tt_out_trace
 
-        # reset inputs when mode switches from prefill to decode,
-        # or when sampling mode changes (different trace has stale inputs)
-        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
-        self._prev_on_device_sampling = on_device_sampling
-        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
-        reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed
         page_table_changed = page_table is not None and (
             self.prev_page_table is None
             or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
         )
 
         for i in range(self.data_parallel):
-            refresh_trace_inputs = reset_inputs or getattr(
+            refresh_trace_inputs = reload_inputs or getattr(
                 self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False
             )
             user_page_table = page_table[i] if page_table is not None else None
@@ -1620,7 +2575,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         enable_trace=False,
+        skip_precompile=False,
+        reload_inputs=None,
     ):
+        """Sample this decode step's tokens on device.
+
+        ``reload_inputs``: host inputs are authoritative, so ``start_pos`` may
+        re-anchor the seed counters. ``None`` takes the last decode_forward's
+        value (the deferred path calls this out of band).
+        """
+        if reload_inputs is None:
+            reload_inputs = getattr(self, "_decode_reload_inputs", True)
         # sampling_dp may differ from data_parallel for models that internally
         # shard users across mesh rows (users_row_sharded) — each row samples
         # 32 users independently, so sampling params must be chunked by the
@@ -1677,6 +2642,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 sm_bs = sampling_module.seed_manager.max_batch_size
                 rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
                 sampling_module.seed_manager.apply_slot_remap(rank_remap)
+            # Drop seed state of slots no longer live (a request finishing at
+            # the batch tail is never vacated by condense), so its ghost seed
+            # cannot inflate a later request's salt.
+            if active_seed_slots is not None:
+                sampling_module.seed_manager.deactivate_slots_except(active_seed_slots)
             # Register each request's explicit seed into the seed manager and
             # tie its RNG counter to the absolute decode position before
             # advancing. Without registration the per-request seed never reaches
@@ -1686,6 +2656,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # flow). Position alignment then keeps the stream reproducible even
             # when vLLM evicts a running request and re-admits it in a different
             # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
+            #
+            # Align only from a trustworthy position (#51981): the counter
+            # self-advances per token, so re-anchoring to a lagging host start_pos
+            # is what breaks reproducibility. Trustworthy = reload_inputs, or a
+            # slot just reseeded (freshly admitted, position from its prefill).
             if active_seed_slots:
                 seed_bs = sampling_module.tt_sampling.max_batch_size
                 if len(model_chunks) == 1:
@@ -1695,10 +2670,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     for chunk in model_chunks:
                         s = format_sampling_params(chunk, seed_bs).seed
                         seed_values += s if isinstance(s, list) else [s] * seed_bs
-                sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-                sampling_module.seed_manager.align_seed_counters_to_positions(
-                    seed_values, active_seed_slots, start_values
-                )
+                # reset_batch = first decode after prefill or a layout change: seed unconditionally,
+                # even for seed=None. ``decode_only`` mode never seeded the device, so the if_needed
+                # path matches the manager's initial None, early-returns, and replays one draw.
+                if reset_batch:
+                    sampling_module.seed_manager.reset_seed_from_slots(seed_values, active_seed_slots)
+                    reseeded_slots = list(active_seed_slots)
+                else:
+                    reseeded_slots = sampling_module.seed_manager.reset_seed_from_slots_if_needed(
+                        seed_values, active_seed_slots
+                    )
+                align_slots = active_seed_slots if reload_inputs else reseeded_slots
+                if align_slots:
+                    sampling_module.seed_manager.align_seed_counters_to_positions(
+                        seed_values, align_slots, start_values
+                    )
             sampling_module.seed_manager.get_new_values(active_seed_slots)
 
         sampled_outputs = []
@@ -1730,6 +2716,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     logits=logits_i,
                     tt_out_tok=tt_out_tok,
                     enable_trace=sampling_enable_trace,
+                    skip_precompile=skip_precompile,
                 )
             )
         return sampled_outputs
@@ -1904,6 +2891,39 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
 
     # Note: This function is called by vLLM
+    def warmup_vision_encoder(self):
+        """Run the vision encoder once per supported image canvas so its programs exist before any trace.
+
+        The encoder's programs are keyed on the image geometry: 1, 2 or 4 chunks through the image
+        blocks, and the tile aspect ratio through the tile position embeddings. A request with a new
+        geometry otherwise compiles the whole encoder path (image blocks, positional embeddings, pad
+        and concat, the vision projection) while the decode trace is live - measured on
+        Llama-3.2-11B-Vision T3K batch-1 as 60+ buffers alive across trace replays, arriving with
+        the second and third distinct images. One blank image per supported canvas covers every
+        geometry the transform can produce.
+        """
+        from PIL import Image as PIL_Image
+
+        if getattr(self, "already_warmed_up_vision", False):
+            return
+        for model in self.model:
+            transform = getattr(model, "image_transform", None)
+            if transform is None or not hasattr(model, "compute_vision_tokens_masks"):
+                continue
+            base_transform = getattr(transform, "func", transform)
+            resolutions = base_transform.find_supported_resolutions(
+                max_num_chunks=model.max_num_chunks, patch_size=base_transform.size
+            )
+            for height, width in dict.fromkeys(tuple(r) for r in resolutions):
+                logger.info(f"Warming up vision encoder for a {width}x{height} image")
+                model.compute_vision_tokens_masks(
+                    batch_images=[[PIL_Image.new("RGB", (width, height))]],
+                    batch_masks=[[[0, -1]]],
+                    total_len=128,
+                    prefill_len=128,
+                )
+        self.already_warmed_up_vision = True
+
     def prefill_forward_llama_vision(
         self,
         vision_images,
@@ -1920,6 +2940,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """
         Batched version of _prefill_forward_single_user for vision model.
         """
+        self.warmup_vision_encoder()
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         if cross_page_table is not None:
@@ -2016,6 +3037,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
     ):
+        # vLLM may warm decode before the first image request. Compile every
+        # canvas before that path captures a trace as well.
+        self.warmup_vision_encoder()
         B = tokens.shape[0]
         data_parallel = min(B, self.data_parallel)
         batch_per_device = B // data_parallel
@@ -2895,12 +3919,31 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         except Exception:
                             pass
 
+            # Release all sampling traces, including every decode-bucket namespace.
+            for model in getattr(self, "model", []):
+                sampling_module = getattr(model, "sampling", None)
+                if sampling_module is not None and hasattr(sampling_module, "reset_trace"):
+                    try:
+                        sampling_module.reset_trace()
+                    except Exception:
+                        pass
+
             # Release decode traces
+            decode_trace_stores = []
+            for bucket_store in getattr(self, "_bucket_trace_store", {}).values():
+                if bucket_store is not None:
+                    decode_trace_stores.append(bucket_store[0])
             if hasattr(self, "trace_ids_decode"):
-                for sampling_key, trace_ids_dict in self.trace_ids_decode.items():
+                decode_trace_stores.append(self.trace_ids_decode)
+
+            released_decode_traces = set()
+            for trace_store in decode_trace_stores:
+                for sampling_key, trace_ids_dict in trace_store.items():
                     if trace_ids_dict is not None:
                         for model_id, trace_id in trace_ids_dict.items():
-                            if trace_id is not None:
+                            trace_key = (model_id, trace_id)
+                            if trace_id is not None and trace_key not in released_decode_traces:
+                                released_decode_traces.add(trace_key)
                                 try:
                                     ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
                                 except Exception:

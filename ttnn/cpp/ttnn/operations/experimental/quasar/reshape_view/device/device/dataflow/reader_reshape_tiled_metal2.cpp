@@ -46,24 +46,32 @@ void kernel_main() {
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
         mapping_cb.reserve_back(One_Tile_Reserve);
-        const uint32_t map_l1_addr = mapping_cb.get_write_ptr();
-        // [#48552] async_read_barrier is a no-op on Quasar (scmdbuf_tr_ack stubbed) and a repeated read into
-        // the reused num_entries=1 slot doesn't re-deliver. Use the TRID read + is_read_trid_flushed poll
-        // (the mechanism padded_slice relies on) so the transaction actually completes before we parse.
-        constexpr uint8_t map_trid = 1;
-        noc.async_read<NocOptions::TXN_ID>(
-            map_addr_gen,
-            CoreLocalMem<uint32_t>(map_l1_addr),
-            Max_Map_Size_Bytes,
-            {.page_id = out_page_idx, .offset_bytes = 0},
-            {.offset_bytes = 0},
-            NocOptVals{.trid = map_trid});
-        while (!noc.is_read_trid_flushed(map_trid)) {
+        uint32_t map_l1_addr;
+        {
+            // Hold the write lock across the NOC fill of this entry. Taken right after reserve_back, so
+            // get_ptr() is the pre-push write pointer. The lock is what makes the NOC write into this DFB
+            // legal -- every NOC write into a DFB region must be fully covered by a lock the writing
+            // processor holds. It does NOT cover the parse below: that runs after the release (and after
+            // push_back), and is coherent only because map_l1_addr is the uncached L1 alias on Quasar DM,
+            // so the loads re-fetch from TL1.
+            const auto map_lock = mapping_cb.scoped_write_lock(One_Tile_Reserve);
+            const auto map_mem = map_lock.get_ptr();  // CoreLocalMem: the NOC dst, no rewrap needed
+            map_l1_addr = static_cast<uint32_t>(map_mem.get_address());
+            // [#48552] async_read_barrier is a no-op on Quasar (scmdbuf_tr_ack stubbed) and a repeated read
+            // into the reused num_entries=1 slot doesn't re-deliver. Use the TRID read +
+            // is_read_trid_flushed poll (the mechanism padded_slice relies on) so the transaction actually
+            // completes before we parse.
+            constexpr uint8_t map_trid = 1;
+            noc.async_read<NocOptions::TXN_ID>(
+                map_addr_gen,
+                map_mem,
+                Max_Map_Size_Bytes,
+                {.page_id = out_page_idx, .offset_bytes = 0},
+                {.offset_bytes = 0},
+                NocOptVals{.trid = map_trid});
+            while (!noc.is_read_trid_flushed(map_trid)) {
+            }
         }
-        // [#48552] invalidate_l1_cache() is a NO-OP on Quasar DM. The map lands in TL1 but the DM reads a
-        // STALE L2 cache line for the reused constant slot -> every page saw page-0's map. Discard the L2
-        // line(s) so the parse re-fetches from TL1 (same fix as the maxpool constant-read-address bug).
-        invalidate_l2_cache_range(map_l1_addr, Max_Map_Size_Bytes);
         mapping_cb.push_back(1);
 
         auto map_ptr = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_l1_addr);
@@ -84,21 +92,24 @@ void kernel_main() {
             }
 
             input_cb.reserve_back(One_Tile_Reserve);
-            const uint32_t input_write_addr = input_cb.get_write_ptr();
-            // [#48552] TRID read (see map read above) — the input_cb slot is also reused (num_entries=1), so
-            // the same no-op-barrier / no-re-deliver problem applies. Poll is_read_trid_flushed for completion.
-            constexpr uint8_t input_trid = 2;
-            noc.async_read<NocOptions::TXN_ID>(
-                input_addr_gen,
-                CoreLocalMem<uint32_t>(input_write_addr),
-                Tile_Size_Bytes,
-                {.page_id = input_page_idx, .offset_bytes = 0},
-                {.offset_bytes = 0},
-                NocOptVals{.trid = input_trid});
-            previous_input_page_idx = input_page_idx;
-            while (!noc.is_read_trid_flushed(input_trid)) {
+            {
+                // Same pattern as the map read: the write lock covers the NOC fill of this entry.
+                const auto input_lock = input_cb.scoped_write_lock(One_Tile_Reserve);
+                // [#48552] TRID read (see map read above) — the input_cb slot is also reused
+                // (num_entries=1), so the same no-op-barrier / no-re-deliver problem applies. Poll
+                // is_read_trid_flushed for completion.
+                constexpr uint8_t input_trid = 2;
+                noc.async_read<NocOptions::TXN_ID>(
+                    input_addr_gen,
+                    input_lock.get_ptr(),
+                    Tile_Size_Bytes,
+                    {.page_id = input_page_idx, .offset_bytes = 0},
+                    {.offset_bytes = 0},
+                    NocOptVals{.trid = input_trid});
+                previous_input_page_idx = input_page_idx;
+                while (!noc.is_read_trid_flushed(input_trid)) {
+                }
             }
-            invalidate_l2_cache_range(input_write_addr, Tile_Size_Bytes);  // [#48552] stale-L2 fix (see map read)
             input_cb.push_back(1);
         }
     }

@@ -20,7 +20,8 @@ void kernel_main() {
     const uint32_t in1_id = tt::CBIndex::c_1;
     const uint32_t out_id = tt::CBIndex::c_16;
 
-    init_sfpu(in0_id, out_id);
+    compute_kernel_hw_startup(in0_id, out_id);
+    copy_init(in0_id);
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             buff_in0.wait_front(1);
@@ -29,9 +30,9 @@ void kernel_main() {
 
             tile_regs_acquire();
 
-            copy_tile_to_dst_init_short(in0_id);
+            copy_init(in0_id);
             copy_tile(in0_id, /*tile_index=*/0, /*dst_index=*/0);
-            copy_tile_to_dst_init_short(in1_id);
+            copy_init(in1_id);
             copy_tile(in1_id, /*tile_index=*/0, /*dst_index=*/1);
 
 #ifdef SFPU_OP_CHAIN_0
@@ -57,7 +58,8 @@ void kernel_main() {
     CircularBuffer buff_out(tt::CBIndex::c_16);
     const uint32_t in_id = tt::CBIndex::c_0;
     const uint32_t out_id = tt::CBIndex::c_16;
-    init_sfpu(in_id, out_id);
+    compute_kernel_hw_startup(in_id, out_id);
+    copy_init(in_id);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         buff_out.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {

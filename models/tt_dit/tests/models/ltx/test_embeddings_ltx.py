@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
-
 import pytest
 import torch
 from loguru import logger
@@ -11,9 +9,6 @@ from loguru import logger
 import ttnn
 from models.tt_dit.layers.embeddings import LTXAdaLayerNormSingle
 from models.tt_dit.utils.check import assert_quality
-
-# Add LTX-2 reference to path
-sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 
 
 @pytest.mark.parametrize(
@@ -25,14 +20,16 @@ sys.path.insert(0, "LTX-2/packages/ltx-core/src")
 @pytest.mark.parametrize("embedding_dim", [4096], ids=["dim4096"])
 def test_ltx_adaln_single(mesh_device: ttnn.MeshDevice, embedding_dim: int):
     """
-    Test LTXAdaLayerNormSingle: compare TT output vs LTX-2 PyTorch AdaLayerNormSingle.
+    Test LTXAdaLayerNormSingle: compare TT output vs diffusers LTX2AdaLayerNormSingle.
     """
-    from ltx_core.model.transformer.adaln import AdaLayerNormSingle as TorchAdaLayerNormSingle
+    from diffusers.models.transformers.transformer_ltx2 import LTX2AdaLayerNormSingle as TorchAdaLayerNormSingle
 
     B = 2
 
     # Create PyTorch reference model
-    torch_model = TorchAdaLayerNormSingle(embedding_dim=embedding_dim, embedding_coefficient=6)
+    torch_model = TorchAdaLayerNormSingle(
+        embedding_dim=embedding_dim, num_mod_params=6, use_additional_conditions=False
+    )
     torch_model.eval()
     torch_state = torch_model.state_dict()
     logger.info(f"PyTorch AdaLayerNormSingle state keys: {list(torch_state.keys())}")

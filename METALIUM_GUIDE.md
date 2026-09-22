@@ -147,8 +147,8 @@ void kernel_main() {
     constexpr uint32_t dst_reg = 0;
 
     // Metalium API Calls                              Involved Cores
-    binary_op_init_common(cb_in0, cb_in1, cb_out);  // Unpack, Math, Pack
-    add_tiles_init(cb_in0, cb_in1, false);          // Unpack, Math
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);  // Unpack, Math, Pack
+    add_init(cb_in0, cb_in1, false);          // Unpack, Math
 
     for (uint32_t i = 0; i < n_tiles; i++) {
         cb_wait_front(cb_in0, 1);                   // Unpack

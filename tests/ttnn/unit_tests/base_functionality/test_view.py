@@ -37,34 +37,43 @@ def test_view(input_shape, output_shape, layout, device):
 
 
 @pytest.mark.parametrize(
-    "input_shape, output_shape, layout",
+    "input_shape, output_shape, layout, expected_message",
     [
-        ((2, 1, 1, 1, 15), (1, 30), ttnn.ROW_MAJOR_LAYOUT),  # RM last dimension doesn't match
+        (
+            (2, 1, 1, 1, 15),
+            (1, 30),
+            ttnn.ROW_MAJOR_LAYOUT,
+            "The last dimension can not change in view",
+        ),  # RM last dimension doesn't match
         (
             (16, 1, 256, 1, 16),
             (8, 16, 32, 16),
             ttnn.TILE_LAYOUT,
+            "Invalid second last dims",
         ),  # TILE last dimension match but second last does not match, shape mult of 32 only
         (
             (16, 1, 1, 256, 16),
             (8, 16, 32, 1, 16),
             ttnn.TILE_LAYOUT,
+            "Invalid second last dims",
         ),  # TILE last dimension match but second last does not match, tensor mult of 32 only
         (
             (256, 1, 1, 16, 16),
             (8, 16, 32, 1, 16),
             ttnn.TILE_LAYOUT,
+            "Invalid second last dims",
         ),  # TILE last dimension match but second last does not match, none mult of 32
         (
             (16, 8, 1, 32, 16),
             (8, 16, 31, 16),
             ttnn.TILE_LAYOUT,
+            "Invalid arguments to reshape",
         ),  # Volume doesn't match but padded volume does
     ],
 )
-def test_invalid_cases(input_shape, output_shape, layout, device):
+def test_invalid_cases(input_shape, output_shape, layout, expected_message, device, expect_error):
     # Verifies invalid cases do cause an assertion
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, expected_message):
         ttnn.view(input_tensor, output_shape)

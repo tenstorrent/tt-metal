@@ -10,6 +10,7 @@
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // X = output width
@@ -23,17 +24,18 @@ void kernel_main() {
      * rearrange it into its faces, transpose, and then pack it back such that it's de-faced (WX, where X is contiguous
      * and isn't divided into subtiles)
      */
-    uint32_t start_block = get_arg_val<uint32_t>(0);
-    uint32_t end_block = get_arg_val<uint32_t>(1);
+    uint32_t start_block = get_arg(args::start_block);
+    uint32_t end_block = get_arg(args::end_block);
 
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_tilize = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_in = dfb::cb_in;
+    constexpr auto cb_tilize = dfb::cb_tilize;
+    constexpr auto cb_out = dfb::cb_out;
 
     DataflowBuffer dfb_tilize_exp(cb_tilize);
     DataflowBuffer dfb_out_exp(cb_out);
 
-    unary_op_init_common(cb_in, cb_out);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
 
     for (uint32_t block = start_block; block < end_block; block++) {
         // Tilize input via unpack and then pack (standard symmetric: 1 tile in → 1 tile out)

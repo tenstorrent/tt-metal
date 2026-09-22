@@ -4,11 +4,17 @@
 
 #pragma once
 
+#include "internal/debug/assert_common.h"
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
-#include "risc_common.h"
 #if defined(ARCH_QUASAR)
 #include "internal/tt-2xx/quasar/error_handling.h"
+
+#if defined(COMPILE_FOR_DM)
+#include "internal/tt-2xx/quasar/cache.h"
+#elif defined(COMPILE_FOR_TRISC)
+#include "tensix.h"
+#endif
 #endif
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
@@ -16,7 +22,7 @@
 //  - for Quasar, multiple DMs and TRISCs share assert_status; only the first to assert records its
 //    metadata via a dedicated claim field atomically claimed (amoswap on the cached L1 alias).
 //    Writes are flushed to make them visible to host.
-inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
+inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) {
     // Write the line number into the memory mailbox for host to read.
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
 #if defined(ARCH_QUASAR)
@@ -32,7 +38,11 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 #endif
     {
         v->line_num = line_num;
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_DM) || defined(COMPILE_FOR_TRISC))
+        v->which = internal_::read_hw_thread_idx();
+#else
         v->which = internal_::get_hw_thread_idx();
+#endif
         if (assert_type == DebugAssertHwFault) {  // only valid on Quasar
 #ifndef COMPILE_FOR_TRISC
             uint64_t mcause;
@@ -93,32 +103,5 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
         ;
     }
 }
-
-#define ASSERT(condition, ...) (void(not(condition) ? assert_and_hang(__LINE__, ##__VA_ARGS__), 0 : 0))
-
-#define ASSERT_ENABLED 1
-#define WATCHER_ASSERT_ENABLED 1
-#define LIGHTWEIGHT_ASSERT_ENABLED 0
-
-#else  // !WATCHER_ENABLED
-
-#if defined(LIGHTWEIGHT_KERNEL_ASSERTS)
-
-#define ASSERT(condition, ...) (void(not(condition) ? ({ asm("ebreak"); }), 0 : 0))
-
-#define ASSERT_ENABLED 1
-#define LIGHTWEIGHT_ASSERT_ENABLED 1
-#define WATCHER_ASSERT_ENABLED 0
-
-#else
-
-// Avoid unused variable warnings here.
-#define ASSERT(condition, ...) (void(sizeof(not(condition))))
-
-#define ASSERT_ENABLED 0
-#define LIGHTWEIGHT_ASSERT_ENABLED 0
-#define WATCHER_ASSERT_ENABLED 0
-
-#endif  // LIGHTWEIGHT_KERNEL_ASSERTS
 
 #endif  // WATCHER_ENABLED

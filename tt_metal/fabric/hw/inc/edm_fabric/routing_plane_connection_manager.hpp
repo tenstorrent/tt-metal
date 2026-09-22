@@ -14,9 +14,13 @@ namespace tt::tt_fabric {
 
 // Determine maximum number of routing-plane connections if not provided by the build.
 #ifndef TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS
-#if defined(FABRIC_2D)
-#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
-#else  // 1D
+// The manager holds at most one logical connection per output direction. When any local Blackhole
+// mesh uses express routing, all local workers compile for the five-direction superset; a worker on
+// a non-express mesh simply leaves the Z slot unused. Parallel lanes to one neighbor are routing-plane
+// realizations, not additional logical connections.
+#if defined(FABRIC_EXPRESS_ENABLED) && defined(ARCH_BLACKHOLE)
+#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 5
+#else
 #define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
 // TODO: 3D, dragonfly and custom etc.
 #endif
@@ -35,9 +39,7 @@ public:
         BUILD_AND_OPEN_CONNECTION_START_ONLY,
     };
 
-    // These field for FABRIC_2D are used by fabric_set_unicast_route
 #if defined(FABRIC_2D)
-    uint32_t ew_dim;
     uint16_t my_mesh_id;
     uint16_t my_chip_id;
 #endif
@@ -53,7 +55,9 @@ public:
 
     RoutingPlaneConnectionManager() : num_active_(0) {}
 
-    template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
+    template <
+        BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY,
+        uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     static RoutingPlaneConnectionManager build_from_args(std::size_t& arg_idx, uint32_t num_connections_to_build) {
         constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
                                  build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY;
@@ -68,20 +72,18 @@ public:
             conn.sender =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
-                conn.sender.open_start();
+                conn.sender.open_start<false, false, WORKER_HANDSHAKE_NOC>();
             }
         }
-
         mgr.num_active_ = num_connections_to_build;
 
         if constexpr (connect && wait_for_connection_open_finish) {
             for (uint32_t i = 0; i < mgr.num_active_; ++i) {
-                mgr.slots_[i].sender.open_finish();
+                mgr.slots_[i].sender.open_finish<false, WORKER_HANDSHAKE_NOC>();
             }
         }
 
 #if defined(FABRIC_2D)
-        mgr.ew_dim = get_arg_val<uint32_t>(arg_idx++);
         mgr.my_chip_id = get_arg_val<uint32_t>(arg_idx++);
         mgr.my_mesh_id = get_arg_val<uint32_t>(arg_idx++);
         for (uint32_t i = 0; i < num_connections_to_build; i++) {
@@ -115,41 +117,36 @@ public:
         }
     }
 
-    template <typename Fn>
-    inline void for_each_with_tag(uint32_t tag, Fn&& fn) {
-        for (uint32_t i = 0; i < num_active_; ++i) {
-            if (slots_[i].tag == tag) {
-                fn(slots_[i].sender, i, slots_[i].tag);
-            }
-        }
-    }
-
-    template <bool SEND_CREDIT_ADDR = false>
+    template <bool SEND_CREDIT_ADDR = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void open_start() {
-        for_each([&](Sender& s, uint32_t, uint32_t) { s.open_start<SEND_CREDIT_ADDR>(); });
+        for_each([&](Sender& s, uint32_t, uint32_t) { s.open_start<SEND_CREDIT_ADDR, false, WORKER_HANDSHAKE_NOC>(); });
     }
 
+    template <uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void open_finish() {
-        for_each([&](Sender& s, uint32_t, uint32_t) { s.open_finish(); });
+        for_each([&](Sender& s, uint32_t, uint32_t) { s.open_finish<false, WORKER_HANDSHAKE_NOC>(); });
     }
 
-    template <bool SEND_CREDIT_ADDR = false>
+    template <bool SEND_CREDIT_ADDR = false, uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void open() {
-        open_start<SEND_CREDIT_ADDR>();
-        open_finish();
+        open_start<SEND_CREDIT_ADDR, WORKER_HANDSHAKE_NOC>();
+        open_finish<WORKER_HANDSHAKE_NOC>();
     }
 
+    template <uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void close_start() {
-        for_each([&](Sender& s, uint32_t, uint32_t) { s.close_start(); });
+        for_each([&](Sender& s, uint32_t, uint32_t) { s.close_start<false, WORKER_HANDSHAKE_NOC>(); });
     }
 
+    template <uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void close_finish() {
-        for_each([&](Sender& s, uint32_t, uint32_t) { s.close_finish(); });
+        for_each([&](Sender& s, uint32_t, uint32_t) { s.close_finish<false, WORKER_HANDSHAKE_NOC>(); });
     }
 
+    template <uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
     inline void close() {
-        close_start();
-        close_finish();
+        close_start<WORKER_HANDSHAKE_NOC>();
+        close_finish<WORKER_HANDSHAKE_NOC>();
     }
 
     inline uint32_t active_count() const { return num_active_; }

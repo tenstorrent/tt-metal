@@ -103,6 +103,7 @@ TEST_F(WeightTyingTest, ModelFC) {
     }
 
     std::vector<float> targets;
+    targets.reserve(batch_size * output_features);
     for (size_t i = 0; i < batch_size; ++i) {
         for (int j = 0; j < output_features; ++j) {
             targets.push_back(static_cast<float>(i) * 0.1F);

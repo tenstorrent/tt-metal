@@ -44,6 +44,11 @@ ARG PYTHON_VERSION=""
 # The single source of truth is docker-bake.hcl variable "UV_IMAGE".
 # When upgrading uv, update docker-bake.hcl first, then sync this default.
 ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
+# Prebuilt tt-llm-engine migration image that release-models bakes _migration_client
+# out of on the 3.10 build (see the mig-client stages before release-models), so that
+# image doubles as the disaggregated-prefill worker. Global because it is used in a
+# FROM. Single source of truth is docker-bake.hcl variable "TT_LLM_ENGINE_IMAGE".
+ARG TT_LLM_ENGINE_IMAGE=ghcr.io/tenstorrent/tt-llm-engine/migration-worker:598154ddb3b838e5a516c220db83442340a72f74
 
 #############################################################
 # Tool and venv layers (resolved by docker-bake.hcl contexts)
@@ -59,6 +64,7 @@ FROM scratch AS ccache-layer
 FROM scratch AS mold-layer
 FROM scratch AS doxygen-layer
 FROM scratch AS clangbuildanalyzer-layer
+FROM scratch AS iwyu-layer
 FROM scratch AS gdb-layer
 FROM scratch AS cmake-layer
 FROM scratch AS yq-layer
@@ -195,6 +201,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zstd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# The LLVM packages install versioned names only. CodeChecker resolves the
+# unversioned ones, and consults ClangSA.analyzer_binary() even when only
+# clang-tidy runs, where a None crashes compilation-database parsing. Three
+# workflows each fixed that up themselves before running it; do it once here.
+# Nothing in the build picks a compiler by bare name: build_metal.sh passes an
+# explicit path, CMakePresets pins clang-tidy-20, and CMake's own default probe
+# looks for cc/c++.
+RUN for tool in clang clang++ clang-tidy; do \
+        update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100; \
+    done && \
+    clang --version && clang-tidy --version
+
 #############################################################
 # CI Build image
 #############################################################
@@ -241,6 +259,22 @@ RUN curl -fsSL -o /usr/local/bin/tt-smi \
     "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-${UBUNTU_VERSION}" && \
     chmod a+rx /usr/local/bin/tt-smi && \
     tt-smi --version | grep -q "${TT_SMI_VERSION}"
+
+# include-what-you-use. Here rather than with the other tools in ci-build-light
+# because nothing in the build needs it: this is the first stage shared by the
+# CI test images and the dev images, which are the two consumers.
+#
+# IWYU reads Clang's builtin headers from the LLVM prefix it was built against,
+# which is the same /usr/lib/llvm-<major> the apt packages above install. The
+# check below analyzes a file that needs those headers, so that coupling breaks
+# the image build rather than the first analysis run.
+COPY --from=iwyu-layer --link /install/ /usr/local/
+RUN test -x /usr/local/bin/include-what-you-use || \
+      { echo "ERROR: include-what-you-use not found in iwyu-layer" >&2; exit 1; }; \
+    printf '#include <stddef.h>\nsize_t f(void) { return 0; }\n' > /tmp/iwyu-check.c; \
+    include-what-you-use -xc /tmp/iwyu-check.c 2>&1 | grep -q 'has correct #includes' || \
+      { echo "ERROR: include-what-you-use cannot find Clang's builtin headers" >&2; exit 1; }; \
+    rm -f /tmp/iwyu-check.c
 
 # Create directories for infra (needed even with pre-built venv for requirements file reference)
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
@@ -354,10 +388,6 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 COPY --from=ci-test-venv-layer --link /install/venv /opt/venv
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
-# IWYU (Include What You Use) could be useful to developers.
-# Not currently included; install script ready at dockerfile/scripts/install-iwyu.sh
-# To add: create iwyu tool target in Dockerfile.tools using install-iwyu.sh
-
 #############################################################
 # Release image
 #############################################################
@@ -393,6 +423,19 @@ RUN umask 000 && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf && \
     umask 000 && \
     uv pip install $WHEEL_FILENAME
+
+# -----------------------------------------------------------------------------
+# Disaggregated-prefill client source (selected by Python version)
+#
+# release-models doubles as the disaggregated-prefill worker by baking in
+# tt-llm-engine's _migration_client - a nanobind extension, hence Python-version
+# specific. The engine image is built for Python 3.10, so it's only valid on the
+# 3.10 (Ubuntu 22.04) build
+# -----------------------------------------------------------------------------
+FROM ${TT_LLM_ENGINE_IMAGE} AS mig-client-3.10
+FROM base AS mig-client-3.12
+RUN mkdir -p /opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+FROM mig-client-${PYTHON_VERSION:-3.10} AS mig-client
 
 #############################################################
 # Release models image
@@ -443,3 +486,13 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=mig-client \
+     /opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python/ \
+     /opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python/
+RUN find /opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python -maxdepth 1 -type f ! -name '_migration_client*.so' -delete 2>/dev/null || true
+RUN if ls /opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python/_migration_client*.so >/dev/null 2>&1; then \
+      "$PYTHON_ENV_DIR/bin/python3" -c "import sys; sys.path.insert(0, '/opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python'); import _migration_client; print('OK _migration_client:', _migration_client.__file__); assert hasattr(_migration_client, 'MigrationLayerClient'), 'MigrationLayerClient missing'"; \
+    else \
+      echo 'No _migration_client (non-3.10 build) - release-models ships without the disaggregated-prefill client.'; \
+    fi

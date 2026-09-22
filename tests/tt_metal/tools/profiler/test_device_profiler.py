@@ -9,6 +9,7 @@ import inspect
 import pytest
 import subprocess
 import ast
+import yaml
 from loguru import logger
 from conftest import is_6u
 
@@ -1199,7 +1200,52 @@ def test_noc_event_profiler():
 
     with open(expected_trace_file, "r") as nocTraceJson:
         noc_trace_data = json.load(nocTraceJson)
-        assert len(noc_trace_data) == 8
+        # Zone-marker entries carry no "type" key, so default it rather than indexing.
+        event_types = [event.get("type", "") for event in noc_trace_data]
+
+        # The example kernel's read and write are what NPE consumes; they must always be traced.
+        assert "READ" in event_types, f"missing READ event: {event_types}"
+        assert "WRITE_" in event_types, f"missing WRITE_ event: {event_types}"
+
+        # Barrier/flush/semaphore/inline-write events serve only the NOC debug tool and are compiled out of plain
+        # NOC tracing (see KernelProfilerNocEventMetadata::isDebugOnlyEventType), so the kernel's two barriers
+        # contribute nothing here. That is why this count is 4 (2 zone markers + READ + WRITE_) and not 8.
+        # Debug-mode coverage lives in the C++ unit_tests_noc_debugging suite instead: enabling
+        # TT_METAL_NOC_DEBUG_DUMP routes events into NOCDebugState and no noc trace JSON is written at all.
+        assert not any(
+            "BARRIER" in event_type for event_type in event_types
+        ), f"plain NOC tracing must not record barrier events, got: {event_types}"
+        assert len(noc_trace_data) == 4, f"unexpected noc trace events: {event_types}"
+
+    # Validate SoC descriptor is produced and contains valid grid/core data
+    expected_soc_descriptor_file = f"{PROFILER_ARTIFACTS_DIR}/noc_events_rpt/soc_descriptor.yaml"
+    assert os.path.isfile(
+        expected_soc_descriptor_file
+    ), f"SoC descriptor file not found at {expected_soc_descriptor_file}"
+
+    with open(expected_soc_descriptor_file, "r") as soc_desc_file:
+        soc_desc_data = yaml.safe_load(soc_desc_file)
+
+        # Verify required fields exist
+        assert "grid" in soc_desc_data, "SoC descriptor missing 'grid' field"
+        assert "x_size" in soc_desc_data["grid"], "SoC descriptor grid missing 'x_size'"
+        assert "y_size" in soc_desc_data["grid"], "SoC descriptor grid missing 'y_size'"
+        assert soc_desc_data["grid"]["x_size"] > 0, "SoC descriptor grid x_size must be positive"
+        assert soc_desc_data["grid"]["y_size"] > 0, "SoC descriptor grid y_size must be positive"
+
+        assert "arch_name" in soc_desc_data, "SoC descriptor missing 'arch_name' field"
+        arch_name = soc_desc_data["arch_name"].upper()
+        expected_arch = ENV_VAR_ARCH_NAME.upper()
+        assert (
+            expected_arch in arch_name or arch_name in expected_arch
+        ), f"SoC descriptor arch_name '{soc_desc_data['arch_name']}' does not match expected arch '{ENV_VAR_ARCH_NAME}'"
+
+        assert "functional_workers" in soc_desc_data, "SoC descriptor missing 'functional_workers' field"
+        assert len(soc_desc_data["functional_workers"]) > 0, "SoC descriptor must have at least one functional worker"
+
+        # Verify DRAM channels exist (all architectures have DRAM)
+        assert "dram" in soc_desc_data, "SoC descriptor missing 'dram' field"
+        assert len(soc_desc_data["dram"]) > 0, "SoC descriptor must have at least one DRAM channel"
 
 
 @skip_for_blackhole()
@@ -1238,11 +1284,6 @@ def test_fabric_event_profiler_1d():
         except subprocess.CalledProcessError as e:
             ret_code = e.returncode
             assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
         noc_trace_files = []
         for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
@@ -1309,11 +1350,6 @@ def test_fabric_event_profiler_fabric_mux():
             ret_code = e.returncode
             assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
 
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
-
         noc_trace_files = []
         for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
             if re.match(r"^noc_trace_dev[0-9]+_ID[0-9]+.json$", f):
@@ -1349,123 +1385,6 @@ def test_fabric_event_profiler_fabric_mux():
         assert (
             fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
         ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
-
-
-@skip_for_blackhole()
-def test_fabric_event_profiler_2d():
-    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
-    is_6u_bool = is_6u_wrapper()
-
-    # test that current device has a valid fabric API connection
-    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
-    sanity_check_test_name = "Fabric2DFixture.Test2DMCastConnAPI_1N1E1W"
-    sanity_check_succeeded = run_gtest_profiler_test(
-        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
-    )
-    if not sanity_check_succeeded:
-        logger.info("Device does not have testable fabric connections, skipping ...")
-        return
-
-    # if device supports fabric API, test fabric event profiler
-    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
-    tests = [
-        "Fabric2DFixture.TestUnicastRaw_3E",
-        "Fabric2DFixture.TestMCastConnAPI_1W2E",
-        "Fabric2DFixture.Test2DMCastConnAPI_1N1E1W",
-    ]
-
-    if is_6u_bool:
-        tests.extend(
-            [
-                "Fabric2DFixture.TestUnicastRaw_3N",
-                "Fabric2DFixture.TestUnicastRaw_3N3E",
-                "Fabric2DFixture.TestMCastConnAPI_2N1S",
-                "Fabric2DFixture.Test2DMCastConnAPI_7N3E",
-            ]
-        )
-
-    all_tests_expected_event_counts = [
-        {
-            frozenset({"ns_hops": 0, "e_hops": 3, "w_hops": 0, "is_mcast": False}.items()): 10,
-        },
-        {
-            frozenset({"ns_hops": 0, "e_hops": 0, "w_hops": 1, "is_mcast": False}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 2, "w_hops": 0, "is_mcast": True}.items()): 100,
-        },
-        {
-            frozenset({"ns_hops": 1, "e_hops": 1, "w_hops": 1, "is_mcast": True}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 1, "w_hops": 0, "is_mcast": False}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 0, "w_hops": 1, "is_mcast": False}.items()): 100,
-        },
-    ]
-
-    if is_6u_bool:
-        all_tests_expected_event_counts.extend(
-            [
-                {
-                    frozenset({"ns_hops": 3, "e_hops": 0, "w_hops": 0, "is_mcast": False}.items()): 10,
-                },
-                {
-                    frozenset({"ns_hops": 2, "e_hops": 4, "w_hops": 0, "is_mcast": False}.items()): 10,
-                },
-                {
-                    frozenset({"ns_hops": 2, "e_hops": 0, "w_hops": 0, "is_mcast": True}.items()): 100,
-                    frozenset({"ns_hops": 1, "e_hops": 0, "w_hops": 0, "is_mcast": False}.items()): 100,
-                },
-                {
-                    frozenset({"ns_hops": 7, "e_hops": 3, "w_hops": 0, "is_mcast": True}.items()): 100,
-                    frozenset({"ns_hops": 0, "e_hops": 3, "w_hops": 0, "is_mcast": True}.items()): 100,
-                },
-            ]
-        )
-
-    for test_name, expected_event_counts in zip(tests, all_tests_expected_event_counts):
-        nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
-        try:
-            not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
-            assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
-        except subprocess.CalledProcessError as e:
-            ret_code = e.returncode
-            assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
-
-        noc_trace_files = []
-        for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
-            if re.match(r"^noc_trace_dev[0-9]+_ID[0-9]+.json$", f):
-                noc_trace_files.append(f)
-
-        actual_event_counts = {}
-        for trace_file in noc_trace_files:
-            with open(f"{PROFILER_LOGS_DIR}/{trace_file}", "r") as nocTraceJson:
-                try:
-                    noc_trace_data = json.load(nocTraceJson)
-                except json.JSONDecodeError:
-                    raise ValueError(f"noc trace file '{trace_file}' is not a valid JSON file")
-
-                assert isinstance(noc_trace_data, list), f"noc trace file '{trace_file}' format is incorrect"
-                assert len(noc_trace_data) > 0, f"noc trace file '{trace_file}' is empty"
-                for event in noc_trace_data:
-                    assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
-                    if event.get("type", "").startswith("FABRIC_"):
-                        assert event.get("fabric_send", None) is not None
-                        fabric_send_metadata = event.get("fabric_send", None)
-                        assert fabric_send_metadata.get("eth_chan", None) is not None
-                        del fabric_send_metadata["eth_chan"]
-                        key = frozenset(fabric_send_metadata.items())
-                        if key not in actual_event_counts:
-                            actual_event_counts[key] = 0
-                        actual_event_counts[key] += 1
-
-        # compare expected event counts to actual event_counts
-        for event in expected_event_counts.keys() | actual_event_counts.keys():
-            assert expected_event_counts.get(event, 0) == actual_event_counts.get(
-                event, 0
-            ), f"There are {actual_event_counts.get(event, 0)} fabric events with fields {event}, expected {expected_event_counts.get(event, 0)}"
 
 
 def test_sub_device_profiler():

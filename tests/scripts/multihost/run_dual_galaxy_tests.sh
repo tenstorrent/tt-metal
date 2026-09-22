@@ -49,28 +49,8 @@ run_dual_galaxy_unit_tests() {
   fi
 }
 
-run_dual_galaxy_resnet50_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_dual_galaxy_resnet50_tests"
-
-  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_dual_galaxy_resnet50_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_dual_galaxy_tests() {
   run_dual_galaxy_unit_tests
-  # TODO: #30155 - Enable the test when hardware hang is addressed.
-  # run_dual_galaxy_resnet50_tests
 }
 
 fail=0

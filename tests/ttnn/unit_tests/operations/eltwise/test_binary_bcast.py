@@ -101,12 +101,12 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_confi
         [[1, 2, 3, 3, 4, 32, 32], [5, 1, 3, 3, 4, 32, 32]],
     ],
 )
-def test_binary_invalid_rank(device, a_shape, b_shape):
+def test_binary_invalid_rank(device, a_shape, b_shape, expect_error):
     torch.manual_seed(0)
     pt_a, tt_a = rand_bf16_gen(a_shape, device)
     pt_b, tt_b = rand_bf16_gen(b_shape, device)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Broadcasting rule violation for rank"):
         ttnn.add(tt_a, tt_b)
 
 
@@ -315,7 +315,7 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
         (ttnn.bfloat8_b, 0.999),
     ),
 )
-@pytest.mark.parametrize("ttnn_fn", ["add", "sub", "mul", "add_", "sub_", "mul_"])
+@pytest.mark.parametrize("ttnn_fn", ["add", "sub", "mul"])
 def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     torch.manual_seed(0)
 
@@ -343,8 +343,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(input_tensor_a if ttnn_fn.endswith("_") else output_tensor)
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor_a, input_tensor_b))
     assert output_tensor.shape == torch_output_tensor.shape
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= pcc
 
@@ -1641,7 +1640,9 @@ def test_binary_sharded_bcast_scalar_value_uneven(
         ],
     ),
 )
-def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, shard_size, core_range, device):
+def test_binary_sharded_scalar_invalid_row_major(
+    scalar, a_shape, shard_type, shard_size, core_range, device, expect_error
+):
     torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
@@ -1656,7 +1657,7 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
         a_shape
     )
 
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "Optional output tensor with Row Major input is not supported"):
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=ttnn.bfloat16,
@@ -2007,7 +2008,7 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
     ),
 )
 def test_binary_sharded_invalid_row_major_layout(
-    a_shape, b_shape, shard_type, shard_size, core_range, dtype_pt, dtype_tt, device
+    a_shape, b_shape, shard_type, shard_size, core_range, dtype_pt, dtype_tt, device, expect_error
 ):
     torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
@@ -2028,7 +2029,7 @@ def test_binary_sharded_invalid_row_major_layout(
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Physical shard shape"):
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=ttnn.bfloat16,

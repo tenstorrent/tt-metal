@@ -4,6 +4,11 @@
 
 #pragma once
 
+// NOTE: A Metal 2.0 fork of this header lives beside it, as embeddings_common_metal2.hpp. Readers
+// ported to Metal 2.0 include the fork, which takes a DataflowBuffer binding token and the pad-token
+// value; this file serves the readers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"

@@ -12,13 +12,39 @@ Usage:
 
 import os
 
+from loguru import logger
+
 import ttnn
+from models.common.weight_cache import (
+    build_cached_state_dict,
+    checkpoint_name,
+    mark_weight_cache_complete,
+    weight_cache_is_complete,
+)
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
+
+# Weights gemma4 consumes on the HOST (not just via ttnn.as_tensor) and that therefore must be
+# loaded for real even on a warm cache (see #45400 follow-up analysis of models/demos/gemma4/tt):
+#  - token embedding: F.embedding(tokens, _embed_weight_cpu)      (model.py:1218/1238/1421)
+#  - per-layer-input embed/proj/norm (E2B/E4B):                    (model.py:615-635)
+#  - per-layer learned scalar read via .item():                   (layer.py:122-123)
+# Everything else flows through ttnn.as_tensor(cache_file_name=...) and is placeholder-safe.
+_GEMMA4_HOST_WEIGHT_SUFFIXES = (
+    "embed_tokens.weight",
+    "embed_tokens_per_layer.weight",
+    "per_layer_model_projection.weight",
+    "per_layer_projection_norm.weight",
+    ".layer_scalar",
+)
+
+
+def _gemma4_is_host_weight(key):
+    return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
 
 
 def create_tt_model(
@@ -74,16 +100,69 @@ def create_tt_model(
     else:
         ccl_manager = None
 
+    # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
+    # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
+    # sidecar, the rest as dataless placeholders. Generalizes PR #50550 to gemma4 (#45400).
+    # Qualify the cache by mesh geometry BEFORE resolving cache_dir: ttnn.as_tensor
+    # reloads tensorbins as-is and ignores mesh_mapper, so a TP=4 cache built on
+    # MeshShape([2,4]) must not be reused on [1,4] (QB2). Setting cluster_shape here
+    # keeps the warm-cache marker (cache_dir) and the tensorbin path on the same
+    # directory instead of letting them diverge.
+    _worker_mesh = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    model_args.cluster_shape = _worker_mesh
+    cache_dir = model_args.weight_cache_path(dtype)
+    # Resolved early so it can key the cache identity: gemma4 embeds each module's dtype in its
+    # tensorbin FILENAME (attention/experts/shared_mlp/router *_{dtype} suffixes), so an edit to
+    # precision_overrides.json changes which files a build needs. Without the precision in the
+    # variant, a marker seeded under the old overrides would certify a warm build whose files do
+    # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
+    # NOTE: use the SERVED max_seq_len argument, not model_args.max_seq_len --
+    # model_args still carries its construction default here (the served value is
+    # applied further below), so reading it silently skipped the bfp8 context
+    # ceiling at long context.
+    _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh, max_seq_len=max_seq_len)
+    # The variant must also pin every knob that decides WHICH tensorbin FILENAMES a build needs, not
+    # only their dtype: a warm marker seeded before a filename change certifies a build whose files
+    # do not exist yet, and as_tensor then persists the dataless placeholders under the new names
+    # (weight_cache.py "Build options that change an as_tensor cache FILENAME ... must match
+    # exactly"). #50648 renamed the fused gate/up, .ws attention and .ws down-proj files without
+    # touching this identity and poisoned the Gemma-4-E4B caches on bh_p300 / bh_quietbox_2
+    # (#54831: 2085 of 2131 keys served as torch.empty and written to disk). Bump the layout tag
+    # whenever a cache filename scheme changes.
+    _cache_layout = {
+        "layout": "v2-fused-gate-up-ws",
+        "attn_dram_shard": os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1"),
+        "mlp_dram_shard": os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1"),
+        "dram_cores": os.environ.get("GEMMA4_DRAM_CORES", "8"),
+    }
+    cache_identity = dict(
+        # vLLM hands over the resolved hub snapshot dir, not the HF id: keyed on the plain
+        # basename the marker seeded by the e2e demo never matched and every server start
+        # cold-loaded the full HF checkpoint (31B on QB2: ~12 of the 20 budgeted minutes).
+        model_name=checkpoint_name(model_path) or "gemma4",
+        n_layers=model_args.num_hidden_layers,
+        mesh_shape=_worker_mesh,
+        build_variant={
+            "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
+            "cache_layout": _cache_layout,
+        },
+    )
+    loaded_real_weights = False
     if state_dict is None:
-        state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
+        if num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (gemma4 hybrid).")
+            state_dict = build_cached_state_dict(
+                cache_dir, args=model_args, build_variant=cache_identity["build_variant"]
+            )
+        else:
+            state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
+            loaded_real_weights = bool(state_dict)
 
-    tensor_cache_path = str(model_args.weight_cache_path(dtype))
+    tensor_cache_path = str(cache_dir)
 
-    # Resolve per-module dtype overrides from precision_overrides.json. The
-    # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
-    # system still gets the 1x1 entry.
-    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
-    precision = Gemma4Precision.load(model_path, mesh_shape)
+    # Per-module dtype overrides from precision_overrides.json, resolved once
+    # above so the cache identity and the model share one value.
+    precision = _precision_for_variant
 
     model = Gemma4Model(
         mesh_device=mesh_device,
@@ -102,6 +181,11 @@ def create_tt_model(
         bounded_sliding_kv_cache=bounded_sliding_kv_cache,
     )
 
+    # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)
+    # so future runs can skip the HF load.
+    if loaded_real_weights and num_layers is None:
+        mark_weight_cache_complete(cache_dir, state_dict, is_host_weight=_gemma4_is_host_weight, **cache_identity)
+
     return model_args, model, model.tt_kv_cache, state_dict
 
 
@@ -114,6 +198,8 @@ def create_assistant_model(
     assistant_path=None,
     state_dict=None,
     max_local_batch_size=1,
+    bounded_sliding_kv_cache=None,
+    max_seq_len=None,
 ):
     """Create the Gemma4 it-assistant drafter, sharing the target's mesh/CCL.
 
@@ -140,16 +226,51 @@ def create_assistant_model(
             f"Assistant backbone_hidden_size ({assistant_args.backbone_hidden_size}) != target hidden_size "
             f"({target_model.hidden_size}). The assistant must match its target model."
         )
+    # Bounded target KV is supported now: the drafter's attention configs take
+    # the same cache_position_modulo as the target's sliding layers (see the
+    # bounded_sliding_kv_cache plumbing below and assistant/model.py), so its
+    # cross-attention wraps absolute positions into the same ring. This is what
+    # makes >=128k spec decode reachable on 31B, where unbounded KV does not fit.
+    # It requires the ring sizes to agree; the assistant's own sliding_window
+    # matches its target's (1024 on both 12B and 31B), so verify that here
+    # rather than assuming it.
+    # GATE LIFTED. The clobbering described here was real -- verify writes all K+1
+    # candidates up front, and in a ring of EXACTLY the window, slot (p+j)%W still
+    # holds live position p+j-W. It is fixed by ring HEADROOM (the spec path runs
+    # ring = 2*window, so speculative slots fall outside the window; see
+    # attention.bounded_ring_modulo), plus the last-chunk expansion threshold fix
+    # in Gemma4Generator._expand_bounded_last_chunk.
+    # Measured 31B @ 32k, greedy/traced: bounded 2.40/5 @ 42.26 tok/s/u vs
+    # unbounded 2.40/5 @ 42.42 -- parity, matching text. 128k 2.78/5 @ 36.08
+    # (baseline 24.44); 256k 1.70/5 @ 16.35 (baseline 16.97 -- coherent but spec
+    # is NOT a win at 256k: verify cost scales with context, acceptance falls).
     if getattr(target_model, "bounded_sliding_kv_cache", False):
-        raise NotImplementedError(
-            "Speculative decoding requires the target to use unbounded sliding KV caches "
-            "(bounded_sliding_kv_cache=False); the drafter cross-attention reads absolute cache positions."
+        _tgt_win = getattr(target_model, "sliding_window", None) or getattr(
+            getattr(target_model, "hf_config", None), "sliding_window", None
         )
+        _asst_win = getattr(assistant_args.text_args, "sliding_window", None)
+        if _tgt_win is not None and _asst_win is not None and int(_tgt_win) != int(_asst_win):
+            raise NotImplementedError(
+                f"Bounded spec decode needs matching sliding windows: target {_tgt_win} vs "
+                f"assistant {_asst_win}. The drafter cross-attends the target's bounded ring, "
+                "so a different window would wrap positions to the wrong slots."
+            )
 
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
 
-    tensor_cache_path = str(assistant_args.weight_cache_path(dtype))
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    assistant_args.cluster_shape = mesh_shape
+    # Serve length: Gemma4AssistantArgs.max_seq_len DEFAULTS to 131072, and the
+    # drafter's layers are built from it (assistant/model.py max_seq_len=...). Left
+    # unset, a 256k run builds the drafter for HALF the context while positions run
+    # to 262143 -- the drafter then produces noise and acceptance collapses to
+    # ~0.00/5 (measured), while <=128k looked fine because the default covered it.
+    if max_seq_len is not None:
+        assistant_args.max_seq_len = int(max_seq_len)
+        if hasattr(assistant_args, "text_args"):
+            assistant_args.text_args.max_seq_len = int(max_seq_len)
+    tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,
@@ -161,5 +282,25 @@ def create_assistant_model(
         tensor_cache_path=tensor_cache_path,
         mesh_config=mesh_config,
         max_local_batch_size=max_local_batch_size,
+        # Match the TARGET's KV mode: with bounded sliding caches the drafter's
+        # cross-attention must wrap positions into the same ring. Inferred from
+        # the target when not stated explicitly.
+        # Whether the DRAFTER wraps positions must match the caches it actually
+        # reads, not the target's global mode. The drafter cross-attends only the
+        # LAST layer of each type; full-attention layers are always unbounded, and
+        # the last sliding layer is EXEMPTED from bounding for exactly this reason
+        # (Gemma4Model._spec_unbounded_layer). So when that exemption is active,
+        # both caches the drafter touches hold absolute positions and it must NOT
+        # apply the ring modulo -- otherwise it looks up p % window in a
+        # full-length cache and drafts noise (measured: acceptance 0.12/5 at 128k
+        # bounded vs 2.78/5 unbounded, 0.00/5 at 256k).
+        bounded_sliding_kv_cache=(
+            bounded_sliding_kv_cache
+            if bounded_sliding_kv_cache is not None
+            else (
+                bool(getattr(target_model, "bounded_sliding_kv_cache", False))
+                and getattr(target_model, "_spec_unbounded_layer", None) is None
+            )
+        ),
     )
     return assistant_args, model

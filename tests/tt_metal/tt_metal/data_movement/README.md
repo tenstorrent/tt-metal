@@ -6,7 +6,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 This test suite includes tests using both fast dispatch (Mesh Device API) and slow dispatch modes:
 
 ### Fast Dispatch (Mesh Device API)
-Most test suites use the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. These tests use `GenericMeshDeviceFixture` and run on single-device unit meshes with fast dispatch mode for optimal performance.
+Most test suites use the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. These tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes with fast dispatch mode for optimal performance.
 
 ### Slow Dispatch
 Some test suites use slow dispatch mode for reliable program execution. These tests use `MeshDeviceFixture`. With TT-Mesh, APIs for executing programs in slow dispatch are the same as in fast dispatch, using `tt::tt_metal::distributed::EnqueueMeshWorkload`. Tests requiring slow dispatch include:
@@ -15,7 +15,7 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 - **Reshard Hardcoded** (IDs 17-20)
 
 ### Quasar Simulator
-Quasar data movement tests (IDs 912-927) use `GenericMeshDeviceFixture` with `arch == ARCH::QUASAR` branches inside each test. They require `TT_METAL_SLOW_DISPATCH_MODE=1` (fast dispatch is not yet supported on the Quasar emulator). The base fixture skips gracefully if fast dispatch is attempted. Tests that require `≥2 Tensix columns` (e.g. subordinate core `{1,0}`) also skip with an informative message when run on a 1-column emulator — use `emu-quasar-2x3` or larger for those tests.
+Quasar data movement tests (IDs 912-927) use `UnitMeshFastDispatchFixture` with `arch == ARCH::QUASAR` branches inside each test. They require `TT_METAL_SLOW_DISPATCH_MODE=1` (fast dispatch is not yet supported on the Quasar emulator). The base fixture skips gracefully if fast dispatch is attempted. Tests that require `≥2 Tensix columns` (e.g. subordinate core `{1,0}`) also skip with an informative message when run on a 1-column emulator — use `emu-quasar-2x3` or larger for those tests.
 
 ## Device 2.0 API Support
 This test suite now includes tests using the new device 2.0 NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
@@ -99,9 +99,9 @@ An exhaustive list of options and their descriptions can be found in `./conftest
 Follow these steps to add new tests to this test suite.
 
 1. **Choose dispatch mode:** Decide whether your test should use fast dispatch (Mesh Device API) or slow dispatch:
-    - **Fast Dispatch (recommended)**: Use `GenericMeshDeviceFixture` for new performance tests
+    - **Fast Dispatch (recommended)**: Use `UnitMeshFastDispatchFixture` for new performance tests
     - **Slow Dispatch**: Use `MeshDeviceFixture` only if fast dispatch APIs don't work for your specific test case
-    - **Quasar Simulator**: Use `GenericMeshDeviceFixture` with an `arch == ARCH::QUASAR` branch inside the test; run with `TT_METAL_SLOW_DISPATCH_MODE=1`
+    - **Quasar Simulator**: Use `UnitMeshFastDispatchFixture` with an `arch == ARCH::QUASAR` branch inside the test; run with `TT_METAL_SLOW_DISPATCH_MODE=1`
 2. Create a new directory with a descriptive name for the test.
     - **Example:** `./dram_unary`
 3. In this directory, create the c++ test file with a filename that starts with "test_".
@@ -157,3 +157,87 @@ By default, per-core bandwidth is computed as `(Number of transactions × Transa
 DeviceTimestampedData("Per-core bytes", actual_bytes_pushed_by_this_core);
 ```
 When present, `gather_bw_per_core` uses this stamp as the numerator for that core, exposing sender-vs-receiver asymmetry on the heatmap. All five matmul multicast kernels (`in0_kernel.cpp`, `in0_kernel_v2.cpp`, `in0_kernel_2d.cpp`, `in1_kernel.cpp`, `in1_kernel_2d.cpp`) do this so the heatmaps correctly show which cores are doing the multicast work.
+
+## Data Movement Web Viewer
+
+The data movement web viewer is a static application that compiles the
+reported CSV files into interactive bandwidth and latency charts. It groups tests by
+directory, supports search and tags, lets the user select an architecture, and creates
+filters for sweep dimensions found in the CSV. It also displays the test-directory
+README, an optional communication-pattern diagram, and FAQ content. It is currently
+hosted in [tt-low-level-documentation](https://github.com/tenstorrent/tt-low-level-documentation).
+
+It is primarily meant to support generalizable performance sweep tests; it plots
+test results from most of our relevant tests, but not every single test. Some
+examples of what would not be present include Directed Ideal tests and hardcoded tests
+(e.g. reshard_hardcoded).
+
+Currently, only Blackhole and Wormhole test results are supported.
+
+The viewer reads its inputs from two repositories at runtime:
+
+- `tt-metal` supplies `python/test_mappings/test_information.yaml`,
+    `python/test_mappings/web_viewer_groups.yaml`, and the application files.
+- `tt-low-level-documentation` supplies the architecture-specific CSV files under
+    `data_movement_doc/perf_plots/<architecture>/csv/` and diagram images under
+    `data_movement_doc/web_images/`.
+
+### Adding a Test to the Viewer
+
+Adding a C++ test does not automatically make it visible in the viewer. Complete the
+following steps after adding the test and its test ID:
+
+1. Add the test to `python/test_mappings/test_information.yaml` with the correct
+     `name` and `directory`. Add `web_viewer_name` to expose it in the viewer. The
+     value of `name` must match the CSV basename produced by the reporter; the viewer
+     requests `<name>.csv`.
+2. If the test has a bandwidth convention, set `bandwidth_mode` (`per_core` or
+     `combined`) and `bandwidth_unit` (`bpc` or `gbps`) in the same entry. Add the
+     packet-test fields (`memory_type`, `mechanism`, and `pattern`) when applicable.
+     These metadata values are written into the CSV and become chart dimensions or
+     displayed constants.
+3. Add or update the matching directory entry in
+     `python/test_mappings/web_viewer_groups.yaml`. Set the sidebar `name` and useful
+     `tags`; optionally add an `image` path and group-specific `faq` entries. The group
+     key must be the same directory value used in `test_information.yaml`. Tag FAQ
+     entries belong under the top-level `tags` section, and general FAQ entries belong
+     under `universal`.
+4. Run the test with reporting enabled so that the CSV is generated through
+     `python/stats_reporter.py`. For example:
+     ```bash
+     pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py \
+             --gtest-filter="<test-filter>" --report
+     ```
+5. Publish the generated CSV for every supported architecture under the matching
+     `data_movement_doc/perf_plots/<architecture>/csv/` directory in `tt-low-level-documentation`.
+     Do not change the CSV filename, it should be identical to its `name` value
+     from the yaml.
+6. If adding an image, upload it to the `data_movement_doc/web_images/` directory
+    in `tt-low-level-documentation`.
+
+The chart code treats columns as follows: known internal and metric columns are
+reserved, columns with one value are shown as test information, and columns with
+multiple values become sweep dimensions. The preferred x-axis is transaction size,
+then grid dimensions, then master/subordinate grid dimensions. Consequently, a new
+CSV should have a header, numeric metric values, and stable dimension names. The
+reporter normally provides `Latency (cycles)` and either `Bandwidth (bytes/cycle)`,
+`Bandwidth (GB/s)`, or `Combined Bandwidth (bytes/cycle)`.
+
+### Maintaining the Viewer
+
+The app files are located on the `gh-pages` branch of `tt-low-level-documentation`;
+this branch must not be deleted.
+- Keep `test_information.yaml` and `web_viewer_groups.yaml` synchronized with test
+    directories and generated CSV names. Remove or rename published CSVs deliberately;
+    the viewer probes each known architecture and hides tests for which no CSV exists.
+- Update `KNOWN_ARCHITECTURES` and `ARCH_FREQ_GHZ` in `app.js` when adding
+    an architecture. Verify that its CSV directory and latency conversion frequency
+    are also available.
+- Update `METRIC_COLUMNS`, `INTERNAL_COLUMNS`, or `X_AXIS_EXCLUDED` when the CSV
+    schema gains a column that should not be plotted as a sweep dimension. Otherwise
+    the new column may become an unexpected filter or x-axis.
+- Keep the CDN dependency versions and Subresource Integrity hashes in
+    `index.html` together. The viewer currently uses Papa Parse for CSV,
+    js-yaml for mappings, and Plotly for charts.
+- If new useful information arises or there are consistent points of confusion regarding
+    any particular tests, they can be added as FAQs to `web_viewer_groups.yaml`.

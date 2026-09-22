@@ -402,6 +402,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
 
     ProgramRunArgs run_args;
     std::vector<KernelRunArgs> kra;
+    kra.reserve(4);
     kra.push_back(KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_node_args)});
     kra.push_back(KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_node_args)});
     if (has_full) {

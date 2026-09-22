@@ -815,7 +815,7 @@ void run_single_galaxy_pipeline(
 
     // Helper to run warmup iteration with barrier synchronization
     auto barrier = [&]() {
-        Synchronize(mesh_device.get(), std::nullopt);
+        Synchronize(*mesh_device, std::nullopt);
         distributed_context->barrier();
     };
 
@@ -1060,7 +1060,7 @@ void run_single_galaxy_rate_pipeline(
     };
 
     auto barrier = [&]() {
-        Synchronize(mesh_device.get(), std::nullopt);
+        Synchronize(*mesh_device, std::nullopt);
         distributed_context->barrier();
     };
 

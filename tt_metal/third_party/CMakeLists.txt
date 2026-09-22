@@ -53,18 +53,6 @@ install(
         COMPONENT metalium-runtime
 )
 
-if(NOT ENABLE_TRACY)
-    return()
-endif()
-
-# Tracy-enabled-only tuning (only meaningful when profiling is actually compiled in):
-# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
-target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
-# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
-target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
-# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
-target_link_options(TracyClient PUBLIC -rdynamic)
-
 # TracyClient is a PUBLIC dependency of TT::Metalium, so its interface exports
 # $<INSTALL_INTERFACE:include/tracy>. Tracy's own header install rules are
 # COMPONENT-less (they land in "Unspecified", which cmake/packaging.cmake drops),
@@ -74,6 +62,10 @@ target_link_options(TracyClient PUBLIC -rdynamic)
 # Ship the public headers under the dev component so the SDK package is consistent.
 # Layout mirrors Tracy's own install: tracy/Tracy.hpp plus its ../client and
 # ../common siblings, all under <includedir>/tracy.
+# Keep this ABOVE the ENABLE_TRACY early-return below -- same reasoning as the
+# TracyClient install above: these are Tracy's own stub headers when
+# TRACY_ENABLE=OFF, and the packaged SDK must ship them regardless of
+# ENABLE_TRACY so a disabled-tracy build stays find_package-consistent.
 install(
     DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/tracy
@@ -87,6 +79,24 @@ install(
     PATTERN
     "*.hpp"
 )
+
+if(NOT ENABLE_TRACY)
+    return()
+endif()
+
+# Tracy-enabled-only tuning (only meaningful when profiling is actually compiled in):
+# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
+target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
+# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
+target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+# The top-level -Wno-deprecated-declarations (see CMakeLists.txt) is declared after these
+# subdirectories are added, so it never reaches Tracy's own targets: GCC's libstdc++ marks
+# std::get_temporary_buffer as deprecated, and Tracy's server code (e.g. TracyFileRead.hpp)
+# still triggers it internally via std::stable_sort/inplace_merge. Suppress it locally on all
+# real (non-vendored) Tracy targets rather than relying on the global flag's declaration order.
+target_compile_options(TracyClient PRIVATE -Wno-deprecated-declarations)
+# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
+target_link_options(TracyClient PUBLIC -rdynamic)
 
 set(NO_FILESELECTOR ON)
 
@@ -117,6 +127,30 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             "${TRACY_CLI_BIN_DIR}"
 )
+
+# Same -Wno-deprecated-declarations suppression as TracyClient above, extended to the rest of
+# Tracy's own (non-vendored) targets -- their server code is what actually triggers the warning.
+foreach(
+    _tt_tracy_deprecated_target
+    IN
+    ITEMS
+        TracyServer
+        TracyGetOpt
+        tracy-csvexport
+        tracy-capture
+        tracy-capture-daemon
+)
+    if(NOT TARGET ${_tt_tracy_deprecated_target})
+        continue()
+    endif()
+    get_target_property(_tt_tracy_deprecated_target_type ${_tt_tracy_deprecated_target} TYPE)
+    if(_tt_tracy_deprecated_target_type STREQUAL "INTERFACE_LIBRARY")
+        continue()
+    endif()
+    target_compile_options(${_tt_tracy_deprecated_target} PRIVATE -Wno-deprecated-declarations)
+endforeach()
+unset(_tt_tracy_deprecated_target)
+unset(_tt_tracy_deprecated_target_type)
 
 # Force a portable ISA baseline for Tracy server/CLI and key deps on x86_64.
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")

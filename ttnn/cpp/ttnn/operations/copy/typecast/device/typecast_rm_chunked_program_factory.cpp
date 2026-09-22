@@ -71,14 +71,11 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
     using namespace tt::tt_metal;
 
     const Tensor& input = tensor_args.input;
-    const DataType& input_dtype = args.input_dtype;
-    const DataType& output_dtype = args.output_dtype;
-
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "This factory is only for ROW_MAJOR layout");
 
-    const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format_input = cb_dataformat_for(input.dtype());
     const uint32_t input_element_size = tt::datum_size(cb_data_format_input);
-    const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat cb_data_format_output = cb_dataformat_for(output.dtype());
     const uint32_t output_element_size = tt::datum_size(cb_data_format_output);
 
     const auto* device = input.device();
@@ -199,20 +196,6 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
     }
 
-    KernelSpec::CompilerOptions::Defines unary_defines;
-    unary_defines.emplace(
-        "TYPECAST_LLK_INIT",
-        fmt::format(
-            "typecast_tile_init<{0}u, {1}u>",
-            static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype))));
-    unary_defines.emplace(
-        "TYPECAST_LLK",
-        fmt::format(
-            "typecast_tile<{0}u, {1}u>",
-            static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype))));
-
     const char* const path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     // One KernelSpec per legacy compute KernelDescriptor: the per-group chunk count stays a
@@ -224,14 +207,16 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         return KernelSpec{
             .unique_id = id,
             .source = path,
-            .compiler_options = {.defines = unary_defines},
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{
                      .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},  // rows * total_chunks_per_row
-                 {"per_core_block_dim", 1u}},
+                 {"per_core_block_dim", 1u},
+                 {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+                 {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
             .hw_config = ComputeHardwareConfig{ComputeGen1Config{
                 .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false

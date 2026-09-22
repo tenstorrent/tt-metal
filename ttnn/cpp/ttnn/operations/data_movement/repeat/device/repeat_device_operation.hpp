@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
@@ -40,7 +42,8 @@ RepeatDeviceOperation::tensor_return_value_t repeat(
     const Tensor& input,
     uint32_t m_num_repeats,
     bool m_is_last_dim,
-    const tt::tt_metal::MemoryConfig& output_mem_config);
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<Tensor> optional_output_tensor = std::nullopt);
 
 RepeatDeviceOperation::tensor_return_value_t repeat_tile(
     const Tensor& input,
@@ -50,5 +53,6 @@ RepeatDeviceOperation::tensor_return_value_t repeat_tile(
     uint32_t tile_higher_pages,
     uint32_t tile_rep_dim_pages,
     uint32_t tile_lower_pages,
-    uint32_t tile_page_size_bytes);
+    uint32_t tile_page_size_bytes,
+    std::optional<Tensor> optional_output_tensor = std::nullopt);
 }  // namespace ttnn::prim
