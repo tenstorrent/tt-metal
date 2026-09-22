@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Cache-key tests for UnaryDeviceOperation::compute_program_hash.
+//
+// These stop at the hash generation intentionally. Both CBs are sized from tile_size(DataFormat)
+// (unary_program_factory.cpp:356-358, 371-372), which assumes a fixed 32x32 tile. Dispatching a
+// different tile size will write past the output buffer and returns wrong data.
+
 #include <gtest/gtest.h>
 
 #include <array>
