@@ -6,7 +6,7 @@
 
 Every test drives the same kernels through a different (cores, C_slice_M_tiles, C_slice_N_tiles) placement and
 memory layout. Correctness is checked with allclose against an fp32 golden of the bf16-rounded inputs
-(the device runs HiFi4 here), plus exact checks with structured inputs (identity / ones), which catch
+(the device runs HiFi4 here), plus exact checks with structured inputs (identity / ones / zeros), which catch
 indexing and edge-clipping errors that a statistical check would not.
 
 Run on Wormhole / Blackhole silicon (one NEO per cluster, same as Quasar in stage A):
@@ -43,6 +43,10 @@ def _rect(x0, y0, x1, y1):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))])
 
 
+def _shard(grid, shape, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    return ttnn.ShardSpec(grid, shape, orientation)
+
+
 def _hifi4(device, fp32_dest_acc_en=False, packer_l1_acc=False):
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -59,7 +63,12 @@ def _golden(a, b):
     return torch.matmul(a.to(torch.float32), b.to(torch.float32))
 
 
-def _check(out, golden, dtype_out=ttnn.bfloat16, rtol=0.02):
+def _quantized(t, dtype):
+    # Round-trips t through dtype so the golden sees the same operand the device does.
+    return ttnn.to_torch(ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT)) if dtype == ttnn.bfloat8_b else t
+
+
+def _check(out, golden, rtol=0.02):
     out_f = out.to(torch.float32)
     scale = golden.abs().max().item()
     atol = rtol * scale
@@ -149,7 +158,7 @@ def test_repr_and_fields():
 
 
 # ----------------------------------------------------------------------------------------------------
-# Edges: M, N not multiples of the block, K not a multiple of the tile, explicit blocking knobs
+# Edges and corners: ragged M / K / N, sub-tile shapes, explicit blocking knobs, subblock padding
 # ----------------------------------------------------------------------------------------------------
 
 
@@ -182,6 +191,27 @@ def test_edges_and_blocking(device, M, K, N, C_slice_M_tiles, C_slice_N_tiles, K
     _check(out, _golden(a, b))
 
 
+def test_single_tile(device):
+    """The smallest problem: one tile, one core, 1x1 C slice; the auto subblock pads it to 8 entries,
+    all but one of which are stale and must be clipped."""
+    M = K = N = TILE
+    torch.manual_seed(2)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=1, C_slice_N_tiles=1)
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+def test_sub_tile_dims(device):
+    """M=5, K=10, N=7 elements: one partly-valid tile per operand; A's K padding must be zeroed."""
+    M, K, N = 5, 10, 7
+    torch.manual_seed(3)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=1, C_slice_N_tiles=1)
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
 def test_auto_subblock_falls_back_when_padding_does_not_fit(device):
     """22x22-tile C slice: every max-volume subblock pads a dim to 24 and blows the DFB extent limit,
     so auto must fall back to a smaller subblock (2x2 pads nothing) instead of failing."""
@@ -192,6 +222,11 @@ def test_auto_subblock_falls_back_when_padding_does_not_fit(device):
     config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=22, C_slice_N_tiles=22)
     out = _run(device, a, b, config)
     _check(out, _golden(a, b))
+
+
+# ----------------------------------------------------------------------------------------------------
+# Structured inputs: exact answers that expose indexing, clipping and K-step errors bit for bit
+# ----------------------------------------------------------------------------------------------------
 
 
 def test_identity_is_exact_on_ragged_edges(device):
@@ -221,19 +256,48 @@ def test_ones_give_constant_k(device):
     assert torch.equal(out.to(torch.float32), torch.full((1, 1, M, N), float(K)))
 
 
+def test_zeros_give_exact_zero(device):
+    """in0 = 0: every output element is exactly 0; stale ring entries or unclipped subblock padding
+    leak nonzeros here (the 2x3 C slice forces a padded auto subblock)."""
+    gx, gy = _grid(device)
+    M, K, N = 5 * TILE, 6 * TILE, 7 * TILE
+    torch.manual_seed(5)
+    a = torch.zeros(1, 1, M, K, dtype=torch.bfloat16)
+    b = _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, min(gx, 2) - 1, min(gy, 2) - 1), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=2
+    )
+    out = _run(device, a, b, config)
+    assert torch.equal(out.to(torch.float32), torch.zeros(1, 1, M, N))
+
+
 # ----------------------------------------------------------------------------------------------------
-# Batch: broadcast in1 and batched in1
+# Batch: broadcast in1, batched in1, several leading dims, and batch interleaved with K spill
 # ----------------------------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("K_chunk_tiles", [0, 1], ids=["single_K_chunk", "K_spill"])
 @pytest.mark.parametrize("bcast", [True, False], ids=["bcast_in1", "batched_in1"])
-def test_batch(device, bcast):
+def test_batch(device, bcast, K_chunk_tiles):
     gx, gy = _grid(device)
     B, M, K, N = 3, 4 * TILE, 4 * TILE, 6 * TILE
     torch.manual_seed(3)
     a = _randn(1, B, M, K)
     b = _randn(1, 1, K, N) if bcast else _randn(1, B, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, min(gx, 3) - 1, 0), C_slice_M_tiles=2, C_slice_N_tiles=3)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, min(gx, 3) - 1, 0), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=K_chunk_tiles
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+def test_batch_from_multiple_leading_dims(device):
+    """(2, 3, M, K) x (2, 3, K, N): every leading dim folds into one batch of 6."""
+    gx, gy = _grid(device)
+    M, K, N = 2 * TILE, 3 * TILE, 2 * TILE
+    torch.manual_seed(6)
+    a, b = _randn(2, 3, M, K), _randn(2, 3, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, min(gx, 2) - 1, 0), C_slice_M_tiles=2, C_slice_N_tiles=2)
     out = _run(device, a, b, config)
     _check(out, _golden(a, b))
 
@@ -241,10 +305,6 @@ def test_batch(device, bcast):
 # ----------------------------------------------------------------------------------------------------
 # Memory layouts: the same kernels read and write interleaved, L1-sharded and DRAM-sharded tensors
 # ----------------------------------------------------------------------------------------------------
-
-
-def _shard(grid, shape, orientation=ttnn.ShardOrientation.ROW_MAJOR):
-    return ttnn.ShardSpec(grid, shape, orientation)
 
 
 def test_height_sharded_in0_and_out(device):
@@ -269,7 +329,6 @@ def test_height_sharded_in0_and_out(device):
 
 def test_block_sharded_in0_and_out(device):
     """2D: in0 block-sharded on a 2x2 rectangle, output block-sharded on the same rectangle."""
-    gx, gy = _grid(device)
     M, K, N = 4 * TILE, 4 * TILE, 6 * TILE
     cores = _rect(0, 0, 1, 1)
     in0_mem = ttnn.MemoryConfig(
@@ -407,7 +466,6 @@ def test_single_core_all_operands_borrowed(device):
 
 
 def test_l1_interleaved_everything(device):
-    gx, gy = _grid(device)
     M, K, N = 4 * TILE, 4 * TILE, 4 * TILE
     torch.manual_seed(8)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -425,51 +483,73 @@ def test_l1_interleaved_everything(device):
 
 
 # ----------------------------------------------------------------------------------------------------
-# Compute options: bfp8 inputs, fp32 accumulation, packer L1 accumulation, fp32 output
+# Compute options: bfp8 operands and output, fp32 accumulation, packer L1 accumulation
 # ----------------------------------------------------------------------------------------------------
 
 
-def test_bfp8_inputs(device):
-    gx, gy = _grid(device)
+@pytest.mark.parametrize(
+    "in0_dtype,in1_dtype,out_dtype,rtol",
+    [
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, 0.03),
+        (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, 0.03),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, 0.06),
+    ],
+    ids=["bfp8_inputs", "bfp8_weights_only", "bfp8_out"],
+)
+def test_bfp8(device, in0_dtype, in1_dtype, out_dtype, rtol):
     M, K, N = 4 * TILE, 8 * TILE, 4 * TILE
     torch.manual_seed(9)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=2)
-    out = _run(device, a, b, config, in0_dtype=ttnn.bfloat8_b, in1_dtype=ttnn.bfloat8_b)
-    # bfp8 quantizes the operands; compare against the same quantization.
-    a_q = ttnn.to_torch(ttnn.from_torch(a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT))
-    b_q = ttnn.to_torch(ttnn.from_torch(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT))
-    _check(out, _golden(a_q, b_q), rtol=0.03)
+    out = _run(device, a, b, config, in0_dtype=in0_dtype, in1_dtype=in1_dtype, out_dtype=out_dtype)
+    _check(out, _golden(_quantized(a, in0_dtype), _quantized(b, in1_dtype)), rtol=rtol)
 
 
-def test_fp32_dest_acc_and_fp32_out(device):
-    """fp32 accumulation caps the subblock at 4 tiles (auto picks one that fits); fp32 output means partials and C differ in format."""
-    gx, gy = _grid(device)
+@pytest.mark.parametrize(
+    "C_slice_M_tiles,C_slice_N_tiles",
+    [(4, 2), (3, 3)],
+    ids=["dividing_subblock", "padded_subblock"],
+)
+def test_fp32_dest_acc_and_fp32_out(device, C_slice_M_tiles, C_slice_N_tiles):
+    """fp32 accumulation caps the subblock at 4 tiles; the 3x3 slice forces padding under that cap.
+    fp32 output means partials and C differ in format."""
     M, K, N = 4 * TILE, 8 * TILE, 4 * TILE
     torch.manual_seed(10)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, 1, 0), C_slice_M_tiles=4, C_slice_N_tiles=2, K_chunk_tiles=2
+        cores=_rect(0, 0, 1, 0),
+        C_slice_M_tiles=C_slice_M_tiles,
+        C_slice_N_tiles=C_slice_N_tiles,
+        K_chunk_tiles=2,
     )
     out = _run(device, a, b, config, out_dtype=ttnn.float32, fp32_dest_acc_en=True)
     _check(out, _golden(a, b), rtol=0.005)
 
 
-def test_packer_l1_acc(device):
-    """packer_l1_acc engages when there are more than 2 K steps (K_chunk_tiles=1 on K_tiles=6 gives 6)."""
-    gx, gy = _grid(device)
+@pytest.mark.parametrize(
+    "C_slice_M_tiles,C_slice_N_tiles,subblock",
+    [(2, 2, (0, 0)), (3, 3, (2, 2))],
+    ids=["dividing_subblock", "padded_subblock"],
+)
+def test_packer_l1_acc(device, C_slice_M_tiles, C_slice_N_tiles, subblock):
+    """packer_l1_acc engages when there are more than 2 K steps (K_chunk_tiles=1 on K_tiles=6 gives 6);
+    the padded case must keep the accumulation ring's credits balanced over padded subblocks."""
     M, K, N = 4 * TILE, 6 * TILE, 4 * TILE
     torch.manual_seed(11)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=1
+        cores=_rect(0, 0, 1, 1),
+        C_slice_M_tiles=C_slice_M_tiles,
+        C_slice_N_tiles=C_slice_N_tiles,
+        K_chunk_tiles=1,
+        subblock_M_tiles=subblock[0],
+        subblock_N_tiles=subblock[1],
     )
     out = _run(device, a, b, config, packer_l1_acc=True)
     _check(out, _golden(a, b))
 
 
 def test_bias_is_applied_as_separate_add(device):
-    gx, gy = _grid(device)
     M, K, N = 4 * TILE, 4 * TILE, 4 * TILE
     torch.manual_seed(12)
     a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _randn(1, 1, 1, N)
@@ -481,6 +561,25 @@ def test_bias_is_applied_as_separate_add(device):
         a_t, b_t, bias=bias_t, program_config=config, compute_kernel_config=_hifi4(device)
     )
     _check(ttnn.to_torch(out), _golden(a, b) + bias.to(torch.float32))
+
+
+# ----------------------------------------------------------------------------------------------------
+# Everything at once: interactions between mechanisms show up here first
+# ----------------------------------------------------------------------------------------------------
+
+
+def test_ragged_batched_spill_all_at_once(device):
+    """Ragged M / K / N, a batch, K spill with packer L1 accumulation, a padded auto subblock and an
+    uneven C-slice split, all in one run."""
+    gx, gy = _grid(device)
+    B, M, K, N = 2, 7 * TILE + 13, 5 * TILE + 20, 9 * TILE + 5
+    torch.manual_seed(17)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, min(gx, 3) - 1, min(gy, 2) - 1), C_slice_M_tiles=3, C_slice_N_tiles=4, K_chunk_tiles=2
+    )
+    out = _run(device, a, b, config, packer_l1_acc=True)
+    _check(out, _golden(a, b))
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -523,6 +622,18 @@ def test_bias_is_applied_as_separate_add(device):
             "must be > 0",
         ),
         (
+            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=40, C_slice_N_tiles=40),
+            None,
+            "shrink C_slice_M_tiles",
+        ),
+        (
+            lambda: qsr.MatmulUnifiedProgramConfig(
+                cores=_rect(0, 0, 0, 0), C_slice_M_tiles=40, C_slice_N_tiles=40, K_chunk_tiles=4
+            ),
+            None,
+            "do not fit",
+        ),
+        (
             lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -538,6 +649,8 @@ def test_bias_is_applied_as_separate_add(device):
         "half_auto_subblock",
         "subblock_too_big",
         "zero_block",
+        "slice_does_not_fit_l1",
+        "explicit_K_chunk_does_not_fit",
         "sharded_multi_block",
     ],
 )
