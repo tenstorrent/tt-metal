@@ -167,7 +167,38 @@ jobs:
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
           echo "[Info] Workflow run attempt"
-          gh api /repos/${{ github.repository }}/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
+          # --include keeps the response headers. X-Ratelimit-* on a billed call is the only place
+          # the enforced GITHUB_TOKEN budget is visible: the /rate_limit endpoint reports a
+          # different counter and has read 15000 remaining seconds before this same token was
+          # rejected with "API rate limit exceeded for installation ... (HTTP 403)". This request
+          # is made anyway, so sampling it costs no extra calls.
+          gh api --include /repos/${{ github.repository }}/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > api_response.txt
+          sed -n '1,/^[[:space:]]*$/p' api_response.txt | tr -d '\r' > api_response_headers.txt
+          sed '1,/^[[:space:]]*$/d' api_response.txt > workflow.json
+          jq -e . workflow.json > /dev/null || {
+            echo "::error title=bad-api-response::Could not split the response headers from the JSON body"
+            cat api_response.txt
+            exit 1
+          }
+          # The body has no trailing newline, so without the echo the next log line runs onto
+          # the end of the JSON and the [rate-limit] prefix stops being greppable.
+          cat workflow.json
+          echo
+
+          # One greppable line per execution. produce-data runs on nearly every workflow_run
+          # completion, so at peak this samples the budget every few seconds.
+          rl() { awk -v k="$1:" 'tolower($1)==k {print $2; exit}' api_response_headers.txt; }
+          used=$(rl x-ratelimit-used)
+          remaining=$(rl x-ratelimit-remaining)
+          limit=$(rl x-ratelimit-limit)
+          reset=$(rl x-ratelimit-reset)
+          if [ -n "$remaining" ] && [ -n "$reset" ]; then
+            window_left=$(( reset - $(date +%s) ))
+            echo "[rate-limit] repo=${{ github.repository }} used=${used} remaining=${remaining} limit=${limit} reset=${reset} window_left_s=${window_left}"
+            echo "GITHUB_TOKEN budget: ${remaining} of ${limit} left, window resets in $(( window_left / 60 )) min" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "[rate-limit] no X-Ratelimit headers on this response"
+          fi
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
