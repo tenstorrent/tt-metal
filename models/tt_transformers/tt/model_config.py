@@ -893,7 +893,9 @@ class ModelArgs:
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             self.prefill_rows = 8
-            self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+            # QKV decode matmul is fastest with a wide 8x1 activation shard (K=16 tiles
+            # per core), which lets the DRAM-sharded matmul use in0_block_w=16.
+            self.attn_input_grid = ttnn.CoreGrid(y=1, x=8)
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -1817,14 +1819,16 @@ class ModelArgs:
                     untilize_out=True,
                 )
             else:
-                return self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=self.dim,
-                    n=self.qkv_size // self.num_devices,
-                    num_cores=self.attn_input_grid.num_cores,
-                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
-                        TensorGroup.WQKV, self.qkv_size // self.num_devices
-                    ),
+                # Sweep on this board measured the 8-core / in0_block_w=16 / per_core_N=6
+                # geometry ~35% faster than the 32-core default for this QKV shape.
+                # It requires the activation to arrive width-sharded on an 8x1 grid,
+                # which get_attn_input_mem_config() now produces (attn_input_grid).
+                return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=16,
+                    per_core_M=math.ceil(self.tile_padded_batch_rows / ttnn.TILE_SIZE),
+                    per_core_N=math.ceil((self.qkv_size // self.num_devices) / (ttnn.TILE_SIZE * 8)),
+                    fused_activation=None,
+                    num_workers_per_dram_bank=1,
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
@@ -1921,9 +1925,23 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_attn_create_head_input_mem_config(self, mode: Mode):
-        """Get the memory config for create_head input (TG specific)."""
+        """Get the memory config for create_head input."""
         if mode == Mode.DECODE:
-            return self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
+            if self.is_galaxy:
+                return self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
+            # nlp_create_qkv_heads_decode requires head_dim % shard_width == 0.
+            # Width-shard the fused QKV so each core holds a whole number of heads.
+            qkv_n = self.qkv_size // self.num_devices
+            num_cores = qkv_n // self.head_dim
+            while num_cores > 1 and (num_cores > 64 or qkv_n % (num_cores * ttnn.TILE_SIZE) != 0):
+                num_cores -= 1
+            return ttnn.create_sharded_memory_config(
+                (self.tile_padded_batch_rows, qkv_n // num_cores),
+                num_to_coregrid(num_cores),
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
         elif mode == Mode.PREFILL:
             return ttnn.DRAM_MEMORY_CONFIG
         else:

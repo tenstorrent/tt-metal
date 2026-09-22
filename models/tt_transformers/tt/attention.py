@@ -791,10 +791,23 @@ class Attention(LightweightModule):
                 # nlp_create_qkv_heads_decode requires a sharded input; keep the fused QKV
                 # activation width-sharded in L1 instead of round-tripping through an
                 # interleaved L1 buffer.
+                #
+                # The QKV matmul now runs on an 8-core DRAM-sharded geometry, so its
+                # output shard width (qkv_size/8) is not a divisor-multiple of head_dim
+                # and nlp_create_qkv_heads_decode rejects partial heads in a shard.
+                # Reshard the fused QKV back onto the head-friendly grid this op expects.
                 if xqkv_fused_sharded.dtype == ttnn.bfloat16:
-                    xqkv_fused = xqkv_fused_sharded
+                    xqkv_fused = ttnn.to_memory_config(
+                        xqkv_fused_sharded,
+                        self.args.get_attn_create_head_input_mem_config(Mode.DECODE),
+                    )
+                    ttnn.deallocate(xqkv_fused_sharded)
                 else:
-                    xqkv_fused = ttnn.typecast(xqkv_fused_sharded, ttnn.bfloat16)
+                    xqkv_fused = ttnn.typecast(
+                        xqkv_fused_sharded,
+                        ttnn.bfloat16,
+                        memory_config=self.args.get_attn_create_head_input_mem_config(Mode.DECODE),
+                    )
                     ttnn.deallocate(xqkv_fused_sharded)
             else:
                 xqkv_fused = xqkv_fused_sharded
