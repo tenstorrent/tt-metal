@@ -85,11 +85,18 @@ class QuantConfig:
 
     @staticmethod
     def all_weights_bf8() -> QuantConfig:
-        """All linear weights bfloat8_b, rest default."""
+        """All linear weights bfloat8_b, rest default.
+
+        self_attn_out keeps bf16 weights, as in `all_bf8_lofi`: the fused matmul+addcmul
+        kernels (`all_gather_minimal_matmul_async` with the addcmul ternary, and
+        `dit_minimal_matmul_addcmul_fused`) require the residual and gate tiles to match the
+        weight tile format, and those are bf16 activations. With bf8 weights there the kernel
+        asserts `ternary_a_tile_size == in1_tile_size` (seen on the TI2V-5B, 2026-09-22).
+        """
         lc = LinearQuantConfig(weight_dtype=ttnn.bfloat8_b)
         return QuantConfig(
             self_attn_qkv=lc,
-            self_attn_out=lc,
+            self_attn_out=LinearQuantConfig(),
             cross_attn_q=lc,
             cross_attn_kv=lc,
             cross_attn_out=lc,
