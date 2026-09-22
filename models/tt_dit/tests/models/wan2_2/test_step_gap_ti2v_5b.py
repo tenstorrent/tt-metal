@@ -150,29 +150,43 @@ def test_step_gap_ti2v_5b(mesh_device, mesh_shape, topology):
     num_frames = int(os.environ.get("WAN5B_GAP_FRAMES", 81))
     steps = int(os.environ.get("WAN5B_GAP_STEPS", 40))
 
-    # Same construction as the perf test: eager cache warmup, then a 2-step traced run that
-    # captures the trace, so the timed passes below execute it exactly as production does.
+    passes = os.environ.get("WAN5B_GAP_PASSES", "AB").upper()
+
+    # Denoise only, end to end: the construction warmup is skipped and replaced by an eager
+    # 2-step run with `output_type="latent"`, which compiles every denoise program without ever
+    # running the VAE decode. A Tracy capture of this test therefore holds the text encoder
+    # (3 calls, ~0.1 s each of device time) plus 2 eager + 2 trace-capture + `steps` per pass
+    # denoise steps and nothing else, which is what makes the per-step device time attributable.
     pipeline = WanTI2V5BPipeline.create_pipeline(
-        mesh_device=mesh_device, height=height, width=width, num_frames=num_frames, run_warmup=True
+        mesh_device=mesh_device, height=height, width=width, num_frames=num_frames, run_warmup=False
     )
 
-    def _run():
+    def _run(n, traced):
         with torch.no_grad():
-            return pipeline(prompts=[_PROMPT], num_inference_steps=steps, seed=42, output_type="latent", traced=True)
+            return pipeline(prompts=[_PROMPT], num_inference_steps=n, seed=42, output_type="latent", traced=traced)
 
-    with torch.no_grad():
-        pipeline(prompts=[_PROMPT], num_inference_steps=2, traced=True)
+    _run(2, traced=False)  # compile
+    _run(2, traced=True)  # capture the trace
     ttnn.synchronize_device(mesh_device)
 
-    logger.info(f"step gap: {width}x{height}, {num_frames}f, {steps} traced steps")
+    logger.info(f"step gap: {width}x{height}, {num_frames}f, {steps} traced steps, passes {passes}")
+    denoise_steps_total = 4 + steps * len(passes)
+    print(f"GAP denoise steps executed in this process (for Tracy attribution): {denoise_steps_total}")
 
-    with _StepTimer(pipeline, mesh_device, sync_after_solver=False) as ta:
-        _run()
-    a = _summarise("A production", ta.records)
+    a = b = None
+    if "A" in passes:
+        with _StepTimer(pipeline, mesh_device, sync_after_solver=False) as ta:
+            _run(steps, traced=True)
+        a = _summarise("A production", ta.records)
 
-    with _StepTimer(pipeline, mesh_device, sync_after_solver=True) as tb:
-        _run()
-    b = _summarise("B sync-after-solver", tb.records)
+    if "B" in passes:
+        with _StepTimer(pipeline, mesh_device, sync_after_solver=True) as tb:
+            _run(steps, traced=True)
+        b = _summarise("B sync-after-solver", tb.records)
+
+    pipeline.release_traces()
+    if a is None or b is None:
+        return
 
     solver_device = b["solver_host"] + b["solver_sync"]
     gap = a["wall"] - a["trace"] - solver_device
@@ -182,5 +196,4 @@ def test_step_gap_ti2v_5b(mesh_device, mesh_shape, topology):
         f"GAP HOST GAP = wall A - trace A - solver dev   {gap * 1e3:7.2f} ms/step  ({gap / a['wall'] * 100:.1f}% of wall)"
     )
 
-    pipeline.release_traces()
     assert len(ta.records) == steps and len(tb.records) == steps
