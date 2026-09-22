@@ -43,7 +43,8 @@ PR2 is developed on `cglagovich/sdpa-streaming-pr2`, stacked on PR1. Its first
 slice adds joint segment addressing with unchanged compute and shared accuracy
 tests. It does not yet qualify PR2 for merge. Remaining integration gates:
 
-- Add tail masking and required geometry without duplicating recipe arithmetic.
+- Joint whole-tile chunk tails use a shared score-mask hook; add sub-tile tails
+  and required geometry without duplicating recipe arithmetic.
 - Separate Q-block release from final normalization before ring integration.
   Preserve raw maxima, denominators, numerators and pending compensated groups
   across ring steps, including state staging for multiple Q blocks.

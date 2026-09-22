@@ -614,7 +614,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (ttnn.SDPAProgramConfig)
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):Defaults to None.
-            precision (ttnn.SDPAPrecision, optional): Opt-in Blackhole recipes, with the same numerical contract as ordinary SDPA. Initially D128, batch 1, tile-aligned segments, total Q divisible by 256 and total K by 512. Omit to retain legacy support.
+            precision (ttnn.SDPAPrecision, optional): Opt-in Blackhole recipes, with the same numerical contract as ordinary SDPA. Initially D128, batch 1 and tile-aligned segments; partial Q256/K512 chunks are masked internally. Omit to retain legacy support.
             inputs_prepared (bool): Caller acknowledgment that LOW_PRECISION preparation was applied to both segments. Required only for LOW_PRECISION. Defaults to False.
 
         Returns:

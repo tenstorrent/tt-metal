@@ -71,14 +71,19 @@ Q/K/V segments. Omitting `precision` preserves the existing joint implementation
 
 The initial joint adapter supports `joint_strategy="rear"` and the same device,
 dtype, D128, batch-one and grid restrictions above. Each segment must have positive
-tile-aligned lengths; **total** Q length must be divisible by 256 and **total** K
-length by 512. Segment boundaries may occur inside a Q or K chunk.
+tile-aligned lengths. Segment boundaries and the end of the concatenated sequence
+may occur inside a Q or K chunk; Q and K lengths may differ.
 
 The reader maps virtual concatenated tile addresses to the two input segments;
 the writer maps output tiles back to their respective tensors. There is no
-materialized concatenation or output slicing, and the compute kernel, CB depths
-and softmax-state lifetime are identical to dense attention. Tail masking and
-ring integration are not enabled by this initial adapter.
+materialized concatenation or output slicing. The final partial chunk is zero-filled
+by the reader, nonexistent output tiles are discarded, and padded **key** score
+tiles are replaced with negative infinity before the row maximum and exponential.
+Zero-filling K/V alone would incorrectly increase the denominator. This mask is
+compiled out for aligned K lengths; valid-score arithmetic, CB depths and the
+softmax-state lifetime remain unchanged. Sub-tile segment tails and ring
+integration are not enabled yet. Ordinary dense recipes retain PR1's full-chunk
+restriction until their tail adapter is separately qualified.
 
 ## Examples
 

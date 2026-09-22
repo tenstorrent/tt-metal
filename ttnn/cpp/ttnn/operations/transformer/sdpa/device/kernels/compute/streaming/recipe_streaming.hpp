@@ -301,6 +301,11 @@ void blocked_matmul_and_pack(
     tile_regs_commit();
 
     tile_regs_wait();
+#ifdef SDPA_RECIPE_VALID_K_TILES
+    if constexpr (transpose) {
+        mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
+    }
+#endif
     if (!skip_pack_configure) {
         configure_row_pack_width(out_cb, subblock_w);
     }
@@ -1761,7 +1766,7 @@ static void sdpa_inner_loop_step(
 }
 
 // Dense Q256/K512/D128 schedule. Feature-rich legacy attention retains its own
-// entrypoint; the host rejects masks, tails, sinks and ring mode for these recipes.
+// entrypoint; named joint recipes may mask whole-tile chunk padding.
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
@@ -1800,6 +1805,9 @@ void sdpa_standard_v2(
         bool group_local_valid[4] = {};
 #endif
         for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+#ifdef SDPA_RECIPE_VALID_K_TILES
+            recipe_k_tile_offset = k_chunk * Sk_chunk_t;
+#endif
             const bool is_first = k_chunk == 0;
             const bool is_last = k_chunk == k_num_chunks - 1;
             sdpa_inner_loop_step<

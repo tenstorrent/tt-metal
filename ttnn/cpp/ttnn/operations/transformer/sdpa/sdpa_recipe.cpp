@@ -182,7 +182,7 @@ static std::vector<Tensor> run_recipe_segments(
         k_length += kshape[2];
     }
     TT_FATAL(
-        q_length % 256 == 0 && k_length % 512 == 0,
+        segments.size() == 2 || (q_length % 256 == 0 && k_length % 512 == 0),
         "SDPA recipes require total Q and K lengths divisible by 256 and 512, respectively");
     const auto hardware = q.device()->compute_with_storage_grid_size();
     const auto grid_size = program_config ? program_config->compute_with_storage_grid_size : hardware;
@@ -196,8 +196,8 @@ static std::vector<Tensor> run_recipe_segments(
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");
         TT_FATAL(program_config->max_cores_per_head_batch > 0, "SDPA max_cores_per_head_batch must be positive");
     }
-    const uint32_t jobs_per_head = q_length / 256;
-    const uint32_t k_chunks = k_length / 512;
+    const uint32_t jobs_per_head = (q_length + 255) / 256;
+    const uint32_t k_chunks = (k_length + 511) / 512;
     const uint32_t chain = std::min<uint32_t>(
         {jobs_per_head,
          static_cast<uint32_t>(grid_size.x * grid_size.y / qs[1]),
@@ -218,6 +218,9 @@ static std::vector<Tensor> run_recipe_segments(
     }
     const auto& output = outputs.front();
     auto program = recipe_compute_program(policy, grid, k_chunks);
+    if (k_length % 512 != 0) {
+        program.kernels.front().defines.emplace_back("SDPA_RECIPE_VALID_K_TILES", std::to_string(k_length / 32));
+    }
     for (uint32_t i = 0; i < 3; ++i) {
         program.semaphores.push_back({.id = i, .core_ranges = grid, .initial_value = i == 2 ? 1u : 0u});
     }

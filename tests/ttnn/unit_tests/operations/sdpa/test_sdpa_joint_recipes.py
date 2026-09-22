@@ -106,19 +106,21 @@ def test_joint_recipe_model_capture(device, model_capture, variant, record_prope
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
+@pytest.mark.parametrize("lengths", [(384, 128), (320, 96)])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16777216}], indirect=True)
-def test_joint_recipe_cache_trace(device, variant):
+def test_joint_recipe_cache_trace(device, variant, lengths):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
     device.enable_program_cache()
     grid = (2, 1)
     outputs = []
     retained_inputs = []
+    primary, total = lengths[0], sum(lengths)
     for seed in (20260919, 20260920):
-        host = make_inputs(512, "normal", q_length=512, seed=seed)
+        host = make_inputs(total, "normal", q_length=total, seed=seed)
         inputs = [
             upload(device, [x[..., start:end, :].contiguous() for x in host], variant)
-            for start, end in ((0, 384), (384, 512))
+            for start, end in ((0, primary), (primary, total))
         ]
         retained_inputs.append(inputs)
         actual = joint(inputs, variant, grid)
@@ -128,15 +130,21 @@ def test_joint_recipe_cache_trace(device, variant):
         else:
             assert device.num_program_cache_entries() == entries
             assert digest(outputs[0]) != digest(outputs[1])
-    expected = ttnn.transformer.scaled_dot_product_attention(
-        *upload(device, host, variant), is_causal=False, **options(variant, grid)
-    )
-    assert digest(outputs[-1]) == digest(ttnn.to_torch(expected))
+    if total == 512:
+        expected = ttnn.transformer.scaled_dot_product_attention(
+            *upload(device, host, variant), is_causal=False, **options(variant, grid)
+        )
+        assert digest(outputs[-1]) == digest(ttnn.to_torch(expected))
     other_split = [
         upload(device, [x[..., start:end, :].contiguous() for x in host], variant)
-        for start, end in ((0, 256), (256, 512))
+        for start, end in ((0, 256), (256, total))
     ]
-    assert digest(joined(joint(other_split, variant, grid))) == digest(outputs[-1])
+    for index in range(3):
+        assert digest(joined([segment[index] for segment in other_split])) == digest(
+            joined([segment[index] for segment in retained_inputs[-1]])
+        )
+    repartitioned = joined(joint(other_split, variant, grid))
+    assert digest(repartitioned) == digest(outputs[-1]), metrics(repartitioned, outputs[-1])
     assert digest(joined(joint(retained_inputs[-1], variant, grid))) == digest(outputs[-1])
     trace = ttnn.begin_trace_capture(device, cq_id=0)
     traced = joint(retained_inputs[-1], variant, grid)
@@ -149,13 +157,74 @@ def test_joint_recipe_cache_trace(device, variant):
         ttnn.release_trace(device, trace)
 
 
+@pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize(
-    "invalid", ["padding", "total_length", "joint_heads", "joint_dtype", "strategy", "unprepared", "compute"]
+    "q_lengths,k_lengths,heads,grid,distribution",
+    [
+        ((32, 32), (32, 32), 1, (1, 1), "normal"),
+        ((384, 128), (32, 224), 1, (2, 1), "uniform"),
+        ((32, 256), (384, 128), 2, (4, 1), "normal"),
+        ((512, 256), (512, 256), 2, (4, 1), "normal"),
+        ((768, 32), (1024, 32), 2, (6, 1), "changed_max"),
+        ((32, 32), (32, 512), 1, (1, 1), "constant_v"),
+        ((512, 32), (32, 224), 1, (2, 1), "zero_v"),
+    ],
 )
+def test_joint_recipe_chunk_tails(device, variant, q_lengths, k_lengths, heads, grid, distribution, record_property):
+    if not is_blackhole():
+        pytest.skip("Named recipes initially target Blackhole")
+    host = make_inputs(sum(k_lengths), distribution, q_length=sum(q_lengths), heads=heads)
+    segments = [
+        [x[..., : lengths[0], :].contiguous() for x, lengths in zip(host, (q_lengths, k_lengths, k_lengths))],
+        [x[..., lengths[0] :, :].contiguous() for x, lengths in zip(host, (q_lengths, k_lengths, k_lengths))],
+    ]
+    inputs = [upload(device, segment, variant) for segment in segments]
+    hashes = [digest(ttnn.to_torch(x)) for segment in inputs for x in segment]
+    outputs = joint(inputs, variant, grid)
+    assert [tuple(x.shape) for x in outputs] == [tuple(segment[0].shape) for segment in segments]
+    actual = joined(outputs)
+    observed = metrics(actual, reference(*host))
+    record_property("variant", variant)
+    record_property("distribution", distribution)
+    for key, value in observed.items():
+        record_property(key, value)
+    if distribution == "zero_v":
+        assert observed["max_abs"] <= 1e-6
+    else:
+        limits = {"A": 8, "B": 8, "C": 2, "D": 0.4, "E_bf16": 8, "E_bfp8": 8, "E_bfp4": 35}
+        if distribution == "constant_v":
+            limits = {key: 0.4 if key in ("C", "D") else 1 for key in limits}
+        assert observed["l2_pct"] < limits[variant]
+        if distribution == "uniform":
+            # Duplicating every key/value leaves exact attention unchanged and
+            # gives an aligned diagnostic. Finite-precision reductions differ,
+            # so equal attention does not imply equal error for this comparison.
+            dense_host = [host[0], *(x.repeat(1, 1, 2, 1) for x in host[1:])]
+            dense = ttnn.transformer.scaled_dot_product_attention(
+                *upload(device, dense_host, variant), is_causal=False, **options(variant, grid)
+            )
+            baseline = metrics(ttnn.to_torch(dense), reference(*host))
+            record_property("duplicate_kv_l2_pct", baseline["l2_pct"])
+            if variant in ("A", "B"):
+                legacy = ttnn.transformer.scaled_dot_product_attention(
+                    *upload(device, host, variant),
+                    is_causal=False,
+                    program_config=config(grid),
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=True, fp32_dest_acc_en=False
+                    ),
+                )
+                legacy_metrics = metrics(ttnn.to_torch(legacy), reference(*host))
+                record_property("legacy_tail_l2_pct", legacy_metrics["l2_pct"])
+                assert observed["l2_pct"] <= 1.05 * legacy_metrics["l2_pct"] + 0.0001
+    assert hashes == [digest(ttnn.to_torch(x)) for segment in inputs for x in segment]
+
+
+@pytest.mark.parametrize("invalid", ["padding", "joint_heads", "joint_dtype", "strategy", "unprepared", "compute"])
 def test_joint_recipe_rejects_unsupported(device, invalid):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
-    n, j = (383, 129) if invalid == "padding" else (512, 256) if invalid == "total_length" else (384, 128)
+    n, j = (383, 129) if invalid == "padding" else (384, 128)
     segments = [make_inputs(length, "normal", q_length=length) for length in (n, j)]
     if invalid == "joint_heads":
         segments[1] = [x.repeat(1, 2, 1, 1) for x in segments[1]]

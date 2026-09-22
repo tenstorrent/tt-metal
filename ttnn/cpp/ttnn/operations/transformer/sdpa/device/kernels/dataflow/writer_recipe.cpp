@@ -12,7 +12,7 @@ void kernel_main() {
     constexpr uint32_t joint_pages = get_compile_time_arg_val(2);
     constexpr auto oa = TensorAccessorArgs<3>();
     constexpr auto joa = TensorAccessorArgs<oa.next_compile_time_args_offset()>();
-    const auto out = sequence_accessor<primary_pages, joint_pages>(
+    const auto out = sequence_accessor<primary_pages, joint_pages, ((primary_pages + joint_pages + 31) / 32) * 32>(
         TensorAccessor(oa, get_arg_val<uint32_t>(0)), TensorAccessor(joa, get_arg_val<uint32_t>(3)));
 #else
     constexpr auto oa = TensorAccessorArgs<1>();
