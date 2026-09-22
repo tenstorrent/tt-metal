@@ -78,6 +78,11 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
+      run-galaxy-sanity-tests:
+        required: false
+        default: false
+        type: boolean
+        description: "Run Galaxy sanity tests (WH Galaxy fabric CCL). The scheduled runs carry this leg; a caller must opt in."
       run-models-sanity-tests:
         required: false
         default: true
@@ -197,6 +202,11 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
+      run-galaxy-sanity-tests:
+        required: false
+        default: false
+        type: boolean
+        description: "Run Galaxy sanity tests (WH Galaxy fabric CCL). The scheduled runs carry this leg; a caller must opt in."
       run-models-sanity-tests:
         required: false
         default: true
@@ -451,7 +461,8 @@ jobs:
           # simply produce no matrix rows for that impl.
           #
           # Both lists include every wh_*/bh_* SKU in .github/sku_config.yaml except:
-          #   - Galaxy SKUs (wh_galaxy*, bh_galaxy*) -- a separate pipeline (galaxy-sanity.yaml).
+          #   - Galaxy SKUs (wh_galaxy*, bh_galaxy*) -- galaxy-sanity-tests below gates on the
+          #     event instead of on these lists; the heavier Galaxy suites live in galaxy-tests.yaml.
           #   - bh_sc* -- exabox multihost SKUs, used by shield/scaleout, not sanity.
           #   - cpu_medium -- not a wh/bh hardware SKU.
           #   - *_prio SKUs -- merge_group-only aliases; sku_config.yaml itself says not to
@@ -723,10 +734,25 @@ jobs:
         with:
           pytest-markers: "quasar"
 
+  # Galaxy sanity tests (wh_galaxy). Galaxy SKUs sit outside the wh/bh lists that
+  # generate-sku-matrix builds, thus this leg is gated on the event, not on an arch.
+  # The scheduled runs carry it every 2 hours, which is the cadence the standalone
+  # "(Galaxy) Sanity" pipeline had. Every other path leaves it out: `inputs` is null
+  # on a push to main, and the input defaults to false, thus sanity-tests-pr (fork
+  # PRs), sanity-tests-debug and the manylinux canary do not take a Galaxy box.
+  galaxy-sanity-tests:
+    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && (github.event_name == 'schedule' || toJSON(inputs.run-galaxy-sanity-tests) == 'true') }}
+    needs: [build-artifact]
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-sanity-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
-  # workflow invokes (galaxy-sanity-impl is driven by galaxy-sanity.yaml and is
-  # not covered) into one run-level report. expected-jobs is the union of each
+  # workflow invokes into one run-level report. expected-jobs is the union of each
   # impl's matrix, so a leg whose runner died is reported as an infra failure
   # rather than silently dropped. A new impl must be added to `needs:` below or
   # its legs are absent from that union with no error.
@@ -755,6 +781,7 @@ jobs:
       # expected leg with no artifact as INFRA_FAILURE, so exposing `matrix` from
       # llk-smoke-impl on its own would report every passing LLK leg as infra-failed.
       # Both halves — the artifact upload and the `matrix` output — have to land together.
+      - galaxy-sanity-tests
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.

@@ -14,7 +14,6 @@ on:
   workflow_run:
     workflows:
       - "Sanity tests"
-      - "(Galaxy) Sanity"
       - "Sanity tests nightly debug run"
     types:
       - completed
