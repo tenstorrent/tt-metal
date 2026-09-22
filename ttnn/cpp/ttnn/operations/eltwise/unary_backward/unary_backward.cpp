@@ -470,59 +470,11 @@ std::vector<Tensor> sigmoid_bw(
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
 
-    // The fused device operation is interleaved-only: it sizes its circular buffers from
-    // tt::tile_size and splits work by physical_volume() / TILE_HW.
-    //
-    // The fused device operation now handles most sharded configurations, but not all, so the
-    // composite still covers the remainder. Two shapes of gap, both measured against the
-    // composite on a 156-configuration matrix (#57308):
-    //
-    //   * A DRAM-sharded operand cannot be bound to a circular buffer -- circular buffers live
-    //     in L1 -- so it would have to be read like an interleaved one, which is a separate
-    //     path the factory does not have yet.
-    //   * When some operand is interleaved, the reader walks a CONTIGUOUS tile range per core.
-    //     That is only the right range when a shard spans the tensor's full width; a partial-
-    //     width shard (width- or block-sharded with more than one tile per row of the shard)
-    //     leaves each core reading another core's tiles. Measured silently wrong at PCC 0.25
-    //     (width-sharded) and 0.50 (block-sharded), not an error -- which is why this is a
-    //     routing decision rather than a validation.
-    //
-    // When every operand AND the output are sharded, no reading happens at all, so the layout
-    // does not matter and any shard spec is safe.
+    // Sharded configurations run on the fused device operation too: it either aliases the
+    // circular buffers to the shards (when every operand and the output are L1-sharded on the
+    // same grid and shape) or addresses every operand by logical page through TensorAccessor,
+    // which is transparent to sharding. See the factory for the rule.
     const auto& output_memory_config = output_mem_config.value_or(input.memory_config());
-    {
-        const bool any_sharded = grad.is_sharded() || input.is_sharded() || output_memory_config.is_sharded();
-        const bool all_sharded = grad.is_sharded() && input.is_sharded() && output_memory_config.is_sharded();
-
-        const auto is_dram_sharded = [](const tt::tt_metal::MemoryConfig& mc) {
-            return mc.is_sharded() && mc.buffer_type() == tt::tt_metal::BufferType::DRAM;
-        };
-        const bool dram_sharded = is_dram_sharded(grad.memory_config()) || is_dram_sharded(input.memory_config()) ||
-                                  is_dram_sharded(output_memory_config);
-
-        // A shard spans the full width when its width equals the tensor's padded width, which is
-        // what makes each core's tiles a contiguous range.
-        const uint32_t padded_width = input.padded_shape()[-1];
-        const auto spans_full_width = [padded_width](const tt::tt_metal::MemoryConfig& mc) {
-            return !mc.is_sharded() || mc.shard_spec()->shape[1] == padded_width;
-        };
-        const bool contiguous_shards = spans_full_width(grad.memory_config()) &&
-                                       spans_full_width(input.memory_config()) &&
-                                       spans_full_width(output_memory_config);
-
-        const bool fused_handles_it = !dram_sharded && (all_sharded || contiguous_shards);
-        if (any_sharded && !fused_handles_it) {
-            Tensor sig_result = ttnn::sigmoid(
-                input,
-                (int)ttnn::operations::unary::VecMode::RC,
-                ttnn::operations::unary::SigmoidMode::ACCURATE,
-                output_mem_config);
-            Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
-            Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
-            grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
-            return grad_tensor;
-        }
-    }
 
     grad_tensor.emplace_back(ttnn::operations::unary_backward::launch_unary_backward(
         ttnn::operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW,

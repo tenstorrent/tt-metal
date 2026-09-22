@@ -41,15 +41,57 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
 
     const uint32_t num_tiles = input.physical_volume() / TILE_HW;
 
-    // Sharding is per operand: any of the three may be sharded independently, and a caller may
-    // ask for a sharded output from interleaved operands. A sharded tensor's circular buffer is
-    // bound to its own buffer (globally allocated) and sized to a whole shard, and the dataflow
-    // kernels skip the copy for it -- the shard already is the CB. The others keep the
-    // interleaved double-buffered path.
-    const bool grad_output_sharded = grad_output.is_sharded();
-    const bool input_sharded = input.is_sharded();
-    const bool output_sharded = output.is_sharded();
-    const bool any_sharded = grad_output_sharded || input_sharded || output_sharded;
+    // Two modes, following eltwise unary (see is_native_L1_sharding / get_shard_specs in
+    // unary/common/unary_utils.cpp):
+    //
+    //  1. ALIAS. Every operand and the output are L1-sharded on the same grid with the same
+    //     shard shape, so each circular buffer can be bound to its tensor's own buffer and the
+    //     dataflow kernels copy nothing -- the shard already is the CB.
+    //  2. ADDRESS. Anything else: bind nothing and let TensorAccessor address every operand by
+    //     logical page. A sharded buffer is fully addressable that way, because the accessor
+    //     encodes the shard mapping, so this covers DRAM-sharded operands and any mix of
+    //     sharded and interleaved.
+    //
+    // Mixing the two is what must not happen. A bound CB presents the shard in PHYSICAL order
+    // while an addressed operand is read in LOGICAL order; for a height shard those coincide,
+    // but for a width or block shard they do not, and the operands end up misaligned -- silently,
+    // measured at PCC 0.25 and 0.50 before this rule existed.
+    const auto shard_of = [](const Tensor& t) { return t.memory_config().shard_spec(); };
+    const auto is_uneven_shard = [](const Tensor& t) {
+        if (!t.is_sharded()) {
+            return false;
+        }
+        const auto& shape = t.padded_shape();
+        const auto& shard = t.memory_config().shard_spec()->shape;
+        uint64_t volume_except_last = 1;
+        for (int i = 0; i < static_cast<int>(shape.rank()) - 1; ++i) {
+            volume_except_last *= shape[i];
+        }
+        return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
+    };
+    const auto is_l1_sharded = [](const Tensor& t) {
+        return t.is_sharded() && t.memory_config().buffer_type() == BufferType::L1;
+    };
+
+    const bool can_alias_shards = [&]() {
+        if (!(is_l1_sharded(grad_output) && is_l1_sharded(input) && is_l1_sharded(output))) {
+            return false;
+        }
+        if (is_uneven_shard(grad_output) || is_uneven_shard(input) || is_uneven_shard(output)) {
+            return false;
+        }
+        // By value: memory_config() returns a temporary, so a reference into its shard_spec
+        // would dangle.
+        const auto a = *shard_of(grad_output);
+        const auto b = *shard_of(input);
+        const auto c = *shard_of(output);
+        return a.grid == b.grid && b.grid == c.grid && a.shape == b.shape && b.shape == c.shape;
+    }();
+
+    const bool grad_output_sharded = can_alias_shards;
+    const bool input_sharded = can_alias_shards;
+    const bool output_sharded = can_alias_shards;
+    const bool any_sharded = can_alias_shards;
 
     // Tiles in one shard, for whichever operand is sharded. All sharded operands share a shape
     // and a grid here (validation pins the padded shapes equal), so one figure serves them all.
