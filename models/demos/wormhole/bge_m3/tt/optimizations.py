@@ -406,6 +406,15 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
     if max_seq_len == 512 and max_batch == 1:
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
+    # B8/S512 takes the streaming SDPA compute kernel. sdpa_program_factory.cpp
+    # picks it only when fp32_dest_acc_en is false, and calls it the Blackhole
+    # default. It drops the row buffers and overlaps the FPU with the SFPU, so it
+    # removes the pack and unpack passes over the score tiles. HiFi2 to LoFi cut
+    # only 1.9%, so the matmul arithmetic is not the cost.
+    if max_seq_len == 512 and max_batch == 8 and dtype == ttnn.bfloat8_b:
+        return _make_compute_kernel(
+            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
+        )
     # NOTE: B16 SDPA LoFi gives no speedup (bandwidth-bound, not compute-bound)
     # and drops PCC to 0.9357 (< 0.94 gate). Kept HiFi2.
     if max_seq_len == 512 and max_batch in (8, 16, 32):
