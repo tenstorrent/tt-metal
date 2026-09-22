@@ -395,16 +395,14 @@ static void run_implicit_read_availability_guard(distributed::MeshDevice& mesh_d
     }
 
     const m2::NodeCoord node{0, 0};
-    // One counter uses the full 16-entry ring. Two counters use 10 entries so
-    // the only legal transaction-id count is 1: the two reserving reads then
-    // cannot close a transaction batch, and the follow-up read blocks in the
-    // new ACKED check rather than in the existing POSTED catch-up wait.
-    // POSTED is hw_capacity - stride, which leaves hardware free space while
-    // the software cursor treats the next visit to that counter as full.
-    const uint32_t ring_entries = num_tile_counters == 1 ? kGuardRingEntries : 10;
-    const uint32_t hw_capacity = ring_entries / num_tile_counters;
-    const uint32_t preload_posted = num_tile_counters == 1 ? hw_capacity : hw_capacity - num_tile_counters;
-    const uint32_t preload_acked = num_tile_counters == 1 ? 1u : 0u;
+    // STRIDED splits the ring across the consumers, so each tile counter holds
+    // ring / num_tile_counters entries. Preloading POSTED to that capacity with
+    // ACKED at 1 leaves exactly one free slot on every counter: the producer can
+    // reserve one read per counter, and the read that wraps back to the first
+    // counter must then wait for that counter's consumer to free a slot.
+    const uint32_t ring_entries = kGuardRingEntries;
+    const uint32_t preload_posted = ring_entries / num_tile_counters;
+    constexpr uint32_t preload_acked = 1;
 
     const auto tensor_spec = make_flat_dram_tensor_spec(kGuardEntrySize, num_tile_counters + 1, DataType::UINT32);
     auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
