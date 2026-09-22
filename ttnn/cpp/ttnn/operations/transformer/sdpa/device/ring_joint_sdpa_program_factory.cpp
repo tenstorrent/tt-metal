@@ -2413,7 +2413,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Rotate remainder Q chunks across multicast groups between active ring iterations.
     // Saved (m, l, O) state is addressed by chunk ID; semaphore handoffs protect migration.
     const uint32_t rotated_base_chunks = base_chunks_per_core;
-    const uint32_t rotated_float_chunks = cores_doing_extra_work;
+    const uint32_t rotated_float_chunks = cores_doing_extra_work;  // pairs when zigzag balancing is enabled
+    const uint32_t rotation_unit_chunks = enable_zigzag_balancing ? 2 : 1;
 
     // Only multicast groups share a row-wide barrier: linear chains do not have
     // the same per-row cost. Use the live shared-K or GQA K/V multicast family.
@@ -2494,9 +2495,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         !use_head_chain &&
         // Only streaming compute consumes rotated IDs. The reader loads a sink for the
         // scheduled Q head only on final normalization, so sinks need no ownership handoff.
-        // Balanced allocation and per-Q skips are incompatible with this schedule.
-        use_streaming_compute && !args.is_balanced &&
-        // Every core needs a real chunk: padded reader slots decode my_count - 1.
+        // Balanced rotation requires whole low/high pairs; odd chunk layouts stay static.
+        use_streaming_compute && (!args.is_balanced || enable_zigzag_balancing) &&
+        // Every core needs a complete unit to supply indices for padded reader slots.
         rotated_base_chunks >= 1;
 
     ring_joint::RotatedQSchedule rotated_sched;
@@ -2504,7 +2505,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Appends one iteration's chunk-id list padded to the fixed rotated_max_slots length, so every
     // ring iteration occupies the same number of runtime args and the kernels can index by stride.
     const auto append_rot_chunk_ids = [&](CheckedRuntimeArgList& args_out, const ring_joint::RotatedQIteration& sched) {
-        for (uint32_t slot = 0; slot < rotated_base_chunks + 1; ++slot) {
+        for (uint32_t slot = 0; slot < rotated_base_chunks + rotation_unit_chunks; ++slot) {
             args_out.push_back(slot < sched.my_chunks.size() ? sched.my_chunks[slot] : 0);
         }
     };
@@ -2512,13 +2513,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const uint32_t num_groups = static_cast<uint32_t>(rotated_groups.size());
         const uint32_t groups_needed = rotated_groups_needed;
         rotated_sched = ring_joint::build_rotated_q_schedule(
-            num_cores, ring_size, rotated_base_chunks, rotated_float_chunks, rotated_groups);
+            num_cores, ring_size, rotated_base_chunks, rotated_float_chunks, rotation_unit_chunks, rotated_groups);
         // The mcast injector's forward gate (q_iter_local < next_core_q_chunks) must cover the
-        // +1-slot iterations of every group, not just the injector's static flat-split count.
+        // extra-unit iterations of every group, not just the injector's static flat-split count.
         // Patched on whichever family the groups came from -- batch for latent-V, gqa for GQA.
         for (auto& cfg : *rotated_mcast_configs) {
             if (cfg.participates && cfg.is_injector) {
-                cfg.next_core_q_chunks = rotated_base_chunks + 1;
+                cfg.next_core_q_chunks = rotated_base_chunks + rotation_unit_chunks;
             }
         }
 
@@ -2551,7 +2552,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         log_info(
             tt::LogOp,
             "Rotated Q split ACTIVE: base={} floats={} groups={}x{} groups_needed={} ring_size={} "
-            "active_iters={} kv_pad_rotation={}",
+            "active_iters={} kv_pad_rotation={} unit_chunks={}",
             rotated_base_chunks,
             rotated_float_chunks,
             num_groups,
@@ -2559,7 +2560,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             groups_needed,
             ring_size,
             std::popcount(active_ring_iter_mask),
-            kv_pad_rotation_enabled);
+            kv_pad_rotation_enabled,
+            rotation_unit_chunks);
     } else if (kernel_chunked || use_head_chain) {
         log_info(
             tt::LogOp,
@@ -2579,12 +2581,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     // Rotated Q split, compile-time: the per-iteration chunk-list length (base chunks plus one
-    // float slot), or 0 when the rotation declines. Kernels gate on `> 0` via if constexpr, so both
-    // paths always compile. Pushed unconditionally as the LAST compile-time arg of all three
+    // remainder unit: a chunk or a balanced pair), or 0 when the rotation declines. Kernels gate on `> 0` via if
+    // constexpr, so both paths always compile. Pushed unconditionally as the LAST compile-time arg of all three
     // kernels, which is how they read it back -- no per-kernel index to keep in sync. The
     // TT_FATAL below pins that "last" so a future append fails loudly instead of silently
     // handing the kernels some other value.
-    const uint32_t rotated_max_slots_ct = use_rotated_q_split ? rotated_base_chunks + 1 : 0;
+    const uint32_t rotated_max_slots_ct = use_rotated_q_split ? rotated_base_chunks + rotation_unit_chunks : 0;
     for (auto* args : {&reader_compile_time_args, &writer_compile_time_args, &compute_compile_time_args}) {
         args->push_back(rotated_max_slots_ct);
     }

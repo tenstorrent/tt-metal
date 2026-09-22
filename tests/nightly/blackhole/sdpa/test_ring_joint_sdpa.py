@@ -6032,6 +6032,83 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_accuracy():
 
 
 @pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "head_mode,q_chunk_size,k_chunk_size,local_q_pairs",
+    [
+        pytest.param("gqa", 64, 448, 8, id="gqa-base_one_pair-straddle"),
+        pytest.param("gqa_sink", 32, 512, 15, id="gqa_sink-base_two_pairs-single_k"),
+        pytest.param("mla", 32, 512, 15, id="mla-base_two_pairs-single_k"),
+    ],
+)
+def test_ring_joint_balanced_rotated_q_pairs_accuracy_and_cache_reuse(
+    q_chunk_size, k_chunk_size, local_q_pairs, head_mode
+):
+    """Whole-pair rotation preserves causal skips, padded multicast slots and final normalization.
+
+    Q32/base-two also reduces a remote balanced K range from two chunks to one,
+    requiring the writer to flush staging before its next restore prefetch.
+    """
+    local_heads = 17
+    base_pairs, remainder = divmod(local_heads * local_q_pairs, MESH_CONFIG.sdpa_cores)
+    assert base_pairs == (1 if local_q_pairs == 8 else 2)
+    assert 0 < remainder < MESH_CONFIG.sdpa_cores - MESH_CONFIG.sdpa_cols
+    assert remainder % MESH_CONFIG.sdpa_cols != 0
+    local_seq = 2 * local_q_pairs * q_chunk_size
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        cache_entries = None
+        # Two accuracy calls exercise cached runtime args; replay also checks semaphore resets.
+        for num_iterations in (1, 1, 3):
+            if head_mode == "mla":
+                run_ring_mla_sdpa(
+                    MESH_CONFIG,
+                    1,
+                    local_heads * MESH_CONFIG.tp_size,
+                    1,
+                    local_seq * MESH_CONFIG.sp_size,
+                    576,
+                    576,
+                    512,
+                    q_chunk_size,
+                    k_chunk_size,
+                    ttnn.bfloat16,
+                    ttnn.bfloat8_b,
+                    is_balanced=True,
+                    num_iterations=num_iterations,
+                    runtime=runtime,
+                )
+            else:
+                model = replace(
+                    MODEL_CONFIGS["minimax3_gqa_smoke"], nhq=local_heads, seq_len=local_seq, is_balanced=True
+                )
+                run_ring_joint_sdpa_model_configs(
+                    MESH_CONFIG,
+                    model,
+                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    use_attention_sink=head_mode == "gqa_sink",
+                    num_iterations=num_iterations,
+                    runtime=runtime,
+                )
+            if num_iterations == 1:
+                current_entries = runtime.mesh_device.num_program_cache_entries()
+                assert current_entries > 0
+                if cache_entries is not None:
+                    assert current_entries == cache_entries
+                cache_entries = current_entries
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+@pytest.mark.parametrize("all_rows_have_remainder", [False, True], ids=["no_remainder", "all_rows_have_remainder"])
+def test_ring_joint_balanced_nonmoving_q_pairs_accuracy(all_rows_have_remainder):
+    """Retain the static paired allocation when rotating cannot free a multicast group."""
+    local_heads = 2 * MESH_CONFIG.sdpa_cores - 1 if all_rows_have_remainder else MESH_CONFIG.sdpa_cores
+    model = replace(MODEL_CONFIGS["minimax3_gqa_smoke"], nhq=local_heads, seq_len=128, is_balanced=True)
+    run_ring_joint_sdpa_model_configs(MESH_CONFIG, model, qk_configs=[(64, 128)])
+
+
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("q_chunk_size", [32, 64], ids=["q32", "q64"])
 @pytest.mark.parametrize("local_q_chunks", [8, 15], ids=["base_one", "base_two"])
 def test_ring_joint_attention_rotated_q_sink_accuracy_and_cache_reuse(q_chunk_size, local_q_chunks):

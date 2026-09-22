@@ -555,7 +555,7 @@ void kernel_main() {
     constexpr uint32_t cb_arg_offset =
         has_logical_length_tensor ? logical_l_args.next_compile_time_args_offset() : post_meta_args_offset;
 
-    // Per-iteration chunk-list length (base chunks plus one float slot), or 0 when the host
+    // Per-iteration chunk-list length (base chunks plus one remainder unit), or 0 when the host
     // declined the rotation. The offset clears the whole CB block, not just the CBs used here.
     // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
     // read it from there rather than tracking a per-kernel index into the block above.
@@ -833,8 +833,8 @@ void kernel_main() {
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
 
-            // Rotated: q_per_core is the chunks owned THIS iteration (base, or base+1 with the
-            // float), shadowing the static meaning of global_q_start/_end.
+            // Rotated: q_per_core is the chunks owned THIS iteration (base plus an optional
+            // remainder chunk or pair), shadowing the static meaning of global_q_start/_end.
             uint32_t rotated_ordinal = 0;
             uint32_t q_per_core;
             uint32_t rotated_has_mig_in_float = 0;
@@ -917,15 +917,21 @@ void kernel_main() {
                 if (next_q_index >= q_per_core) {
                     return;
                 }
-                // The migrated-in float sits last. Wait for the donor's handoff signal before the
-                // restore reads, then reset the semaphore for the next (possibly cached) run.
+                // The migrated-in unit sits last. Wait once before its first restore; the
+                // donor signal covers every member. Reset for the next (possibly cached) run.
                 if constexpr (rotated_q_split_enabled) {
-                    if (rotated_has_mig_in_float != 0 && next_q_index == last_q_index) {
-                        // Never set on the first active iteration, so ring_iter >= 1 here.
-                        Semaphore<> handoff_sem(rotated_sem_ids[rotated_sem_slot(rotated_ordinal, rotated_sem_count)]);
-                        handoff_sem.wait_min(rotated_has_mig_in_float);
-                        handoff_sem.set(0);
-                        // The donor completed this save before signaling; no local TRID owns it.
+                    constexpr uint32_t rotation_unit_chunks = use_zigzag_balancing ? 2 : 1;
+                    const uint32_t first_float_index = q_per_core - rotation_unit_chunks;
+                    if (rotated_has_mig_in_float != 0 && next_q_index >= first_float_index) {
+                        if (next_q_index == first_float_index) {
+                            // One signal covers the entire pair, including an unchanged low
+                            // member on a causally skipped iteration. Reset only once per unit.
+                            Semaphore<> handoff_sem(
+                                rotated_sem_ids[rotated_sem_slot(rotated_ordinal, rotated_sem_count)]);
+                            handoff_sem.wait_min(rotated_has_mig_in_float);
+                            handoff_sem.set(0);
+                        }
+                        // The donor completed the unit's saves before signaling; no local TRID owns them.
                         prefetch_for(q_slots.at(next_q_index), TRID_LAST, /*barrier_first=*/false);
                         return;
                     }
@@ -972,12 +978,19 @@ void kernel_main() {
                     deferred.trid);
                 // Donor half of the float handoff. Floats sit last, so this flush runs during the
                 // receiver's use iteration and both index rotated_sem_slot() with the same ordinal.
-                // A core can be donor and receiver in one iteration; that is not a cycle, because
-                // the donor's flush at slot 0 always precedes the receiver's wait at last-1 >= 1.
+                // In a balanced schedule, a core can be both donor and receiver without a cycle:
+                // it retains at least two base chunks, so the slot-0 flush precedes the incoming
+                // pair's prefetch at base_chunks-1 >= 1.
                 // Barrier first: flushed-but-not-landed writes must not read as "ready".
                 if constexpr (rotated_q_split_enabled) {
                     if (deferred.mig_dest != kRotatedNoDest) {
-                        noc.async_write_barrier<NocOptions::TXN_ID>({.trid = deferred.trid});
+                        if constexpr (use_zigzag_balancing) {
+                            // The high member ends the pair. Cover the low member's INNER save
+                            // too; when causally skipped its previously saved state remains valid.
+                            noc.async_write_barrier();
+                        } else {
+                            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = deferred.trid});
+                        }
                         Semaphore<>(rotated_sem_ids[rotated_sem_slot(rotated_ordinal, rotated_sem_count)])
                             .up(noc, rotated_dest_x(deferred.mig_dest), rotated_dest_y(deferred.mig_dest), 1);
                         deferred.mig_dest = kRotatedNoDest;
@@ -1023,9 +1036,14 @@ void kernel_main() {
                 // q_per_core == 2 is a positional proxy for "the chunk about to be prefetched is
                 // the one still in staging", exact only while slots map to fixed chunks. Under
                 // rotation they do not, so compare chunk ids directly instead.
+                // Balanced remote iterations can halve the K range to one chunk even
+                // when the whole-shard runtime mask says multiple chunks. K0 then saves
+                // directly into staging: flush the prior save before reserving restore CBs.
+                const bool balanced_single_k_chunk =
+                    use_zigzag_balancing && ring_index > ring_id && kv_local_padded_Nt <= 2 * Sk_chunk_t;
                 const bool early_flush =
                     rotated_q_split_enabled
-                        ? (single_valid_kv_chunk ||
+                        ? (single_valid_kv_chunk || balanced_single_k_chunk ||
                            q_slots.prefetch_targets(q_index, deferred.flat_q, q_per_core, is_last_ring_iter))
                         : flush_before_prefetch;
                 if (deferred.pending && early_flush) {
@@ -1099,7 +1117,7 @@ void kernel_main() {
                     deferred.nq = nq;
                     deferred.qi = qi;
                     if constexpr (rotated_q_split_enabled) {
-                        // Only the last (float) slot can migrate; base chunks keep kRotatedNoDest.
+                        // Signal once after the last member of a migrating unit; base chunks never signal.
                         deferred.mig_dest = (q_index == last_q_index) ? rotated_float_dest : kRotatedNoDest;
                         deferred.flat_q = q_slots.at(q_index);
                     }

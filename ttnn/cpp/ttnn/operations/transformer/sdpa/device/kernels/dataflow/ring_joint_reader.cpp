@@ -874,13 +874,16 @@ void kernel_main() {
             uint32_t flat_q_index;
             if constexpr (rotated_q_split_enabled) {
                 is_padded_iter = (q_iter >= rotated_my_count);
-                // Padded iterations only handshake; decode a valid owned chunk so downstream index
-                // math stays in range (its values are never used for reads or pushes). Every core
-                // owns at least one chunk per iteration and never more than the pushed list holds --
-                // otherwise the rotated_my_count - 1 here underflows, or the read runs past the list.
-                ASSERT(rotated_my_count >= 1 && rotated_my_count <= rotated_max_slots);
-                flat_q_index =
-                    get_arg_val<uint32_t>(rotated_ids_base + (is_padded_iter ? rotated_my_count - 1 : q_iter));
+                // Padded iterations only handshake; decode a member of a valid owned unit so
+                // downstream indices and balanced causal skips match the multicast slot.
+                // Every core owns at least one complete unit and no more than the pushed list.
+                constexpr uint32_t rotation_unit_chunks = use_zigzag_balancing ? 2 : 1;
+                ASSERT(rotated_my_count >= rotation_unit_chunks && rotated_my_count <= rotated_max_slots);
+                ASSERT(rotated_my_count % rotation_unit_chunks == 0);
+                // Pad with the corresponding member of the last owned unit. A balanced low
+                // slot must skip on every multicast peer, including cores without a remainder.
+                const uint32_t padded_slot = rotated_my_count - rotation_unit_chunks + q_iter % rotation_unit_chunks;
+                flat_q_index = get_arg_val<uint32_t>(rotated_ids_base + (is_padded_iter ? padded_slot : q_iter));
             } else {
                 is_padded_iter = (q_iter >= q_per_core);
                 flat_q_index = global_q_start + q_iter;
