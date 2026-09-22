@@ -1044,7 +1044,13 @@ def test_actual_spec_plan_admits_narrow_concurrent_decode_with_drafter_accountin
     monkeypatch.setattr(
         adapter,
         "_dflash_drafter_config",
-        lambda snapshot: {"num_hidden_layers": 5, "hidden_size": 128, "head_dim": 32, "num_key_value_heads": 8},
+        lambda snapshot: {
+            "num_hidden_layers": 5,
+            "hidden_size": 128,
+            "head_dim": 32,
+            "num_key_value_heads": 8,
+            "block_size": 16,
+        },
     )
     monkeypatch.setattr(adapter, "_dflash_mesh_tp", lambda: 8)
     plan = adapter.Gemma4DFlashContractForCausalLM.spec_plan(SimpleNamespace(), 4, 5)

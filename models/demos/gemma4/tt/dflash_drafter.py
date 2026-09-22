@@ -898,7 +898,7 @@ class DFlashFusedDecoder:
     v1: B=1, greedy, single ctx bucket (ctx_len + block must stay <= ctx_cap).
     """
 
-    def __init__(self, target_model, drafter, kv_layers, page_table_torch, ctx_cap=2048):
+    def __init__(self, target_model, drafter, kv_layers, page_table_torch, ctx_cap=2048, *, verify_count=None):
         self.target = target_model
         self.drafter = drafter
         self.kv_layers = kv_layers
@@ -909,6 +909,16 @@ class DFlashFusedDecoder:
         self._tp = drafter.tp
         K = drafter.block_size - 1
         self.K = K
+        self.use_packed = _os.environ.get("GEMMA4_DFLASH_PACKED", "1") == "1"
+        if verify_count is None:
+            self.V = min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K) if self.use_packed else K
+        else:
+            self.V = int(verify_count)
+            if not 1 <= self.V <= K:
+                raise ValueError(f"dFlash verify_count must be in [1, {K}], got {self.V}")
+            if not self.use_packed and self.V != K:
+                raise ValueError("dFlash verify_count below the drafter width requires packed verification")
+        self.P_v = self.V + 1
         H = drafter.hidden
 
         mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
@@ -927,9 +937,6 @@ class DFlashFusedDecoder:
         # forward), so fc_prev and the ctx-merge width are sized to P_v.
         # Truncation (V < K) requires the packed path -- the batch-dim verify
         # always runs K+1 rows.
-        self.use_packed = _os.environ.get("GEMMA4_DFLASH_PACKED", "1") == "1"
-        self.V = min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K) if self.use_packed else K
-        self.P_v = self.V + 1
         self.pv_pos = None  # allocated in capture() (needs the generation horizon)
         # Packed-verify WIDTH SET: {pv_sk: buffer set + its captured trace}. One
         # decoder serves every width, so the heavy per-session state is held

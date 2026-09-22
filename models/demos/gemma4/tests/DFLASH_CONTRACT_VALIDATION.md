@@ -48,6 +48,14 @@ prefix length. Prefix caching remains unsupported.
 `GEMMA4_CONTRACT_ASYNC=1` enables the experimental validation path. The async
 default must remain false until the device checklist passes.
 
+The contract resolves `GEMMA4_DFLASH_VERIFY` once, defaulting to five drafts.
+`spec_plan` and both decoder construction paths use that count, so physical
+verification writes occupy exactly `effective_k + 1` positions. Admission rejects
+counts outside the actual drafter block size and rejects disabled packed
+verification, width-set preparation, or eager decode warmup. These diagnostic
+settings cannot satisfy the adaptive contract's physical allocation and capture
+requirements.
+
 `warmup_model_decode(enable_trace=False)` prepares drafter weights, persistent
 verify inputs for every configured width, fixed-capacity context projection,
 and fused programs before ordinary trace capture. Trace-enabled warmup captures
@@ -78,7 +86,8 @@ PYTHONPATH=/path/to/vllm-tt-plugin/src python -m pytest -o addopts='' \
   --confcutdir=models/demos/gemma4/tests/unit \
   models/demos/gemma4/tests/unit/test_dflash_contract_adapter.py \
   models/demos/gemma4/tests/unit/test_dflash_width_prepare.py \
-  models/demos/gemma4/tests/unit/test_dflash_capture_cleanup.py -q
+  models/demos/gemma4/tests/unit/test_dflash_capture_cleanup.py \
+  models/demos/gemma4/tests/unit/test_dflash_contract_width_config.py -q
 ```
 
 The host test module supplies scoped stubs for lower TT imports. `--confcutdir`
@@ -89,6 +98,9 @@ lifecycle tests execute the real decoder preparation and capture code, including
 fixed-capacity context seeding, failure cleanup, and preparation of all widths
 before the first capture. Coverage tests check fixed-capture exhaustion,
 width-set exhaustion, and ordinary fallback without repeated reconstruction.
+Width configuration tests execute both production decoder constructors and
+compare physical tensor extents with the admitted draft count, including an
+unset `GEMMA4_DFLASH_VERIFY` and overridden drafter block sizes.
 
 ## Required device evidence before readiness
 

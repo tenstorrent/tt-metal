@@ -2507,18 +2507,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 supported_k=(),
             )
 
-        verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
-        if requested_k < verify:
-            # The trace bucket is fixed at capture, so K is a SET, not a range:
-            # a smaller K would need its own packed-verify capture.
-            return SpecReject(
-                reason=(
-                    f"Gemma4 dFlash verifies exactly {verify} drafts per iteration "
-                    f"(GEMMA4_DFLASH_VERIFY); requested_k={requested_k} is below that and no "
-                    "narrower verify bucket is captured."
-                ),
-                supported_k=(verify,),
-            )
+        verify = getattr(cls, "_SPEC_CONTRACT_K", None)
+        if verify is None:
+            verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
 
         snapshot = os.environ.get("GEMMA4_DFLASH_DRAFTER") or _dflash_default_snapshot()
         if not snapshot:
@@ -2538,11 +2529,32 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             hidden = int(cfg["hidden_size"])
             head_dim = int(cfg["head_dim"])
             n_kv = int(cfg["num_key_value_heads"])
+            block_size = int(os.environ.get("GEMMA4_DFLASH_BLOCK", cfg["block_size"]))
         except (OSError, KeyError, TypeError, ValueError) as exc:
             return SpecReject(
                 reason=(
                     f"Gemma4 dFlash drafter config unreadable at {snapshot}: {exc!r}. Point "
                     "GEMMA4_DFLASH_DRAFTER at a z-lab/gemma-4-31B-it-DFlash snapshot."
+                ),
+                supported_k=(verify,),
+            )
+
+        if not 1 <= verify < block_size:
+            return SpecReject(
+                reason=(
+                    f"Gemma4 dFlash verify count {verify} is outside [1, {block_size - 1}] "
+                    f"for drafter block_size={block_size}. Set GEMMA4_DFLASH_VERIFY within that range."
+                ),
+                supported_k=(),
+            )
+        if requested_k < verify:
+            # Captured shapes use the model's resolved count, independent of
+            # how many drafts the scheduler requested.
+            return SpecReject(
+                reason=(
+                    f"Gemma4 dFlash verifies exactly {verify} drafts per iteration "
+                    f"(GEMMA4_DFLASH_VERIFY); requested_k={requested_k} is below that and no "
+                    "narrower verify bucket is captured."
                 ),
                 supported_k=(verify,),
             )
@@ -2731,7 +2743,13 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         scratch_pt = torch.zeros(1, blocks, dtype=torch.int32)
         dec = self._spec_decoder
         if dec is None:
-            dec = DFlashFusedDecoder(self.model[0], self._spec_get_drafter(), kv_layers, scratch_pt)
+            dec = DFlashFusedDecoder(
+                self.model[0],
+                self._spec_get_drafter(),
+                kv_layers,
+                scratch_pt,
+                verify_count=getattr(self, "_SPEC_CONTRACT_K", None),
+            )
             self._spec_decoder = dec
             self._spec_width_ladder = ladder
         elif self._spec_width_ladder != ladder:
@@ -3011,7 +3029,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             # Keep the per-layer tables installed above: the new decoder reads
             # them in __init__ (see _spec_release_decoder's drop_page_tables).
             self._spec_release_decoder(drop_page_tables=False)
-            dec = DFlashFusedDecoder(model0, self._spec_get_drafter(), kv_layers, pt)
+            dec = DFlashFusedDecoder(
+                model0, self._spec_get_drafter(), kv_layers, pt, verify_count=getattr(self, "_SPEC_CONTRACT_K", None)
+            )
             dec.prefill_ingest(taps, n)
             dec.capture(int(anchor_id), int(start), max_new=horizon)
             self._spec_decoder = dec
@@ -3031,17 +3051,8 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
     def _spec_release_decoder(self, drop_page_tables=True, *, teardown=False):
         dec = self._spec_decoder
         if not teardown and self._spec_width_set and getattr(dec, "_pv_widths", None):
-            # The captured WIDTH SET lives on this decoder, and its traces are
-            # the whole point: tearing it down here would push every later
-            # request back onto a per-session capture, which is the behaviour
-            # the width set exists to remove. End the SESSION instead -- the
-            # per-layer page tables still go, so a batched baseline step rebuilds
-            # its own set. This holds for capture teardown too: the width set is
-            # a WARMUP artifact, not a per-session capture, so the hook that
-            # exists to free per-session captures has nothing to free here.
-            # Freeing it anyway would leave the process with no captured widths
-            # and no way to recapture them (warmup is over), silently restoring
-            # the per-session capture AND the horizon generation cap.
+            # Session release preserves startup widths. Final teardown bypasses
+            # retention and releases their traces while the mesh is open.
             self._spec_active = False
             self._spec_active_owner = None
             self._spec_decoder_bucket = None
@@ -3386,6 +3397,10 @@ class Gemma4DFlashContractForCausalLM(DFlashContractMixin, Gemma4DFlashForCausal
     """
 
     _SPEC_CONTRACT_K = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
+    _SPEC_V = _SPEC_CONTRACT_K
+    _SPEC_N = _SPEC_V + 1
+    # Inherited preparation uses _SPEC_BLOCK > 1 to enable speculation;
+    # the plugin contract still declares one output token per ordinary step.
     _SPEC_BLOCK = max(2, int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64")))
 
     model_capabilities = {
@@ -3405,8 +3420,25 @@ class Gemma4DFlashContractForCausalLM(DFlashContractMixin, Gemma4DFlashForCausal
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
         from dataclasses import replace
 
-        from vllm_tt_plugin.spec_decode import SpecPlan
+        from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
+        if os.environ.get("GEMMA4_DFLASH_PACKED", "1") != "1":
+            return SpecReject(
+                reason=(
+                    "Gemma4 dFlash contract requires GEMMA4_DFLASH_PACKED=1 so physical "
+                    "verification writes match the effective_k + 1 KV lookahead."
+                ),
+                supported_k=(),
+            )
+        for preparation_setting in ("GEMMA4_DFLASH_WIDTH_SET", "GEMMA4_DFLASH_WARMUP_DECODE"):
+            if os.environ.get(preparation_setting, "1").lower() not in ("1", "true", "yes"):
+                return SpecReject(
+                    reason=(
+                        f"Gemma4 dFlash contract requires {preparation_setting}=1 to prepare persistent "
+                        "verification buffers before ordinary trace capture."
+                    ),
+                    supported_k=(),
+                )
         outcome = super().spec_plan(vllm_config, 1, requested_k)
         if isinstance(outcome, SpecPlan):
             return replace(outcome, supports_narrow_decode=True)
