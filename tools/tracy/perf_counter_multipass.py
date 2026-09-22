@@ -186,9 +186,7 @@ def _op_key(fields):
 
 
 def merge_perf_counter_device_logs(pass_csvs, out_csv):
-    """Merge per-pass device logs: pass 0 whole, later passes contribute only their perf-counter rows,
-    re-timestamped onto pass 0's timeline. Every pass is its own run, so a later pass's raw timestamps
-    sort into pass 0's zones arbitrarily and the ops report then sees a duplicate device op."""
+    """Merge per-pass device logs: pass 0 whole, later passes add their counter rows re-timestamped onto pass 0."""
     base = Path(pass_csvs[0]).read_text().splitlines(keepends=True)
     anchors = {}
     for line in base:
