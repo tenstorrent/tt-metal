@@ -29,9 +29,8 @@ class KDARecurrenceProgramConfig:
     """Tunable recurrence strategy and compute fidelity."""
 
     local_scan_strategy: Literal["direct", "grouped"] = "direct"
-    # Used by grouped scan, which runs when local_scan_strategy="grouped" or sequence
-    # parallelism is enabled. This is a ceiling: the effective size is the largest
-    # local-chunk divisor no greater than this value.
+    # Exact number of chunks per group. Construction validates divisibility and
+    # worker capacity; execution never silently changes an explicit configuration.
     summary_group_chunks: int = 20
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
@@ -64,13 +63,20 @@ class KDAProgramConfig:
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
 
 
-def kimi_k3_program_config(*, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
+def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
+    # Fixed production/proxy geometries; native worker capacity is validated by
+    # the recurrence constructor for the actual TP-local head count and device.
+    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
+    if active_seq_len_local not in group_chunks:
+        raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
     return KDAProgramConfig(
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
-        recurrence=KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=20),
+        recurrence=KDARecurrenceProgramConfig(
+            local_scan_strategy="grouped", summary_group_chunks=group_chunks[active_seq_len_local]
+        ),
         qkv_channel_chunk_size=512,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,

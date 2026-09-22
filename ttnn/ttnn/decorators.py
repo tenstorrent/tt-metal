@@ -996,7 +996,7 @@ if TRACE_ALLOC_DIAGNOSTICS:
 
 # Keyword argument names through which an operation writes into a caller-supplied tensor in
 # place; the tensor's contents are overwritten so any pre-existing global golden becomes stale.
-INPLACE_OUTPUT_KWARG_NAMES = (
+DEFAULT_OUTPUT_TENSOR_KWARG_NAMES = (
     "output_tensor",
     "optional_tensor",
     "optional_output_tensor",
@@ -1007,9 +1007,9 @@ INPLACE_OUTPUT_KWARG_NAMES = (
 )
 
 
-def get_inplace_output_tensors(function_kwargs):
+def get_inplace_output_tensors(function_kwargs, output_tensor_kwarg_names=DEFAULT_OUTPUT_TENSOR_KWARG_NAMES):
     tensors = []
-    for name in INPLACE_OUTPUT_KWARG_NAMES:
+    for name in output_tensor_kwarg_names:
         if name in function_kwargs:
             tensors += get_ttnn_tensors(function_kwargs[name])
     return tensors
@@ -1062,6 +1062,7 @@ class FastOperation:
     postprocess_golden_function_outputs: Callable
     is_cpp_operation: bool
     is_experimental: bool
+    output_tensor_kwarg_names: tuple[str, ...] = DEFAULT_OUTPUT_TENSOR_KWARG_NAMES
     _slow_operation: "Operation | None" = dataclasses.field(default=None, init=False, repr=False)
 
     @property
@@ -1083,6 +1084,7 @@ class FastOperation:
                 postprocess_golden_function_outputs=self.postprocess_golden_function_outputs,
                 is_cpp_operation=self.is_cpp_operation,
                 is_experimental=self.is_experimental,
+                output_tensor_kwarg_names=self.output_tensor_kwarg_names,
             )
             self._slow_operation.__post_init__()
         return self._slow_operation
@@ -1277,6 +1279,7 @@ class Operation:
     postprocess_golden_function_outputs: Callable
     is_cpp_operation: bool
     is_experimental: bool
+    output_tensor_kwarg_names: tuple[str, ...] = DEFAULT_OUTPUT_TENSOR_KWARG_NAMES
 
     @property
     def __name__(self):
@@ -1350,7 +1353,9 @@ class Operation:
                     # An op without a golden (e.g. dropout) can still mutate a caller tensor in
                     # place; invalidate its stale global golden so later reads don't mismatch.
                     if ttnn.CONFIG.report_path is not None:
-                        refresh_or_invalidate_global_goldens(get_inplace_output_tensors(function_kwargs), None)
+                        refresh_or_invalidate_global_goldens(
+                            get_inplace_output_tensors(function_kwargs, self.output_tensor_kwarg_names), None
+                        )
                     TENSOR_IDS_PRODUCED_BY_OPERATION.update(get_output_tensor_ids(function_return_value))
                     return function_return_value, (
                         local_tensor_comparison_records,
@@ -1460,7 +1465,8 @@ class Operation:
                 # the fresh global golden onto the caller's tensor to keep later reads consistent.
                 if ttnn.CONFIG.report_path is not None:
                     refresh_or_invalidate_global_goldens(
-                        get_inplace_output_tensors(function_kwargs), global_golden_function_output
+                        get_inplace_output_tensors(function_kwargs, self.output_tensor_kwarg_names),
+                        global_golden_function_output,
                     )
 
                 if isinstance(local_golden_function_output, torch.Tensor):
@@ -1774,6 +1780,7 @@ def attach_golden_function(
     *,
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
+    output_tensor_kwarg_names=DEFAULT_OUTPUT_TENSOR_KWARG_NAMES,
 ):
     operation.golden_function = golden_function
     operation.preprocess_golden_function_inputs = (
@@ -1782,6 +1789,7 @@ def attach_golden_function(
     operation.postprocess_golden_function_outputs = (
         postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
     )
+    operation.output_tensor_kwarg_names = tuple(output_tensor_kwarg_names)
 
 
 def create_module_if_not_exists(module_name):
@@ -1839,6 +1847,7 @@ def register_python_operation(
     golden_function=None,
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
+    output_tensor_kwarg_names=DEFAULT_OUTPUT_TENSOR_KWARG_NAMES,
     doc=None,
 ):
     python_fully_qualified_name = name
@@ -1876,6 +1885,7 @@ def register_python_operation(
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
             is_cpp_operation=False,
             is_experimental=is_experimental,
+            output_tensor_kwarg_names=tuple(output_tensor_kwarg_names),
         )
 
         attach_golden_function(
@@ -1883,6 +1893,7 @@ def register_python_operation(
             golden_function,
             preprocess_golden_function_inputs=preprocess_golden_function_inputs,
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
+            output_tensor_kwarg_names=output_tensor_kwarg_names,
         )
 
         if not is_method:  # Do not export methods
