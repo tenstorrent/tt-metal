@@ -195,7 +195,14 @@ jobs:
           if [ -n "$remaining" ] && [ -n "$reset" ]; then
             window_left=$(( reset - $(date +%s) ))
             echo "[rate-limit] repo=${{ github.repository }} used=${used} remaining=${remaining} limit=${limit} reset=${reset} window_left_s=${window_left}"
-            echo "GITHUB_TOKEN budget: ${remaining} of ${limit} left, window resets in $(( window_left / 60 )) min" >> "$GITHUB_STEP_SUMMARY"
+            # window_left_s stays raw above: a negative value marks a sample taken after the
+            # reset it reports, which burn-rate analysis should discard rather than read as a
+            # budget about to refill. The summary line is for people, so say that plainly.
+            if [ "$window_left" -gt 0 ]; then
+              echo "GITHUB_TOKEN budget: ${remaining} of ${limit} left, window resets in $(( window_left / 60 )) min" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "GITHUB_TOKEN budget: ${remaining} of ${limit} left, reported window already rolled over" >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             echo "[rate-limit] no X-Ratelimit headers on this response"
           fi
