@@ -45,7 +45,14 @@ void kernel_main() {
     const uint32_t dest_offset = get_arg_val<uint32_t>(2);
 
     ex::tt_uva_ini(
-        cfg_addr, 0, page_size, stage_addr, ex::tt_uva_self(grid_width, host, chip, chips_per_host), 0, l1_base, 0,
+        cfg_addr,
+        0,
+        page_size,
+        stage_addr,
+        ex::tt_uva_self(grid_width, host, chip, chips_per_host),
+        0,
+        l1_base,
+        0,
         consumed_addr);
 
     volatile tt_l1_ptr uint32_t* const payload = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(payload_addr);

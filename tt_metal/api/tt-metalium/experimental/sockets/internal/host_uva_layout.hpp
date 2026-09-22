@@ -26,8 +26,7 @@ constexpr uint32_t kMaxHosts = kMaxCreditPeers;
 // make a duplicated or reordered credit a no-op, so nothing here needs ordering.
 constexpr uint64_t kCreditLineBytes = 64;
 constexpr uint64_t kCreditArrayOffset = kHeaderBytes;
-constexpr uint64_t kCreditArrayBytes =
-    static_cast<uint64_t>(kProvisionedCores) * kMaxCreditPeers * kCreditLineBytes;
+constexpr uint64_t kCreditArrayBytes = static_cast<uint64_t>(kProvisionedCores) * kMaxCreditPeers * kCreditLineBytes;
 
 constexpr uint64_t credit_offset(uint32_t core, uint32_t peer) {
     return kCreditArrayOffset + (static_cast<uint64_t>(core) * kMaxCreditPeers + peer) * kCreditLineBytes;

@@ -22,13 +22,13 @@ struct L1MapNew {
     // Signal offsets go on the wire relative to this, so both kernels need it.
     uint32_t l1_base = 0;
 
-    uint32_t payload_addr = 0;     // what the sender kernel puts
-    uint32_t stage_addr = 0;       // kFrameTrailerBytes; where the trailer is assembled
-    uint32_t stop_addr = 0;        // where a DEVICE_PULL receiver kernel is told to exit
-    uint32_t consumed_addr = 0;    // what the far device has pulled, for tt_uva_sync()
-    uint32_t dest_word_addr = 0;   // a store's per-message destination, for the pull kernel
-    uint32_t verify_addr = 0;      // [0] corrupt frames, [4] frames landed; written at kernel exit
-    uint32_t deliver_addr = 0;     // where the pull kernel lands payload
+    uint32_t payload_addr = 0;    // what the sender kernel puts
+    uint32_t stage_addr = 0;      // kFrameTrailerBytes; where the trailer is assembled
+    uint32_t stop_addr = 0;       // where a DEVICE_PULL receiver kernel is told to exit
+    uint32_t consumed_addr = 0;   // what the far device has pulled, for tt_uva_sync()
+    uint32_t dest_word_addr = 0;  // a store's per-message destination, for the pull kernel
+    uint32_t verify_addr = 0;     // [0] corrupt frames, [4] frames landed; written at kernel exit
+    uint32_t deliver_addr = 0;    // where the pull kernel lands payload
 
     // Delivery gets its own buffer so a core can hold an outbound and an inbound payload at
     // once. Costs a second payload of L1, halving the largest that fits.
