@@ -7,8 +7,7 @@ operands:
   - name: "input_B"
     dims: [256, 256]
     format: "Float16_b"
-    range:
-      include: [1.0]
+    stimuli: 1.0
   - name: "reduce_scalar_out"
     dims: [256, 256]
     format: "Float16_b"

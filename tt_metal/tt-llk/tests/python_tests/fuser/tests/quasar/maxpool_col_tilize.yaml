@@ -10,8 +10,7 @@ operands:
   - name: input_B
     dims: [32, 32]
     format: Float16_b
-    range:
-      include: [1.0]
+    stimuli: 1.0
   - name: maxpool_out
     dims: [672, 480]
     format: Float16_b

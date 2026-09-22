@@ -6,7 +6,7 @@ operands:
   - name: "input_A"
     dims: [32, 32]
     format: [Float16_b, Float32]
-    range:
+    stimuli:
       include:
         - 0.005
         - [0.01, 1.0]
@@ -27,11 +27,13 @@ operations:
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
         unpack_to_dest: true
+        block_size: [32, 32]
       - type: "UnarySfpu"
         operation: all
         approximation_mode: all
         iterations: 32
+        block_size: [32, 32]
     pack:
       - output: "sfpu_out"
         packer: "Packer"
-    block_size: [32, 32]
+        block_size: [32, 32]

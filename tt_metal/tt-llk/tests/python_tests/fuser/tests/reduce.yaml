@@ -9,8 +9,7 @@ operands:
   - name: "input_B"
     dims: [32, 32]
     format: "Float32"
-    range:
-      include: [1.0]
+    stimuli: 1.0
   - name: "reduced_output"
     dims: [32, 32]
     format: "Float32"

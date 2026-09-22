@@ -104,23 +104,35 @@ def format_validation_error(error: ValidationError) -> str:
 Interval = Annotated[Tuple[float, float], Field(min_length=2, max_length=2)]
 
 
-class RangeDefinition(BaseModel):
+class StimuliDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include: Annotated[List[Interval], Field(min_length=1)]
     exclude: List[Interval] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def expand_shorthand(cls, value):
+        if type(value) in (int, float):
+            return {"include": [value]}
+        if isinstance(value, (list, tuple)):
+            return {"include": [value]}
+        return value
+
     @field_validator("include", "exclude", mode="before")
     @classmethod
-    def validate_intervals(cls, intervals):
-        intervals = [
-            (interval, interval) if isinstance(interval, (int, float)) else interval
+    def expand_points(cls, intervals):
+        if not isinstance(intervals, (list, tuple)):
+            return intervals
+        return [
+            (interval, interval) if type(interval) in (int, float) else interval
             for interval in intervals
         ]
-        for low, high in intervals:
-            if low > high:
-                raise ValueError(f"range lower bound {low} exceeds upper bound {high}")
-        return intervals
+
+    @model_validator(mode="after")
+    def validate_domain(self) -> "StimuliDefinition":
+        self.resolved()
+        return self
 
     def resolved(self) -> List[Tuple[float, float]]:
         return resolve_intervals(self.include, self.exclude)
@@ -132,7 +144,7 @@ class OperandDefinition(BaseModel):
     name: str = Field(..., min_length=1)
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
-    range: Optional[RangeDefinition] = None
+    stimuli: Optional[StimuliDefinition] = None
     # Optional per-operand tile geometry (rows, cols). Defaults to a full 32x32 tile
     # (4 faces). Use (16, 32) for a 16x32 tiny tile (num_faces=2, one face-row).
     tile_dims: Optional[
@@ -295,7 +307,9 @@ class FuserConfigSchema(BaseModel):
                 name=op_def.name,
                 dimensions=op_def.dims,
                 data_format=op_def.format,
-                intervals=op_def.range.resolved() if op_def.range is not None else None,
+                intervals=(
+                    op_def.stimuli.resolved() if op_def.stimuli is not None else None
+                ),
                 tile_dims=op_def.tile_dims,
             )
 
@@ -346,7 +360,7 @@ class FuserConfigSchema(BaseModel):
             ) from None
 
     @staticmethod
-    def load_definition(test_name: str) -> dict:
+    def resolve_definition_path(test_name: str) -> Path:
         yaml_path = (FUSER_CONFIG_DIR / f"{test_name}.yaml").resolve()
         if not yaml_path.exists():
             yaml_path = (FUSER_CONFIG_DIR / arch.value / f"{test_name}.yaml").resolve()
@@ -355,6 +369,11 @@ class FuserConfigSchema(BaseModel):
         if not yaml_path.exists():
             raise FileNotFoundError(f"File not found: {yaml_path}")
 
+        return yaml_path
+
+    @classmethod
+    def load_definition(cls, test_name: str) -> dict:
+        yaml_path = cls.resolve_definition_path(test_name)
         with open(yaml_path, "r") as f:
             config_dict = yaml.safe_load(f)
 

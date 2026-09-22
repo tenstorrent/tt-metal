@@ -12,11 +12,11 @@ from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
     QUASAR_DATA_FORMAT_ENUM_VALUES,
     WORMHOLE_DATA_FORMAT_ENUM_VALUES,
-    DataFormat,
 )
 
 from .arch_common import _get_parser
 from .config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from .operand import L1_PACKERS
 
 SweepValue = str | bool | int | float
 ConfigPath = tuple[str | int, ...]
@@ -56,8 +56,7 @@ def _operand_formats(_node: dict) -> list[str]:
         ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
         ChipArchitecture.QUASAR: QUASAR_DATA_FORMAT_ENUM_VALUES,
     }[get_chip_architecture()]
-    register_only = {DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B}
-    return sorted(fmt.name for fmt in formats if fmt not in register_only)
+    return sorted(fmt.name for fmt in formats if fmt in L1_PACKERS)
 
 
 _SFPU_OPERATION = SweepParameter(

@@ -23,11 +23,17 @@ def expand_fuser_selector(selector):
     ):
         return [selector]
 
-    from .config_parser import FuserConfigSchema
+    from .config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
     from .sweep import expand_fuser_configs
 
     test_name = test[:-1]
     try:
+        yaml_path = FuserConfigSchema.resolve_definition_path(test_name)
+        canonical_name = str(
+            yaml_path.relative_to(FUSER_CONFIG_DIR.resolve()).with_suffix("")
+        )
+        if test_name != canonical_name:
+            return [selector]
         definition = FuserConfigSchema.load_definition(test_name)
     except FileNotFoundError:
         return [selector]

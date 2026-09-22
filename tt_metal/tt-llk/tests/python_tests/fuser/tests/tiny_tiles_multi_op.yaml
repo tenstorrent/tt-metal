@@ -37,8 +37,7 @@ operands:
     dims: [48, 128]
     format: "Float16_b"
     tile_dims: [16, 32]
-    range:
-      include: [1.0]
+    stimuli: 1.0
   - name: "reduce_out"
     dims: [48, 128]
     format: "Float16_b"
