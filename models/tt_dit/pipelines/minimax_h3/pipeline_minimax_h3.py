@@ -206,6 +206,13 @@ MODEL_NAME = "minimax-h3"
 # straddles an SP shard; both remain 1024-aligned, so the dense path is unaffected.
 MINIMAX_H3_BUCKET_LADDER = (22528, 32768, 45056, 61440, 86016, 120832)
 
+# FastH3 (VSA) sizes a rung on (exempt + video) *tiles*, not rows: the exempt prefix is reserved as
+# whole 64-token tiles (132 for the t2va caps) and ragged cube tiling rounds each video dimension up,
+# so a working point needs more tokens than its row count. 15 s at 16:9 is 1914 tiles = 122496 tokens
+# (rung 122880), past the dense top rung, hence a separate ladder. Rungs land the 5/10/15 s 16:9 points
+# (51200/86016/122880) tightly; 2048-aligned like the dense ladder. `default_bucket_ladder` selects it when
+# a `vsa_config` is set (t2va/fl2va only; ref2va keeps its own ladder).
+MINIMAX_H3_FASTH3_BUCKET_LADDER = (32768, 51200, 71680, 86016, 104448, 122880)
 # ref2va shares the machinery but not the envelope: reference rows (up to 9 images and 3 video clips)
 # push the packed length far past t2va's. The ladder runs from the smallest measured case (~46k, one
 # image) up to the top rung, which must admit everything the arena caps do -- the full 12-reference
@@ -214,8 +221,10 @@ MINIMAX_H3_BUCKET_LADDER = (22528, 32768, 45056, 61440, 86016, 120832)
 MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 322560)
 
 
-def default_bucket_ladder(task: str) -> tuple[int, ...]:
-    return MINIMAX_H3_REF2VA_BUCKET_LADDER if task == "ref2va" else MINIMAX_H3_BUCKET_LADDER
+def default_bucket_ladder(task: str, vsa: bool = False) -> tuple[int, ...]:
+    if task == "ref2va":
+        return MINIMAX_H3_REF2VA_BUCKET_LADDER
+    return MINIMAX_H3_FASTH3_BUCKET_LADDER if vsa else MINIMAX_H3_BUCKET_LADDER
 
 
 def validate_bucket_ladder(ladder: tuple[int, ...], alignment: int) -> None:
@@ -563,7 +572,9 @@ class MiniMaxH3Pipeline:
         # The trace-bucket ladder and the arena capacities: both are admission limits (a request
         # beyond the top rung or any cap raises), both default to the task's envelope, both validated
         # now that the SP alignment is known.
-        self.bucket_ladder = tuple(bucket_ladder if bucket_ladder is not None else default_bucket_ladder(task))
+        self.bucket_ladder = tuple(
+            bucket_ladder if bucket_ladder is not None else default_bucket_ladder(task, vsa=self.vsa_config is not None)
+        )
         # VSA tiles are 64 tokens and none may straddle an SP shard, so a VSA-served rung aligns to
         # `sp_factor * 64` rather than the dense path's `sp_factor * TILE_SIZE`.
         ladder_alignment = self.sp_factor * (64 if self.vsa_config is not None else ttnn.TILE_SIZE)

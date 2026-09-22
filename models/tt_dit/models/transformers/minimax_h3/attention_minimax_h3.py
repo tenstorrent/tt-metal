@@ -287,6 +287,8 @@ class MiniMaxH3Attention(Module):
                 state["to_gate_compress.weight"] = gate
             if gate is not None:
                 self.gate_compress_is_zero = not bool(gate.any())
+        else:
+            state.pop("to_gate_compress.weight", None)
 
         def _interleave_heads(tensors: list[torch.Tensor]) -> torch.Tensor:
             """Reorder [out, in] weights so TP column-fracturing gives each device matching heads.
@@ -632,8 +634,12 @@ class MiniMaxH3Attention(Module):
 
             # R2: gathered K/V equal the concatenation of all shards' local K/V.
             if self.parallel_config.sequence_parallel.factor > 1:
-                k_gathered = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis)
-                v_gathered = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=self.sp_mesh_axis)
+                k_gathered = self.ccl_manager.all_gather(
+                    k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+                )
+                v_gathered = self.ccl_manager.all_gather(
+                    v_BHNE, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
+                )
             else:
                 k_gathered, v_gathered = k_BHNE, v_BHNE
 
@@ -689,8 +695,8 @@ class MiniMaxH3Attention(Module):
                 ttnn.deallocate(gate_1BNF)
                 ttnn.deallocate(o_c)
             if not self.use_fused_agmm and tp_factor > 1:
-                spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                    spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis
+                spatial_1BND = self.ccl_manager.all_gather(
+                    spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False
                 )
             fuse_gate = addcmul_residual is not None and self.use_fused_agmm
             out = self.to_out(
