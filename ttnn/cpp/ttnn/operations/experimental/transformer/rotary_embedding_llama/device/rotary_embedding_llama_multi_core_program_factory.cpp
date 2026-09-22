@@ -176,8 +176,15 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     // into sfpu_precision_mode=Approximate, which the legacy descriptor discarded (Precise). All DFBs
     // are bfloat16, so no unpack_modes entry is required even when enable_32_bit_dest is true.
     // ------------------------------------------------------------------
-    const ComputeHardwareConfig compute_hw_config =
+    ComputeHardwareConfig compute_hw_config =
         ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw_config = ComputeGen2Config{
+            .fpu_math_fidelity = math_fidelity,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+        };
+    }
 
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
 
