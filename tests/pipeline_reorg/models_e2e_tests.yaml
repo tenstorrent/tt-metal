@@ -507,6 +507,30 @@
   team: models
   budget_type: e2e
 
+- name: Qwen3.8-27B e2e tests (Wormhole T3K)
+  # Text-only. Qwen3.8-27B is architecturally identical to Qwen3.6-27B (the two HF
+  # config.json files differ only in transformers_version), so it runs on the shared
+  # models/demos/qwen36 core via the Wormhole entry points. No vision case: the vision
+  # tower is validated on Blackhole only.
+  # NOTE: -k matches substrings, so "traced_128" alone would also select traced_128k and
+  # run both ISLs in one process; each case gets its own process (chaining demo configs
+  # on the 8-device mesh has wedged an ETH core).
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3.8-27B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.8-27B MESH_DEVICE=T3K
+    pytest --timeout 1200 models/demos/wormhole/qwen38/demo/text_demo.py -k "traced_128 and not traced_128k"
+    pytest --timeout 1200 models/demos/wormhole/qwen38/demo/text_demo.py -k "determinism_128"
+    pytest --timeout 1500 models/demos/wormhole/qwen38/demo/text_demo.py -k "traced_4k"
+  model: qwen3.8-27b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+      release_ready: false
+  owner_id: TODO # cleonidou@tenstorrent.com -- replace with Slack member ID before merge
+  team: models
+  budget_type: e2e
+
 - name: Qwen3.6-35B-A3B e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4
