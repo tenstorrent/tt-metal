@@ -424,9 +424,14 @@ def validate_encoder_sdpa_inputs(
     if q.device() != k.device() or q.device() != v.device():
         raise ValueError("Q/K/V must be on the same device")
 
+    # The descriptor builds its CoreRangeSet from the config, so the config may
+    # use a subset of the device. Check that it fits instead of demanding an
+    # exact match: a p150 reports 13x10 and the S8192 plan wants 8x8.
     grid = q.device().compute_with_storage_grid_size()
-    if (int(grid.x), int(grid.y)) != (config.grid_x, config.grid_y):
-        raise ValueError(f"expected {config.grid_x}x{config.grid_y} compute grid, got {int(grid.x)}x{int(grid.y)}")
+    if config.grid_x > int(grid.x) or config.grid_y > int(grid.y):
+        raise ValueError(
+            f"config grid {config.grid_x}x{config.grid_y} exceeds the device grid {int(grid.x)}x{int(grid.y)}"
+        )
     return plan
 
 
