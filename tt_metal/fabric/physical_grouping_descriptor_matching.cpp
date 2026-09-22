@@ -698,24 +698,13 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
     return node_to_position;
 }
 
-// Compose PGD grouping-node -> host partition index from an MGD<->PGD topology match and the matched MGD
-// host_topology. Empty only when the MGD declared no host topology at all, so an empty result means "nothing
-// was declared" rather than "one host". Called at PGD<->MGD commit time in get_valid_groupings_for_mgd.
+// Compose logical chip id -> MeshGraph host partition from the MGD host_topology. Empty only when the MGD
+// declared no host topology at all, so an empty result means "nothing was declared" rather than "one host".
+// Called at PGD<->MGD commit time in get_valid_groupings_for_mgd.
 //
-// TODO: the host split's direction is unconstrained. This row-major-splits the MGD's own chip indices and stamps
-// the result onto whichever PGD nodes the isomorphism picked, so the axis the split lands on is whatever
-// orientation that match happened to choose -- the MGD host axis is never tied to the PGD's host structure. One
-// declared host group can therefore end up half on one physical host and half on another (measured on the gemma
-// 4x4 with host_topology [2,1]: an 8-chip group whose best single 8-ASIC PSD host could seat only 4 of its 8
-// members, with every member trait-bound). That fails configure_pgd_psd_host_alignment_constraints, and because
-// footprint discovery and the rank-bound path can settle on different matches out of the same candidate set, the
-// two can disagree about the same descriptor.
-//
-// Fix, and where it now stands: configure_mgd_pgd_host_alignment_constraints below ties the declared split to the
-// host division the PGD variant sits on, so for a descriptor that declares its hosts the isomorphism can only
-// return an orientation this stamping is sound for. What is still unconstrained is descriptors that say nothing
-// for it to match against -- no HOSTS groupings, or hosts that leave their chips unspecified -- and there the
-// split lands in whatever orientation the match happened to choose, exactly as described above.
+// The split is the MeshGraph / MGD tiling (row-major chip index vs host_topology). The PGD match pairing is
+// not applied: rank-binding yaml groups follow those logical tiles. Fitting each tile inside a PGD HOST is
+// enforced separately by configure_mgd_pgd_host_alignment_constraints.
 std::map<LogicalChipId, uint32_t> compose_mesh_node_to_host_group_from_mgd_match(
     const std::optional<DeclaredTopology>& mgd_topo,
     const std::map<LogicalChipId, GroupingChipId>& mgd_node_to_grouping_node) {
@@ -727,9 +716,10 @@ std::map<LogicalChipId, uint32_t> compose_mesh_node_to_host_group_from_mgd_match
     // host_topology [1,1] is not "no opinion": it declares one rank owning the whole mesh, which is as binding
     // as any other split and is left in so the caller enforces it. host_partition_index_for_row_major_chip puts
     // every chip in partition 0 for it, giving a single group that must land inside a single host.
-    for (const auto& [mgd_node, grouping_node] : mgd_node_to_grouping_node) {
+    for (const auto& [mgd_node, unused_grouping_node] : mgd_node_to_grouping_node) {
+        (void)unused_grouping_node;
         node_to_host_group.emplace(
-            grouping_node,
+            mgd_node,
             host_partition_index_for_row_major_chip(
                 static_cast<uint32_t>(mgd_node), mgd_topo->dims, mgd_topo->host_dims));
     }
@@ -896,9 +886,8 @@ std::set<LogicalChipId> collect_pgd_asic_targets(const GroupingInfo& grouping_in
 // The soft same-host preference is left for groupings that reach this with no declared host topology at all,
 // where there is no contract to enforce and one host is merely the better tie-break.
 //
-// A rejection here is usually not a too-small host: see the TODO on
-// compose_mesh_node_to_host_group_from_mgd_match, which stamps the declared split onto the match in an arbitrary
-// orientation, so a group can straddle two hosts that are each large enough to hold it whole.
+// mesh_node_to_host_group is keyed by MeshGraph / MGD chip id. Placement targets are those chips
+// (MGD fallback) or the PGD nodes they pin to (committed match). The host split is applied either way.
 bool configure_pgd_psd_host_alignment_constraints(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -937,22 +926,34 @@ bool configure_pgd_psd_host_alignment_constraints(
     };
 
     if (!grouping_info.mesh_node_to_host_group.empty()) {
-        std::map<uint32_t, std::set<LogicalChipId>> targets_by_group;
-        for (LogicalChipId node_id : all_targets) {
-            const auto group_it = grouping_info.mesh_node_to_host_group.find(node_id);
-            if (group_it == grouping_info.mesh_node_to_host_group.end()) {
-                log_debug(
-                    tt::LogFabric,
-                    "PGD host split '{}' is missing host group for node {}",
-                    grouping_info.name,
-                    node_id);
-                return false;
+        // MeshGraph host_topology split: chip -> rank from compose_mesh_node_to_host_group_from_mgd_match.
+        // The constraint graph may still number nodes as PGD grouping chips; if this chip has a committed
+        // slot pinning, use the PGD node at that slot, otherwise the chip is already the placement target
+        // (MGD fallback). The rank key is always the MeshGraph partition, not the PGD host index.
+        std::map<uint32_t, std::set<LogicalChipId>> targets_by_mesh_host_rank;
+        for (const auto& [mgd_chip, mesh_host_rank] : grouping_info.mesh_node_to_host_group) {
+            LogicalChipId placement_node = mgd_chip;
+            const auto pos_it = grouping_info.mesh_node_to_asic_position.find(mgd_chip);
+            if (pos_it != grouping_info.mesh_node_to_asic_position.end()) {
+                for (LogicalChipId node_id : grouping_info.adjacency_graph.get_nodes()) {
+                    if (node_id >= grouping_info.items.size()) {
+                        continue;
+                    }
+                    const GroupingItemInfo& item = grouping_info.items[node_id];
+                    if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                        continue;
+                    }
+                    if (tt::tt_metal::ASICPosition{item.tray_id, item.asic_location} == pos_it->second) {
+                        placement_node = node_id;
+                        break;
+                    }
+                }
             }
-            targets_by_group[group_it->second].insert(node_id);
+            targets_by_mesh_host_rank[mesh_host_rank].insert(placement_node);
         }
         std::vector<std::set<LogicalChipId>> target_groups;
-        target_groups.reserve(targets_by_group.size());
-        for (auto& [_, group_targets] : targets_by_group) {
+        target_groups.reserve(targets_by_mesh_host_rank.size());
+        for (auto& [_, group_targets] : targets_by_mesh_host_rank) {
             target_groups.push_back(std::move(group_targets));
         }
 
