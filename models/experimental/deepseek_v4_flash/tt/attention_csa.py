@@ -20,8 +20,10 @@ Pooling runs only on the steps that close a window -- a compressor emits an entr
 
 The CSA Lightning Indexer (:class:`DeepSeekV4Indexer`) is a second CSA compressor at
 ``index_head_dim`` plus ``indexer_score_dsa`` / ``topk_large_indices``. It reuses
-:class:`DeepSeekV4CSACompressor` for key writes. For ``seq_len <= index_topk * compress_rate``
-its top-k selects every closed window, so the block bias reduces to causal masking.
+:class:`DeepSeekV4CSACompressor` for key writes. While ``seq_len < compress_rate * index_topk``
+there are fewer closed windows than ``index_topk``, so attention stays dense causal SDPA
+(its own trace). At and above that length the indexer picks the top-k compressed entries
+and core attention is ``sparse_sdpa`` over the sliding ring plus those entries.
 
 HCA has its own compressor (:mod:`.attention_hca`). The helpers shared with the rest of the
 attention block -- the decode activation layouts, the rope wrapper, the in-place cache writers --
@@ -48,10 +50,9 @@ from .common import _profile, _signpost, width_sharded_l1_config
 from .decode_prefetch import (
     check_decode_layout,
     decode_prefetch_page_bytes,
-    ensure_named_gcb,
     make_decode_prefetch_buffers,
 )
-from .layers import DeepSeekV4RMSNorm, LinearDecode, decode_gcb_page_bytes
+from .layers import DeepSeekV4RMSNorm, LinearDecode
 from .paged_cache import PagedLayerView
 from .system_config import active_system_config
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
@@ -132,8 +133,8 @@ class DeepSeekV4CSACompressor:
 
     The CSA Lightning Indexer (:class:`DeepSeekV4Indexer`) scores queries against
     these compressed keys and gathers a top-k; this compressor still emits every
-    closed window. For ``seq_len <= index_topk * compress_rate`` that top-k is
-    all entries, so the block bias reduces to causal masking over windows.
+    closed window. For ``seq_len < index_topk * compress_rate`` that top-k would
+    exceed the closed windows, so the caller keeps dense causal SDPA instead.
     """
 
     def __init__(
@@ -204,13 +205,11 @@ class DeepSeekV4CSACompressor:
             self.position_bias = _rm_width_sharded(self.position_bias, self.compress_rate, 2 * self.head_dim)
         self._win_offsets: ttnn.Tensor | None = None
         self.indexer: DeepSeekV4Indexer | None = None
-        # The indexer's compute (``write_keys`` / ``score_and_select``) is not wired into the
-        # decode step yet, so attaching it only stages weights that no matmul ever drains. The
-        # prefetcher's credit accounting assumes every queued weight is popped (see
-        # ``LinearDecode._queue_prefetch``), so those orphan pages cost decode throughput for
-        # weights nothing reads. Gate on the profile switch so ``indexer: "off"`` (the default)
-        # is genuinely off and the build path matches the pre-indexer behaviour; ``always`` or
-        # ``auto`` opt back in once the indexer is actually consumed.
+        # ``indexer: "on"`` (the default) attaches the indexer when the checkpoint
+        # has its weights. ``off`` attaches nothing, so the prefetcher never queues
+        # weights no matmul pops. Decode writes index keys every step and scores
+        # them once the sequence is long enough for top-k (see
+        # :meth:`DeepSeekV4Attention.decode_static`).
         if attach_indexer and active_system_config().attention.indexer_enabled() and _has_indexer_weights(weights):
             self.indexer = DeepSeekV4Indexer(
                 config,
@@ -245,28 +244,33 @@ class DeepSeekV4CSACompressor:
             )
         return ttnn.add(win_slot, self._win_offsets)
 
-    def prefetch_weights(self):
+    def prefetch_weights(self, *, index_sparse: bool = False):
         """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
 
-        Queued kv before gate, the order :meth:`_project` pops them off their shared GCB
-        (q_a's 32-receiver ring); both stay DRAM ND-sharded ``[D, 2*Dh]``.
+        Queued kv before gate, the order :meth:`decode_static` pops them off their shared GCB
+        (q_a's 32-receiver ring); both stay DRAM ND-sharded ``[D, 2*Dh]``. ``index_sparse``
+        also stages the indexer's score projections; key compression is staged either way,
+        because both the short-sequence and the indexer trace write index keys.
         """
         self.kv_proj.fetch_weights()
         self.gate_proj.fetch_weights()
         if self.indexer is not None:
-            self.indexer.prefetch_weights()
+            # q_b was queued by attention, between its own q_b and o_a: it shares that ring.
+            self.indexer.prefetch_weights(score=index_sparse, q_b=False)
 
-    def _project(self, tokens: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``tokens`` ``[1, 1, B, D]`` -> per-token ``(kv, gate)`` ``[1, 1, B, 2*Dh]`` each.
+    def _write_projection(self, proj, tokens: ttnn.Tensor, window: ttnn.Tensor, win_index: ttnn.Tensor) -> None:
+        """Project ``tokens`` with ``proj`` into ``window`` at ``win_index``, then free the row.
 
-        Returned in whatever layout ``LinearDecode`` leaves them in -- unlike HCA's, they
-        are not moved to DRAM here, because :func:`_update_window_at` reshapes and
-        reshards them for the width-sharded window buffer anyway.
+        kv and gate share a GCB, and ``matmul_decode`` places its circular buffers on the
+        bounding box of every core the activation and the weight touch. That box is the
+        whole compute grid for the indexer's 8-core ring. The kv row lives in that box;
+        leaving it allocated while the gate program is built drops the lowest L1 address
+        into the buffer region and the program is rejected. The window already holds the
+        row, so the projection result is free to go before the next matmul.
         """
-        return (
-            self.kv_proj(_decode_activation(self.kv_proj, tokens)),
-            self.gate_proj(_decode_activation(self.gate_proj, tokens)),
-        )
+        row = proj(_decode_activation(proj, tokens))
+        _update_window_at(window, row, win_index)
+        ttnn.deallocate(row)
 
     def _pool_window(
         self,
@@ -324,18 +328,26 @@ class DeepSeekV4CSACompressor:
         """
         _signpost("CSA_START")
         users = _packed_users(tokens)
-        kv, gate = self._project(tokens)  # [1, 1, B, 2*Dh]
         win_index = self._win_index(win_slot, users)
-        _update_window_at(scache.win_kv, kv, win_index)
-        _update_window_at(scache.win_gate, gate, win_index)
+        # kv before gate: that is the order :meth:`prefetch_weights` queued them on the
+        # shared ring. Each row is freed before the next matmul; see :meth:`_write_projection`.
+        self._write_projection(self.kv_proj, tokens, scache.win_kv, win_index)
+        self._write_projection(self.gate_proj, tokens, scache.win_gate, win_index)
         if pool and (combined_cache is not None or paged is not None):
             pooled = self._pool_window(
                 scache.prev_kv, scache.prev_gate, scache.win_kv, scache.win_gate, cos_row, sin_row
             )
-            _update_cache_at(combined_cache, pooled, win_row, paged=paged)
+            # Paged attention reads the block pool. A dense ``combined_cache`` beside it
+            # is the indexer's ``sparse_sdpa`` mirror and has to see the same entry.
+            if paged is not None:
+                _update_cache_at(None, pooled, win_row, paged=paged)
+            if combined_cache is not None:
+                _update_cache_at(combined_cache, pooled, win_row)
             ttnn.deallocate(pooled)
             _retire_window(scache.prev_kv, scache.win_kv)
             _retire_window(scache.prev_gate, scache.win_gate)
+        if self.indexer is not None and getattr(scache, "idx_key_cache", None) is not None:
+            self.indexer.write_keys(tokens, cos_row, sin_row, scache, win_slot, win_row, pool=pool)
         if win_index is not win_slot:
             ttnn.deallocate(win_index)
         _signpost("CSA_END")
@@ -388,6 +400,21 @@ def _indexer_weight(weights: dict, name: str):
     raise KeyError(f"indexer weight {name} not found; tried {_INDEXER_WEIGHT_KEYS[name]}")
 
 
+def _release_if_distinct(src: ttnn.Tensor, dst: ttnn.Tensor) -> None:
+    """Free ``src`` only when ``dst`` owns a different buffer.
+
+    ``to_memory_config`` returns the input unchanged when it is already in the
+    requested config, but as a new Python object. ``src is not dst`` is then
+    true while both still name the same allocation, and freeing ``src`` frees
+    ``dst`` as well.
+    """
+    if src is dst or not src.is_allocated() or not dst.is_allocated():
+        return
+    if src.buffer_address() == dst.buffer_address():
+        return
+    ttnn.deallocate(src)
+
+
 def _scale_linear_weight(weight, scale: float):
     """Fold ``scale`` into a ``[N, K]`` weight (or thunk) for ``indexer_score_dsa``."""
     if callable(weight):
@@ -415,11 +442,10 @@ class DeepSeekV4Indexer:
     ``1/√n_heads`` and ``1/√index_head_dim`` are folded into ``weights_proj`` because
     the score op applies no scale of its own.
 
-    At ``tp_size > 1`` the index-key cache is sequence-sharded on the TP mesh axis
-    (``T / tp`` per rank). Scoring uses ``ring_indexer_score_dsa``, which all-gathers
-    those shards into a persistent full-T buffer while overlapping the gather with
-    compute. Query and weights must be sequence-sharded on the same axis (the fused
-    op's SP contract); each rank's local ``Sq`` stays tile-aligned.
+    The index-key cache is replicated on every TP rank. Decode scores it with
+    ``indexer_score_dsa`` on each rank: the query is one replicated token, so a
+    sequence-sharded cache cannot be updated at the global window row a large
+    ``start_pos`` names.
     """
 
     def __init__(
@@ -489,27 +515,29 @@ class DeepSeekV4Indexer:
             layout = dict(check_decode_layout(layout_name, K, N))
             if layout.get("partial_width_sharded", False):
                 raise ValueError(f"{layout_name} must be fully width-sharded for hub-mode matmul_decode")
-            if layout_name == "indexer.q_b_proj":
-                global_cb = prefetch_buffers["q_b_proj"]
-                page_bytes = decode_prefetch_page_bytes(weight_dtype)
-            else:
-                global_cb = ensure_named_gcb(prefetch_buffers, layout_name, device, [layout], weight_dtype)
-                page_bytes = decode_gcb_page_bytes([layout], weight_dtype)
+            # q_b shares the 64-receiver ring. weights_proj is 2 cores, which does
+            # not divide the DRAM banks, so it cannot take a prefetch ring.
+            prefetch = layout_name == "indexer.q_b_proj"
+            extra = {}
+            if prefetch:
+                extra = {
+                    "global_cb": prefetch_buffers["q_b_proj"],
+                    "global_cb_page_bytes": decode_prefetch_page_bytes(weight_dtype),
+                }
             proj = LinearDecode(
                 weight,
                 device,
                 cache.file(f"{cache_key}.full"),
                 dtype=weight_dtype,
                 **layout,
-                use_prefetcher=True,
-                global_cb=global_cb,
-                global_cb_page_bytes=page_bytes,
+                use_prefetcher=prefetch,
                 rectangle_b_grid=True,
                 use_rm_hs=True,
+                **extra,
             )
             assert (
-                proj.use_prefetcher and proj.use_rm_hs and not proj.partial_width_sharded
-            ), f"{layout_name} must be prefetched, ROW_MAJOR HEIGHT_SHARDED, fully width-sharded"
+                proj.use_rm_hs and not proj.partial_width_sharded
+            ), f"{layout_name} must be ROW_MAJOR HEIGHT_SHARDED and fully width-sharded"
             assert proj._can_matmul_decode_rm_hs(), f"{layout_name} cannot take a ROW_MAJOR HEIGHT_SHARDED A"
             return proj
 
@@ -558,11 +586,22 @@ class DeepSeekV4Indexer:
                 self.device.set_sub_device_stall_group([self._ag_sub_device_id])
             self._ag_semaphores = [ttnn.create_global_semaphore(self.device, cores, 0) for _ in range(2)]
 
-    def prefetch_weights(self):
-        """Stage compressor kv/gate then q_b / weights_proj."""
+    def prefetch_weights(self, *, score: bool = False, q_b: bool = True):
+        """Stage compressor kv/gate, and the score projections when ``score`` is set.
+
+        The short-sequence trace writes index keys but does not score, and a queued
+        page that no matmul pops desynchronizes that GCB. Score weights are staged
+        only on the indexer trace. ``q_b`` is false when the caller already queued
+        ``q_b_proj`` on the shared ring (it has to precede o_a).
+        """
         self.compressor.prefetch_weights()
-        self.q_b_proj.fetch_weights()
-        self.weights_proj.fetch_weights()
+        if score and q_b:
+            self.q_b_proj.fetch_weights()
+        # weights_proj has no prefetch ring (2 cores do not divide the DRAM banks).
+        # Its forward copies DRAM -> L1 itself; queueing that here would allocate
+        # inside the trace.
+        if score and self.weights_proj.use_prefetcher:
+            self.weights_proj.fetch_weights()
 
     def write_keys(
         self,
@@ -575,7 +614,14 @@ class DeepSeekV4Indexer:
         pool: bool = True,
     ) -> None:
         """Same schedule as CSA :meth:`DeepSeekV4CSACompressor.decode_static`, writing
-        pooled index keys into ``scache.idx_key_cache``."""
+        pooled index keys into ``scache.idx_key_cache``.
+
+        ``win_row`` addresses the attention KV axis (``sliding_window + w``). The index
+        cache holds only compressed keys, so the entry lands at row ``w``.
+        """
+        idx_row = win_row
+        if pool and win_row is not None:
+            idx_row = ttnn.subtract(win_row, self.sliding_window)
         self.compressor.decode_static(
             tokens,
             cos_row,
@@ -583,9 +629,11 @@ class DeepSeekV4Indexer:
             _IndexerWindowView(scache),
             scache.idx_key_cache,
             win_slot,
-            win_row,
+            idx_row,
             pool=pool,
         )
+        if idx_row is not win_row and idx_row is not None:
+            ttnn.deallocate(idx_row)
 
     def select(
         self,
@@ -593,56 +641,78 @@ class DeepSeekV4Indexer:
         key_cache: ttnn.Tensor,
         head_weights: ttnn.Tensor,
         logits_out: ttnn.Tensor | None = None,
+        valid_length_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """``indexer_score_dsa`` (TP1) or ``ring_indexer_score_dsa`` (TP>1) then ``topk_large_indices``.
+        """``indexer_score_dsa`` then ``topk_large_indices``.
 
-        ``query`` ``[B, Hi, Sq, D]`` TILE, ``key_cache`` TILE, ``head_weights``
-        ``[B, 1, Sq, Hi]`` TILE with both scales already folded.
-        At TP1 ``key_cache`` is the full ``[B, 1, T, D]``. At TP>1 it is this rank's
-        ``[B, 1, T/tp, D]`` shard on the TP mesh axis; the fused op all-gathers into a
-        persistent full-T buffer. Query / weights use the same sequence-shard (local
-        ``Sq`` tile-aligned). Future / pad columns must already be ``-inf`` on the
-        score path (mask on device; do not pass host ``kv_len``). Returns uint32
-        ``[B, 1, Sq, k]``.
+        ``query`` ``[B, Hi, Sq, D]`` TILE, ``key_cache`` the full ``[B, 1, T, D]``
+        TILE (replicated across TP), ``head_weights`` ``[B, 1, Sq, Hi]`` TILE with
+        both scales already folded.
 
-        ``Sq`` must be a multiple of the 32-row tile: the score ops reject anything
-        shorter ("Sq 1, T .., D .. must be tile-aligned"). One call therefore scores
-        ONE key-cache slot against a whole tile of query rows, so a packed decode
-        step cannot score one query row per user -- see :meth:`score_and_select`.
-        Checked here so the caller gets a message instead of a device abort.
+        ``Sq`` must be a multiple of the 32-row tile. Decode uses ``Sq == 32`` and puts
+        the real query on the last row: ``chunk_start = T - Sq`` is tile-aligned and
+        constant, so that row sees every allocated key (``t <= T - 1``). Columns past
+        the closed-window count are dropped by ``valid_length_tensor`` (a 1-element
+        uint32 DRAM tensor), which is what keeps one captured program correct at
+        every later position, including a non-zero ``start_pos``. Do not pass a host
+        ``kv_len``. Returns uint32 ``[B, 1, Sq, k]``.
         """
-        assert list(query.shape)[2] % 32 == 0, (
-            f"indexer score needs a tile-aligned query block, got Sq={list(query.shape)[2]} "
+        sq = list(query.shape)[2]
+        assert sq % 32 == 0, (
+            f"indexer score needs a tile-aligned query block, got Sq={sq} "
             "(1-row decode queries are rejected on device)"
         )
-        if self.tp_size > 1:
-            t_local = list(key_cache.shape)[2]
-            assert t_local % 32 == 0, f"TP{self.tp_size} index-key shard T/tp={t_local} must be tile-aligned"
-            self._ensure_ring(key_cache)
-            # A 1xTP submesh of Galaxy is a line: TORUS_X wraps the full 8-chip X axis, not
-            # these four ranks, so Topology.Ring hangs on a wrap link that does not exist.
-            scores = ttnn.experimental.ring_indexer_score_dsa(
-                query,
-                self._k_gathered,
-                head_weights,
-                key_cache,
-                self._ag_semaphores,
-                cluster_axis=self.cluster_axis,
-                topology=ttnn.Topology.Linear,
-                num_links=1,
-                ag_sub_device_id=self._ag_sub_device_id,
-                program_config=ttnn.IndexerScoreProgramConfig(head_group_size=0),
-            )
-        else:
-            scores = ttnn.experimental.indexer_score_dsa(query, key_cache, head_weights)
+        t_full = list(key_cache.shape)[2]
+        assert t_full >= sq, f"index-key cache T={t_full} is shorter than the score query block Sq={sq}"
+        chunk_start = t_full - sq
+        scores = ttnn.experimental.indexer_score_dsa(query, key_cache, head_weights, chunk_start_idx=chunk_start)
         if logits_out is not None:
             ttnn.copy(scores, logits_out)
             scores = logits_out
         return ttnn.experimental.topk_large_indices(
             scores,
             k=self.index_topk,
+            valid_length_tensor=valid_length_tensor,
             subdevice_id=self._ag_sub_device_id,
         )
+
+    def _closed_windows(self, compress_pos: ttnn.Tensor) -> ttnn.Tensor:
+        """``(pos + 1) // compress_rate`` as a 1-element uint32 DRAM row, from ``compress_pos`` ``[B]``.
+
+        Top-k reads this on device (``valid_length_tensor``), so a traced step can grow
+        the searchable prefix without a host scalar baked into the capture. The batch
+        shares one position; the count is taken from user 0.
+        """
+        users = list(compress_pos.shape)[0]
+        pos = ttnn.reshape(compress_pos, [1, 1, 1, users])
+        scalar = ttnn.slice(pos, [0, 0, 0, 0], [1, 1, 1, 1])
+        scalar_f = ttnn.typecast(ttnn.to_layout(scalar, ttnn.TILE_LAYOUT), ttnn.float32)
+        closed = ttnn.floor(ttnn.multiply(ttnn.add(scalar_f, 1.0), 1.0 / self.compress_rate))
+        closed_rm = ttnn.to_layout(ttnn.typecast(closed, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+        closed_1 = ttnn.reshape(closed_rm, [1])
+        return ttnn.to_memory_config(closed_1, ttnn.DRAM_MEMORY_CONFIG)
+
+    def _score_block(self, row: ttnn.Tensor) -> ttnn.Tensor:
+        """TILE ``[B, ..., 32, D]`` with the real row at index 31.
+
+        ``indexer_score_dsa`` rejects ``Sq == 1`` and wants TILE input. Padding is
+        applied in row-major, before the tilize, so the 31 leading rows are real
+        zeros rather than tile padding. With ``chunk_start = T - 32`` that last row
+        is the one whose causal window covers the whole allocated cache.
+        """
+        dram = ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG)
+        # A no-op copy (already DRAM) comes back as a new Python object over the
+        # same buffer. Freeing ``row`` would free ``dram`` too.
+        _release_if_distinct(row, dram)
+        if dram.layout != ttnn.ROW_MAJOR_LAYOUT:
+            rm = ttnn.to_layout(dram, ttnn.ROW_MAJOR_LAYOUT)
+            _release_if_distinct(dram, rm)
+            dram = rm
+        padded = ttnn.pad(dram, padding=[(0, 0), (0, 0), (ttnn.TILE_SIZE - 1, 0), (0, 0)], value=0.0)
+        _release_if_distinct(dram, padded)
+        tiled = ttnn.to_layout(padded, ttnn.TILE_LAYOUT)
+        _release_if_distinct(padded, tiled)
+        return tiled
 
     def score_and_select(
         self,
@@ -651,25 +721,40 @@ class DeepSeekV4Indexer:
         cos_row: ttnn.Tensor,
         sin_row: ttnn.Tensor,
         key_cache: ttnn.Tensor,
+        compress_pos: ttnn.Tensor,
         logits_out: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Project indexer q / folded weights, RoPE q, then :meth:`select`.
 
-        NOT usable as written for a packed decode step: it reshapes to ``[users, Hi, 1, D]``, i.e.
-        ``Sq == 1``, which ``indexer_score_dsa`` rejects (see :meth:`select`). The users axis has to
-        become the query block (a tile of rows, pad rows masked) and the key cache has to be
-        addressed per slot, since one call scores exactly one cache slot. Resolve that when wiring
-        this into the decode loop.
+        Returns uint32 ROW_MAJOR ``[B, 1, 1, sliding_window + index_topk]``: the sliding
+        ring followed by the selected compressed entries, which is the index list
+        ``sparse_sdpa`` consumes against the combined KV axis. The real query occupies
+        score-row 31; top-k runs on the padded block and only that row is kept.
         """
         q = self.q_b_proj(_decode_activation(self.q_b_proj, q_a))
         q = _apply_rope(q, cos_row, sin_row, self.rot, self.rope_dim, head_dim=self.head_dim)
         users = _packed_users(tokens)
-        q = ttnn.reshape(q, [users, self.num_heads, 1, self.head_dim])
-        q = ttnn.to_layout(ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
+        # RoPE leaves a width-sharded L1 row. Reshaping that shard into heads
+        # asks for a page size L1 will not take, so interleave in DRAM first.
+        q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        _release_if_distinct(q, q_dram)
+        q_heads = ttnn.reshape(q_dram, [users, self.num_heads, 1, self.head_dim])
+        _release_if_distinct(q_dram, q_heads)
+        q = self._score_block(q_heads)
         w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
-        w = ttnn.reshape(w, [users, 1, 1, self.num_heads])
-        w = ttnn.to_layout(ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
-        return self.select(q, key_cache, w, logits_out=logits_out)
+        w_dram = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
+        _release_if_distinct(w, w_dram)
+        w_heads = ttnn.reshape(w_dram, [users, 1, 1, self.num_heads])
+        _release_if_distinct(w_dram, w_heads)
+        w = self._score_block(w_heads)
+        topk = self.select(
+            q, key_cache, w, logits_out=logits_out, valid_length_tensor=self._closed_windows(compress_pos)
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(w)
+        row = ttnn.slice(topk, [0, 0, ttnn.TILE_SIZE - 1, 0], [users, 1, ttnn.TILE_SIZE, self.index_topk])
+        ttnn.deallocate(topk)
+        return self.index_list(row)
 
     def index_list(self, topk_indices: ttnn.Tensor) -> ttnn.Tensor:
         """``[0..window)`` plus ``window + selected``; sentinels stay ``INDEX_SENTINEL``.
