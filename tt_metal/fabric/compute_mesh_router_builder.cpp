@@ -551,6 +551,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
             location.remote_node,
             location.eth_chan,
             eth_direction,
+            fabric_context,
             std::move(tensix_injection_flags));
     }
 

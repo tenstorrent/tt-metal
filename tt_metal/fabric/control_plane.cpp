@@ -2668,9 +2668,10 @@ void ControlPlane::clear_fabric_context() {
     asic_id_to_fabric_node_cache_.clear();
 }
 
-void ControlPlane::initialize_fabric_tensix_datamover_config() {
+void ControlPlane::initialize_fabric_tensix_datamover_config(
+    tt::tt_metal::MetalEnvImpl& env, const TensixDatamoverInitInputs& inputs) {
     TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
-    this->fabric_context_->get_builder_context().initialize_tensix_config();
+    this->fabric_context_->get_builder_context().initialize_tensix_config(env, inputs);
 }
 
 bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const {

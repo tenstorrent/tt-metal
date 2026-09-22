@@ -17,6 +17,10 @@
 #include <optional>
 #include <unordered_map>
 
+namespace tt::tt_metal {
+class MetalEnvImpl;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 class FabricContext;
@@ -134,7 +138,7 @@ public:
     const StreamAssignment& get_stream_assignment(MeshId mesh_id) const;
 
     // ============ Tensix Config ============
-    void initialize_tensix_config();
+    void initialize_tensix_config(tt::tt_metal::MetalEnvImpl& env, const TensixDatamoverInitInputs& inputs);
     FabricTensixDatamoverConfig& get_tensix_config() const;
     bool has_tensix_config() const { return tensix_config_ != nullptr; }
 

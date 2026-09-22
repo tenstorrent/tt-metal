@@ -42,7 +42,7 @@ class RunTimeOptions;
 namespace tt::tt_metal {
 
 class Hal;
-
+class MetalEnvImpl;
 class PhysicalSystemDescriptor;
 
 }  // namespace tt::tt_metal
@@ -61,6 +61,7 @@ uint16_t get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
 UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
 
 class FabricContext;
+struct TensixDatamoverInitInputs;
 
 // This struct provides information for how a process binds to a particular
 // mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
@@ -318,7 +319,8 @@ public:
     void clear_fabric_context();
 
     // Initialize fabric tensix config (call after routing tables are configured)
-    void initialize_fabric_tensix_datamover_config();
+    void initialize_fabric_tensix_datamover_config(
+        tt::tt_metal::MetalEnvImpl& env, const TensixDatamoverInitInputs& inputs);
 
     // Check if the provided chip and channel is a cross-host eth link
     bool is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const;

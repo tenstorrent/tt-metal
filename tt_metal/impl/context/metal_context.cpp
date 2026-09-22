@@ -660,9 +660,9 @@ void MetalContext::initialize_fabric_config() {
     MetalEnvAccessor(*env_).impl().initialize_fabric_config();
 }
 
-void MetalContext::initialize_fabric_tensix_datamover_config() {
+void MetalContext::initialize_fabric_tensix_datamover_config(const tt_fabric::TensixDatamoverInitInputs& inputs) {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().initialize_fabric_tensix_datamover_config();
+    MetalEnvAccessor(*env_).impl().initialize_fabric_tensix_datamover_config(inputs);
 }
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const {

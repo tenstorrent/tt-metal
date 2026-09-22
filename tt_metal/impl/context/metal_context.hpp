@@ -18,6 +18,7 @@
 #include "hostdevcommon/common_values.hpp"
 namespace tt::tt_fabric {
 class ControlPlane;
+struct TensixDatamoverInitInputs;
 }  // namespace tt::tt_fabric
 
 namespace tt {
@@ -203,7 +204,7 @@ public:
         tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT,
         tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{});
     void initialize_fabric_config();
-    void initialize_fabric_tensix_datamover_config();
+    void initialize_fabric_tensix_datamover_config(const tt_fabric::TensixDatamoverInitInputs& inputs);
     tt_fabric::FabricConfig get_fabric_config() const;
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
     const tt_fabric::FabricRouterConfig& get_fabric_router_config() const;

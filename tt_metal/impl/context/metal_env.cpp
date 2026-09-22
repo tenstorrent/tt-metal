@@ -368,7 +368,7 @@ void MetalEnvImpl::initialize_fabric_config() {
     cp.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
-void MetalEnvImpl::initialize_fabric_tensix_datamover_config() {
+void MetalEnvImpl::initialize_fabric_tensix_datamover_config(const tt::tt_fabric::TensixDatamoverInitInputs& inputs) {
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
@@ -377,7 +377,7 @@ void MetalEnvImpl::initialize_fabric_tensix_datamover_config() {
     // fabric compile fatals on a null tensix_config_ when FabricTensixConfig != DISABLED.
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         auto& cp = this->get_control_plane();
-        cp.initialize_fabric_tensix_datamover_config();
+        cp.initialize_fabric_tensix_datamover_config(*this, inputs);
     }
 }
 

@@ -22,10 +22,12 @@
 #include "firmware/profiler_initializer.hpp"
 #include "firmware/fabric_firmware_initializer.hpp"
 #include "firmware/dispatch_kernel_initializer.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include <experimental/fabric/fabric.hpp>
+#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/topology.hpp"
@@ -303,7 +305,12 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
     add_devices_to_pool(device_ids_to_open);
 
     // Initialize fabric tensix datamover config after devices are added to the pool
-    ctx_.initialize_fabric_tensix_datamover_config();
+    tt::tt_fabric::TensixDatamoverInitInputs tensix_init_inputs{
+        .active_devices = get_all_active_devices(),
+        .num_hw_cqs = num_hw_cqs_,
+        .dispatch_core_config = ctx_.get_dispatch_core_manager().get_dispatch_core_config(),
+    };
+    ctx_.initialize_fabric_tensix_datamover_config(tensix_init_inputs);
 
     init_firmware_on_active_devices();
 }

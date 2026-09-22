@@ -21,9 +21,21 @@
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "core_coord.hpp"
 
+namespace tt::tt_metal {
+class MetalEnvImpl;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 class FabricContext;
+
+// Runtime snapshot from DeviceManager used to construct FabricTensixDatamoverConfig without
+// the MetalContext singleton. Core-descriptor lookup still goes through MetalEnvImpl.
+struct TensixDatamoverInitInputs {
+    std::vector<tt::tt_metal::IDevice*> active_devices;
+    uint8_t num_hw_cqs = 0;
+    tt::tt_metal::DispatchCoreConfig dispatch_core_config;
+};
 
 // Core type enum for fabric tensix datamover (identifies MUX vs RELAY cores)
 enum class FabricTensixCoreType : uint32_t {
@@ -45,7 +57,8 @@ namespace tt::tt_fabric {
 
 class FabricTensixDatamoverConfig {
 public:
-    explicit FabricTensixDatamoverConfig(const FabricContext& fabric_context);
+    FabricTensixDatamoverConfig(
+        const FabricContext& fabric_context, tt::tt_metal::MetalEnvImpl& env, const TensixDatamoverInitInputs& inputs);
 
     // Getters for core and channel configuration
     size_t get_num_configs_per_core() const { return num_configs_per_core_; }
@@ -143,6 +156,9 @@ public:
     WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const tt::tt_metal::CoreCoord& worker_coord) const;
 
 private:
+    const FabricContext& fabric_context_;
+    std::vector<tt::tt_metal::IDevice*> active_devices_;
+
     std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores_;
     std::vector<tt::tt_metal::CoreCoord> logical_dispatch_mux_cores_;
     std::unordered_set<tt::tt_metal::CoreCoord> translated_fabric_mux_cores_;
@@ -254,7 +270,7 @@ private:
      */
     void build_fabric_tensix_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
 
-    bool initialize_channel_mappings();
+    bool initialize_channel_mappings(tt::tt_metal::MetalEnvImpl& env, const TensixDatamoverInitInputs& inputs);
     void calculate_buffer_allocations();
     void create_configs(const FabricContext& fabric_context);  // Creates mode-aware configs based on FabricTensixConfig
 
@@ -309,6 +325,7 @@ public:
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
         eth_chan_directions direction,
+        const FabricContext& fabric_context,
         std::vector<bool>&& sender_channel_injection_flags);
 
     // Static builder method for missing directions (UDM mode only)
@@ -320,7 +337,8 @@ public:
         tt::tt_metal::Program& program,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         routing_plane_id_t routing_plane_id,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        const FabricContext& fabric_context);
 
     // Create and compile the kernel(s) based on mode
     void create_and_compile(tt::tt_metal::Program& program);
