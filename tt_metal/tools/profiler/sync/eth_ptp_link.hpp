@@ -307,26 +307,6 @@ constexpr uint32_t kRoleT0 = kernel_profiler::kSyncRoleT0;
 constexpr uint32_t kRoleT1 = kernel_profiler::kSyncRoleT1;
 constexpr uint32_t kRoleT1B = kernel_profiler::kSyncRoleT1B;
 constexpr uint32_t kRoleT2 = kernel_profiler::kSyncRoleT2;
-#if defined(ETH_PTP_LINK_TABLE)
-// The acceptance test's sink (programming_examples/profiler/test_eth_ptp_link): a count word at ETH_PTP_LINK_TABLE,
-// then {round, role, value lo, value hi} rows, ETH_PTP_LINK_TABLE_ROWS of them.
-template <bool>
-struct Ring {
-    void open(uint32_t) {}
-    void record_hw(uint64_t value, uint32_t round, uint32_t role) {
-        const uint32_t n = rd(ETH_PTP_LINK_TABLE);
-        if (n >= ETH_PTP_LINK_TABLE_ROWS) {
-            return;
-        }
-        volatile uint32_t* row = reinterpret_cast<volatile uint32_t*>(ETH_PTP_LINK_TABLE + 4 + n * 16);
-        row[0] = round;
-        row[1] = role;
-        row[2] = static_cast<uint32_t>(value);
-        row[3] = static_cast<uint32_t>(value >> 32);
-        wr(ETH_PTP_LINK_TABLE, n + 1);
-    }
-};
-#else
 // `Bracket`: the record's (wall, refclk) pair is read at a refclk update (read_bracketed, ~5 us of spinning), so the
 // host's AICLK-to-AICLK check of the round reads the wall clock to a cycle; a router's end takes the plain pair.
 template <bool Bracket>
@@ -357,7 +337,6 @@ struct Ring {
         *tail = ++n;
     }
 };
-#endif
 }  // namespace link
 
 // The two ends of a link, driven by whoever owns the core -- a resident kernel or the fabric router: open() before
