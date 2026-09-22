@@ -276,6 +276,18 @@ All verified by reading the code; none implemented.
 2. **Hoist the per-step modulation.** `combined_step` calls `inner_step` twice with the **same
    timestep**, so the timestep MLP, patch embed and every block's modulation are recomputed
    identically — ~26,400 op launches per generation, half of them exact duplicates.
+
+   *Done, first half (2026-09-22):* `combined_step` now computes `prepare_timestep_conditioning`
+   and `patch_embedding` once under CFG and hands both to the two `inner_step` passes through
+   two keyword-only arguments that default to the old behaviour for every other caller. Nothing
+   downstream writes into either tensor (the fused addcmul kernels return fresh outputs).
+   Gate `test_cfg_hoist_ti2v_5b.py`: `max_abs_diff == 0.0` for the cond pass, the uncond pass
+   and the combined output at 720p geometry; the transformer PCC suite is unchanged to four
+   decimals (100.0000 / 99.9893 / 99.9894 %). The per-block AdaLN modulation (the
+   `scale_shift_table + temb` add and six-way chunk in every block, twice per step) is still
+   duplicated: hoisting it means threading 30 x 6 modulation tensors through the block API,
+   and the traced steady state pays only its device time, which is small. Perf effect of the
+   half that landed: see section 1 (expected <= 1 %).
 3. **Fold `+1.0` into `scale_shift_table`.** `1 + (table+temb) == (table+1) + temb` exactly;
    removes 4,800 ops per generation at zero numerical cost.
 4. **Change the AdaLN split layout.** Measured bit-exact on the production shape: current
@@ -304,6 +316,25 @@ All verified by reading the code; none implemented.
    and the `bfloat8_b` path already exists but is only enabled by a `QuantConfig` no 5B pipeline
    applies. Overlapped with compute, so precision-gate it and expect only what the fabric is
    actually binding.
+
+7. **`QuantConfig` presets on the 5B (opt-in, 2026-09-22).** `WAN5B_QUANT_CONFIG=<preset>` now
+   applies a `QuantConfig` preset in the two 5B perf tests, the generate test and the
+   transformer-vs-torch PCC tests (`quant_config.py: set_quant_config_from_env`). The perf tests
+   re-run the eager warmup after applying it, because trace capture cannot compile the programs
+   a new dtype or fidelity needs. The default is unchanged.
+
+   | preset | transformer PCC scalar / per-token (bf16: 99.9893 / 99.9894) | CLIP mean, Teja's 121f generate (bf16 40.38, gate 36.00) | 720p T2V perf |
+   |---|---|---|---|
+   | `all_weights_bf8` | **99.9885 / 99.9885 %** (-0.0008 / -0.0009 pp) | **40.20** (min 38.65, max 41.67) | see section 1 |
+   | `all_lofi` | **hangs the device** in the first LoFi matmul (self-attn QKV; host blocked in `synchronize_device` inside `get_fused_norm_stats_buffer`, `wait_for_outstanding_reads`); needed a `tt-smi -glx_reset_auto` | not reachable | not reachable |
+   | `all_bf8_lofi` | not tried (contains the LoFi compute that hangs) | — | — |
+
+   `all_weights_bf8` as shipped asserted `ternary_a_tile_size == in1_tile_size` in the fused
+   AGMM+addcmul kernel: the residual is a bf16 activation and must match the weight tile
+   format, which `all_bf8_lofi` already accounted for by keeping `self_attn_out` at bf16. The
+   preset now does the same (qkv, cross-attn q/kv/out, ff1, ff2 go to bf8). The bf8 preview
+   frames (`/home/ttuser/wan5b_t2v_720p_bf8_{first,mid,last}.png`) are visually clean: sharp,
+   coherent, stable identities across 121 frames.
 
 ---
 
