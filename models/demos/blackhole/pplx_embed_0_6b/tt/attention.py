@@ -23,6 +23,12 @@ import functools
 import os
 
 import ttnn
+from models.demos.blackhole.pplx_embed_0_6b.tt.custom_ops.fused_concat_heads import nlp_concat_heads_headsplit
+from models.demos.blackhole.pplx_embed_0_6b.tt.custom_ops.fused_concat_heads import (
+    supported as _concat_headsplit_supported,
+)
+from models.demos.blackhole.pplx_embed_0_6b.tt.custom_ops.fused_qkv_heads import nlp_create_qkv_heads_headsplit
+from models.demos.blackhole.pplx_embed_0_6b.tt.custom_ops.fused_qkv_heads import supported as _qkv_headsplit_supported
 from models.tt_transformers.tt.attention import Attention
 
 _OPTIMIZED_BATCH = 1
@@ -40,6 +46,54 @@ def set_pad_attn_mask(mask):
     """Set (or clear with ``None``) the shared bidirectional SDPA padding mask."""
     global _PAD_ATTN_MASK
     _PAD_ATTN_MASK = mask
+
+
+def _interleaved_out(memory_config):
+    """Head-split writers address the output by flat tile id, which only matches
+    the interleaved layout. Sharded destinations must use the stock op."""
+    return memory_config is None or not memory_config.is_sharded()
+
+
+def _wrap_create_qkv_heads_headsplit(original_fn):
+    """Route ``nlp_create_qkv_heads`` to the model-local head-split kernels.
+
+    Falls back to the stock op whenever the fast path cannot express the call
+    (sharded input, transposed K heads, indivisible head counts, …), so this is
+    always safe to leave enabled.
+    """
+
+    @functools.wraps(original_fn)
+    def wrapper(qkv_fused, *args, **kwargs):
+        num_heads = kwargs.get("num_heads")
+        num_kv_heads = kwargs.get("num_kv_heads", num_heads)
+        transpose_k_heads = kwargs.get("transpose_k_heads", True)
+        if (
+            not args
+            and num_heads is not None
+            and _interleaved_out(kwargs.get("memory_config"))
+            and _qkv_headsplit_supported(qkv_fused, num_heads, num_kv_heads, transpose_k_heads)
+        ):
+            return nlp_create_qkv_heads_headsplit(
+                qkv_fused,
+                num_heads=num_heads,
+                num_kv_heads=num_kv_heads,
+                memory_config=kwargs.get("memory_config"),
+            )
+        return original_fn(qkv_fused, *args, **kwargs)
+
+    return wrapper
+
+
+def _wrap_concat_heads_headsplit(original_fn):
+    """Route ``nlp_concat_heads`` to the model-local head-split kernels."""
+
+    @functools.wraps(original_fn)
+    def wrapper(context, *args, **kwargs):
+        if not args and _interleaved_out(kwargs.get("memory_config")) and _concat_headsplit_supported(context):
+            return nlp_concat_heads_headsplit(context, memory_config=kwargs.get("memory_config"))
+        return original_fn(context, *args, **kwargs)
+
+    return wrapper
 
 
 def _wrap_sdpa_bidirectional(original_fn):
@@ -121,6 +175,17 @@ class PplxBidirectionalAttention(Attention):
     ):
         original_sdpa = ttnn.transformer.scaled_dot_product_attention
         ttnn.transformer.scaled_dot_product_attention = _wrap_sdpa_bidirectional(original_sdpa)
+
+        # Head-split QKV/concat live in tt/custom_ops as generic_op kernels and are
+        # injected the same way as the bidirectional SDPA above — by swapping the
+        # ttnn entry point for the duration of the parent's forward_prefill. That
+        # keeps the optimization entirely inside this demo directory.
+        original_create_heads = ttnn.experimental.nlp_create_qkv_heads
+        original_concat_heads = ttnn.experimental.nlp_concat_heads
+        if os.getenv("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "0") == "1":
+            ttnn.experimental.nlp_create_qkv_heads = _wrap_create_qkv_heads_headsplit(original_create_heads)
+        if os.getenv("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "0") == "1":
+            ttnn.experimental.nlp_concat_heads = _wrap_concat_heads_headsplit(original_concat_heads)
         try:
             return super().forward_prefill(
                 x_11SH,
@@ -133,6 +198,8 @@ class PplxBidirectionalAttention(Attention):
             )
         finally:
             ttnn.transformer.scaled_dot_product_attention = original_sdpa
+            ttnn.experimental.nlp_create_qkv_heads = original_create_heads
+            ttnn.experimental.nlp_concat_heads = original_concat_heads
 
 
 PplxBidirectionalAttention.__name__ = "Attention"
