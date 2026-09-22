@@ -1529,7 +1529,7 @@ def main() -> None:
     if warmup_chunks > 0:
         logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
         for cidx in range(warmup_chunks):
-            push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
+            push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
         service.barrier()
         if ack_channel is not None:
             _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
