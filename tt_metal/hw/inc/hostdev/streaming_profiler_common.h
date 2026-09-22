@@ -164,7 +164,8 @@ static constexpr std::uint32_t kSyncLocalPoint = 0, kSyncLocalClose = 1;
 static constexpr std::uint32_t kSyncRoleT0 = 0, kSyncRoleT1 = 1, kSyncRoleT1B = 2, kSyncRoleT2 = 3;
 static constexpr std::uint32_t kLinkSyncRingOffset = 544;
 static constexpr std::uint32_t kLinkSyncRingRecords = 8;
-static constexpr std::uint32_t kSyncRingRecords = 128;
+// A whole seam's instants, one per ~1.2 us: the pusher ships nothing while it acquires a slope.
+static constexpr std::uint32_t kSyncRingRecords = 512;
 static constexpr std::uint32_t kSyncRingBytes = kSyncRingRecords * kSyncRecordWords * 4;
 static constexpr std::uint32_t kSyncFrameRecords = 32;  // records per sync frame at most
 static_assert(kLinkSyncRingOffset + kLinkSyncRingRecords * kSyncRecordWords * 4 <= kLinkSyncL1Bytes);

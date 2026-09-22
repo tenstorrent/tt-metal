@@ -73,7 +73,7 @@ constexpr uint32_t kEthSyncRingBytes = kernel_profiler::kSyncRingBytes;
 // A drainer's control block: done and heartbeat words, then the stop word one stride up.
 constexpr uint32_t kCtrlBytes = 2 * kernel_profiler::kRelayCtrlWordStride;
 // Pusher scratch for one linked core: its control vector, then its two ring images (BH eth has DM0 and DM1).
-constexpr uint32_t kEthScratchBytes = 4608;
+constexpr uint32_t kEthScratchBytes = 6144;
 static_assert(
     kEthScratchBytes >= kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE + 2 * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
     "the pusher scratch must hold a control vector and two whole rings");
@@ -386,6 +386,7 @@ bool Devices::boot_device(
             "without it",
             ctx.chip_id);
         ctx.pusher.reset();
+        ctx.eth_drainer.reset();
     }
     set_producers_armed(ctx, true);
     ctx.out.ctx.has_eth_tracker = ctx.pusher.has_value();
@@ -668,9 +669,32 @@ void Devices::enumerate_eth_cores(DeviceCtx& ctx) {
     for (const CoreCoord& l : idle) {
         ctx.idle_eth.push_back(locate(cluster, chip, l, CoreType::ETH));
     }
+    if (ctx.idle_eth.size() < 2) {
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] Device {}: one idle ethernet core, none left to drain it; eth clock tracking is "
+            "OFF",
+            chip);
+        return;
+    }
     Drainer pusher;
     pusher.core = ctx.idle_eth.front();
     zero_control(ctx, enroll(ctx, pusher.core, eth_prof_l1_, true));
+    // The drainer: the idle core nearest the pusher on the NoC (fewest hops for its reads of the pusher's L1).
+    Drainer drainer;
+    drainer.core = ctx.idle_eth[1];
+    uint32_t best = std::numeric_limits<uint32_t>::max();
+    for (size_t i = 1; i < ctx.idle_eth.size(); i++) {
+        const CoreCoord& a = ctx.idle_eth[i].phys;
+        const CoreCoord& b = pusher.core.phys;
+        const uint32_t hops = static_cast<uint32_t>(std::abs(static_cast<int>(a.x) - static_cast<int>(b.x))) +
+                              static_cast<uint32_t>(std::abs(static_cast<int>(a.y) - static_cast<int>(b.y)));
+        if (hops < best) {
+            best = hops;
+            drainer.core = ctx.idle_eth[i];
+        }
+    }
+    ctx.eth_drainer = std::move(drainer);
     // The chip's active eth cores join the decode roster the same way and become this pusher's linked set. Only
     // cores no dispatch tunnel reserved; lowest (y, x) first.
     uint32_t linked = 0;
@@ -712,34 +736,54 @@ bool Devices::launch_eth_pusher(
     p.state_addr = eth_l1_.ctrl;
     p.stop_addr = eth_l1_.ctrl + kernel_profiler::kRelayCtrlWordStride;
     auto program = std::make_unique<Program>(CreateProgram());
-    const KernelHandle kid = create_pusher_kernel(*program, eth_l1_, p.core);
-    std::vector<uint32_t> rt = {static_cast<uint32_t>(ctx.producers.size() - ctx.n_workers - 1)};
-    for (size_t i = ctx.n_workers + 1; i < ctx.producers.size(); i++) {
-        rt.push_back(packed_xy(ctx.producers[i].virt));
-        rt.push_back(static_cast<uint32_t>(ctx.producers[i].prof_l1));
-    }
-    SetRuntimeArgs(*program, kid, p.core.logical, rt);
+    create_pusher_kernel(*program, eth_l1_, p.core);
     if (!launch_drainer(
             mesh_device,
             ctx,
             coord,
             p,
+            DrainerL1{.core_type = HalProgrammableCoreType::IDLE_ETH, .cfg = 0, .sync_cfg = 0, .fifo_bytes = 0},
+            std::move(program),
+            "idle-eth pusher")) {
+        return false;
+    }
+    // The drainer ships the pusher's own frames (its firmware markers), then every active eth core's; the pusher is
+    // producers[n_workers], its linked cores follow.
+    Drainer& dr = *ctx.eth_drainer;
+    dr.state_addr = eth_l1_.ctrl;
+    dr.stop_addr = eth_l1_.ctrl + kernel_profiler::kRelayCtrlWordStride;
+    auto dprogram = std::make_unique<Program>(CreateProgram());
+    const KernelHandle dkid = create_drainer_kernel(*dprogram, eth_l1_, dr.core, p.core);
+    std::vector<uint32_t> rt = {static_cast<uint32_t>(ctx.producers.size() - ctx.n_workers)};
+    for (size_t i = ctx.n_workers; i < ctx.producers.size(); i++) {
+        rt.push_back(packed_xy(ctx.producers[i].virt));
+        rt.push_back(static_cast<uint32_t>(ctx.producers[i].prof_l1));
+    }
+    SetRuntimeArgs(*dprogram, dkid, dr.core.logical, rt);
+    if (!launch_drainer(
+            mesh_device,
+            ctx,
+            coord,
+            dr,
             DrainerL1{
                 .core_type = HalProgrammableCoreType::IDLE_ETH,
                 .cfg = eth_l1_.cfg,
                 .sync_cfg = eth_l1_.sync_cfg,
                 .fifo_bytes = kEthFifoBytes},
-            std::move(program),
-            "idle-eth pusher")) {
+            std::move(dprogram),
+            "idle-eth drainer")) {
         return false;
     }
-    ctx.out.sync_socket = p.sock_idx + 1;
+    ctx.out.sync_socket = dr.sock_idx + 1;
     log_info(
         tt::LogMetal,
-        "[streaming profiler] Device {}: idle-eth clock pusher on eth ({},{}) up; drains {} active eth core(s)",
+        "[streaming profiler] Device {}: idle-eth clock pusher on eth ({},{}) up, its drainer on eth ({},{}) ships "
+        "{} eth core(s)",
         ctx.chip_id,
         p.core.logical.x,
         p.core.logical.y,
+        dr.core.logical.x,
+        dr.core.logical.y,
         rt[0]);
     return true;
 }
@@ -754,8 +798,10 @@ bool Devices::launch_drainer(
     std::string_view what) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     try {
-        auto socket = make_socket(mesh_device, coord, d.core.phys, l1.fifo_bytes, l1.cfg, l1.core_type);
-        std::unique_ptr<distributed::D2HSocket> sync_socket;
+        std::unique_ptr<distributed::D2HSocket> socket, sync_socket;
+        if (l1.cfg != 0) {
+            socket = make_socket(mesh_device, coord, d.core.phys, l1.fifo_bytes, l1.cfg, l1.core_type);
+        }
         if (l1.sync_cfg != 0) {
             sync_socket = make_socket(mesh_device, coord, d.core.phys, l1.fifo_bytes, l1.sync_cfg, l1.core_type);
         }
@@ -770,10 +816,14 @@ bool Devices::launch_drainer(
             return false;
         }
         d.sock_idx = static_cast<uint32_t>(ctx.out.sockets.size());
-        ctx.out.sockets.push_back(std::move(socket));
+        d.n_sockets = 0;
+        if (socket) {
+            ctx.out.sockets.push_back(std::move(socket));
+            d.n_sockets++;
+        }
         if (sync_socket) {
             ctx.out.sockets.push_back(std::move(sync_socket));
-            d.n_sockets = 2;
+            d.n_sockets++;
         }
         d.program = std::move(program);
     } catch (const std::exception& e) {
@@ -806,6 +856,9 @@ void Devices::release_eth_pushers() {
     for (const DeviceCtx& ctx : devices_) {
         if (ctx.pusher) {
             write_u32(cluster, ctx.chip_id, ctx.pusher->core.virt, eth_l1_.ctrl + 8, 1);
+        }
+        if (ctx.eth_drainer) {
+            write_u32(cluster, ctx.chip_id, ctx.eth_drainer->core.virt, eth_l1_.ctrl + 8, 1);
         }
     }
 }
@@ -888,8 +941,12 @@ void Devices::stop_device(uint32_t device_index, const DeviceCtx& ctx, const Rel
             stop_drainer(device_index, ctx, ctx.relays[d], fmt::format("relay {}", d), on_state);
         }
     }
+    // The pusher first: its ring's tail is final once it is done, and the drainer ships the rest before it stops.
     if (ctx.pusher && ctx.pusher->program) {
         stop_drainer(device_index, ctx, *ctx.pusher, "idle-eth pusher", on_state);
+    }
+    if (ctx.eth_drainer && ctx.eth_drainer->program) {
+        stop_drainer(device_index, ctx, *ctx.eth_drainer, "idle-eth drainer", on_state);
     }
     // Nothing drains the rings any more: a producer blocked on a full one is released and overwrites from here on.
     set_producers_armed(ctx, false);
@@ -904,9 +961,6 @@ void Devices::verify_completeness(uint32_t device_index) {
     uint64_t total = 0, stranded_words = 0, stranded_lanes = 0;
     std::vector<std::pair<uint32_t, uint32_t>> stalled;  // (stalls, core index)
     for (size_t ci = 0; ci < ctx.producers.size(); ci++) {
-        if (ctx.pusher && ci == ctx.n_workers) {
-            continue;  // the pusher cannot ship what its own firmware publishes once it has exited
-        }
         cluster.read_core(
             cv.data(),
             kernel_profiler::SPSC_CONTROL_END * sizeof(uint32_t),

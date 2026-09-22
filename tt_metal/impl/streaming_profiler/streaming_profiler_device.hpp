@@ -118,6 +118,8 @@ private:
         uint32_t n_workers = 0;           // the relays' bands cover this prefix
         std::vector<Drainer> relays;      // at most kMaxRelays; their sockets are the prefix of out.sockets
         std::optional<Drainer> pusher;
+        std::optional<Drainer>
+            eth_drainer;                   // ships the pusher's ring and the eth cores' frames from a second idle core
         std::vector<CoreCoords> idle_eth;  // every idle eth core, the pusher first
 
         DeviceCtx();

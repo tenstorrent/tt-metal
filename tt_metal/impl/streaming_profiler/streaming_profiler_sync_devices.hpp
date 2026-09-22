@@ -164,8 +164,10 @@ struct EthL1 {
 };
 constexpr uint32_t kEthPointUs = 1000;  // the open segment's line reaches the host at least this often
 
-// The idle-eth pusher kernel over its L1 carve.
+// The idle-eth pusher kernel over its L1 carve, and the drainer that ships its ring (and the chip's eth cores'
+// frames) from a second idle core: both cores carve their own L1 alike, so one EthL1 addresses either.
 KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core);
+KernelHandle create_drainer_kernel(Program& program, const EthL1& l1, const CoreCoords& core, const CoreCoords& pusher);
 
 // The device-to-device sync's use of the devices. At boot it measures each chip's tile clock offsets before any
 // relay or pusher is on the NoC and plans the eth links; once the receiver drains the sockets it launches the link

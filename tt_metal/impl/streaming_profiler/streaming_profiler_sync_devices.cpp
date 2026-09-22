@@ -463,15 +463,27 @@ KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreC
             .eth_mode = Eth::IDLE,
             .noc = NOC::RISCV_0_default,
             .processor = DataMovementProcessor::RISCV_0,
+            .compile_args = {kEthPointUs * 50u, l1.ctrl, l1.ring, l1.sync_ring}});
+}
+
+KernelHandle create_drainer_kernel(
+    Program& program, const EthL1& l1, const CoreCoords& core, const CoreCoords& pusher) {
+    return CreateKernel(
+        program,
+        "tt_metal/tools/profiler/sync/eth_clock_drainer.cpp",
+        core.logical,
+        EthernetConfig{
+            .eth_mode = Eth::IDLE,
+            .noc = NOC::RISCV_0_default,
+            .processor = DataMovementProcessor::RISCV_0,
             .compile_args = {
-                kEthPointUs * 50u,
                 l1.cfg,
+                l1.sync_cfg,
                 l1.stage,
                 l1.ctrl,
-                packed_xy(core.virt),
                 l1.scratch,
-                l1.ring,
-                l1.sync_cfg,
+                packed_xy(pusher.virt),
+                l1.ctrl,
                 l1.sync_ring,
                 l1.link_ring}});
 }
