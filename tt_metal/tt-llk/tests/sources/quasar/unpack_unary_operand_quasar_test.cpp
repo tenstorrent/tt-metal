@@ -48,7 +48,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // inherit a handshake from a preceding run type.
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
         }
         else
         {

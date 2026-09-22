@@ -16,6 +16,42 @@
 
 namespace ttnn::prim {
 
+namespace {
+
+// One work unit per reduction the op performs. Mirrors the num_work_units line in
+// create_program_artifacts, for the override, which has no locals to reuse.
+uint32_t welford_num_work_units(const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input) {
+    using namespace tt::tt_metal;
+    const auto& padded_shape = input.padded_shape();
+    const uint32_t H_padded = padded_shape[-2];
+    const uint32_t W_padded = padded_shape[-1];
+    const uint32_t NC = input.physical_volume() / (H_padded * W_padded);
+    const uint32_t Wt = W_padded / input.tensor_spec().tile().get_width();
+    const uint32_t Ht = H_padded / input.tensor_spec().tile().get_height();
+    return attrs.reduce_dim == ReduceOpDim::W    ? (NC * Ht)
+           : attrs.reduce_dim == ReduceOpDim::HW ? (NC / attrs.reduce_batch_size)
+                                                 : (NC * Wt);
+}
+
+// The core-group split. create_program_artifacts and the cache-hit override both call this, so
+// they cannot disagree about how many core groups the split leaves. Note the grid-size CoreCoord
+// overload: a grid size is not an inclusive end coordinate, so a CoreRange built from it is wrong.
+auto welford_split_work(
+    const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input, uint32_t num_work_units) {
+    return attrs.sub_core_grids.has_value()
+               ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_work_units)
+               : tt::tt_metal::split_work_to_cores(
+                     input.mutable_device().compute_with_storage_grid_size(), num_work_units);
+}
+
+// Whether the second compute kernel exists. override_runtime_arguments cannot see the built
+// Program, and naming a kernel it lacks is fatal, so it asks the shared split instead.
+bool welford_has_second_core_group(const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input) {
+    return !std::get<3>(welford_split_work(attrs, input, welford_num_work_units(attrs, input))).ranges().empty();
+}
+
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts
 WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
@@ -153,25 +189,13 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_work_units_per_core_group_1, num_work_units_per_core_group_2;
-    if (operation_attributes.sub_core_grids.has_value()) {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_work_units_per_core_group_1,
-            num_work_units_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_work_units);
-    } else {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_work_units_per_core_group_1,
-            num_work_units_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_work_units);
-    }
+    std::tie(
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_work_units_per_core_group_1,
+        num_work_units_per_core_group_2) = welford_split_work(operation_attributes, input, num_work_units);
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
     // Declared function-local: this factory shares a unity-build translation unit with the reduce
@@ -207,7 +231,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     });
 
     // The reader fills one scalar entry on every reduce dim, but no welford compute kernel reads it
-    // (the user scalar is applied post-reduction via WELFORD_POST_MUL instead), so the reader is this
+    // (the user scalar is applied post-reduction by the compute kernel instead), so the reader is this
     // buffer's only toucher.
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALAR_DFB,
@@ -244,12 +268,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
 
     // Post-reduction scaling: the reduction always runs unscaled (the precise
     // UnpackToDest path), and the user scalar is applied to the small-magnitude result via
-    // SFPU mul_unary_tile inside the compute kernel, gated by the WELFORD_POST_MUL define.
+    // SFPU mul_unary_tile inside the compute kernel, which skips an identity scalar at runtime.
     // Pre-scaling the input (the old do_scale path) read the input via the FPU SrcA operand at TF32
     // precision and collapsed large-offset inputs to a constant before the multiply. The
     // post-multiplier follows var(s*x)=s^2 var(x) and std(s*x)=|s| std(x):
     //   var: scalar^2   std: |scalar|.
-    const bool use_post_mul = (operation_attributes.scalar != 1.0f);
     const float post_mul_scaler =
         is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
     const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(post_mul_scaler);
@@ -292,13 +315,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
-    // Enables the SFPU post-multiplication of the reduced output by the user scalar in the
-    // compute kernel (see post_mul_scaler above). Only the compute kernel reads this; the
-    // reader/writer ignore it.
-    if (use_post_mul) {
-        reduce_defines["WELFORD_POST_MUL"] = "1";
-    }
-
     // --- Reader kernel ---
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
     std::string reader_source;
@@ -318,7 +334,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"Ht", Ht},
             {"Wt", Wt},
             {"HtWt", HtWt},
-            {"scaler_bits", scaler_bits},
             {"use_welford", 1u},
             {"enable_fp32_sfpu", 0u},
             // Welford is compute-bound: batching the reader's tiles measures flat, so it stays off.
@@ -334,7 +349,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_reduce_universal_start_id.cpp";
         // Welford is compute-bound: batching the reader's tiles measures flat, so it stays off.
-        reader_ct_args = {{"scaler_bits", scaler_bits}, {"tiles_per_batch", 1u}};
+        reader_ct_args = {{"tiles_per_batch", 1u}};
         reader_rta_names = {"num_tiles", "start_id"};
     }
 
@@ -366,7 +381,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = std::move(reader_ct_args),
-        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
+        .runtime_arg_schema =
+            {.runtime_arg_names = std::move(reader_rta_names), .common_runtime_arg_names = {"scaler_bits"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     });
 
@@ -374,6 +390,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     std::string writer_source;
     KernelSpec::CompileTimeArgs writer_ct_args;
     Group<std::string> writer_rta_names;
+    Group<std::string> writer_common_rta_names;
     Group<DFBBinding> writer_dfb_bindings;
     KernelSpec::CompilerOptions::Defines writer_defines;
 
@@ -442,7 +459,9 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = std::move(writer_ct_args),
-        .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
+        .runtime_arg_schema =
+            {.runtime_arg_names = std::move(writer_rta_names),
+             .common_runtime_arg_names = std::move(writer_common_rta_names)},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     });
 
@@ -450,6 +469,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     std::string compute_kernel;
     KernelSpec::CompileTimeArgs compute_ct_args;
     std::string compute_rta_name;
+    const Group<std::string> compute_common_rta_names = {"post_mul_scaler_bits"};
 
     if (reduce_hw) {
         compute_ct_args = {
@@ -457,7 +477,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"H", H},
             {"tile_height", tile_height},
             {"Wt", Wt},
-            {"post_mul_scaler_bits", post_mul_scaler_bits},
             {"reduce_batch_size", reduce_batch_size},
             {"is_std", static_cast<uint32_t>(is_std)},
         };
@@ -476,7 +495,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {reduce_w ? "Wt" : "Ht", reduce_w ? Wt : Ht},
             {reduce_w ? "W" : "H", reduce_w ? W : H},
             {reduce_w ? "tile_width" : "tile_height", reduce_w ? tile_width : tile_height},
-            {"post_mul_scaler_bits", post_mul_scaler_bits},
             {"correction", static_cast<uint32_t>(operation_attributes.correction)},
             {"is_std", static_cast<uint32_t>(is_std)},
         };
@@ -601,7 +619,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
                  .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(dfb_bindings),
             .compile_time_args = compute_ct_args,
-            .runtime_arg_schema = {.runtime_arg_names = {compute_rta_name}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {compute_rta_name}, .common_runtime_arg_names = compute_common_rta_names},
             .hw_config = compute_hw,
         };
     };
@@ -748,6 +767,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         }
     }
 
+    reader_run_args.common_runtime_arg_values = {{"scaler_bits", scaler_bits}};
+    const KernelRunArgs::CommonRuntimeArgValues compute_common_args{{"post_mul_scaler_bits", post_mul_scaler_bits}};
+    compute_g1_run_args.common_runtime_arg_values = compute_common_args;
+    compute_g2_run_args.common_runtime_arg_values = compute_common_args;
+
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));
     run_args.kernel_run_args.push_back(std::move(compute_g1_run_args));
@@ -759,6 +783,49 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     run_args.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs
+WelfordReduceDeviceOperation::WelfordReduceProgramFactory::override_runtime_arguments(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_arg,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
+    const auto& input = tensor_arg.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
+
+    // Names must match create_program_artifacts.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    const bool is_std = operation_attributes.math_op == ReduceOpMath::STD;
+    const float post_mul_scaler =
+        is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
+
+    // compute_program_hash excludes the scalar, so a cache hit must re-apply it.
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(KernelRunArgs{
+        .kernel = READER,
+        .common_runtime_arg_values = {{"scaler_bits", std::bit_cast<uint32_t>(operation_attributes.scalar)}}});
+
+    const KernelRunArgs::CommonRuntimeArgValues compute_common_args{
+        {"post_mul_scaler_bits", std::bit_cast<uint32_t>(post_mul_scaler)}};
+    params.kernel_run_args.push_back(
+        KernelRunArgs{.kernel = COMPUTE_G1, .common_runtime_arg_values = compute_common_args});
+    if (welford_has_second_core_group(operation_attributes, input)) {
+        params.kernel_run_args.push_back(
+            KernelRunArgs{.kernel = COMPUTE_G2, .common_runtime_arg_values = compute_common_args});
+    }
+
+    params.tensor_args.emplace(INPUT_TENSOR, TensorArgument{input});
+    params.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
+    return params;
 }
 
 }  // namespace ttnn::prim

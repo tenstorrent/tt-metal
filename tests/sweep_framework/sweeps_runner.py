@@ -898,6 +898,19 @@ _FABRIC_INFRA_SIGNATURES = (
     # failures for one broken runner. Nothing was tested, so this is NOT_RUN + abort.
     "devices are available in the system mesh",
     "requested_size <= system_size",
+    # The host's mesh came up in a SHAPE the traced topology cannot be mapped into, which is the
+    # sibling of the two signatures above (those are "not enough chips", this is "wrong shape").
+    # SystemMesh::Impl::get_mapped_devices rotates the requested shape looking for a fit and
+    # throws from tt_metal/distributed/system_mesh.cpp:220 when none of the rotations fit:
+    #   Requested mesh is too big and is not rotatable: MeshShape([4, 4]) and
+    #   SystemMesh MeshShape([32, 1]), offset MeshCoordinate([0, 0])
+    # Seen on scheduled lead-models runs 35482911171 (158 occurrences) and 35552969641, where a
+    # Galaxy host enumerated as a 32x1 system mesh: every 2D lane (4x8, 8x4, 4x4) failed to open
+    # its mesh and was booked as FAIL_ASSERT_EXCEPTION, while the 1x32 lane on the same host ran
+    # -- so the vectors were fine and the host's shape was not. Mesh open happens before any
+    # kernel runs, so nothing was tested: NOT_RUN + abort.
+    # Matched on the invariant part of the format string; both shapes and the offset vary.
+    "too big and is not rotatable",
     # The fabric routers never reached the synced state, so the control plane never came up and
     # no kernel ran. Seen on lead-models run 30696173498 job mesh4x4_col_2d_conv2d (a HEALTHY
     # 32-chip runner, topology OK):

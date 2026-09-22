@@ -202,7 +202,7 @@ struct Routing2DCodec {
     // Destination-major table footprint: one packed row per destination coordinate.
     static constexpr uint32_t table_bytes(uint32_t axis_size) { return axis_size * row_bytes(axis_size); }
 
-    static inline uint8_t get_action_2bit(const std::uint8_t* packed_row, uint32_t index) {
+    static uint8_t get_action_2bit(const std::uint8_t* packed_row, uint32_t index) {
         const uint32_t byte_index = index / ACTIONS_PER_BYTE;
         const uint32_t shift = (index % ACTIONS_PER_BYTE) * BITS_PER_ACTION;
         return static_cast<uint8_t>((packed_row[byte_index] >> shift) & 0b11);
@@ -259,23 +259,22 @@ struct Routing2DCodec {
     }
 
     // Byte-wise so neither side has to reason about halfword alignment inside a packed union.
-    static inline std::uint16_t get_mcast_tree_edge(const std::uint8_t* region, uint32_t index) {
+    static std::uint16_t get_mcast_tree_edge(const std::uint8_t* region, uint32_t index) {
         const uint32_t byte_index = index * MCAST_TREE_EDGE_BYTES;
         return static_cast<std::uint16_t>(
             region[byte_index] | (static_cast<std::uint16_t>(region[byte_index + 1]) << 8));
     }
 
-    static inline const std::uint8_t* y_row(const std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
+    static const std::uint8_t* y_row(const std::uint8_t* table, uint32_t y_size, uint32_t dst_y) {
         return table + dst_y * row_bytes(y_size);
     }
-    static inline const std::uint8_t* x_row(
-        const std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
+    static const std::uint8_t* x_row(const std::uint8_t* table, uint32_t y_size, uint32_t x_size, uint32_t dst_x) {
         return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
     }
 
     // ---- Decode (packet-side action selection) -----------------------------------
     // Y row while it still holds an action, X row once it is spent. Independent of facing.
-    static inline std::uint8_t decode_action_y_first(
+    static std::uint8_t decode_action_y_first(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         const std::uint8_t action_y = route_buffer[local_y];
         if (action_y != 0) {
@@ -289,7 +288,7 @@ struct Routing2DCodec {
     // whole Y byte is nonzero, and X otherwise. Intermesh landings rebuild the map and restart the Y
     // leg, so they must call decode_action_y_first rather than keying on facing.
     template <eth_chan_directions MY_DIR>
-    static inline std::uint8_t decode_action(
+    static std::uint8_t decode_action(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         if constexpr (MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST) {
             return route_buffer[y_size + local_x];
@@ -337,8 +336,7 @@ struct Routing2DCodec {
 
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
     // Both halves matter: mesh-id inequality alone also matches packets merely transiting the chip.
-    static inline bool action_is_intermesh_exit(
-        std::uint8_t action, std::uint16_t dst_mesh_id, std::uint16_t my_mesh_id) {
+    static bool action_is_intermesh_exit(std::uint8_t action, std::uint16_t dst_mesh_id, std::uint16_t my_mesh_id) {
         return action == ACTION_LOCAL_DELIVER && dst_mesh_id != my_mesh_id;
     }
 };
@@ -388,7 +386,7 @@ inline bool mcast_test_row_bit(const std::uint32_t* bits, std::uint32_t row) {
 
 // Default reader for host buffers and other callers that cannot promise halfword alignment.
 struct McastTreeEdgeByteReader {
-    static inline std::uint16_t get(const std::uint8_t* region, std::uint32_t index) {
+    static std::uint16_t get(const std::uint8_t* region, std::uint32_t index) {
         return Routing2DCodec::get_mcast_tree_edge(region, index);
     }
 };
