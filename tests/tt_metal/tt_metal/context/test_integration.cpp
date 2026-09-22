@@ -533,6 +533,28 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
 }
 
+// Regression for #57286: a fallible step between MetalContext::create_instance() and the
+// mesh device taking ownership (set_destroy_metal_context_instance_on_close) used to leak the
+// context on throw. Trigger the failure via a MeshDeviceConfig that supplies physical_device_ids
+// without a mesh_shape (rejected in MeshDeviceImpl::create before any device is opened), then
+// confirm a fresh MetalEnv can still create a mesh device without the leaked slot getting reused
+// or exhausted.
+TEST(MetalContextIntegrationTest, MockCreateMeshDeviceDoesNotLeakContextOnThrow) {
+    MetalEnv env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
+    distributed::MeshDeviceConfig bad_config(/*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, {0});
+    EXPECT_THROW(env.create_mesh_device(bad_config), std::runtime_error);
+
+    // The context created for the failed attempt must not remain registered under any slot.
+    for (int index = 0; index < static_cast<int>(MAX_CONTEXT_COUNT); ++index) {
+        EXPECT_FALSE(MetalContext::instance_exists(ContextId{index})) << "leaked context at slot " << index;
+    }
+
+    // A subsequent, well-formed create_mesh_device on a fresh env must still succeed.
+    MetalEnv env2{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
+    auto mesh_device = env2.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    ASSERT_NE(mesh_device, nullptr);
+}
+
 // A Metal 2.0 program built on one MeshDevice must not compile on a MeshDevice from a different
 // MetalEnv.
 TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
