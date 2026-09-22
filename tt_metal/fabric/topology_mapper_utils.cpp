@@ -336,6 +336,7 @@ std::vector<TopologyMappingResult> split_mapping_to_local_parts(
     for (auto& part : parts) {
         part.success = global.success;
         part.error_message = global.error_message;
+        part.stats = global.stats;
     }
     for (const auto& [fabric_node, asic] : global.fabric_node_to_asic) {
         for (std::size_t part_index = 0; part_index < local_to_global.size(); ++part_index) {
@@ -925,9 +926,9 @@ uint32_t total_physical_exit_edges_toward_mesh(
 // Helper function to add exit node constraints
 // Constrains certain exit node ASICs on the physical graph to be mappable to exit node fabric nodes in the logical
 // graph
-// Returns true if constraints were successfully added, false if constraints cannot be satisfied
+// Returns nullopt on success, or a reason string if constraints cannot be satisfied
 // (e.g., no valid physical exit nodes or over-constrained)
-bool add_exit_node_constraints(
+std::optional<std::string> add_exit_node_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::unordered_map<MeshId, MeshId>& mesh_mappings,
     const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_graph,
@@ -993,14 +994,34 @@ bool add_exit_node_constraints(
                 const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
                 auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
                 if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
-                    return false;
+                    return fmt::format(
+                        "no physical exit ASICs toward physical mesh {} (logical destination mesh {}) for "
+                        "fabric node (mesh {}, chip {})",
+                        mapped_physical_dst_mesh_id.get(),
+                        dst_logical_mesh.get(),
+                        fabric_node_id.mesh_id.get(),
+                        fabric_node_id.chip_id);
                 }
                 const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
                 if (num_logical_exit_nodes_assigned > valid_physical_exit_nodes.size()) {
-                    return false;
+                    return fmt::format(
+                        "fabric node (mesh {}, chip {}) has {} logical exit(s) toward logical mesh {} but only "
+                        "{} physical exit ASIC(s) toward mapped physical mesh {}",
+                        fabric_node_id.mesh_id.get(),
+                        fabric_node_id.chip_id,
+                        num_logical_exit_nodes_assigned,
+                        dst_logical_mesh.get(),
+                        valid_physical_exit_nodes.size(),
+                        mapped_physical_dst_mesh_id.get());
                 }
                 if (!intra_mesh_constraints.add_required_constraint(fabric_node_id, valid_physical_exit_nodes)) {
-                    return false;
+                    return fmt::format(
+                        "required exit-node constraint infeasible for fabric node (mesh {}, chip {}) toward "
+                        "logical mesh {} ({} candidate physical exit ASIC(s))",
+                        fabric_node_id.mesh_id.get(),
+                        fabric_node_id.chip_id,
+                        dst_logical_mesh.get(),
+                        valid_physical_exit_nodes.size());
                 }
             }
             continue;
@@ -1026,7 +1047,10 @@ bool add_exit_node_constraints(
             const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
-                return false;
+                return fmt::format(
+                    "no physical exit ASICs toward physical mesh {} (logical destination mesh {})",
+                    mapped_physical_dst_mesh_id.get(),
+                    dst_logical_mesh.get());
             }
             const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
 
@@ -1068,21 +1092,42 @@ bool add_exit_node_constraints(
                         max_mappable_exit_pairs);
                 }
             } else if (required_exit_pair_count > max_mappable_exit_pairs) {
-                return false;
+                return fmt::format(
+                    "mesh-level exit toward logical mesh {} needs {} (fabric_node, exit-ASIC) pair(s) but only "
+                    "{} pair(s) are mappable ({} logical exit node(s), {} physical exit ASIC(s), {} physical "
+                    "link(s), {} link(s)/exit ASIC)",
+                    dst_logical_mesh.get(),
+                    required_exit_pair_count,
+                    max_mappable_exit_pairs,
+                    valid_logical_exit_nodes.size(),
+                    valid_physical_exit_nodes.size(),
+                    total_physical_links_toward_dst,
+                    physical_links_per_exit_asic);
             }
 
             if (effective_exit_pair_min_count == 0) {
-                return false;
+                return fmt::format(
+                    "mesh-level exit toward logical mesh {} has zero effective exit pairs ({} logical "
+                    "channel(s), {} physical link(s))",
+                    dst_logical_mesh.get(),
+                    num_logical_exit_nodes_assigned,
+                    total_physical_links_toward_dst);
             }
 
             if (!intra_mesh_constraints.add_cardinality_constraint(
                     valid_logical_exit_nodes, valid_physical_exit_nodes, effective_exit_pair_min_count)) {
-                return false;
+                return fmt::format(
+                    "exit-node cardinality constraint infeasible toward logical mesh {} (min_count={}, {} "
+                    "logical exit node(s), {} physical exit ASIC(s))",
+                    dst_logical_mesh.get(),
+                    effective_exit_pair_min_count,
+                    valid_logical_exit_nodes.size(),
+                    valid_physical_exit_nodes.size());
             }
         }
     }
 
-    return true;
+    return std::nullopt;
 }
 
 }  // anonymous namespace
@@ -1103,7 +1148,91 @@ void print_physical_adjacency_map(const PhysicalMultiMeshGraph& multi_mesh_graph
     }
 }
 
+void record_failing_meshes(TopologyMappingResult& result, MeshId logical_mesh_id, MeshId physical_mesh_id) {
+    result.stats.failing_logical_mesh = logical_mesh_id.get();
+    result.stats.failing_physical_mesh = physical_mesh_id.get();
+}
+
+void apply_placement_stats(TopologyMappingStats& stats, const ::tt::tt_fabric::PlacementSolveStats& placement) {
+    stats.placement_attempted = placement.master_solve_attempted;
+    stats.placement_success = placement.master_solve_success;
+    stats.candidate_lists_complete = placement.candidate_lists_complete;
+    stats.meshes_total = placement.meshes_total;
+    stats.meshes_placed = placement.meshes_placed;
+    stats.placement_candidates = placement.master_candidates_enumerated;
+    stats.placement_growth_rounds = placement.master_growth_rounds;
+    stats.placement_sat_attempts = placement.master_sat_attempts;
+    stats.placement_sat_vars = placement.master_sat_vars;
+    stats.placement_sat_clauses = placement.master_sat_clauses;
+    stats.inner_solver_calls = placement.inner_solver_calls;
+    stats.candidates_generated = placement.candidates_generated;
+}
+
+std::string format_sat_placement_failure(const ::tt::tt_fabric::PlacementSolveStats& stats) {
+    if (!stats.master_solve_attempted) {
+        return "SAT joint placement did not start: no MESH groupings or empty logical graph";
+    }
+    if (stats.master_sat_attempts == 0 && !stats.master_solve_success) {
+        return fmt::format(
+            "SAT joint placement session was not ready (a mesh has no grouping variants); meshes_total={}",
+            stats.meshes_total);
+    }
+    return fmt::format(
+        "SAT joint placement: no placement found after {} attempt(s) and {} growth cycle(s) over {} "
+        "candidate(s); candidate lists {} -- the UNSAT verdict is {}",
+        stats.master_sat_attempts,
+        stats.master_growth_rounds,
+        stats.master_candidates_enumerated,
+        stats.candidate_lists_complete ? "COMPLETE" : "TRUNCATED",
+        stats.candidate_lists_complete ? "trustworthy" : "NOT trustworthy");
+}
+
+void set_mapping_failure(TopologyMappingResult& result, std::string failure_stage, std::string error_message) {
+    result.success = false;
+    result.stats.failure_stage = std::move(failure_stage);
+    result.error_message = std::move(error_message);
+    result.stats.warnings.push_back(result.error_message);
+    log_warning(tt::LogFabric, "{}", result.error_message);
+}
+
 }  // namespace
+
+std::string TopologyMappingStats::to_string() const {
+    return fmt::format(
+        "TopologyMappingStats:\n"
+        "  failure_stage: {}  failing meshes: logical={} physical={}\n"
+        "  seated grouping: '{}' type '{}'\n"
+        "  intra: {} n_target={} n_global={} required={} preferred={}/{} dfs_calls={} sat_solves={}\n"
+        "  placement: attempted={} success={} lists_complete={} meshes={}/{} candidates={} "
+        "growth={} sat_attempts={} vars={} clauses={}\n"
+        "  inner_solver_calls={} candidates_generated={} warnings={}",
+        failure_stage.empty() ? "-" : failure_stage,
+        failing_logical_mesh.has_value() ? std::to_string(*failing_logical_mesh) : "-",
+        failing_physical_mesh.has_value() ? std::to_string(*failing_physical_mesh) : "-",
+        seated_grouping_name,
+        seated_grouping_type,
+        intra_used_sat ? "SAT" : "DFS",
+        intra_n_target,
+        intra_n_global,
+        intra_required_satisfied,
+        intra_preferred_satisfied,
+        intra_preferred_total,
+        intra_dfs_calls,
+        intra_sat_solve_calls,
+        placement_attempted,
+        placement_success,
+        candidate_lists_complete,
+        meshes_placed,
+        meshes_total,
+        placement_candidates,
+        placement_growth_rounds,
+        placement_sat_attempts,
+        placement_sat_vars,
+        placement_sat_clauses,
+        inner_solver_calls,
+        candidates_generated,
+        warnings.size());
+}
 
 std::optional<std::vector<std::pair<FabricNodeId, FabricNodeId>>> assign_non_colliding_hops(
     const std::vector<std::vector<std::pair<FabricNodeId, FabricNodeId>>>& candidates) {
@@ -1205,19 +1334,23 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
 
         if (!logical_exit_node_graph.get_nodes().empty() && !physical_exit_node_graph.get_nodes().empty()) {
-            const bool exit_node_constraints_success = add_exit_node_constraints(
+            auto exit_node_constraints_failure = add_exit_node_constraints(
                 intra_mesh_constraints,
                 mesh_mappings,
                 logical_graph,
                 logical_exit_node_graph,
                 physical_exit_node_graph,
                 inter_mesh_validation_mode);
-            if (!exit_node_constraints_success) {
-                result.success = false;
-                result.error_message = fmt::format(
-                    "intra-mesh mapping failed: exit-node constraints for logical mesh {} -> physical mesh {}",
-                    logical_mesh_id.get(),
-                    physical_mesh_id.get());
+            if (exit_node_constraints_failure.has_value()) {
+                record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
+                set_mapping_failure(
+                    result,
+                    "exit_node_constraints",
+                    fmt::format(
+                        "intra-mesh mapping failed: exit-node constraints for logical mesh {} -> physical mesh {}: {}",
+                        logical_mesh_id.get(),
+                        physical_mesh_id.get(),
+                        *exit_node_constraints_failure));
                 if (failing_pair_out) {
                     *failing_pair_out = {logical_mesh_id, physical_mesh_id};
                 }
@@ -1229,11 +1362,15 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto pinning_constraint_failure =
             add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
         if (pinning_constraint_failure.has_value()) {
-            result.success = false;
-            result.error_message = fmt::format(
-                "intra-mesh mapping failed: MGD pinning constraints for logical mesh {} -> physical mesh {}",
-                logical_mesh_id.get(),
-                physical_mesh_id.get());
+            record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
+            set_mapping_failure(
+                result,
+                "mgd_pinning",
+                fmt::format(
+                    "intra-mesh mapping failed: MGD pinning constraints for logical mesh {} -> physical mesh {}: {}",
+                    logical_mesh_id.get(),
+                    physical_mesh_id.get(),
+                    *pinning_constraint_failure));
             if (failing_pair_out) {
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
             }
@@ -1261,14 +1398,40 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
             logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);
         if (!sub_mapping.success) {
-            result.success = false;
-            result.error_message = fmt::format(
-                "intra-mesh mapping failed: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)): {}",
-                logical_mesh_id.get(),
-                logical_graph.get_nodes().size(),
-                physical_mesh_id.get(),
-                physical_graph.get_nodes().size(),
-                sub_mapping.error_message);
+            record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
+            result.stats.intra_used_sat = sub_mapping.stats.used_sat;
+            result.stats.intra_n_target = sub_mapping.stats.n_target;
+            result.stats.intra_n_global = sub_mapping.stats.n_global;
+            result.stats.intra_required_satisfied = sub_mapping.constraint_stats.required_satisfied;
+            result.stats.intra_preferred_satisfied = sub_mapping.constraint_stats.preferred_satisfied;
+            result.stats.intra_preferred_total = sub_mapping.constraint_stats.preferred_total;
+            result.stats.intra_dfs_calls = sub_mapping.stats.dfs_calls;
+            result.stats.intra_sat_solve_calls = sub_mapping.stats.sat_solve_calls;
+            result.stats.warnings.insert(
+                result.stats.warnings.end(), sub_mapping.warnings.begin(), sub_mapping.warnings.end());
+            const std::string solver_error =
+                sub_mapping.error_message.empty() ? "intra-mesh solver returned no mapping" : sub_mapping.error_message;
+            set_mapping_failure(
+                result,
+                "intra_mesh_solve",
+                fmt::format(
+                    "intra-mesh mapping failed: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)): {} "
+                    "[{} required={} preferred={}/{} n_target={} n_global={}]",
+                    logical_mesh_id.get(),
+                    logical_graph.get_nodes().size(),
+                    physical_mesh_id.get(),
+                    physical_graph.get_nodes().size(),
+                    solver_error,
+                    sub_mapping.stats.used_sat ? "SAT" : "DFS",
+                    sub_mapping.constraint_stats.required_satisfied,
+                    sub_mapping.constraint_stats.preferred_satisfied,
+                    sub_mapping.constraint_stats.preferred_total,
+                    sub_mapping.stats.n_target,
+                    sub_mapping.stats.n_global));
+            for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
+                result.fabric_node_to_asic.insert({fabric_node, asic});
+                result.asic_to_fabric_node.insert({asic, fabric_node});
+            }
             if (failing_pair_out) {
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
             }
@@ -1369,6 +1532,7 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
                 for (const auto& group : groups) {
                     ::tt::tt_fabric::AsicPinningGroup remapped;
                     remapped.asic_positions = group.asic_positions;
+                    remapped.board_revision = group.board_revision;
                     remapped.fabric_nodes.reserve(group.fabric_nodes.size());
                     for (const auto& fabric_node : group.fabric_nodes) {
                         remapped.fabric_nodes.emplace_back(
@@ -1412,17 +1576,20 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
     // Session keys pinnings by merged/global MeshId (remapped above).
     std::optional<PinningsByMesh> session_pinnings;
     PinningsByMesh by_mesh = merged.get_pinnings();
+    drop_inactive_revision_pinnings(by_mesh, physical_system_descriptor);
     if (!config_.pinnings.empty()) {
         merge_pinnings_by_mesh(by_mesh, config_.pinnings);
+        drop_inactive_revision_pinnings(by_mesh, physical_system_descriptor);
     }
     if (!by_mesh.empty()) {
         session_pinnings = std::move(by_mesh);
     }
+    placement_stats_ = std::make_unique<PlacementSolveStats>();
     placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
         physical_grouping_descriptor,
         merged,
         physical_system_descriptor,
-        /*stats=*/nullptr,
+        placement_stats_.get(),
         session_pinnings,
         asic_id_to_mesh_rank_,
         unique_shapes,
@@ -1433,16 +1600,54 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(MultiMeshSolutionEnumer
 MultiMeshSolutionEnumerator& MultiMeshSolutionEnumerator::operator=(MultiMeshSolutionEnumerator&&) noexcept = default;
 MultiMeshSolutionEnumerator::~MultiMeshSolutionEnumerator() = default;
 
+std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::unsuccessful_parts() const {
+    TopologyMappingResult result;
+    if (last_failed_.has_value()) {
+        result = *last_failed_;
+    }
+    result.success = false;
+    if (placement_stats_ != nullptr) {
+        apply_placement_stats(result.stats, *placement_stats_);
+        const std::string sat_status = format_sat_placement_failure(*placement_stats_);
+        result.stats.warnings.push_back(sat_status);
+        result.stats.warnings.push_back(placement_stats_->to_string());
+        result.stats.warnings.push_back(result.stats.to_string());
+        if (result.error_message.empty()) {
+            result.stats.failure_stage = "sat_placement";
+            result.error_message =
+                fmt::format("map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found: {}", sat_status);
+        }
+    }
+    if (result.error_message.empty()) {
+        result.stats.failure_stage = "sat_placement";
+        result.error_message = "map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found";
+    }
+    log_warning(tt::LogFabric, "{}", result.error_message);
+    return split_mapping_to_local_parts(result, per_part_local_to_global_mesh_ids_);
+}
+
 std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     using namespace ::tt::tt_fabric;
     if (placement_session_ == nullptr || physical_system_descriptor_ == nullptr) {
+        if (emitted_ == 0 && !yielded_failure_) {
+            yielded_failure_ = true;
+            return unsuccessful_parts();
+        }
         return {};
     }
+
+    auto give_up = [&]() -> std::vector<TopologyMappingResult> {
+        if (emitted_ == 0 && !yielded_failure_) {
+            yielded_failure_ = true;
+            return unsuccessful_parts();
+        }
+        return {};
+    };
 
     while (true) {
         AssignedMeshes seating = placement_session_->next();
         if (seating.empty()) {
-            return {};
+            return give_up();
         }
 
         PhysicalMultiMeshGraph physical = build_hierarchical_from_flat_graph(flat_graph_, seating);
@@ -1464,31 +1669,48 @@ std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
             asic_id_to_mesh_rank_,
             fabric_node_id_to_mesh_rank_,
             &intra_failing_pair);
+        if (placement_stats_ != nullptr) {
+            apply_placement_stats(full.stats, *placement_stats_);
+        }
         if (full.success) {
             ++emitted_;
             return split_mapping_to_local_parts(full, per_part_local_to_global_mesh_ids_);
         }
 
-        if (!intra_failing_pair.has_value()) {
-            continue;
-        }
         const PlacedMesh* failed_placed = nullptr;
-        for (const PlacedMesh& placed : seating) {
-            if (placed.mesh_id == intra_failing_pair->first) {
-                failed_placed = &placed;
-                break;
+        if (intra_failing_pair.has_value()) {
+            for (const PlacedMesh& placed : seating) {
+                if (placed.mesh_id == intra_failing_pair->first) {
+                    failed_placed = &placed;
+                    break;
+                }
             }
         }
+        if (failed_placed != nullptr) {
+            full.stats.seated_grouping_name = failed_placed->grouping_name;
+            full.stats.seated_grouping_type = failed_placed->grouping_type;
+            full.error_message = fmt::format(
+                "{} (seated as grouping '{}' type '{}' with {} asic(s))",
+                full.error_message,
+                failed_placed->grouping_name,
+                failed_placed->grouping_type,
+                failed_placed->placement.asics.size());
+            full.stats.warnings.push_back(full.error_message);
+            log_warning(tt::LogFabric, "{}", full.error_message);
+        }
+        last_failed_ = full;
+
         if (failed_placed == nullptr || failed_placed->placement.asics.empty()) {
             continue;
         }
 
         if (!placement_session_->add_forbidden_constraint(*failed_placed)) {
-            return {};
+            return give_up();
         }
     }
 }
 
+// TODO: Fix the PGD issue
 TopologyMappingResult map_multi_mesh_to_physical(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
@@ -1506,7 +1728,10 @@ TopologyMappingResult map_multi_mesh_to_physical(
     if (local_parts.empty()) {
         TopologyMappingResult result;
         result.success = false;
+        result.stats.failure_stage = "sat_placement";
         result.error_message = "map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found";
+        result.stats.warnings.push_back(result.error_message);
+        log_warning(tt::LogFabric, "{}", result.error_message);
         return result;
     }
     return local_parts.front();

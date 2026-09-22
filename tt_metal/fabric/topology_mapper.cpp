@@ -477,10 +477,16 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             "TopologyMapper: MeshGraph must have a MeshGraphDescriptor to map onto the physical topology");
         const auto& mesh_graph_descriptor = mesh_graph_.get_mesh_graph_descriptor();
         pinnings_by_mesh = mesh_graph_descriptor.get_pinnings();
-        for (const auto& [_, groups] : mesh_graph_descriptor.get_pinnings()) {
+        ::tt::tt_metal::experimental::tt_fabric::drop_inactive_revision_pinnings(
+            pinnings_by_mesh, physical_system_descriptor_);
+        for (const auto& [_, groups] : pinnings_by_mesh) {
             config.pinnings.insert(config.pinnings.end(), groups.begin(), groups.end());
         }
         ::tt::tt_metal::experimental::tt_fabric::merge_pinnings_by_mesh(pinnings_by_mesh, pinning_groups_);
+        ::tt::tt_metal::experimental::tt_fabric::drop_inactive_revision_pinnings(
+            config.pinnings, physical_system_descriptor_);
+        ::tt::tt_metal::experimental::tt_fabric::drop_inactive_revision_pinnings(
+            pinnings_by_mesh, physical_system_descriptor_);
 
         // Set per-mesh validation modes based on mesh graph policy
         for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
@@ -1643,9 +1649,11 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     const MeshId mesh_id{0};
 
     auto try_map_shape = [&](FabricType fabric_type, const MeshShape& mesh_shape) -> std::optional<MeshGraph> {
-        auto mesh_graph_descriptor = MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
-            mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections);
-        MeshGraph mesh_graph(std::move(mesh_graph_descriptor), /*fabric_config=*/std::nullopt, cluster.is_ubb_galaxy());
+        MeshGraph mesh_graph(
+            MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+                mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections),
+            /*fabric_config=*/std::nullopt,
+            cluster.is_ubb_galaxy());
         auto logical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
 
         if (!logical_adjacency_matrix.contains(mesh_id) || !physical_adjacency_matrix.contains(mesh_id)) {

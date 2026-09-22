@@ -483,7 +483,9 @@ void ControlPlane::init_control_plane(
 
         // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
-            const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            auto mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            tt::tt_metal::experimental::tt_fabric::drop_inactive_revision_pinnings(
+                mgd_pinnings, *this->physical_system_descriptor_);
             for (const auto& [_, groups] : mgd_pinnings) {
                 pinning_groups.insert(pinning_groups.end(), groups.begin(), groups.end());
             }

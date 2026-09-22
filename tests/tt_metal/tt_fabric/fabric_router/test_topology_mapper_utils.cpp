@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/cluster.hpp>
+#include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
@@ -44,13 +44,13 @@ protected:
     }
 };
 
-static void fill_hosts_from_psd(TopologyMappingConfig& config, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
+void fill_hosts_from_psd(TopologyMappingConfig& config, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
         config.hostname_to_asics[desc.host_name].insert(asic_id);
     }
 }
 
-static std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> unset_asic_ranks(
+std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> unset_asic_ranks(
     const tt::tt_metal::PhysicalSystemDescriptor& psd, MeshId mesh = MeshId{0}) {
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> ranks;
     for (const auto& [asic_id, _] : psd.get_asic_descriptors()) {
@@ -59,7 +59,7 @@ static std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> unset_as
     return ranks;
 }
 
-static std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks_for_host_grid(
+std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks_for_host_grid(
     MeshId mesh, uint32_t device_rows, uint32_t device_cols, uint32_t host_rows, uint32_t host_cols) {
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> ranks;
     const uint32_t chips_per_host_row = device_rows / host_rows;
@@ -74,7 +74,7 @@ static std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks_for
     return ranks;
 }
 
-static void verify_each_rank_on_one_host(
+void verify_each_rank_on_one_host(
     const TopologyMappingResult& result,
     const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank,
     const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
@@ -99,7 +99,7 @@ static void verify_each_rank_on_one_host(
     }
 }
 
-static ::tt::tt_fabric::PhysicalGroupingDescriptor unspecified_line_1x2_pgd() {
+::tt::tt_fabric::PhysicalGroupingDescriptor unspecified_line_1x2_pgd() {
     return ::tt::tt_fabric::PhysicalGroupingDescriptor{std::string(R"delimiter(
 groupings {
   name: "1x2_Mesh"
@@ -125,7 +125,7 @@ groupings {
 )delimiter")};
 }
 
-static ::tt::tt_fabric::MeshGraphDescriptor two_1x2_meshes_mgd() {
+::tt::tt_fabric::MeshGraphDescriptor two_1x2_meshes_mgd() {
     return ::tt::tt_fabric::MeshGraphDescriptor{std::string(R"delimiter(
         mesh_descriptors {
           name: "M0"
@@ -151,7 +151,7 @@ static ::tt::tt_fabric::MeshGraphDescriptor two_1x2_meshes_mgd() {
 )delimiter")};
 }
 
-static std::vector<std::set<uint64_t>> mapped_asic_footprints(const TopologyMappingResult& mapping) {
+std::vector<std::set<uint64_t>> mapped_asic_footprints(const TopologyMappingResult& mapping) {
     std::map<MeshId, std::set<uint64_t>> per_mesh;
     for (const auto& [fabric_node, asic] : mapping.fabric_node_to_asic) {
         per_mesh[fabric_node.mesh_id].insert(*asic);
@@ -164,7 +164,7 @@ static std::vector<std::set<uint64_t>> mapped_asic_footprints(const TopologyMapp
     return footprints;
 }
 
-static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
+tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
     auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
     if (mock_desc == nullptr) {
         throw std::runtime_error("TT_METAL_MOCK_CLUSTER_DESC_PATH must be set for PSD tests");
@@ -177,7 +177,7 @@ static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
         *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
 }
 
-static std::size_t chip_count(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
+std::size_t chip_count(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
     std::size_t n = 0;
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         n += mesh_graph.get_chip_ids(mesh_id).size();
@@ -185,7 +185,7 @@ static std::size_t chip_count(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
     return n;
 }
 
-static std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks_from_mesh_graph(
+std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks_from_mesh_graph(
     const ::tt::tt_fabric::MeshGraph& mesh_graph) {
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> ranks;
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
@@ -200,7 +200,7 @@ static std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks_fro
     return ranks;
 }
 
-static TopologyMappingResult map_sp4_blitz_pipeline(const std::filesystem::path& mgd_path) {
+TopologyMappingResult map_sp4_blitz_pipeline(const std::filesystem::path& mgd_path) {
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     EXPECT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path pgd_path = std::filesystem::path(tt_metal_home) /

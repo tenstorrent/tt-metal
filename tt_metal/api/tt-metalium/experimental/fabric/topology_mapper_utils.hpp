@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -18,16 +19,14 @@
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-
-namespace tt::tt_metal {
-class PhysicalSystemDescriptor;
-}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 class PhysicalGroupingDescriptor;
 struct PlacedMesh;
+struct PlacementSolveStats;
 class SatPlacementEnumerationSession;
 }  // namespace tt::tt_fabric
 
@@ -63,6 +62,52 @@ inline void merge_pinnings_by_mesh(PinningsByMesh& dest, const std::vector<Pinni
             dest[group.fabric_nodes.front().mesh_id].push_back(group);
         }
     }
+}
+
+inline bool pinning_active_for_board(
+    const PinningConstraint& group, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    // Unspecified board_revision is never filtered out.
+    if (!group.board_revision.has_value()) {
+        return true;
+    }
+    bool bh_galaxy = false;
+    bool wh_galaxy = false;
+    for (const auto& [_, desc] : physical_system_descriptor.get_asic_descriptors()) {
+        if (desc.board_type == BoardType::UBB_BLACKHOLE) {
+            bh_galaxy = true;
+        } else if (desc.board_type == BoardType::UBB_WORMHOLE) {
+            wh_galaxy = true;
+        }
+    }
+    switch (*group.board_revision) {
+        case ::tt::tt_fabric::BoardRevision::BhRevC:
+            return bh_galaxy && physical_system_descriptor.is_bh_galaxy_rev_c();
+        case ::tt::tt_fabric::BoardRevision::BhRevAb:
+            return bh_galaxy && !physical_system_descriptor.is_bh_galaxy_rev_c();
+        case ::tt::tt_fabric::BoardRevision::Wh: return wh_galaxy;
+    }
+    return true;
+}
+
+inline void drop_inactive_revision_pinnings(
+    PinningsByMesh& pinnings, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    for (auto it = pinnings.begin(); it != pinnings.end();) {
+        std::erase_if(it->second, [&](const PinningConstraint& group) {
+            return !pinning_active_for_board(group, physical_system_descriptor);
+        });
+        if (it->second.empty()) {
+            it = pinnings.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+inline void drop_inactive_revision_pinnings(
+    std::vector<PinningConstraint>& groups, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    std::erase_if(groups, [&](const PinningConstraint& group) {
+        return !pinning_active_for_board(group, physical_system_descriptor);
+    });
 }
 
 // Galaxy corner pinnings for a single mesh, ensuring QSFP links align with the fabric mesh corner nodes
@@ -113,13 +158,55 @@ struct TopologyMappingConfig {
 };
 
 /**
+ * @brief Search / constraint status copied onto TopologyMappingResult.
+ *
+ * Intra-mesh fields come from the topology solver's MappingResult. Placement fields
+ * come from SAT joint seating. On failure, `failure_stage` names the first check that
+ * rejected the mapping and `warnings` holds extra constraint / SAT detail.
+ */
+struct TopologyMappingStats {
+    std::string failure_stage;
+    std::optional<uint32_t> failing_logical_mesh;
+    std::optional<uint32_t> failing_physical_mesh;
+    std::string seated_grouping_name;
+    std::string seated_grouping_type;
+    std::vector<std::string> warnings;
+
+    bool intra_used_sat = false;
+    std::size_t intra_n_target = 0;
+    std::size_t intra_n_global = 0;
+    std::size_t intra_required_satisfied = 0;
+    std::size_t intra_preferred_satisfied = 0;
+    std::size_t intra_preferred_total = 0;
+    std::size_t intra_dfs_calls = 0;
+    std::size_t intra_sat_solve_calls = 0;
+
+    bool placement_attempted = false;
+    bool placement_success = false;
+    bool candidate_lists_complete = false;
+    std::size_t meshes_total = 0;
+    std::size_t meshes_placed = 0;
+    std::size_t placement_candidates = 0;
+    std::size_t placement_growth_rounds = 0;
+    std::size_t placement_sat_attempts = 0;
+    std::size_t placement_sat_vars = 0;
+    std::size_t placement_sat_clauses = 0;
+    std::size_t inner_solver_calls = 0;
+    std::size_t candidates_generated = 0;
+
+    std::string to_string() const;
+};
+
+/**
  * @brief Result of topology mapping operation
  */
 struct TopologyMappingResult {
     bool success = false;
     std::string error_message;
+    TopologyMappingStats stats;
 
-    // Bidirectional mappings between logical fabric nodes and physical ASICs
+    // Bidirectional mappings between logical fabric nodes and physical ASICs.
+    // On failure this is the closest/partial mapping found (meshes that seated plus the failing mesh).
     std::map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_to_asic;
     std::map<tt::tt_metal::AsicID, FabricNodeId> asic_to_fabric_node;
 };
@@ -287,8 +374,8 @@ struct MultiMeshMappingPart {
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
 };
 
-// One TopologyMappingResult per input part, using that descriptor's local MeshIds. Empty means
-// no valid placement+intra-mesh mapping was found.
+// One TopologyMappingResult per input part, using that descriptor's local MeshIds. A failed
+// mapping is still one result per part (success=false, error_message, stats, closest intra-mesh maps).
 std::vector<TopologyMappingResult> map_multi_mesh_to_physical(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
@@ -300,11 +387,12 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical(
  *        then identity intra-mesh.
  *
  *   MultiMeshSolutionEnumerator e(psd, pgd, mgd, config);
- *   while (auto parts = e.next(); !parts.empty()) { ... }
+ *   while (auto parts = e.next(); !parts.empty() && parts.front().success) { ... }
  *
  * Each next() takes one seating, completes identity intra-mesh, and returns one TopologyMappingResult
- * per input MGD with that descriptor's local MeshIds. An empty vector means placement is exhausted.
- * Callers do not see merged/global MeshIds.
+ * per input MGD with that descriptor's local MeshIds. If no valid mapping exists, the first next()
+ * still returns one failed result per MGD (error_message, stats, and closest intra-mesh maps). Later next()
+ * calls, or exhaustion after a success, return empty. Callers do not see merged/global MeshIds.
  *
  * Lifetime: the PSD, PGD, and MeshGraphDescriptor(s) passed to the constructor must outlive
  * the enumerator.
@@ -335,7 +423,10 @@ public:
     ~MultiMeshSolutionEnumerator();
 
     /**
-     * @brief Next seating as one local-mesh-id result per input MGD, or empty when placement is exhausted.
+     * @brief Next seating as one local-mesh-id result per input MGD.
+     *
+     * Empty after a successful yield means placement is exhausted. The first call that finds no
+     * valid mapping returns failed results (error_message, stats, closest maps) instead of empty.
      */
     std::vector<TopologyMappingResult> next();
 
@@ -352,9 +443,13 @@ private:
     ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode_ =
         ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
     std::unique_ptr<::tt::tt_fabric::SatPlacementEnumerationSession> placement_session_;
+    std::unique_ptr<::tt::tt_fabric::PlacementSolveStats> placement_stats_;
     std::size_t emitted_ = 0;
+    std::optional<TopologyMappingResult> last_failed_;
+    bool yielded_failure_ = false;
 
     void fill_host_and_asic_positions_from_psd();
+    std::vector<TopologyMappingResult> unsuccessful_parts() const;
 };
 
 // Choose one (exit, peer) FabricNodeId pair per candidate set ("hop") such that no FabricNodeId is

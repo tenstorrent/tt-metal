@@ -21,11 +21,20 @@ tt::tt_metal::PhysicalSystemDescriptor build_mock_psd(
     const int n = static_cast<int>(host_of_asic.size());
     auto asic_id = [&](int i) { return base_asic_id + static_cast<uint64_t>(i); };
 
-    // Symmetric adjacency (each undirected link listed both ways, in insertion order), carrying its channels.
-    std::vector<std::vector<std::pair<int, uint32_t>>> adj(n);
+    // Symmetric adjacency (each undirected link listed both ways, in insertion order).
+    // Channel IDs are unique per ASIC so get_connected_asic_and_channel cannot alias peers.
+    struct DirectedLink {
+        int nb = 0;
+        uint32_t channels = 0;
+        uint32_t src_chan0 = 0;
+    };
+    std::vector<std::vector<DirectedLink>> adj(n);
+    std::vector<uint32_t> next_chan(n, 0);
     for (const auto& link : links) {
-        adj[link.a].emplace_back(link.b, link.channels);
-        adj[link.b].emplace_back(link.a, link.channels);
+        adj[link.a].push_back({link.b, link.channels, next_chan[link.a]});
+        next_chan[link.a] += link.channels;
+        adj[link.b].push_back({link.a, link.channels, next_chan[link.b]});
+        next_chan[link.b] += link.channels;
     }
     // Hosts ranked in first-seen order.
     std::map<std::string, uint32_t> host_rank;
@@ -78,12 +87,12 @@ tt::tt_metal::PhysicalSystemDescriptor build_mock_psd(
         auto* g = host_conn[host_of_asic[i]]->add_asic_topologies();
         g->set_asic_id(asic_id(i));
         auto* topo = g->mutable_topology();
-        for (const auto& [nb, ch] : adj[i]) {
+        for (const auto& link : adj[i]) {
             auto* e = topo->add_asic_connections();
-            e->set_dst_asic_id(asic_id(nb));
-            const bool is_local = host_of_asic[i] == host_of_asic[nb];
-            for (uint32_t c = 0; c < ch; ++c) {
-                add_eth(e->add_eth_connections(), c, is_local);
+            e->set_dst_asic_id(asic_id(link.nb));
+            const bool is_local = host_of_asic[i] == host_of_asic[link.nb];
+            for (uint32_t c = 0; c < link.channels; ++c) {
+                add_eth(e->add_eth_connections(), link.src_chan0 + c, is_local);
             }
         }
     }
@@ -120,21 +129,21 @@ tt::tt_metal::PhysicalSystemDescriptor build_mock_psd(
         return t;
     };
     for (int i = 0; i < n; ++i) {
-        for (const auto& [nb, ch] : adj[i]) {
-            if (host_of_asic[i] == host_of_asic[nb]) {
+        for (const auto& link : adj[i]) {
+            if (host_of_asic[i] == host_of_asic[link.nb]) {
                 continue;
             }
-            auto* he = get_edge(host_of_asic[i], host_of_asic[nb]);
+            auto* he = get_edge(host_of_asic[i], host_of_asic[link.nb]);
             auto* tbl = get_tbl(host_of_asic[i]);
-            for (uint32_t c = 0; c < ch; ++c) {
+            for (uint32_t c = 0; c < link.channels; ++c) {
                 auto* xc = he->add_exit_node_connections();
                 xc->set_src_exit_node(asic_id(i));
-                xc->set_dst_exit_node(asic_id(nb));
-                add_eth(xc->mutable_eth_conn(), c, false);
+                xc->set_dst_exit_node(asic_id(link.nb));
+                add_eth(xc->mutable_eth_conn(), link.src_chan0 + c, false);
                 auto* tc = tbl->add_exit_connections();
                 tc->set_src_exit_node(asic_id(i));
-                tc->set_dst_exit_node(asic_id(nb));
-                add_eth(tc->mutable_eth_conn(), c, false);
+                tc->set_dst_exit_node(asic_id(link.nb));
+                add_eth(tc->mutable_eth_conn(), link.src_chan0 + c, false);
             }
         }
     }

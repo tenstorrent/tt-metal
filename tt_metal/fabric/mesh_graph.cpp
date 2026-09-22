@@ -31,6 +31,7 @@
 #include <numeric>
 #include <set>
 #include <cmath>
+#include <utility>
 
 // Implementation of hash function for port_id_t
 std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
@@ -409,7 +410,7 @@ void MeshGraph::initialize_from_mgd(
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 
-    this->inter_mesh_policy_specified_ = true;
+    this->inter_mesh_policy_specified_ = mgd.is_inter_mesh_policy_specified();
     this->inter_mesh_relaxed_policy_ = mgd.is_inter_mesh_policy_relaxed();
 
     // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all meshes
@@ -1026,8 +1027,8 @@ FabricConfig fabric_config_matching_type(FabricType fabric_type) {
 }  // namespace
 
 MeshGraph::MeshGraph(
-    MeshGraphDescriptor mesh_graph_descriptor, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
-    mesh_graph_descriptor_ = std::move(mesh_graph_descriptor);
+    MeshGraphDescriptor mesh_graph_descriptor, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) :
+    mesh_graph_descriptor_(std::move(mesh_graph_descriptor)) {
     initialize_from_mgd(*mesh_graph_descriptor_, fabric_config, is_ubb_galaxy);
 }
 
@@ -1039,7 +1040,7 @@ MeshGraph MeshGraph::generate_mesh_graph_of_shape(
     std::uint32_t num_connections_per_direction) {
     return MeshGraph(
         MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
-            mesh_shape, fabric_type, reliability_mode, arch, num_connections_per_direction),
+            std::move(mesh_shape), fabric_type, reliability_mode, arch, num_connections_per_direction),
         fabric_config_matching_type(fabric_type),
         /*is_ubb_galaxy=*/false);
 }

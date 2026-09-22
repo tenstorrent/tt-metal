@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <filesystem>
@@ -102,16 +103,26 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 // `fabric_nodes` may map to any of `asic_positions` (all-to-all); the topology solver still enforces a
 // bijection, so distinct nodes land on distinct ASICs. A group with a single node and a single position is
 // the classic one-to-one pin. The same shape is used as TopologyMappingConfig::PinningConstraint.
+enum class BoardRevision : uint8_t { BhRevAb, BhRevC, Wh };
+
 struct AsicPinningGroup {
     std::vector<FabricNodeId> fabric_nodes;
     std::vector<AsicPosition> asic_positions;
+    // Set when the MGD pinning named board_revision: BH_REV_AB, BH_REV_C, or WH. Empty means always apply.
+    std::optional<BoardRevision> board_revision;
 
     bool operator==(const AsicPinningGroup& other) const {
-        return fabric_nodes == other.fabric_nodes && asic_positions == other.asic_positions;
+        return fabric_nodes == other.fabric_nodes && asic_positions == other.asic_positions &&
+               board_revision == other.board_revision;
     }
     bool operator<(const AsicPinningGroup& other) const {
-        return fabric_nodes == other.fabric_nodes ? asic_positions < other.asic_positions
-                                                  : fabric_nodes < other.fabric_nodes;
+        if (fabric_nodes != other.fabric_nodes) {
+            return fabric_nodes < other.fabric_nodes;
+        }
+        if (asic_positions != other.asic_positions) {
+            return asic_positions < other.asic_positions;
+        }
+        return board_revision < other.board_revision;
     }
 };
 

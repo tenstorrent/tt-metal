@@ -3798,7 +3798,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     utils::TopologyMappingConfig config = no_rank_config();
     config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
     const auto mapping = utils::map_multi_mesh_to_physical(
-        psd, pgd, std::vector<utils::MultiMeshMappingPart>{{&mgds[0]}, {&mgds[1]}}, config);
+        psd, pgd, std::vector<utils::MultiMeshMappingPart>{{mgds.data()}, {mgds.data() + 1}}, config);
     ASSERT_FALSE(mapping.empty());
     ASSERT_TRUE(mapping.front().success) << mapping.front().error_message;
     const auto footprints = mapped_footprints(mapping);

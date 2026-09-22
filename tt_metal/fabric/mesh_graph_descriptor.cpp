@@ -2250,6 +2250,19 @@ void MeshGraphDescriptor::populate_pinnings() {
         all_mesh_ids.push_back(m);
     }
 
+    auto board_revision_of = [](const proto::AsicPinning& pinning) -> std::optional<BoardRevision> {
+        if (!pinning.has_board_revision()) {
+            return std::nullopt;
+        }
+        switch (pinning.board_revision()) {
+            case proto::BoardRevision::BH_REV_AB: return BoardRevision::BhRevAb;
+            case proto::BoardRevision::BH_REV_C: return BoardRevision::BhRevC;
+            case proto::BoardRevision::WH: return BoardRevision::Wh;
+            case proto::BoardRevision::BOARD_REVISION_UNSPECIFIED:
+            default: return std::nullopt;
+        }
+    };
+
     // Extract pinnings from the top-level pinnings section, preserving the many-to-many grouping.
     //
     // Each AsicPinning entry may list multiple logical fabric nodes and multiple physical ASIC
@@ -2278,6 +2291,7 @@ void MeshGraphDescriptor::populate_pinnings() {
                     group.fabric_nodes.emplace_back(MeshId{m}, c);
                 }
                 group.asic_positions = positions;
+                group.board_revision = board_revision_of(pinning);
                 pinnings_[MeshId{m}].push_back(std::move(group));
             }
             continue;
@@ -2334,6 +2348,7 @@ void MeshGraphDescriptor::populate_pinnings() {
                 group.fabric_nodes.emplace_back(MeshId{m}, c);
             }
             group.asic_positions = positions;
+            group.board_revision = board_revision_of(pinning);
             pinnings_[MeshId{m}].push_back(std::move(group));
         }
     }

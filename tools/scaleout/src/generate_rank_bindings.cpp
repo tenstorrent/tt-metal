@@ -141,6 +141,7 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
     for (std::size_t mgi = 0; mgi < mesh_graph_descriptors.size(); ++mgi) {
         parts[mgi].mesh_graph_descriptor = &mesh_graph_descriptors[mgi];
         PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings();
+        drop_inactive_revision_pinnings(local_pins, psd);
         if (cluster.is_ubb_galaxy()) {
             for (const auto& mesh_id : mesh_graphs[mgi].get_all_mesh_ids()) {
                 const auto& mesh_shape = mesh_graphs[mgi].get_mesh_shape(mesh_id);
@@ -206,7 +207,9 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
  *                                in length and order (one path per descriptor for `MeshGraph` host ranks).
  * @param mgd_paths_in_order      Const reference to paths parallel to `mesh_graph_descriptors`.
  *
- * @return One local-mesh-id mapping per input MGD. Empty parts means no seating was found.
+ * @return One local-mesh-id mapping per input MGD. A failed mapping still returns one result
+ *         per MGD (success=false, error_message, closest intra-mesh maps). Empty parts means
+ *         the enumerator was not initialized.
  */
 TopologyMappingParts run_topology_mapping(
     const PhysicalSystemDescriptor& psd,
@@ -728,8 +731,8 @@ int main(int argc, char** argv) {
                         break;
                     }
                     const std::vector<TopologyMappingResult> parts = enumerator.next();
-                    if (parts.empty()) {
-                        break;  // enumeration exhausted (genuine UNSAT -- no budget give-up)
+                    if (parts.empty() || !parts.front().success) {
+                        break;  // exhausted, or first next() reported no valid mapping
                     }
                     ++emitted;
 
