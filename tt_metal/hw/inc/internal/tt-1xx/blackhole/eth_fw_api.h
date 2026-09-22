@@ -208,8 +208,7 @@ struct eth_live_status_t {
     uint32_t spare2[64 - 52];  // 52-63
 };
 
-// SysEng base firmware debug buffer. Fields metal does not consume stand in for SysEng
-// register unions and enums of the same width.
+// SysEng base firmware debug buffer
 struct debug_buf_t {
     uint32_t serdes_init_lead_message_expected;
     uint32_t serdes_init_follow_message_expected;
@@ -272,10 +271,29 @@ static_assert(
 
 #define MEM_AERISC_PTP_TRACE_ADDR (MEM_SYSENG_ETH_DEBUG_BUF_ADDR + offsetof(debug_buf_t, scratchpad))
 
+#define AERISC_PTP_TRACE_MAGIC 0x1234ABCD
+
+// Metal FW tenure stamps. Base FW zeroes the debug buffer once at load, so an all-zero record
+// means metal has not run since. Each stamp publishes hi then lo, so lo commits it. Reader
+// contract:
+//   magic != AERISC_PTP_TRACE_MAGIC -> entry in flight or never stamped; sample again
+//   fw_exit_ptp_lo == 0             -> entered at fw_entry_ptp, still resident
+//   otherwise                       -> ran from fw_entry_ptp to fw_exit_ptp
 struct aerisc_ptp_trace_t {
-    uint64_t fw_entry_ptp;
-    uint64_t fw_exit_ptp;  // 0 while runtime FW owns the core
+    uint32_t magic;
+    uint32_t run_count;  // +1 per entry; counts metal FW entries since base FW load
+    uint32_t fw_entry_ptp_lo;
+    uint32_t fw_entry_ptp_hi;
+    uint32_t fw_exit_ptp_lo;
+    uint32_t fw_exit_ptp_hi;
 };
+
+static_assert(
+    sizeof(aerisc_ptp_trace_t) <= sizeof(debug_buf_t::scratchpad),
+    "aerisc_ptp_trace_t must fit in the scratchpad words metal owns");
+static_assert(
+    offsetof(debug_buf_t, scratchpad) == 496 * sizeof(uint32_t),
+    "scratchpad moved; re-sync debug_buf_t with SysEng before shipping");
 
 struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
@@ -330,11 +348,7 @@ struct boot_results_t {
 #include "internal/ethernet/tt_eth_api.h"
 #include "hostdev/dev_msgs.h"
 
-// Watcher builds can leave runtime FW through erisc_exit()'s longjmp, which bypasses the exit stamp
-// in main(). The one place covering both exits is active_erisc-crt0.cc, but this header cannot be
-// included there: its non-inline functions collide with active_erisc.cc at link time. Stamping the
-// erisc_exit() call sites instead goes silently missing when a new caller is added. Compile the
-// trace out under watcher rather than record one without its exit.
+// Under watcher, erisc_exit()'s longjmp bypasses the exit stamp in main(), leaving no exit to record.
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0) && \
     !(defined(WATCHER_ENABLED) && !defined(FORCE_WATCHER_OFF))
 #define AERISC_PTP_TRACE_ENABLED 1
@@ -357,22 +371,30 @@ FORCE_INLINE uint64_t eth_read_ptp_clock() {
     // Reading TIMER_LO latches TIMER_HI, so order is important
     uint32_t ptp_timer_lo = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR);
     uint32_t ptp_timer_hi = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR);
-    return (((uint64_t)ptp_timer_hi) << 32) | ptp_timer_lo;
+    return (static_cast<uint64_t>(ptp_timer_hi) << 32) | ptp_timer_lo;
 }
 
 static __attribute__((unused)) void aerisc_ptp_trace_entry() {
 #if AERISC_PTP_TRACE_ENABLED
-    volatile tt_l1_ptr aerisc_ptp_trace_t* trace = (volatile tt_l1_ptr aerisc_ptp_trace_t*)MEM_AERISC_PTP_TRACE_ADDR;
-    // Clear the stale exit first so a core that dies in between reads as resident, not as exited.
-    trace->fw_exit_ptp = 0;
-    trace->fw_entry_ptp = eth_read_ptp_clock();
+    auto* trace = reinterpret_cast<volatile tt_l1_ptr aerisc_ptp_trace_t*>(MEM_AERISC_PTP_TRACE_ADDR);
+
+    trace->magic = 0;
+    trace->run_count = trace->run_count + 1;
+    trace->fw_exit_ptp_lo = 0;
+    trace->fw_exit_ptp_hi = 0;
+    uint64_t entry_ptp = eth_read_ptp_clock();
+    trace->fw_entry_ptp_hi = static_cast<uint32_t>(entry_ptp >> 32);
+    trace->fw_entry_ptp_lo = static_cast<uint32_t>(entry_ptp);
+    trace->magic = AERISC_PTP_TRACE_MAGIC;
 #endif
 }
 
 static __attribute__((unused)) void aerisc_ptp_trace_exit() {
 #if AERISC_PTP_TRACE_ENABLED
-    volatile tt_l1_ptr aerisc_ptp_trace_t* trace = (volatile tt_l1_ptr aerisc_ptp_trace_t*)MEM_AERISC_PTP_TRACE_ADDR;
-    trace->fw_exit_ptp = eth_read_ptp_clock();
+    auto* trace = reinterpret_cast<volatile tt_l1_ptr aerisc_ptp_trace_t*>(MEM_AERISC_PTP_TRACE_ADDR);
+    uint64_t exit_ptp = eth_read_ptp_clock();
+    trace->fw_exit_ptp_hi = static_cast<uint32_t>(exit_ptp >> 32);
+    trace->fw_exit_ptp_lo = static_cast<uint32_t>(exit_ptp);
 #endif
 }
 

@@ -35,6 +35,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include "eth_test_common.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -624,6 +625,39 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
             eth_core,
             erisc0_ethernet_config,
             erisc1_ethernet_config));
+    }
+}
+
+TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
+    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+
+    // Outside 2-erisc mode bh_hal.cpp forces PHYSICAL_AERISC_ID=1, which compiles the trace out.
+    const auto erisc_count = env.get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    if (erisc_count < 2) {
+        GTEST_SKIP() << "Requires 2-erisc mode";
+    }
+
+    const auto trace_addr =
+        env.get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_PTP_TRACE);
+
+    constexpr uint32_t expected_magic = 0x1234ABCD;
+    enum : size_t { kMagic, kRunCount, kEntryLo, kEntryHi, kExitLo, kExitHi, kNumWords };
+
+    for (const auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
+            const auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core);
+            const auto trace =
+                env.get_cluster().read_core(device->id(), eth_noc_xy, trace_addr, kNumWords * sizeof(uint32_t));
+
+            EXPECT_EQ(trace[kMagic], expected_magic) << "no PTP trace on eth core " << eth_noc_xy.str();
+            if (trace[kMagic] != expected_magic) {
+                continue;
+            }
+            // A previous session that ran to completion would have left an exit stamp, so a cleared
+            // one means this session's entry did the stamping.
+            EXPECT_EQ(trace[kExitLo], 0u) << "metal FW should still be resident on " << eth_noc_xy.str();
+        }
     }
 }
 
