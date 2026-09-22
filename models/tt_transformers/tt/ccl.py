@@ -218,6 +218,30 @@ def tt_all_reduce(
             in_spec = in_mem_cfg.shard_spec if in_mem_cfg.shard_spec is not None else input_tensor.shard_spec()
             out_grid = in_spec.grid
             out_shard = [in_spec.shape[0], in_spec.shape[1]]
+            # SMELL.underused-grid: the input grid is only 8 cores, so the
+            # all-reduce runs its reduction on 8 of 110 cores. Spread the same
+            # full width over more cores when the width divides evenly by a
+            # tile: a wider grid means a smaller per-core shard and a smaller
+            # reduction CB per core, with the same total bytes. Keep
+            # num_width_shards == num_cores (tensor_spec.cpp:56-60) by picking
+            # a core count that divides the full width into whole tiles.
+            full_w = in_spec.shape[1] * out_grid.num_cores()
+            target_cores = None
+            for cand in (32, 24, 16):
+                if cand > out_grid.num_cores() and full_w % (cand * 32) == 0:
+                    target_cores = cand
+                    break
+            if target_cores is not None:
+                rows = (target_cores + 7) // 8
+                out_grid = ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, rows - 1),
+                        )
+                    }
+                )
+                out_shard = [in_spec.shape[0], full_w // (rows * 8)]
             num_buf_cores = out_grid.num_cores()
             ar_out_mem_cfg = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
