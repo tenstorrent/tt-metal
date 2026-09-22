@@ -122,18 +122,18 @@ inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, 
 }  // namespace sync
 
 namespace model {
-constexpr uint32_t kRingSamples = 128;  // raw samples kept, ~5 us apart: ~600 us deep
+constexpr uint32_t kRingSamples = 512;  // raw samples kept, ~0.5 us apart: ~250 us deep (kEthRingBytes on the host)
 constexpr uint32_t kConfirm = 4;        // consecutive off-line samples that make a step
 constexpr int64_t kOffTicks = 4;        // off the line by this much is off: a 1/8 step gets there in 0.7 us
 // The intercept follows the samples: once this many are behind the line it moves by 1/2^kEmaShift of each residue
 // (the mean is kept scaled by 2^kEmaShift so sub-tick residues are not lost to the shift), so the phase's wander and
 // a frequency a few ppm off the k8 grid walk the intercept instead of the residues, and the points stay on the true
-// line. Eight samples is ~40 us: the samples' own scatter averages to a tenth of a tick.
-constexpr uint32_t kEmaShift = 3;
-constexpr uint32_t kAcqTicks = 4096;       // refclk after a departure before the first lock test (82 us)
-constexpr uint32_t kWinTicks = 4096;       // the window that must lie on one line to lock its slope (~16 samples)
+// line. 32 samples is ~15 us; a one-notch step walks the residue ~3 ticks a sample, far past kOffTicks, so it shows.
+constexpr uint32_t kEmaShift = 5;
+constexpr uint32_t kAcqTicks = 1024;       // refclk after a departure before the first lock test (20 us): past any ramp
+constexpr uint32_t kWinTicks = 1024;       // the window that must lie on one line to lock its slope (~45 samples)
 constexpr uint32_t kWinSpreadTicks = 8;    // one line's samples spread less than this; a glide inside bends more
-constexpr uint32_t kAcqTestEvery = 8;      // samples between lock tests
+constexpr uint32_t kAcqTestEvery = 64;     // samples between lock tests: a scan of the window every ~30 us
 constexpr uint32_t kFirstPointN = 16;      // samples behind a segment's first point: a quarter of a tick
 constexpr uint32_t kLastDoublingN = 4096;  // points at every doubling of the count up to here, then every kPointTicks
 // While no line holds (a step's acquisition, which a PLL glide of tens of ms keeps failing), the bracketed samples
@@ -654,8 +654,12 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
-    // The loop reads three registers per sample -- refclk, wall, refclk -- and carries both clocks' high words
-    // itself from the low words' wraps, which at this rate no sweep can hide (86 s and 3.2 s periods).
+    // The loop is one bracket -- refclk, wall, refclk -- and as little else as possible, so the bracket is a large
+    // part of each iteration and most iterations that see the refclk advance are ones that bracket it: about one
+    // advance in five is a sample, one per ~0.5 us. More loads in flight than these three widen the bracket (measured:
+    // sixteen back-to-back brackets read the wall 8 ticks wide). Each iteration is padded by 0-3 pseudo-random
+    // cycles so the advance's phase against the loop walks instead of locking. Both clocks' high words are carried
+    // from the low words' wraps, which at this rate no sweep can hide (86 s and 3.2 s periods).
     const eth_ptp::Instant start = eth_ptp::read_instant();
     uint32_t r_hi = static_cast<uint32_t>(start.refclk >> 32), prev_r_lo = static_cast<uint32_t>(start.refclk);
     uint32_t w_hi = start.wall_hi, prev_w_lo = start.wall_lo;
@@ -664,23 +668,26 @@ void kernel_main() {
     uint64_t r_sweep = start.refclk;
     uint32_t iter = 0, walk = start.wall_lo | 1u;
     while (true) {
-        eth_ptp::phase_walk(walk);
+        walk = walk * 1103515245u + 12345u;
+        for (uint32_t d = walk >> 30; d != 0; d--) {
+            asm volatile("nop");
+        }
         const uint32_t ra_lo = eth_ptp::rd(eth_ptp::kPtpCfrLo);
         const uint32_t w_lo = eth_ptp::rd(eth_ptp::kWallClockLo);
         const uint32_t rb_lo = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        r_hi += rb_lo < prev_r_lo;
-        w_hi += w_lo < prev_w_lo;
-        prev_r_lo = rb_lo;
-        prev_w_lo = w_lo;
-        const uint64_t r = (static_cast<uint64_t>(r_hi) << 32) | rb_lo;
         if (rb_lo != ra_lo) {
-            model::feed(m, r, (static_cast<uint64_t>(w_hi) << 32) | w_lo);
+            r_hi += rb_lo < prev_r_lo;
+            w_hi += w_lo < prev_w_lo;
+            prev_r_lo = rb_lo;
+            prev_w_lo = w_lo;
+            model::feed(m, (static_cast<uint64_t>(r_hi) << 32) | rb_lo, (static_cast<uint64_t>(w_hi) << 32) | w_lo);
         }
         if ((++iter & 255u) != 0u) {
             continue;
         }
         (*hb)++;
         invalidate_l1_cache();
+        const uint64_t r = (static_cast<uint64_t>(r_hi) << 32) | prev_r_lo;
         const uint32_t fill = kp::profiler_control_buffer[kp::TAIL_INDEX] - kp::profiler_control_buffer[kp::HEAD_INDEX];
         if (fill >= kShipWords || r - r_sweep >= kSweepTicks) {
             r_sweep = r;

@@ -68,7 +68,7 @@ constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 // 32 B sync records per ms, and the routers' own zones, are well under 1 MB/s, so 1 MiB of host FIFO each (a single
 // 2 MiB-aligned carve of the host channel) is generous; the relays' budget is untouched.
 constexpr uint32_t kEthFifoBytes = 1u << 20;
-constexpr uint32_t kEthRingBytes = 2048;  // model::kRingSamples raw samples of 16 B (eth_clock_pusher.cpp)
+constexpr uint32_t kEthRingBytes = 8192;  // model::kRingSamples raw samples of 16 B (eth_clock_pusher.cpp)
 constexpr uint32_t kEthSyncRingBytes = kernel_profiler::kSyncRingBytes;
 // A drainer's control block: done and heartbeat words, then the stop word one stride up.
 constexpr uint32_t kCtrlBytes = 2 * kernel_profiler::kRelayCtrlWordStride;
