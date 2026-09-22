@@ -38,8 +38,8 @@ Independently corroborated on g03blx04, which measured 15.2 s for the same 8-for
 | Clip | Frames | Canvas | Fwd | Padded | Encoder | Keyframe encode | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 5 s | 124 | 1344x768 | 8 | 41984 | 1.9 | 1.5 | 10.8 | 3.4 | 1.2 | 18.7 | 3.6 | 34.12 | bh-glx-120-b09u02 |
-| 10 s | 243 | 1344x768 | 8 | 77568 | 2.2 | 1.3 | 30.2 | 7.3 | 1.2 | 42.1 | 4.2 | 37.19 | bh-glx-120-c06u08 |
-| 15 s | 362 | 1344x768 | 8 | 113152 | 2.2 | 1.3 | 58.5 | 10.8 | 1.5 | 74.2 | 4.9 | 37.44 | bh-glx-120-c06u08 |
+| 10 s | 243 | 1344x768 | 8 | 77568 | 2.0 | 1.3 | 25.0 | 6.6 | 1.2 | 36.1 | 3.6 | 34.24 | bh-glx-120-b09u02 |
+| 15 s | 362 | 1344x768 | 8 | 113152 | 1.9 | 1.5 | 47.4 | 9.6 | 1.5 | 61.9 | 4.1 | 34.74 | bh-glx-120-b09u02 |
 
 ### ref2va
 
