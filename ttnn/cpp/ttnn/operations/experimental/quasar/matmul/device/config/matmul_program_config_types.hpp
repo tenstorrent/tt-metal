@@ -86,24 +86,16 @@ struct MatmulMultiCoreProgramConfig {
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
-// Placement-first program config for the Quasar-native matmul (stage A of GH#41910).
+// Placement-first program config for the Quasar-native matmul (GH#41910): the caller names the
+// clusters (`cores`) and the C slice (in 32x32 tiles) each produces in one go. The factory walks the
+// C slices of one batch (across N, then down M) and hands contiguous runs to `cores` in enumeration
+// order (x fastest when `row_major_cores`); trailing cores idle when there are fewer C slices, each
+// core produces several when there are more. Edge C slices are computed full size and clipped on read
+// and write, so any M / N works.
 //
-// GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. The caller describes the
-// work directly instead of picking a 1D / 2D / DRAM-sharded strategy:
-//   - `cores`                    the clusters that take part;
-//   - `C_slice_M_tiles` / `C_slice_N_tiles` the C slice of C (in tiles) each cluster produces in one go.
-// The factory walks the C slices of one batch (across N, then down M) and hands that walk to
-// `cores` in enumeration order (x fastest when `row_major_cores`, y fastest otherwise) as contiguous
-// runs; when there are fewer C slices than cores the trailing cores idle, when there are more each core
-// produces several. Blocks on the right / bottom edge are computed at full size and clipped on read
-// and write, so any M / N works. Every operand is addressed by tile index through the tensor accessor, so interleaved,
-// L1-sharded and DRAM-sharded tensors all take the same kernels. The legacy strategies are particular
-// choices of (cores, C_slice_M_tiles, C_slice_N_tiles): e.g. a 1D "mcast_in0" matmul is C_slice_M_tiles = M_tiles on
-// a row of cores, a 2D matmul is a rectangle of cores with C_slice_M_tiles x C_slice_N_tiles C slices.
-//
-// Stage A limits: one NEO, one reader and one writer per cluster; no data sharing between clusters;
-// no bias (the op applies it as a separate add), no fused activation, no untilize, 32x32 tiles only,
-// sharded output needs batch 1 and exactly one C slice per core.
+// Current limits: one NEO, one reader and one writer per cluster; no inter-cluster sharing; no bias
+// (applied as a separate add), no fused activation, no untilize, 32x32 tiles only; sharded output
+// needs batch 1 and exactly one C slice per core.
 struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
     std::size_t C_slice_M_tiles{};
