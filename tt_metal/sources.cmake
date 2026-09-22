@@ -99,6 +99,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/program_preparation.hpp
     api/tt-metalium/experimental/streaming_profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
+    api/tt-metalium/experimental/sockets/d2h2h2d_socket.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/d2h_stream_service_descriptor.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
