@@ -116,7 +116,7 @@ shipped (see below).
 | Efficient KV-cache for long sequences | ✅ | `test_device_fixed_shape_cache_matches_the_growing_one` | *Fixed-width KV cache* |
 | Flash attention or equivalent | ✅ both stages | `test_device_fused_attention_matches_explicit` | *Fused decode attention*, *Flash attention* |
 | Minimize token generation latency | ✅ | `test_device_traced_throughput`, `test_device_inplace_throughput` | *The LLM decode step* |
-| **Batch processing for multiple utterances** | ✅ decode batched and checked; end-to-end batched synthesis blocked by a pre-existing device defect (below) | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, checked) | *Batched decode* |
+| **Batch processing for multiple utterances** | ✅ decode and end-to-end synthesis, both checked | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, checked), `test_device_batched_synthesis_agrees_with_one_at_a_time` (end to end, since 2026-09-23) | *Batched decode* |
 | Efficient sampling strategies | ✅ top-k / top-p / RAS, host-side **by measurement** | `test_nucleus_filter_*`, `test_ras_*`, `scripts/profile_token_tail.py` | *The LLM decode step* |
 | **Pipeline semantic generation with acoustic modeling** | ✅ | `test_device_streaming_first_audio_latency` (both schedules, all three stages real; Blackhole), `test_device_streaming_generates_the_same_tokens_as_batch` (the shipped API, all three boards) | *Streaming* |
 | Optimize flow decoder computation | ✅ | `test_device_solve_euler_matches_golden`; trace-cache timing | *The flow decoder* |
@@ -134,9 +134,11 @@ shipped (see below).
 ## What is not met, what was fixed, and why
 
 Three requirements are unmet (`RTF < 0.2`, `RTF < 0.5` on n300, speculative decoding)
-and two device defects remain open (the Wormhole `test_streaming_perf` hang, the n300
-amplitude difference). The interleaved schedule's corrupt audio was in this list and is
-now fixed; its account is kept because the remedy that failed is the instructive half.
+and three device defects remain open (the Wormhole `test_streaming_perf` hang, the n300
+amplitude difference, and the vocoder's per-geometry L1_SMALL growth). Two entries that
+were in this list are now fixed -- the interleaved schedule's corrupt audio and
+end-to-end batched synthesis -- and their accounts are kept, because in both cases the
+remedies that failed are the instructive half.
 
 ### `RTF < 0.2` — reached the floor of this decomposition
 
@@ -180,28 +182,78 @@ per-token cost rather than the number of sequential steps — was taken instead:
 capture, the fused decode attention, the fixed-width and in-place KV caches, and now
 batching. `PERF.md` *The LLM decode step* carries what each was worth.
 
-### End-to-end batched synthesis — blocked by the L1 growth, not by batching
+### End-to-end batched synthesis — fixed 2026-09-23
 
-`TtTransformerLM.generate_batch` is verified and checked: batched rows match single-row
-decode at ragged prompt lengths, and the `B = 1..8` sweep fails if batching amortises
-nothing. That is where the win is — the LLM runs once per *token* and is the large
-majority of an utterance, while the flow decoder and the vocoder run once per
-utterance each.
+Closed. `test_device_batched_synthesis_agrees_with_one_at_a_time` ran for the life of
+this PR as a skip, on the grounds that `synthesize_batch` wedged the board on the second
+utterance and the cause was not established. It now passes in 18 s, two utterances at
+100 % token agreement against the same two run alone.
 
-`CosyVoiceTTNN.synthesize_batch` composes that with per-utterance flow and vocoder
-work on one open device, and that composition hangs: synthesising two utterances
-of different lengths on one device wedges it, needing a board reset. The cause is
-known, pre-dates all of this, and is unrelated to batching — something in the
-vocoder's `conv_transpose2d`/halo path accumulates per-geometry device state that
-`release_caches()` does not free. It is why `demo/demo.py` opens a fresh device per
-utterance.
+`TtTransformerLM.generate_batch` was never the problem and was always verified: batched
+rows match single-row decode at ragged prompt lengths, and the `B = 1..8` sweep fails if
+batching amortises nothing. That is where the win is — the LLM runs once per *token* and
+is the large majority of an utterance, while the flow decoder and the vocoder run once
+per utterance each.
 
-`test_device_batched_synthesis_agrees_with_one_at_a_time` is therefore skipped with
-that reason attached rather than deleted: the moment the L1 growth is root-caused,
-it is the test that says whether `synthesize_batch` was right all along. Anyone
-building a real multi-utterance serving path needs that defect closed first, and
-should batch the decode while keeping a device per utterance for the other two stages
-until then.
+What blocked it was two traces alive at once. `COSYVOICE_CFM_TRACE_CACHE` keeps the flow
+decoder's estimator trace across utterances, which is what makes a second utterance of
+the same mel length cheap. `synthesize_batch` then captures a *decode* trace in
+`generate_batch` and runs the flow decoder once per utterance, so a cached estimator
+trace is live while another trace is captured — and TTNN is explicit: *"Allocating
+device buffers is unsafe due to the existence of an active trace."* The last line before
+each hang is that warning.
+
+Four configurations on `p150a`, and the scope is the part worth recording:
+
+| configuration | result |
+|---|---|
+| cache on (the shipped default) | hangs; 40-minute timeout, twice |
+| cached trace released at entry to `synthesize_batch` | hangs; 40-minute timeout |
+| cache disabled for the duration of `synthesize_batch` | hangs; 40-minute timeout |
+| cache never captured in this process (`COSYVOICE_CFM_TRACE_CACHE=0`) | **passes, 18 s, 100 % agreement** |
+
+So a *released* trace still makes a later capture unsafe. That is an upstream TTNN
+property rather than something this port can fix from the outside, and it is why the
+test sets the variable before the pipeline is constructed — `TtConditionalCFM` reads it
+once, in its constructor — rather than toggling it around the call.
+
+The cost is one estimator capture per utterance instead of one per distinct mel length,
+paid only by `synthesize_batch`. Single-utterance `synthesize` keeps the cache and its
+figures in `PERF.md` are unchanged.
+
+### The L1_SMALL growth across vocoder geometries — measured, still open
+
+Separate from the above, and the reason this section used to blame it. The vocoder parks
+prepared `conv_transpose2d` weights in L1_SMALL per distinct mel geometry and never frees
+them. Measured on `p150a` by synthesising one prompt at a sweep of token budgets on one
+open device:
+
+| geometries seen | L1_SMALL allocated | per-geometry cost |
+|---|---:|---:|
+| 1 (96 tokens) | `16 896 B` | — |
+| 2 (128) | `31 680 B` | `+14 784` |
+| 3 (160) | `48 640 B` | `+16 960` |
+| 4 (192) | `65 280 B` | `+16 640` |
+| 7 (288) | `123 520 B` | `+20 160` |
+
+Revisiting a geometry already seen costs nothing — five calls alternating two geometries
+stay flat at `32 064 B`. So the growth is per distinct geometry, not per call, and it
+scales with mel length.
+
+At the `l1_small_size = 131072` the e2e tests ask for, that admits about three geometries
+before the allocator's top clashes with `conv_transpose2d`'s static circular-buffer
+region:
+
+```
+RuntimeError: Statically allocated circular buffers in program 2455 clash with L1
+buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1384576 and static circular
+buffer region ends at 1395648
+```
+
+That is a clean exception rather than a hang, which is how it is distinguishable from
+the trace defect above. `test_device_batched_synthesis_agrees_with_one_at_a_time` asks
+for `524288` for headroom. Freeing the per-geometry state is upstream work and is not
+done here; `scripts/probe_l1_growth.py` reproduces the sweep.
 
 ### The interleaved schedule's corrupt audio — fixed 2026-09-22
 

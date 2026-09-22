@@ -206,15 +206,18 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
 #
 # Skipped rather than deleted, because the moment the L1 growth is root-caused this is
 # the test that says whether `synthesize_batch` was right all along.
-@pytest.mark.skip(
-    reason="hangs on the second utterance: known L1_SMALL growth across vocoder "
-    "geometries on one open device (see docs/VALIDATION.md). Batched *decode* is "
-    "verified in tests/perf/test_batching.py."
-)
+# **A larger L1_SMALL bank, and the measurement that says why.** The vocoder parks
+# prepared `conv_transpose2d` weights in L1_SMALL per distinct mel geometry and never
+# frees them -- measured at 15-20 KB each, growing with mel length, and revisiting a
+# geometry already seen costs nothing. The 131072 the rest of this file asks for
+# therefore admits about three geometries before the allocator's top clashes with
+# `conv_transpose2d`'s static circular-buffer region, which is what used to wedge this
+# test on the second utterance. Seven geometries fit in 524288 with room to spare.
+# `docs/VALIDATION.md` carries the sweep.
 @needs_weights
 @needs_inputs
-@needs_device
-def test_device_batched_synthesis_agrees_with_one_at_a_time(device):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 524288, "trace_region_size": 402653184}], indirect=True)
+def test_device_batched_synthesis_agrees_with_one_at_a_time(device, monkeypatch):
     """Two utterances through one decode loop against the same two run alone.
 
     This is the whole-utterance form of `test_device_batched_decode_matches_single`,
@@ -227,6 +230,27 @@ def test_device_batched_synthesis_agrees_with_one_at_a_time(device):
     """
     import ttnn
     from models.demos.cosyvoice.tt.pipeline import PromptContext
+
+    # **The CFM estimator's trace cache is off for this test, and that is what
+    # unblocked it.** `TtConditionalCFM` reads `COSYVOICE_CFM_TRACE_CACHE` once, in its
+    # constructor, so this has to be set before `_model` builds the pipeline.
+    #
+    # The cache keeps the flow decoder's estimator trace alive between utterances. This
+    # test then captures a *decode* trace in `generate_batch` and runs the flow decoder
+    # once per utterance, so a cached estimator trace is live while another trace is
+    # captured -- and TTNN says what that costs: "Allocating device buffers is unsafe
+    # due to the existence of an active trace."
+    #
+    # Measured on p150a, and the scope is the surprising part. Three configurations
+    # hang the board for the full 40-minute timeout: the cache left on; the cached
+    # trace released at entry to `synthesize_batch`; and the cache disabled only for
+    # the duration of that call. The one that passes -- in 18 s, at 100 % token
+    # agreement on both rows -- is the cache never having captured at all in this
+    # process, which is what setting the variable before construction achieves. So a
+    # *released* trace still makes a later capture unsafe, which is an upstream TTNN
+    # property rather than something this port can fix from the outside.
+    # `docs/VALIDATION.md` carries the full account of all four.
+    monkeypatch.setenv("COSYVOICE_CFM_TRACE_CACHE", "0")
 
     paths = _cases(2)
     ctxs, metas = zip(*(PromptContext.from_npz(p) for p in paths))

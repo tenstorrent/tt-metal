@@ -64,9 +64,10 @@ The n300 result is one Wormhole B0 chip — nothing in this port is multi-chip.
 | `perf` | 14 | `/dev/tenstorrent` | 14 passed, on each of the three configurations, on all three boards |
 
 The device tier re-runs the host tier (it lives in `tests/pcc/`), which is why 150 is
-not 113 + 37. One test is skipped with its reason attached — end-to-end batched
-synthesis, blocked by a pre-existing device defect; `docs/VALIDATION.md` has the
-account.
+not 113 + 37. The skip in that column was end-to-end batched synthesis, blocked by a
+device defect; it is fixed as of 2026-09-23 and the test now runs — see §10 item 5 and
+`docs/VALIDATION.md`. These counts are the 2026-08-30 certification run and are not
+re-stated here for the two fixes that followed it.
 
 ## 2. The requirements, and the verdict on each
 
@@ -375,16 +376,21 @@ risky: `COSYVOICE_FF2_GRID`, and `COSYVOICE_KV_INPLACE` on Blackhole.
 
 ## 10. Known limitations
 
-Four, all reproducible, none smoothed over. `docs/VALIDATION.md` carries the same list
+Five, all reproducible, none smoothed over. `docs/VALIDATION.md` carries the same list
 against the requirements they touch.
 
 1. `RTF < 0.2` is not reachable on this decomposition — §3.4. Bounded below by the
    Euler count and by the decode step's weight traffic, not by tuning.
-2. L1_SMALL grows across differing vocoder geometries on one open device. Something
-   in the `conv_transpose2d`/halo path accumulates per-geometry state that
-   `release_caches()` does not free. It is why `demo/demo.py` opens a fresh device per
-   utterance, and it is what blocks end-to-end *batched synthesis* (batched decode
-   itself is fine — §4). Not root-caused.
+2. L1_SMALL grows across differing vocoder geometries on one open device, and the
+   growth is now measured: the prepared `conv_transpose2d` weights cost `15-20 KB` per
+   *distinct* mel geometry and are never freed, while revisiting a geometry already
+   seen costs nothing. At `l1_small_size = 131072` that admits about three geometries
+   before the allocator's top clashes with `conv_transpose2d`'s static circular-buffer
+   region — a clean exception, not a hang. It is why `demo/demo.py` opens a fresh
+   device per utterance. Freeing the state is upstream work and is not done here;
+   `scripts/probe_l1_growth.py` reproduces the sweep and `docs/VALIDATION.md` has the
+   table. This is *not* what blocked end-to-end batched synthesis, which is fixed —
+   see item 5.
 3. Device buffers allocated while a trace is live get corrupted, and can hang the
    board. TTNN warns about it — *"Allocating device buffers is unsafe due to the
    existence of an active trace"* — and this port has been bitten by two distinct
@@ -409,6 +415,15 @@ against the requirements they touch.
    while diagnosing the above and not yet explained. Which figure is wrong is not
    established; the content-comparison test passes on n300.
    `docs/VALIDATION.md` records what has been ruled out.
+
+5. End-to-end batched synthesis is fixed, and the cause was not item 2. Two traces
+   alive at once did it: `COSYVOICE_CFM_TRACE_CACHE` keeps the flow decoder's estimator
+   trace across utterances, and `synthesize_batch` captures a decode trace in
+   `generate_batch` while that one is live. Four configurations were measured on `p150a` — cache
+   on, cached trace released at entry, cache disabled for the duration of the call, and
+   cache never captured in the process. Only the last passes, in `18 s` at `100 %`
+   token agreement, so a *released* trace still makes a later capture unsafe.
+   `docs/VALIDATION.md` carries the table of all four.
 
 Items 2 and 3's hang share a shape — device state accumulating across geometries or
 across a trace — and may share a cause. That is a guess, and is labelled as one.
