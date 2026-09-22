@@ -62,7 +62,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     float nf = n;
     // The scale (-1)^(n+1) * n! goes into every term rather than onto the final sum: the unscaled
     // sum sits n! below the result and flushes to zero while the result is still a normal float.
-    float inv_nf = scale / nf;
+    float c_b0 = scale / nf;                                   // leading term coefficient
     float c_b2 = scale * n1 / 12.0f;                           // B_2 term coefficient
     float c_b4 = -scale * (n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
     float c_b6 = scale * (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
@@ -119,8 +119,8 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
         sfpi::vFloat inv_z2 = inv_z * inv_z;
 
         // Use PolynomialEvaluator for the Bernoulli polynomial in the tail:
-        // E = inv_nf + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
-        sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, inv_nf, c_b2, c_b4, c_b6);
+        // E = c_b0 + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
+        sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, c_b0, c_b2, c_b4, c_b6);
         sfpi::vFloat tail = E + half_scale * inv_z;
 
         // Scale by inv_z^n, taking advantage of inv_z^2's

@@ -2692,12 +2692,12 @@ class UnarySFPUGolden:
         else:  # self.data_format == DataFormat.Float16:
             return math.nan
 
-    def _torch_unary(self, x, torch_fn) -> float:
-        """Apply torch_fn to scalar x in fp32, then enforce the
+    def _torch_unary(self, x, torch_fn, dtype=torch.float32) -> float:
+        """Apply torch_fn to scalar x in dtype (fp32 by default), then enforce the
         format-aware NaN rule: convert +/-inf to NaN when the dest is
         A-exponent (Float16).
         """
-        result = torch_fn(torch.tensor(x, dtype=torch.float32)).item()
+        result = torch_fn(torch.tensor(x, dtype=dtype)).item()
         if math.isinf(result) and not self.data_format.is_exponent_B():
             return math.nan
         return result
@@ -3281,9 +3281,9 @@ class UnarySFPUGolden:
     def _polygamma(self, x):
         # float64: torch's float32 polygamma loses precision as the result nears the bottom of
         # the normal range and returns 0 there (n = 11, x = 1.1e4), where the kernel must not.
-        return torch.polygamma(
-            self._polygamma_order, torch.tensor(x, dtype=torch.float64)
-        ).item()
+        return self._torch_unary(
+            x, lambda t: torch.polygamma(self._polygamma_order, t), dtype=torch.float64
+        )
 
     def _xielu(self, x):
         # Mirrors calculate_xielu: beta = 0.5, alpha_p/alpha_n learnable params.

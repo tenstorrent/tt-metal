@@ -362,6 +362,8 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         n = self.polygamma_order
+        if not 1 <= n <= 11:
+            raise ValueError(f"polygamma supports orders 1 to 11, got {n}")
         scale = (-1) ** (n + 1) * math.factorial(n)
         return (
             f"#define SFPU_POLYGAMMA_N_BITS {_fp32_bits(n):#x}u\n"
