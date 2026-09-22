@@ -1,0 +1,23 @@
+operands:
+  - {name: seed, dims: [32, 32], format: Float16_b}
+  - {name: a, dims: [32, 32], format: Float16_b}
+  - {name: b, dims: [32, 32], format: Float16_b}
+  - {name: out, dims: [32, 32], format: Float16_b}
+
+operations:
+  - dest_sync: SyncFull
+    math:
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: seed
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        in0: a
+        in1: b
+        math_fidelity: HiFi4
+        acc_to_dest: false
+    pack:
+      - output: out
+        packer: Packer
