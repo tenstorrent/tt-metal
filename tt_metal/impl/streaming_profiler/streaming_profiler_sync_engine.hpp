@@ -40,50 +40,29 @@ struct ClockSample {
     uint32_t spins = 0;  // link records: the bracketed read's spins to the caught refclk update, plus one
 };
 
-// The chip's AICLK wall clock against its refclk, as its idle-eth pusher models it (eth_clock_pusher.cpp): one
-// segment per PLL multiple, each a line the pusher sends POINTS of -- (refclk r, the line's wall at r) with the
-// multiple k8 and the count of samples behind the line in the record's round word. The newest point of the open
-// segment stands for it; a CLOSE point ends a segment at its last on-line sample; a new multiple, or a point after
-// a close, opens the next; and consecutive segments meet where their lines cross.
+// A chip's clock as the pusher describes it: instants (its refclk tick, its eth wall tick) in refclk order, the wall
+// linear between consecutive ones. On a steady line the pusher sends a point every kEthPointUs with the line's exact
+// k/8 slope and the residual bound of the samples behind it; inside a transition it sends the samples that keep the
+// chord through them within kRawEpsTicks of every sample (k8 0), so the map bends through a glide as the clock did.
+// Records are placed only up to the newest instant, on the chord to it.
 class LocalClockModel {
 public:
     static constexpr double kRefclkHz = kernel_profiler::kEthRefclkHz;
-    // A line behind fewer samples than this has its intercept fixed too loosely (>0.25 tick) to freeze a node on.
-    static constexpr uint32_t kSettledCount = 16;
-    // How far from a segment's close the crossing with the next line may lie: the pusher confirms a step within
-    // ~25 us of samples and the close is its last on-line sample, so the crossing precedes the close by at most that.
-    static constexpr double kKnotSlackTicks = 4000.0;
-
-    // A run's points lie on the true line (the pusher's intercept follows the samples), so once the run spans
-    // kSlopeSpanTicks its own two end points give the slope to a fraction of a ppm; before that the k8 multiple
-    // stands, within a few ppm. Evaluations anchor on the nearer end point so the slope's error has the least lever.
-    static constexpr double kSlopeSpanTicks = 100000.0;  // 2 ms
-    struct Run {
-        double k8 = 0.0;                     // wall ticks per refclk tick, in eighths
-        double r_first = 0.0, r_last = 0.0;  // the first and the newest point's refclk
-        double w_first = 0.0, w_last = 0.0;  // their walls; w_first is the segment's key in wall order
-        uint32_t n = 0;                      // samples behind the line
-        bool closed = false;
-        double slope() const {
-            return r_last - r_first >= kSlopeSpanTicks ? (w_last - w_first) / (r_last - r_first) : k8 / 8.0;
-        }
-        bool settled() const { return n >= kSettledCount; }
-        double wall_of_refclk(double r) const {
-            return r - r_first < r_last - r ? w_first + slope() * (r - r_first) : w_last + slope() * (r - r_last);
-        }
-        double refclk_of_wall(double w) const {
-            return w - w_first < w_last - w ? r_first + (w - w_first) / slope() : r_last + (w - w_last) / slope();
-        }
+    struct Instant {
+        double r = 0.0, w = 0.0;
+        uint32_t k8 = 0;  // the line's slope in eighths of a wall tick per refclk tick at a point; 0 at a raw instant
+        bool close = false;  // a line's last instant
     };
-
-    std::vector<Run> runs;  // in time order, disjoint in refclk
+    std::vector<Instant> pts;  // in refclk order
+    uint64_t points = 0;       // instants received, those behind the frontier included
+    uint64_t transitions = 0;  // closes
     // The pusher's own check of each line against its samples: the largest residual any point reported, in wall
     // ticks, and how many points reported one beyond kResidWarnTicks.
     static constexpr double kResidWarnTicks = 8.0;
     double max_resid_ticks = 0.0;
     uint64_t resid_warn_points = 0;
-    // Each line point's residual as (refclk, wall ticks): the model's error bound over the samples between the
-    // previous point and it, in refclk order.
+    // Each point's residual as (refclk, wall ticks): the line's error bound over the samples between the previous
+    // point and it, in refclk order.
     std::vector<std::pair<double, double>> resid;
     // The bound in force at refclk r: the first point at or after it, the last point's past the end.
     double resid_at(double r) const {
@@ -94,152 +73,45 @@ public:
             resid.begin(), resid.end(), r, [](const std::pair<double, double>& p, double x) { return p.first < x; });
         return it == resid.end() ? resid.back().second : it->second;
     }
-    // Instants of the wall clock on no line (k8 0): the pusher's own samples while it acquires a slope across a
-    // glide, in refclk order. They bend the map through the seam they fall in.
-    std::vector<std::pair<double, double>> raw;  // (refclk, wall)
-    uint64_t points = 0;                         // points and closes received
-    uint64_t transitions = 0;                    // segments after the first
 
-    // A point of the open segment's line, or the segment's close, its wall in eighths of a tick. An older point than
-    // the newest is superseded.
-    void add_point(uint64_t refclk, uint64_t wall8, uint32_t k8, uint32_t n, bool close, uint32_t resid8 = 0) {
+    void add_point(uint64_t refclk, uint64_t wall8, uint32_t k8, uint32_t, bool close, uint32_t resid8 = 0) {
         points++;
         const double r = static_cast<double>(refclk), w = static_cast<double>(wall8) / 8.0;
-        const double resid = resid8 / 8.0;
-        max_resid_ticks = std::max(max_resid_ticks, resid);
-        resid_warn_points += resid > kResidWarnTicks;
-        if (k8 != 0 && (this->resid.empty() || r > this->resid.back().first)) {
-            this->resid.emplace_back(r, resid);
+        const double res = resid8 / 8.0;
+        max_resid_ticks = std::max(max_resid_ticks, res);
+        resid_warn_points += res > kResidWarnTicks;
+        if (k8 != 0 && (resid.empty() || r > resid.back().first)) {
+            resid.emplace_back(r, res);
         }
-        if (k8 == 0) {
-            if (raw.empty() || r > raw.back().first) {
-                raw.emplace_back(r, w);
-            }
+        // A new line's first points sit at its lock, behind the seam's last instants: nothing behind the frontier
+        // is placed again.
+        if (!pts.empty() && (r <= pts.back().r || w <= pts.back().w)) {
             return;
         }
-        if (runs.empty() || runs.back().closed || runs.back().k8 != static_cast<double>(k8)) {
-            transitions += runs.empty() ? 0 : 1;
-            runs.emplace_back();
-            runs.back().k8 = k8;
-            runs.back().r_first = r;
-            runs.back().w_first = w;
-        }
-        Run& cur = runs.back();
-        if (r < cur.r_last) {
-            return;
-        }
-        cur.r_last = r;
-        cur.w_last = w;
-        cur.n = n;
-        cur.closed = close;
+        transitions += close;
+        pts.push_back(Instant{r, w, k8, close});
     }
-    // The raw instants inside a seam (r_lo, r_hi), in order.
-    std::vector<std::pair<double, double>> raw_between(double r_lo, double r_hi) const {
-        std::vector<std::pair<double, double>> out;
-        for (const auto& p : raw) {
-            if (p.first > r_lo && p.first < r_hi) {
-                out.push_back(p);
-            }
-        }
-        return out;
-    }
-    // The newest instant the samples reach when the model ends inside a transition (the last segment closed, or raw
-    // instants past it): nothing later is measured. No value while the last segment is open: its line stands on.
-    std::optional<double> modelled_until() const {
-        if (runs.empty()) {
-            return 0.0;
-        }
-        const double raw_r = raw.empty() ? 0.0 : raw.back().first;
-        if (!runs.back().closed && runs.back().r_last >= raw_r) {
-            return std::nullopt;
-        }
-        return std::max(runs.back().r_last, raw_r);
-    }
-    // The segment holding refclk r: the last one starting at or before it (the first, for anything earlier).
-    const Run& run_at(double r) const {
-        auto it = std::upper_bound(runs.begin(), runs.end(), r, [](double x, const Run& a) { return x < a.r_first; });
-        return it == runs.begin() ? runs.front() : *(it - 1);
-    }
-    // A raw instant this far off the line a step would put it on says the seam is a ramp. The pusher's raw instants
-    // hold a chord within three ticks of every sample across the seam (its cone), so a step's two lines must do the
-    // same or the instants themselves place the seam.
-    static constexpr double kStepFitTicks = 3.0;
-    // Where consecutive segments hand over: their lines' intersection, when it lies within kKnotSlackTicks of the
-    // seam and the two lines account for every raw instant recorded across it, i.e. the seam is a step. No value (a
-    // ramp, parallel lines, or a crossing far from the seam): the seam is bridged from a.r_last to b.r_first through
-    // its raw instants.
-    std::optional<double> knot(const Run& a, const Run& b) const {
-        const double ds = a.slope() - b.slope();
-        if (!(std::abs(ds) > 1e-9)) {
-            return std::nullopt;
-        }
-        const double r_x = (b.w_first - b.slope() * b.r_first - a.w_last + a.slope() * a.r_last) / ds;
-        if (!(std::isfinite(r_x) && r_x >= a.r_last - kKnotSlackTicks && r_x <= b.r_first + kKnotSlackTicks)) {
-            return std::nullopt;
-        }
-        for (const auto& [rr, ww] : raw_between(a.r_last, b.r_first)) {
-            const Run& on = rr < r_x ? a : b;
-            if (std::abs(ww - on.wall_of_refclk(rr)) > kStepFitTicks) {
-                return std::nullopt;
-            }
-        }
-        return r_x;
-    }
-    // The wall instant of refclk tick r exactly as the published correction places a record there: each segment's
-    // line up to its knot with the next, a straight bridge across a seam without one. 0 when no line holds r yet.
+    // The newest instant's refclk: nothing later is known.
+    double frontier() const { return pts.empty() ? 0.0 : pts.back().r; }
+    // The wall tick at refclk r: linear between the instants around it, along the last two past the newest, and 0
+    // before the first, where nothing places.
     double wall_at(double r) const {
-        if (runs.empty()) {
+        if (pts.empty() || r < pts.front().r) {
             return 0.0;
         }
-        const Run* run = &run_at(r);
-        const size_t idx = static_cast<size_t>(run - runs.data());
-        const auto usable = [](const Run& b) { return b.n > 0 && b.slope() > 0.0; };
-        if (idx + 1 < runs.size() && usable(runs[idx + 1])) {
-            const Run& next = runs[idx + 1];
-            if (const auto k = knot(*run, next)) {
-                if (r >= *k) {
-                    run = &next;
-                }
-            } else if (r > run->r_last && r < next.r_first && usable(*run)) {
-                // A bridged seam: straight between the raw instants inside it, the two lines' ends included.
-                double r0 = run->r_last, w0 = run->wall_of_refclk(run->r_last);
-                for (const auto& [rr, ww] : raw_between(run->r_last, next.r_first)) {
-                    if (r < rr) {
-                        return w0 + (ww - w0) * (r - r0) / (rr - r0);
-                    }
-                    r0 = rr;
-                    w0 = ww;
-                }
-                const double w1 = next.wall_of_refclk(next.r_first);
-                return w0 + (w1 - w0) * (r - r0) / (next.r_first - r0);
-            }
-        } else if (
-            idx + 1 == runs.size() && run->closed && r > run->r_last && usable(*run) && !raw.empty() &&
-            raw.back().first > run->r_last) {
-            // The seam still open: through the raw instants, then along the last two.
-            double r0 = run->r_last, w0 = run->wall_of_refclk(run->r_last);
-            for (const auto& [rr, ww] : raw_between(run->r_last, std::numeric_limits<double>::infinity())) {
-                if (r < rr) {
-                    return w0 + (ww - w0) * (r - r0) / (rr - r0);
-                }
-                if (rr == raw.back().first) {
-                    return ww + (ww - w0) * (r - rr) / (rr - r0);
-                }
-                r0 = rr;
-                w0 = ww;
-            }
+        if (pts.size() == 1) {
+            return pts[0].w + (r - pts[0].r) * pts[0].k8 / 8.0;
         }
-        if (run == &runs[idx] && idx > 0 && usable(runs[idx - 1])) {
-            if (const auto k = knot(runs[idx - 1], *run); k && r < *k) {
-                run = &runs[idx - 1];
-            }
+        auto hi = std::lower_bound(pts.begin(), pts.end(), r, [](const Instant& p, double x) { return p.r < x; });
+        if (hi == pts.end()) {
+            hi = pts.end() - 1;
         }
-        return usable(*run) ? run->wall_of_refclk(r) : 0.0;
-    }
-    // The segment holding wall tick w, by the segments' wall order (monotone with their refclk order).
-    const Run& run_at_wall(double w) const {
-        auto it = std::upper_bound(runs.begin(), runs.end(), w, [](double x, const Run& a) { return x < a.w_first; });
-        return it == runs.begin() ? runs.front() : *(it - 1);
+        if (hi == pts.begin()) {
+            ++hi;
+        }
+        const Instant& a = *(hi - 1);
+        const Instant& b = *hi;
+        return a.w + (b.w - a.w) * (r - a.r) / (b.r - a.r);
     }
 };
 
@@ -423,30 +295,29 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Each chip's published placement series: its clock model's segments and its root transform turned into the
-// ClockMap's nodes. Nodes are frozen once published (consumers have placed records against them), so a publish
-// only appends beyond them: a node where the map bends (a segment boundary, the first sample) and the open
-// segment's frontier at every publish. Records are placed only up to the newest node, on the chord to it.
+// Each chip's published placement series: a node per instant of its clock model, the instant's eth wall tick and
+// the root's refclk tick there through the chip's refclk and the solved links, the chord to the next instant as its
+// tangent. Nodes are frozen once published (consumers have placed records against them), so a publish only appends
+// beyond them; records are placed only up to the newest node, on the chord to it.
 class SeriesPublisher {
 public:
     // A placement node: at eth wall tick H the chip sits at root refclk tick `root`; r is the chip's own refclk it
-    // was placed at, tangent the run's rate on the root (root refclk ticks per wall tick), the map past the newest
-    // node.
+    // was placed at, tangent the rate on the root (root refclk ticks per wall tick) past it.
     struct Node {
         double H, root, r, tangent;
     };
-    // One chip's series. `knots` is how many run boundaries have their nodes, `last_r` the refclk of the newest node.
+    // One chip's series; `last_r` is the refclk of the newest instant published.
     struct Series {
         std::vector<Node> nodes;
-        size_t knots = 0;
         double last_r = -1.0;
-        size_t dropped = 0;  // nodes refused: behind the frozen series, or not a correction below one ns per ns
+        size_t dropped = 0;  // nodes refused: behind the frozen series, or not a rate
     };
 
     explicit SeriesPublisher(ClockMap& map) : map_(map) {}
     void reset() { series_.clear(); }
-    // Publishes one chip's series from its fit and root transform as they stand; true when a node was added.
-    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final = false);
+    // Publishes one chip's instants beyond its series' end, from its model and root transform as they stand; true
+    // when a node was added.
+    bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf);
     // A chip's series, null before its first publish.
     const Series* series(uint32_t dev) const {
         const auto it = series_.find(dev);
@@ -458,15 +329,6 @@ public:
     }
 
 private:
-    // The nodes a chip's fit yields beyond a series: those at run boundaries, and the open run's frontier.
-    struct Fresh {
-        std::vector<Node> knots;
-        std::optional<Node> frontier;
-        size_t knots_after = 0;  // run boundaries consumed once the knots are placed
-    };
-    Fresh fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf, bool final) const;
-    // Appends the knots, then the frontier. True when a node was added.
-    bool advance(Series& s, uint32_t chip, Fresh fresh);
     void append_node(Series& s, uint32_t chip, const Node& n);
     void push_node(Series& s, uint32_t chip, const Node& n);
 
@@ -498,7 +360,7 @@ private:
     // The fleet timeline's root: the chip the host probe reads, fixed for the capture.
     uint32_t root_dev() const { return ctx_.root_dev; }
     // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
-    bool publish_dev(uint32_t dev, bool final = false);
+    bool publish_dev(uint32_t dev);
     void publish_all();
     // The capture-end report: each chip's clock model, every link's solution, the loop closures; the sync error per
     // round and each chip's AICLK as plots.
@@ -516,12 +378,14 @@ private:
     void log_link_stats(const CaptureContext::Link& L, const LinkErrors& e, size_t rounds) const;
     void log_worst_rounds(const CaptureContext::Link& L, const LinkErrors& e) const;
     void write_err_csv(const CaptureContext::Link& L, const LinkErrors& e) const;
+    void write_model_csv() const;
     // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
     // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
     // abscissa. False when a chip has no fitted run or no node to place a stamp with.
     struct RoundTerms {
         double wall_a = 0, wall_b = 0, root_a = 0, root_b = 0;
         double res_a = 0, res_b = 0;  // each end's recorded pair against its chip's model, ns
+        double ref_a = 0, ref_b = 0, wraw_a = 0, wraw_b = 0;  // the pairs themselves
         uint32_t spins_a = 0, spins_b = 0;
     };
     // `anchored`: each end's wall from the (wall, refclk) pair its record carries, the wall clock at one refclk
