@@ -9,6 +9,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
+#include <optional>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
 #include "metal_env_accessor.hpp"
@@ -655,6 +656,29 @@ distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();
 }
+
+namespace {
+
+// Destroys a context created by MetalContext::create_instance() unless ownership reaches the mesh
+// device. https://github.com/tenstorrent/tt-metal/issues/57286
+class UnownedContextGuard {
+public:
+    explicit UnownedContextGuard(ContextId context_id) : context_id_(context_id) {}
+    UnownedContextGuard(const UnownedContextGuard&) = delete;
+    UnownedContextGuard& operator=(const UnownedContextGuard&) = delete;
+    ~UnownedContextGuard() {
+        if (context_id_.has_value()) {
+            MetalContext::destroy_instance(/*check_device_count=*/false, *context_id_);
+        }
+    }
+    void release() { context_id_.reset(); }
+
+private:
+    std::optional<ContextId> context_id_;
+};
+
+}  // namespace
+
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const distributed::MeshDeviceConfig& config,
     size_t l1_small_size,
@@ -671,6 +695,11 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    // A freshly created context has no owner until it is handed to the mesh device below.
+    std::optional<UnownedContextGuard> context_guard;
+    if (!env_owns_context) {
+        context_guard.emplace(context_id);
+    }
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
         config,
@@ -680,8 +709,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context) {
+    if (context_guard.has_value()) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard->release();
     }
     return mesh_device;
 }
@@ -697,6 +727,11 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    // A freshly created context has no owner until it is handed to the mesh device below.
+    std::optional<UnownedContextGuard> context_guard;
+    if (!env_owns_context) {
+        context_guard.emplace(context_id);
+    }
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
         device_id,
@@ -706,8 +741,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context) {
+    if (context_guard.has_value()) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard->release();
     }
     return mesh_device;
 }
@@ -723,6 +759,11 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    // A freshly created context has no owner until it is handed to the mesh device below.
+    std::optional<UnownedContextGuard> context_guard;
+    if (!env_owns_context) {
+        context_guard.emplace(context_id);
+    }
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
         device_ids,
@@ -732,9 +773,10 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!env_owns_context && !result.empty()) {
-        const auto& parent = result.begin()->second->get_parent_mesh();
-        if (parent) {
+    if (context_guard.has_value() && !result.empty()) {
+        // Devices are live, so the context must outlive them: release even without a parent to own it.
+        context_guard->release();
+        if (const auto& parent = result.begin()->second->get_parent_mesh()) {
             parent->impl().set_destroy_metal_context_instance_on_close(true);
         }
     }
