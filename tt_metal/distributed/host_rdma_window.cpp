@@ -110,28 +110,28 @@ std::unique_ptr<RdmaWindow> RdmaWindow::create(
         err = mpi_error_text("MPI_Win_create", rc);
         return nullptr;
     }
-:wq
+
     // The trailing flag needs the target to observe window memory with ordinary loads,
     // which is defined only under the unified model.
     int* model = nullptr;
-int flag = 0;
-MPI_Win_get_attr(im.win, MPI_WIN_MODEL, &model, &flag);
-if (flag == 0 || model == nullptr || *model != MPI_WIN_UNIFIED) {
-    err =
-        "RdmaWindow::create: this MPI provides a SEPARATE window memory model. The arrival "
-        "flag is read with an ordinary load on the target, which that model leaves undefined.";
-    MPI_Win_free(&im.win);
-    return nullptr;
-}
+    int flag = 0;
+    MPI_Win_get_attr(im.win, MPI_WIN_MODEL, &model, &flag);
+    if (flag == 0 || model == nullptr || *model != MPI_WIN_UNIFIED) {
+        err =
+            "RdmaWindow::create: this MPI provides a SEPARATE window memory model. The arrival "
+            "flag is read with an ordinary load on the target, which that model leaves undefined.";
+        MPI_Win_free(&im.win);
+        return nullptr;
+    }
 
-// Passive target for the whole run, so no access needs an epoch of its own.
-if (const int rc = MPI_Win_lock_all(MPI_MODE_NOCHECK, im.win); rc != MPI_SUCCESS) {
-    err = mpi_error_text("MPI_Win_lock_all", rc);
-    MPI_Win_free(&im.win);
-    return nullptr;
-}
-im.locked = true;
-return w;
+    // Passive target for the whole run, so no access needs an epoch of its own.
+    if (const int rc = MPI_Win_lock_all(MPI_MODE_NOCHECK, im.win); rc != MPI_SUCCESS) {
+        err = mpi_error_text("MPI_Win_lock_all", rc);
+        MPI_Win_free(&im.win);
+        return nullptr;
+    }
+    im.locked = true;
+    return w;
 }
 
 RdmaWindow::~RdmaWindow() {
