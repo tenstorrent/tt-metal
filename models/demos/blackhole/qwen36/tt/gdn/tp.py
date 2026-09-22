@@ -671,7 +671,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
-        if self._out_colpar_prefill and T > tpc.TILE_SIZE:
+        if self._out_colpar_prefill:
             # Column-parallel out-proj: the gate multiply emits the AGMM input directly as bf16 (the
             # only numerics change vs the fp32 MMRS arm: activation quantized to bf16 before the
             # matmul, as every other projection in the model already does; the K=6144 sum stays in
