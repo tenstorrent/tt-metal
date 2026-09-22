@@ -212,10 +212,10 @@ card:
     | profile | users | context | KV pool | 1 user tok/s | TTFT 128 / 8k / 32k tokens | pick it for |
     |---|---|---|---|---|---|---|
     | `tp2` (default) | 32 | 64K | 622K tokens | 17.1 | 0.3 s / 1.9 s / 8.2 s | speed, long prompts, many users, all sampling options |
-    | `p1d1` | 8 | 64K | 164K tokens | 10.2 | 0.5 s / 6.5 s / 26 s | steady per-token latency while long prompts keep arriving (decode never pauses for a prefill) |
+    | `p1d1` | 8 | 64K | 164K tokens | 13.6 | 0.4 s / 3.8 s / 16 s | steady per-token latency while long prompts keep arriving (decode never pauses for a prefill) |
     | `tp2-dflash2` | 4 | 64K | 262K tokens | 26.1 (52 on code) | 0.15 s / 2.1 s / 9.5 s | 1-4 greedy users, code, prompts under ~8k tokens |
 
-    * `tp2` is 1.7x faster per user than `p1d1` and has 3.8x the KV pool; `p1d1` keeps TPOT at 95-136 ms at 1-8 users across every prompt length, where `tp2` at 8 users degrades to 146-285 ms once prompts reach 16k-32k tokens.
+    * `tp2` is 1.3x faster per user than `p1d1` at 1 user and has 3.8x the KV pool; `p1d1` keeps TPOT at 71-88 ms at 1-8 users across every prompt length, where `tp2` at 8 users degrades to 146-285 ms once prompts reach 16k-32k tokens. At 8 users on prompts up to 4k tokens `p1d1` is within 5-10% of `tp2`'s aggregate throughput.
     * `tp2-dflash2` is lossless (greedy trajectory of `tp2` up to bf16 near-ties); its gain fades with prompt length (1.5x at 128 tokens, 1.05x at 32k) and grows with answer length (2.0-2.2x at 1k-token answers).
 
     ### Performance
@@ -252,25 +252,25 @@ card:
 
     | ISL / OSL | 1 user | 2 | 4 | 8 |
     |---|---|---|---|---|
-    | 128 / 128 | 10 (10.2) | 19 (9.4) | 33 (8.2) | 56 (7.1) |
-    | 1,024 / 128 | 10 (9.6) | 17 (8.5) | 29 (7.6) | 49 (6.4) |
-    | 2,048 / 128 | 9 (9.1) | 15 (7.7) | 27 (7.0) | 44 (6.0) |
-    | 4,096 / 128 | 8 (8.2) | 13 (6.5) | 22 (6.1) | 34 (4.5) |
-    | 8,192 / 128 | 7 (6.9) | 10 (5.0) | 15 (4.4) | 18 (2.6) |
-    | 16,384 / 128 | 5 (5.1) | 7 (3.3) | 9 (2.4) | 10 (1.4) |
-    | 32,768 / 128 | 3 (3.3) | 4 (1.9) | 4 (1.3) | - |
-    | 128 / 1,024 | 10 (10.5) | 20 (9.8) | 35 (8.7) | 62 (7.8) |
-    | 8,192 / 1,024 | 10 (9.7) | 17 (8.7) | 30 (7.7) | 50 (6.6) |
+    | 128 / 128 | 14 (13.6) | 25 (12.7) | 48 (12.1) | 86 (10.9) |
+    | 1,024 / 128 | 13 (12.9) | 24 (12.1) | 44 (11.3) | 75 (9.9) |
+    | 2,048 / 128 | 12 (12.5) | 23 (11.7) | 42 (10.8) | 71 (9.5) |
+    | 4,096 / 128 | 12 (11.5) | 21 (10.7) | 37 (9.8) | 56 (7.6) |
+    | 8,192 / 128 | 10 (9.8) | 17 (8.9) | 26 (7.4) | 29 (4.5) |
+    | 16,384 / 128 | 8 (7.6) | 12 (6.7) | 15 (4.3) | 16 (2.5) |
+    | 32,768 / 128 | 5 (5.0) | 6 (3.8) | 7 (2.6) | - |
+    | 128 / 1,024 | 14 (14.0) | 27 (13.5) | 52 (13.1) | 98 (12.3) |
+    | 8,192 / 1,024 | 13 (13.2) | 25 (12.5) | 46 (11.8) | 79 (10.4) |
 
     #### `p1d1`: TTFT ms / TPOT ms
 
     | ISL / OSL | 1 user | 8 users |
     |---|---|---|
-    | 128 / 128 | 465 / 95 | 1,059 / 135 |
-    | 2,048 / 128 | 1,924 / 95 | 4,537 / 133 |
-    | 8,192 / 128 | 6,454 / 96 | 34,963 / 110 |
-    | 32,768 / 128 | 26,369 / 97 | - |
-    | 128 / 1,024 | 470 / 95 | 1,208 / 128 |
+    | 128 / 128 | 354 / 71 | 659 / 87 |
+    | 2,048 / 128 | 1,176 / 71 | 2,285 / 88 |
+    | 8,192 / 128 | 3,823 / 72 | 18,379 / 80 |
+    | 32,768 / 128 | 16,274 / 74 | - |
+    | 128 / 1,024 | 362 / 71 | 759 / 80 |
 
     #### `tp2-dflash2` vs `tp2`, 1 user
 
