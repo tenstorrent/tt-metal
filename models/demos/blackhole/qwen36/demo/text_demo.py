@@ -782,7 +782,8 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         # Per-device local argmax + max value (untilize for multi-core argmax path)
         logits_rm = ttnn.to_layout(sharded_logits, ttnn.ROW_MAJOR_LAYOUT)
         idx = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
-        ttnn.deallocate(logits_rm)
+        if logits_rm is not sharded_logits:  # to_layout returns the input itself when it is already ROW_MAJOR
+            ttnn.deallocate(logits_rm)
         return idx, _maxval_dev(sharded_logits)
 
     _read_comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
@@ -1380,7 +1381,8 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
             # so this generalizes to Bn>1 unchanged from the B=1 version).
             logits_rm = ttnn.to_layout(sharded_logits, ttnn.ROW_MAJOR_LAYOUT)
             idx = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
-            ttnn.deallocate(logits_rm)
+            if logits_rm is not sharded_logits:  # to_layout returns the input itself when it is already ROW_MAJOR
+                ttnn.deallocate(logits_rm)
             return idx, _maxval_dev_b(sharded_logits, Bn)
 
         def _read_tok_b(idx_t, val_t, Bn):

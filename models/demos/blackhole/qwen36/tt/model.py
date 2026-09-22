@@ -119,7 +119,7 @@ class Qwen36Model:
             and (args.vocab_size // self.num_devices <= 64 * 1024)
         )
         if mesh_shape == (1, 1) and os.environ.get("QWEN36_ONDEV_SAMPLING_TP1", "0") == "1":
-            # TP=1 mode (lane C experiment): TTSampling runs a single device's vocab as power-of-two same-device
+            # TP=1 mode (experimental gate, default off): TTSampling runs a single device's vocab as power-of-two same-device
             # chunks of <= 64K (multi_step_reduction; 248320 -> 4 x 62080), so the 64K-per-device gate above does
             # not apply. Gate on the same split test TTSampling itself uses; validate greedy identity before use.
             from models.common.sampling.tt_sampling import TTSampling
@@ -254,8 +254,11 @@ class Qwen36Model:
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
         self._ondev_argmax = False
         # Host-sampling decode logits leave the device ROW_MAJOR and unpadded to the active width (see
-        # ttnn_decode_forward); QWEN36_DECODE_LOGITS_RM=0 keeps the padded TILE readback.
-        self._decode_logits_row_major = os.environ.get("QWEN36_DECODE_LOGITS_RM", "1") != "0"
+        # ttnn_decode_forward). Default ON only on a (1,1) mesh (TP=1 mode), where it was measured and validated
+        # (greedy identity corpus); the multi-device profiles keep the padded TILE readback until they are run with
+        # it. QWEN36_DECODE_LOGITS_RM=1 forces it on for any mesh, =0 forces the TILE readback.
+        _rm_env = os.environ.get("QWEN36_DECODE_LOGITS_RM")
+        self._decode_logits_row_major = (self.num_devices == 1) if _rm_env is None else (_rm_env != "0")
         self._paged_kv_caches = None
         # Positions in self.layers of full-attn layers (not checkpoint indices); drives KV cache bind.
         self._attention_layer_indices = [pos for pos, layer in enumerate(self.layers) if layer.is_full_attention]
@@ -5419,8 +5422,11 @@ class Qwen36Model:
             # Bare tensor (not a tuple): the traced path passes this straight to capture_trace().
             return logits
         logits = self._forward_decode(tokens, cos, sin, current_pos, page_table)
-        if self._decode_logits_row_major:
-            # Host-sampling readback: the lm_head output is a TILE tensor padded to 32 rows, so `.cpu()` moves the
+        if self._decode_logits_row_major and not self._ondev_argmax:
+            # Host-sampling readback ONLY: with _ondev_argmax the caller consumes the pre-gather TILE shards on device
+            # (text_demo's per-shard argmax/max; ttnn.to_layout on an already-ROW_MAJOR tensor returns the same
+            # object and the demo would free the decode output). The lm_head output is a TILE tensor padded to 32
+            # rows, so `.cpu()` moves the
             # whole 32 x vocab buffer (15.9 MB at vocab 248320) and to_torch untilizes it on the host, per step,
             # whatever the active width B. Untilize + unpad ON DEVICE to ROW_MAJOR [1,1,B,vocab] (a pure data
             # movement, bit-exact) so the host reads B x vocab bf16 (0.5 MB per user) and converts with a memcpy.

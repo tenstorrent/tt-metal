@@ -8,6 +8,7 @@ shard/replicate, FP8 dequant, HF weight reorder for per-device sharding. The fus
 wrappers (all_gather_*_prefill, matmul_reduce_scatter_*) are multi-device only; TP=1 callers use
 `prefill_matmul_plain` (the same matmul on the already-full-K activation, no gather).
 """
+
 import math
 import os
 
@@ -176,16 +177,23 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, grid_h=None):
     """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
     the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
 
     Grid is shaped WIDE-first (cols up to `grid_w`, the device worker-grid width — 11 on BH P150, 8 on
     WH): for a fixed core budget a wide-short grid shortens the in0 multicast column and beats a
     tall-narrow one (~2% on this matmul; see test_mlp_matmul_sweep wide1d_* vs forced1d_*). Default
-    grid_w=8 preserves the legacy shaping for callers that don't pass the device width."""
+    grid_w=8 preserves the legacy shaping for callers that don't pass the device width. `grid_h` (the
+    device worker-grid height, 10 on BH P150) makes an over-tall grid fail here with a legible message
+    instead of inside the matmul op (e.g. 110 cores on an 8-wide WH grid would need 14 rows)."""
     cols = min(grid_w, num_cores)
     rows = math.ceil(num_cores / cols)
+    if grid_h is not None and rows > grid_h:
+        raise ValueError(
+            f"1D decode matmul grid for {num_cores} cores needs {cols}x{rows} but the device grid is {grid_w}x{grid_h} "
+            f"(shape m={m} k={k} n={n})"
+        )
     m_tiles = math.ceil(m / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
@@ -516,7 +524,9 @@ def _agmm_pre_barrier(x4, tt_ccl, topology, cluster_axis):
     key = (id(tt_ccl), tt_ccl.mesh_device.id(), cluster_axis)  # per CCL manager AND mesh device (tests reopen devices)
     t = _AGMM_BARRIER_TENSORS.get(key)
     if t is None:
-        logger.info(f"[AGMM] Python entry barrier (QWEN36_AGMM_BARRIER=1) active: topology={topology} axis={cluster_axis}")
+        logger.info(
+            f"[AGMM] Python entry barrier (QWEN36_AGMM_BARRIER=1) active: topology={topology} axis={cluster_axis}"
+        )
         t = ttnn.from_torch(
             torch.zeros((1, 1, TILE_SIZE, TILE_SIZE), dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
