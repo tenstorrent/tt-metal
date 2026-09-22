@@ -24,8 +24,9 @@ from models.demos.llama31_8b_qb2.tt.model import Checkpoint, checkpoint_path
 from models.demos.llama31_8b_qb2.tt.precision import load_precision_config
 
 
+@pytest.mark.parametrize("gu_workers", [8, 16])
 @pytest.mark.parametrize("reuse_scratch", [False, True], ids=["separate", "shared"])
-def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch):
+def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch, gu_workers):
     mesh = qb2_mesh
     torch.set_num_threads(8)
     folder = checkpoint_path()
@@ -47,7 +48,7 @@ def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch):
         workspace = layer.prepare_decode(1, workspace=workspace)
         layers.append(layer)
     assert layers[0].decode_weights["gate_up"].buffer_address() != layers[1].decode_weights["gate_up"].buffer_address()
-    body = FusedMLP(layers, reuse_scratch=reuse_scratch)
+    body = FusedMLP(layers, reuse_scratch=reuse_scratch, gu_workers=gu_workers)
     embedding = checkpoint.load(["model.embed_tokens.weight"])["model.embed_tokens.weight"]
     results = []
     destination = (
@@ -64,7 +65,7 @@ def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch):
             if destination:
                 torch.save(
                     {"actual": a, "expected": b, "layer": layer, "token": token, "stage": stage},
-                    destination / f"mlp-failure-layer{layer}-{stage}-shared{reuse_scratch}.pt",
+                    destination / f"mlp-failure-layer{layer}-{stage}-shared{reuse_scratch}-gu{gu_workers}.pt",
                 )
             raise
         results.append({"layer": layer, "token": token, "stage": stage, **result})
@@ -114,5 +115,7 @@ def test_mlp_stages_real_weights(qb2_mesh, reuse_scratch):
             finally:
                 ttnn.release_trace(mesh, trace)
     if destination:
-        (destination / f"mlp-stage-comparison-shared{reuse_scratch}.json").write_text(json.dumps(results, indent=2))
+        (destination / f"mlp-stage-comparison-shared{reuse_scratch}-gu{gu_workers}.json").write_text(
+            json.dumps(results, indent=2)
+        )
     print(json.dumps(results, indent=2), flush=True)

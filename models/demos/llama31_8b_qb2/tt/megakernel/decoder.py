@@ -19,10 +19,20 @@ class ExperimentalDecoder(LlamaDecoder):
             ttnn.to_memory_config(projected, self.local_residual_memcfg),
             memory_config=self.local_residual_memcfg,
         )
-        normalized = self._norm_input(residual, decode=True, site="mlp")
+        normalized = (
+            self._ag(residual, decode=True, site="mlp")
+            if self.fusion_mode == "norm_mlp_tail"
+            else self._norm_input(residual, decode=True, site="mlp")
+        )
         normalized = ttnn.to_memory_config(normalized, self.decode_inputs["gate_up"])
-        if self.fusion_mode in ("mlp", "mlp_reduce"):
-            local_down = self.fused_body(normalized, self.fused_layer_index)
+        if self.fusion_mode in ("mlp", "mlp_reduce", "mlp_tail", "norm_mlp_tail"):
+            local_down = self.fused_body(
+                normalized,
+                self.fused_layer_index,
+                residual=residual if self.fusion_mode in ("mlp_tail", "norm_mlp_tail") else None,
+            )
+            if self.fusion_mode in ("mlp_tail", "norm_mlp_tail"):
+                return local_down
             down = local_down if self.fusion_mode == "mlp_reduce" else self._rs(local_down, decode=True, site="down")
         else:
             packed = self._decode_linear(normalized, "gate_up")
@@ -36,18 +46,28 @@ class ExperimentalDecoder(LlamaDecoder):
         return ttnn.typecast(result, self.residual_dtype) if result.dtype != self.residual_dtype else result
 
 
-def experimental_layers(layers, *, mode="mlp", reuse_scratch=False):
+def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8):
     """Share original weights, KV ownership and workspace, with explicit opt-in.
 
     Construct before warming or capturing any trace. The caller owns the
     resulting layers and must retain them until all referencing traces release.
     Prefill is inherited unchanged. This does not fuse the complete decoder.
     """
-    if mode not in ("swiglu", "mlp", "mlp_reduce"):
-        raise ValueError("mode must be swiglu, mlp or mlp_reduce")
+    if mode not in ("swiglu", "mlp", "mlp_reduce", "mlp_tail", "norm_mlp_tail"):
+        raise ValueError("mode must be swiglu, mlp, mlp_reduce or mlp_tail")
     if not layers or any(layer.decode_workspace.batch != 1 for layer in layers):
         raise ValueError("Experimental decode supports only prepared batch-one layers")
-    body = FusedMLP(layers, reuse_scratch=reuse_scratch, fuse_reduce=mode == "mlp_reduce") if mode != "swiglu" else None
+    body = (
+        FusedMLP(
+            layers,
+            reuse_scratch=reuse_scratch,
+            fuse_reduce=mode in ("mlp_reduce", "mlp_tail", "norm_mlp_tail"),
+            fuse_norm=mode == "norm_mlp_tail",
+            gu_workers=gu_workers,
+        )
+        if mode != "swiglu"
+        else None
+    )
     result = []
     for index, layer in enumerate(layers):
         adapted = copy(layer)
@@ -59,7 +79,7 @@ def experimental_layers(layers, *, mode="mlp", reuse_scratch=False):
     return result
 
 
-def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False):
+def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_workers=8):
     """Install the same body across all 32 layers before generator trace setup.
 
     The embedding, final norm, head and sampler remain the existing traced
@@ -68,5 +88,5 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False):
     """
     if model.max_batch_size != 1 or set(model.decode_families) != {1}:
         raise ValueError("Only a batch-one model without additional families is supported")
-    model.layers = experimental_layers(model.layers, mode=mode, reuse_scratch=reuse_scratch)
+    model.layers = experimental_layers(model.layers, mode=mode, reuse_scratch=reuse_scratch, gu_workers=gu_workers)
     model.decode_families[1] = model.layers

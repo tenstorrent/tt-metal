@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Fixed eight-core native RMSNorm arithmetic for composition in the QB2 body."""
+
+from pathlib import Path
+import struct
+import ttnn
+from .mlp import _grid
+
+
+class FusedNorm:
+    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False):
+        self.mesh = mesh
+        self.epsilon = struct.unpack("I", struct.pack("f", epsilon))[0]
+        self.cores = [ttnn.CoreCoord(x, 5) for x in range(8)]
+        self.grid = _grid(self.cores)
+        self.debug = {}
+        if debug:
+            from .mlp import _width_memory
+
+            for index in (0, 5, 7, 8, 11):
+                self.debug[index] = ttnn.empty(
+                    (1, 1, 32, 4096 if index in (0, 5) else 256),
+                    dtype=ttnn.bfloat16 if index == 0 else ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    memory_config=_width_memory(self.cores, 4096 if index in (0, 5) else 256),
+                )
+        self.output = ttnn.empty(
+            (1, 1, 1, 4096),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=output_memory_config,
+        )
+
+    def append(self, program, input_tensor, projection_cores=()):
+        if tuple(input_tensor.shape) != (1, 1, 1, 4096) or input_tensor.dtype != ttnn.bfloat16:
+            raise ValueError("Norm requires batch-one BF16 width4096")
+        coords = [self.mesh.worker_core_from_logical_core(c) for c in self.cores]
+        common = [v for c in coords for v in (c.x, c.y)]
+        if projection_cores:
+            c = self.mesh.worker_core_from_logical_core(projection_cores[0])
+            common.extend([c.x, c.y])
+        rt = ttnn.RuntimeArgs()
+        for rank, c in enumerate(self.cores):
+            rt[c.x][c.y] = [rank, input_tensor.buffer_address(), self.output.buffer_address(), self.epsilon, *common]
+        ct = (
+            ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(self.output).get_compile_time_args()
+        )
+        source = Path(__file__).with_name("kernels")
+        kernels = list(program.kernels)
+        for role, config in [("READER", ttnn.ReaderConfigDescriptor()), ("WRITER", ttnn.WriterConfigDescriptor())]:
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(source / "norm_dataflow.cpp"),
+                    core_ranges=self.grid,
+                    compile_time_args=ct,
+                    runtime_args=rt,
+                    defines=[(role, "1")] + ([("FUSE_NORM", "1")] if projection_cores else []),
+                    config=config,
+                )
+            )
+        for cores, defines in [(self.cores[:1], [("IS_ALLGATHER_WORKER", "1")]), (self.cores[1:], [])]:
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(source / "norm_compute.cpp"),
+                    core_ranges=_grid(cores),
+                    defines=defines,
+                    config=ttnn.ComputeConfigDescriptor(
+                        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+                    ),
+                )
+            )
+        cbs = list(program.cbs)
+        for index, tiles, dtype in [
+            (0, 16, ttnn.bfloat16),
+            (2, 1, ttnn.bfloat16),
+            (3, 1, ttnn.bfloat16),
+            (4, 1, ttnn.float32),
+            (5, 16, ttnn.float32),
+            (6, 16, ttnn.float32),
+            (7, 1, ttnn.float32),
+            (8, 1, ttnn.float32),
+            (9, 8, ttnn.float32),
+            (10, 1, ttnn.float32),
+            (11, 1, ttnn.float32),
+            (16, 16, ttnn.bfloat16),
+        ]:
+            if index in self.debug:
+                cbs.append(ttnn.cb_descriptor_from_sharded_tensor(index, self.debug[index]))
+                continue
+            size = ttnn.Tile([32, 32]).get_tile_size(dtype)
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=tiles * size,
+                    core_ranges=self.grid,
+                    format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=size)],
+                )
+            )
+        program.kernels = kernels
+        program.cbs = cbs
+        return program
+
+    def __call__(self, input_tensor):
+        program = ttnn.ProgramDescriptor(
+            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=self.grid, initial_value=0) for i in range(10)]
+        )
+        return ttnn.generic_op([input_tensor, *self.debug.values(), self.output], self.append(program, input_tensor))

@@ -34,19 +34,23 @@ class FusedMLP:
     valid only until the next invocation, matching the decoder workspace rule.
     """
 
-    def __init__(self, layers, *, reuse_scratch=False, fuse_reduce=False):
+    def __init__(self, layers, *, reuse_scratch=False, fuse_reduce=False, gu_workers=8, fuse_norm=False):
         if not layers or len(layers) > 32:
             raise ValueError("Provide one to 32 decoder layers")
+        if gu_workers not in (8, 16):
+            raise ValueError("gu_workers must be 8 or 16")
+        self.gu_workers = gu_workers
         self.layers = tuple(layers)
         self.reuse_scratch = reuse_scratch
         self.fuse_reduce = fuse_reduce
+        self.fuse_norm = fuse_norm
         self.mesh = layers[0].mesh_device
         if self.mesh.arch() != ttnn.device.Arch.BLACKHOLE or self.mesh.dram_grid_size().x != 8:
             raise ValueError("Fused MLP requires Blackhole with eight DRAM banks")
         grid = self.mesh.compute_with_storage_grid_size()
-        if grid.x < 8 or grid.y < (5 if fuse_reduce else 4):
+        if grid.x < 8 or grid.y < (6 if fuse_norm else 5 if fuse_reduce else 4):
             raise ValueError("Fused MLP needs eight columns and four worker rows (five with reduction)")
-        self.projection_cores = [ttnn.CoreCoord(x, 3) for x in range(8)]
+        self.projection_cores = [ttnn.CoreCoord(x, y) for y in range(4 - gu_workers // 8, 4) for x in range(8)]
         self.sfpu_cores = ttnn.corerange_to_cores(layers[0].decode_inputs["down"].shard_spec.grid, row_wise=True)
         if len(self.sfpu_cores) != 16 or any(c in self.sfpu_cores for c in self.projection_cores):
             raise ValueError("Projection and sixteen-core down-input grids must be disjoint")
@@ -56,7 +60,8 @@ class FusedMLP:
         self.projection_grid = _grid(self.projection_cores)
         self.sfpu_grid = _grid(self.sfpu_cores)
         self.communication_cores = [ttnn.CoreCoord(x, 4) for x in range(2)] if fuse_reduce else []
-        self.all_grid = _grid(self.projection_cores + self.sfpu_cores + self.communication_cores)
+        self.norm_cores = [ttnn.CoreCoord(x, 5) for x in range(8)] if fuse_norm else []
+        self.all_grid = _grid(self.projection_cores + self.sfpu_cores + self.communication_cores + self.norm_cores)
 
         for layer in layers:
             policy = layer.precision_policy
@@ -103,6 +108,11 @@ class FusedMLP:
         self.packed = empty(7168, _width_memory(self.projection_cores, 7168))
         self.product = empty(3584, layers[0].decode_inputs["down"])
         self.output = empty(4096, layers[0].residual_memcfg)
+        self.normalizer = None
+        if fuse_norm:
+            from .norm import FusedNorm
+
+            self.normalizer = FusedNorm(self.mesh, layers[0].decode_inputs["gate_up"], layers[0].eps)
         self.reduction = None
         if fuse_reduce:
             from .reduce_scatter import CompactReduceScatter
@@ -216,7 +226,9 @@ class FusedMLP:
                         core_ranges=grid,
                         compile_time_args=ct,
                         runtime_args=rt,
-                        defines=[(role, "1"), (risc, "1")] + ([("FUSE_REDUCE", "1")] if self.fuse_reduce else []),
+                        defines=[(role, "1"), (risc, "1"), ("GU_WORKERS", str(self.gu_workers))]
+                        + ([("FUSE_REDUCE", "1")] if self.fuse_reduce else [])
+                        + ([("FUSE_NORM", "1")] if self.fuse_norm else []),
                         config=config,
                     )
                 )
@@ -239,11 +251,11 @@ class FusedMLP:
 
         for index, tiles, dtype in (
             (0, 16, ttnn.bfloat16),
-            (1, 224 if self.reuse_scratch else 448, ttnn.bfloat4_b),
+            (1, (224 if self.reuse_scratch else 448) * 8 // self.gu_workers, ttnn.bfloat4_b),
             (3, 112 if self.reuse_scratch else 224, ttnn.bfloat8_b),
             (4, 14, ttnn.bfloat16),
             (17, 16, ttnn.bfloat16),
-            (24, 28, ttnn.bfloat16),
+            (24, 224 // self.gu_workers, ttnn.bfloat16),
             (25, 16, ttnn.bfloat16),
         ):
             cb(index, tiles, dtype, self.projection_grid)
@@ -258,27 +270,41 @@ class FusedMLP:
         )
         semaphores = [
             ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_grid, initial_value=0)
-            for i in range(6 if self.fuse_reduce else 4)
+            for i in range(10 if self.fuse_norm else 6 if self.fuse_reduce else 4)
         ]
         return ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
 
-    def __call__(self, normalized, layer_index):
+    def __call__(self, normalized, layer_index, residual=None):
+        if residual is not None and self.reduction is None:
+            raise ValueError("Residual fusion requires four-chip reduction")
+        norm_input = normalized
+        if self.normalizer is not None:
+            normalized = self.normalizer.output
         if self.reduction is None:
             descriptor = self.descriptor(normalized, layer_index)
+            if self.normalizer is not None:
+                descriptor = self.normalizer.append(descriptor, norm_input, self.projection_cores)
         else:
             descriptor = ttnn.MeshProgramDescriptor()
             for rank in range(4):
                 coord = ttnn.MeshCoordinate(0, rank)
                 local = self.descriptor(normalized, layer_index)
+                if self.normalizer is not None:
+                    local = self.normalizer.append(local, norm_input, self.projection_cores)
                 descriptor[ttnn.MeshCoordinateRange(coord, coord)] = self.reduction.append(
                     local,
                     self.output,
                     rank,
                     wait_for_mlp=True,
+                    residual=residual,
                 )
         # Keep every table-referenced weight resident; the returned scratch is
         # consumed by reduce-scatter before the next decoder invokes this body.
         io = [normalized, self.address_table, self.packed, self.product, *self.scratch_storage]
+        if self.normalizer is not None:
+            io.append(norm_input)
+        if residual is not None:
+            io.append(residual)
         io.extend(w for layer in self.layers for w in (layer.decode_weights["gate_up"], layer.decode_weights["down"]))
         if self.reduction is None:
             ttnn.generic_op([*io, self.output], descriptor)

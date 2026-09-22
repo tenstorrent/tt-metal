@@ -45,7 +45,9 @@ def metrics(actual, expected):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("baseline", "swiglu", "mlp", "mlp_reduce"), required=True)
+    parser.add_argument(
+        "--mode", choices=("baseline", "swiglu", "mlp", "mlp_reduce", "mlp_tail", "norm_mlp_tail"), required=True
+    )
     parser.add_argument("--context", type=int, default=128)
     parser.add_argument("--tokens", type=int, default=32)
     parser.add_argument("--repeats", type=int, default=3)
@@ -60,6 +62,7 @@ def parse_args():
         help="Optional HF accuracy gate; otherwise report BF16-reference drift separately from matched TT checks",
     )
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--gu-workers", type=int, choices=(8, 16), default=8)
     parser.add_argument("--reuse-mlp-scratch", action="store_true")
     args = parser.parse_args()
     if args.reuse_mlp_scratch and args.mode != "mlp":
@@ -91,6 +94,7 @@ def run(args):
     result = {
         "mode": args.mode,
         "reuse_mlp_scratch": args.reuse_mlp_scratch,
+        "gu_workers": args.gu_workers,
         "sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "source_status": subprocess.check_output(["git", "status", "--short"], text=True),
         "checkpoint_revision": REVISION,
@@ -116,7 +120,9 @@ def run(args):
         )
         generator = LlamaGenerator(mesh, max_batch_size=1, trace_prefill=False, record_token_history=True)
         if args.mode != "baseline":
-            enable_experimental_decode(generator.model, mode=args.mode, reuse_scratch=args.reuse_mlp_scratch)
+            enable_experimental_decode(
+                generator.model, mode=args.mode, reuse_scratch=args.reuse_mlp_scratch, gu_workers=args.gu_workers
+            )
         assert generator.model.num_layers == 32
         result["precision"] = generator.model.precision_policy
         evidence["precision"] = result["precision"]

@@ -54,8 +54,15 @@ def copy_to(value, target, mesh):
 
 @pytest.mark.parametrize(
     "mode,reuse_scratch",
-    [("swiglu", False), ("mlp", False), ("mlp", True), ("mlp_reduce", False)],
-    ids=["swiglu", "mlp", "mlp_shared", "mlp_reduce"],
+    [
+        ("swiglu", False),
+        ("mlp", False),
+        ("mlp", True),
+        ("mlp_reduce", False),
+        ("mlp_tail", False),
+        ("norm_mlp_tail", False),
+    ],
+    ids=["swiglu", "mlp", "mlp_shared", "mlp_reduce", "mlp_tail", "norm_mlp_tail"],
 )
 def test_fused_layer_real_weights(qb2_mesh, mode, reuse_scratch):
     torch.set_num_threads(8)
@@ -73,13 +80,15 @@ def test_fused_layer_real_weights(qb2_mesh, mode, reuse_scratch):
         ccl=TT_CCL(mesh),
     )
     baseline.prepare_decode(1)
-    prototype = experimental_layers([baseline], mode=mode, reuse_scratch=reuse_scratch)[0]
+    gu_workers = int(os.environ.get("QB2_GU_WORKERS", "8"))
+    prototype = experimental_layers([baseline], mode=mode, reuse_scratch=reuse_scratch, gu_workers=gu_workers)[0]
     embedding = checkpoint.load(["model.embed_tokens.weight"])["model.embed_tokens.weight"]
     ids = torch.randint(0, config.vocab_size, (1, 259), generator=torch.Generator().manual_seed(35))
     hidden = embedding[ids]
     results = {
         "mode": mode,
         "reuse_scratch": reuse_scratch,
+        "gu_workers": gu_workers,
         "batch": 1,
         "checkpoint": str(folder),
         "precision": baseline.precision_policy,

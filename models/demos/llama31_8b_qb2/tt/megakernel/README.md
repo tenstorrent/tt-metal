@@ -132,3 +132,36 @@ context, and continue normalization/attention fusion. Full decoder, device
 Verify complete operation coverage for device profiling. The current
 `--device-trace-profiler` flag aggregates whole traces and must be used
 separately from per-operation reporting. No serving result is claimed.
+
+## Native RMSNorm and residual composition (2026-09-22 14:28 UTC)
+
+New verified `norm_mlp_tail` mode combines current native HiFi4/FP32 RMSNorm
+arithmetic, quantized MLP, four-chip reduce-scatter and BF16 residual addition.
+Metal2 DataflowBuffer uses the same Blackhole CB interface; fixed named argument
+bindings allow reusing native norm compute code with a composable data path.
+Input-ready waits and zero initialization of masked statistics are explicit.
+Initial norm failures and intermediate dumps are preserved; final native norm
+outputs are bitwise exact across3 real token embeddings and8 replay iterations.
+Complete-layer12 page-growth/remap checks and all32-layer context128 pass:
+logits/all64 KV tensors exact,greedy32/32,3 stable repeats. Host9.336578ms/token
+versus baseline8.785510; still slower. Separate `mlp_tail` (no fused norm) gives
+9.133671ms/token and the same exact model evidence.
+
+The optional `--gu-workers 16` experiment also passes real layers0/31, paged
+layer checks and full model, but is slower at9.383494ms/token. Default stays8.
+Coverage-qualified device profiling: baseline999 operations/device/window
+(968 model+31 sampling) in all3 windows, no missing durations. Baseline device3
+median summed kernel time8.525387ms and full firmware span9.393458ms at1350MHz.
+GU16 MLP+reduction median kernel sum9.091880ms, firmware span9.853521ms, also
+complete windows/no missing durations. Profiling is separate from host timing.
+Summed firmware durations overlap across programs and are not latency.
+Artifacts: profile-baseline-drained/, profile-gu16-drained/, their coverage.json
+and concise decode-*-summary.csv from tt-perf-report1.3.0.
+
+Measured GU16 synchronization zones over3x32layersx4chips: coordinator GU wait
+median4.029us/p959.388us; down-ready barrier0.348us/p950.351us. Other phase
+durations in phase-durations.json; they overlap and must not be summed. No
+hardware DRAM-traffic count or serving benchmark yet. Next: context2048 baseline
+and matched prototype; fuse all-gather using the existing two fabric workers
+and connections, then projection/attention toward a complete decoder body.
+Full decoder and device32-layer loop remain incomplete.

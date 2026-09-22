@@ -37,7 +37,7 @@ class CompactReduceScatter:
         self.addresses = [ttnn.get_global_semaphore_address(s) for s in self.semaphores]
         ttnn.synchronize_device(mesh)
 
-    def append(self, program, input_tensor, rank, *, wait_for_mlp=False):
+    def append(self, program, input_tensor, rank, *, wait_for_mlp=False, residual=None):
         if tuple(input_tensor.shape) != (1, 1, 1, 4096) or input_tensor.dtype != ttnn.bfloat16:
             raise ValueError("Expected BF16 batch-one four-way reduction input")
         # All descriptors in this body use disjoint worker cores. The local MLP
@@ -50,12 +50,20 @@ class CompactReduceScatter:
         )
         accessor = lambda t: ttnn.TensorAccessorArgs(t).get_compile_time_args()
         reader_ct = [2048, 8, 4, 32, 32, 128, 4, 0, 1, 1, 0] + accessor(input_tensor) + accessor(self.output)
+        residual_offset = len(reader_ct)
+        if residual is not None:
+            reader_ct += accessor(residual)
         writer_ct = [2048, 8, 4, 32, 4, 4, 0, 16, 1, 0, 1] + accessor(self.output) + accessor(self.output)
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         kernel_base = len(program.kernels)
         additions = [
             ttnn.KernelDescriptor(
                 kernel_source=source_reader,
+                defines=(
+                    [("FUSE_RESIDUAL", "1"), ("RESIDUAL_CT_OFFSET", str(residual_offset))]
+                    if residual is not None
+                    else []
+                ),
                 core_ranges=self.grid,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
@@ -70,7 +78,11 @@ class CompactReduceScatter:
                 defines=[("LOCAL_STAGING_CB", "1")],
             ),
             ttnn.KernelDescriptor(
-                kernel_source=native + "reduce_scatter_minimal_direct_compute.cpp",
+                kernel_source=(
+                    str(Path(__file__).with_name("kernels") / "reduce_compute.cpp")
+                    if residual is not None
+                    else native + "reduce_scatter_minimal_direct_compute.cpp"
+                ),
                 core_ranges=self.grid,
                 compile_time_args=[8, 4, 1, 16, 0],
                 runtime_args=compute_rt,
@@ -79,7 +91,7 @@ class CompactReduceScatter:
         ]
         program.kernels = [*program.kernels, *additions]
         cbs = list(program.cbs)
-        for index in (0, 16):
+        for index in ((0, 16, 2, 17) if residual is not None else (0, 16)):
             cbs.append(
                 ttnn.CBDescriptor(
                     total_size=16 * 2048,
@@ -122,6 +134,8 @@ class CompactReduceScatter:
                 *[self.addresses[s] for s in range(4) if s != rank],
                 *[d[0] for d in destinations],
             ]
+            if residual is not None:
+                reader_rt[core.x][core.y] = [*reader_rt[core.x][core.y], residual.buffer_address()]
             compute_rt[core.x][core.y] = [2, 16, self.addresses[6]]
             args = [
                 0,
