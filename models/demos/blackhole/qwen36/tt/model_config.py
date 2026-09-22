@@ -315,8 +315,9 @@ class Qwen36ModelArgs(ModelArgs):
         # a pure partition of N): gate/up bf4 [5120,17408] 186.5 -> 177.3 us on the full 11x10 grid (per_core_N 5);
         # down bf8 [17408,5120] 269 -> 249 us, wo [8192,5120] 130 -> 121 us and gdn_out [6144,5120] 99 -> 92 us on
         # an 11x3 grid (per_core_N 5); qkvzab [5120,16480] 254 -> 244 us (11x10); attn qkv [5120,14336] 242 -> 215 us
-        # (11x9). ~4 ms of a ~74 ms fused-GDN decode step. Opt-in via QWEN36_TP1_DECODE_GRIDS=1 until validated e2e.
-        _tp1_grids = tp == 1 and os.environ.get("QWEN36_TP1_DECODE_GRIDS", "0") == "1"
+        # (11x9). ~4 ms of a ~74 ms fused-GDN decode step; served TPOT 77.2 -> 75.1 ms (1 user), 90.3 -> 87.4 (8 users), greedy
+        # streams identical to the previous grids on the 21-prompt corpus. QWEN36_TP1_DECODE_GRIDS=0 restores the old grids.
+        _tp1_grids = tp == 1 and os.environ.get("QWEN36_TP1_DECODE_GRIDS", "1") == "1"
         _gu_cores = (110 if _tp1_grids else 77) if tp == 1 else 44
         _rp_cores = (32 if _tp1_grids else 44) if tp == 1 else 33
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
