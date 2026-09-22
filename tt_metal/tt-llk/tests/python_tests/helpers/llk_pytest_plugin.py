@@ -222,6 +222,14 @@ def pytest_addoption(parser):
         "Reporting only: it cannot change a verdict.",
     )
     parser.addoption(
+        "--ulp-emit",
+        action="store_true",
+        help="Re-measure rather than gate: the exhaustive unary sweep records what it "
+        "measures and folds it back into helpers/sfpu_accuracy_budget.yaml at the end "
+        "of the session, replacing each swept op's rows. Writes the table; use it "
+        "deliberately.",
+    )
+    parser.addoption(
         "--ulp-report",
         action="store_true",
         help="Log the measured ULP distance for every comparison on a ULP-capable "

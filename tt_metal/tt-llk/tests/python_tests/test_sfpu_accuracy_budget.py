@@ -655,7 +655,7 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
     # variant and 15616 in another, purely from block composition. So the assertion is
     # not a list of ops but the property that makes one safe -- every enrolled Bfp8_b
     # budget stays inside the format's usable ceiling, which is what a block-quantized
-    # cell cannot do. The 408 cells that measured past it are not enrolled.
+    # cell cannot do. Measured: 161 Bfp8_b cells clear it and are enrolled.
     ceiling = usable_budget_ceiling(DataFormat.Bfp8_b)
     for op in enrolled_ops():
         for fmt, contract in _every_variant(op):

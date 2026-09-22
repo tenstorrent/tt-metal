@@ -138,8 +138,12 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The same lookup the unary and binary drivers make. This file had none, so the five Scalar*
-    # ops could not be ULP-gated at all, whatever the registry declared.
+    # The same lookup the unary, binary and ternary drivers make, and the same arm: the
+    # registry's *tolerance*, not its step budgets. This file had no lookup at all, so
+    # the five Scalar* ops could not even pick up a declared tolerance. The budgets stay
+    # with the exhaustive sweep that measured them -- one derived from a whole format is
+    # far wider than this driver's sampled domain, so enforcing it here would loosen the
+    # gate rather than tighten it.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
@@ -151,7 +155,7 @@ def _run_sfpu_binop_scalar(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 
