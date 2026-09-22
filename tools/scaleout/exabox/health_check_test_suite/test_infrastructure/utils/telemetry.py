@@ -82,6 +82,23 @@ _VALUE_METRICS = frozenset(
 )
 
 
+def _write_dump(dump_path: Path, body: bytes) -> None:
+    """Keep the endpoint's reply on disk, as the bytes it arrived as.
+
+    ``resp.text`` would decode with whatever encoding requests guessed and
+    ``write_text`` re-encode with the locale's, which loses exactly the
+    malformed reply the dump is most wanted for. An unwritable results_dir is
+    logged rather than raised: this is an artifact, not the run's verdict.
+    """
+    try:
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_path.write_bytes(body)
+    except OSError as exc:
+        log.warning("Could not write raw telemetry to %s: %s", dump_path, exc)
+    else:
+        log.info("Raw telemetry (%d bytes) written to %s", len(body), dump_path)
+
+
 def collect_prometheus_metrics(
     port: int = SLURM_TELEMETRY_PORT, dump_path: Path | None = None
 ) -> dict[str, list[dict]] | None:
@@ -100,6 +117,13 @@ def collect_prometheus_metrics(
     """
     url = f"http://localhost:{port}/metrics"
 
+    if dump_path is not None:
+        # Dropped before the request, not after a failed one: the requeue from a
+        # self-heal reboot keeps the job id and so reuses results_dir, and a
+        # scrape taken just after that reboot is the likeliest one to fail. The
+        # previous run's dump would then be attached as this run's telemetry.
+        dump_path.unlink(missing_ok=True)
+
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -108,9 +132,7 @@ def collect_prometheus_metrics(
         return None
 
     if dump_path is not None:
-        dump_path.parent.mkdir(parents=True, exist_ok=True)
-        dump_path.write_text(resp.text)
-        log.info("Raw telemetry (%d bytes) written to %s", len(resp.text), dump_path)
+        _write_dump(dump_path, resp.content)
 
     metrics: dict[str, list[dict]] = {}
     for family in text_string_to_metric_families(resp.text):
