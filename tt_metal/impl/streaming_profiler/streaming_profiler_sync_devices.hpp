@@ -30,7 +30,7 @@ namespace tt {
 class Cluster;
 }
 namespace tt::umd {
-class TlbWindow;
+class IoWindow;
 }
 
 namespace tt::tt_metal {
@@ -109,7 +109,7 @@ private:
     const uint32_t chip_id_;
     ClockMap& map_;
     uint32_t pcie_x_ = 0, pcie_y_ = 0;  // translated
-    tt::umd::TlbWindow* window_ = nullptr;
+    std::unique_ptr<tt::umd::IoWindow> window_;
     uint32_t cfr_hi_ = 0, cfr_lo_last_ = 0;
     double ticks_per_ns_ = 0.0;
     int64_t rtt_floor_ = std::numeric_limits<int64_t>::max();  // fastest read round trip seen, TSC ticks

@@ -20,9 +20,9 @@
 #include <fmt/format.h>
 #include <numa.h>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <umd/device/cluster.hpp>
-#include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/io_window/io_window.hpp>
+#include <umd/device/types/io_window_config.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 #include <tt-metalium/allocator.hpp>
@@ -49,7 +49,6 @@ namespace {
 // (Blackhole PCIE_SS spec, tables 4 and 12).
 constexpr uint64_t kSiiBase = 0xFFFFFFFFF0000000ull;
 constexpr uint32_t kCfrLo = 0xA8, kCfrHi = 0xAC;
-constexpr size_t kTlbBytes = 2 * 1024 * 1024;
 constexpr uint32_t kBurstReads = 1000;
 // Reads within this much of the burst's tightest round trip carry the least queueing on either leg.
 constexpr double kRttSlackNs = 50.0;
@@ -130,17 +129,15 @@ HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, ClockMap& map) :
     }
     pcie_x_ = static_cast<uint32_t>(pcie.front().x);
     pcie_y_ = static_cast<uint32_t>(pcie.front().y);
-    auto* tlb_manager = cluster_.get_driver()->get_chip(chip_id)->get_tlb_manager();
-    const tt_xy_pair xy(pcie_x_, pcie_y_);
+    // WC like every other UMD window: a read is uncached under either caching type, and tsc_now()'s fences order it.
     try {
-        if (!tlb_manager->is_tlb_mapped(xy)) {
-            tlb_manager->configure_tlb(xy, kTlbBytes, kSiiBase, tt::umd::tlb_data::Strict);
-        }
-        if (tlb_manager->is_tlb_mapped(xy, kSiiBase + kCfrLo, 4)) {
-            window_ = tlb_manager->get_tlb_window(xy);
-        }
+        window_ = cluster_.get_driver()->create_io_window(
+            chip_id,
+            pcie.front(),
+            kSiiBase,
+            tt::umd::HostIoWindowConfig{.mapping = tt::umd::HostMemoryCaching::WC, .size = kCfrHi + sizeof(uint32_t)});
     } catch (const std::exception& e) {
-        log_warning(tt::LogMetal, "[streaming profiler] host probe: no static TLB for the PCIe tile: {}", e.what());
+        log_warning(tt::LogMetal, "[streaming profiler] host probe: no I/O window on the PCIe tile: {}", e.what());
     }
     // The LO read latches HI; the host is this instance's only reader, so the pair is consistent.
     cfr_lo_last_ = read_cfr_lo();
@@ -157,6 +154,7 @@ void HostProbe::stop() {
     if (thread_.joinable()) {
         thread_.join();
     }
+    window_.reset();  // the mapping must not outlive the device
 }
 
 HostLine HostProbe::line() const {
