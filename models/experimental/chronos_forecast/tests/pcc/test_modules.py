@@ -162,3 +162,161 @@ def test_encoder_block_pcc(request):
     assert got.shape == x.shape
     log_golden("tt_encoder_block/device_8", got)
     assert_with_pcc(expected.float(), got, pcc=0.99)
+
+
+def test_encoder_pcc(request):
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import (
+        Chronos2Encoder as RefEncoder,
+    )
+    from models.experimental.chronos_forecast.tests.golden_helpers import tiny_config
+    from models.experimental.chronos_forecast.tt.encoder import TtEncoder, TtEncoderWeights
+    from models.experimental.chronos_forecast.tt.time_attention import build_rope_cache
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    cfg = tiny_config()
+    torch.manual_seed(0)
+    encoder = RefEncoder(cfg).eval()
+    weights = TtEncoderWeights.from_torch_encoder(encoder)
+    tt = TtEncoder(device=mesh_device, weights=weights)
+
+    torch.manual_seed(1)
+    x = torch.randn(2, 8, cfg.d_model)
+    position_ids = torch.arange(8).unsqueeze(0).expand(2, -1)
+    expected = encoder(
+        inputs_embeds=x,
+        group_ids=torch.arange(2),
+        attention_mask=torch.ones(2, 8),
+    ).last_hidden_state
+
+    inv_freq = weights.blocks[0].time.inv_freq
+    cos, sin = build_rope_cache(position_ids, inv_freq)
+    got = tt.forward(x, cos, sin, torch.zeros(1, 1, 8, 8), torch.zeros(8, 1, 2, 2))
+    assert got.shape == x.shape
+    log_golden("tt_encoder/device_8", got)
+    assert_with_pcc(expected.float(), got, pcc=0.99)
+
+
+def test_output_embedding_pcc(request):
+    """TT output patch embedding (TtResidualBlock reuse, dummy 6->336) vs oracle."""
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+    from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    model = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
+    weights = TtResidualBlockWeights.from_torch_block(model.output_patch_embedding)
+    tt = TtResidualBlock(device=mesh_device, weights=weights)
+
+    torch.manual_seed(1)
+    x = torch.randn(2, 1, model.config.d_model)
+    expected = model.output_patch_embedding(x).float()
+    got = tt.forward(x)
+    assert got.shape == (2, 1, expected.shape[-1])
+    log_golden("tt_output_embed/device_1", got)
+    assert_with_pcc(expected, got, pcc=0.99)
+
+
+def test_tt_encode_pcc(request):
+    """TT Chronos encode (dummy checkpoint, C=32, O=1) vs reference oracle. Single-chip only."""
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+    from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
+    from models.experimental.chronos_forecast.tt.model import TtChronos
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    model = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
+    tt = TtChronos.from_torch_model(mesh_device, model)
+
+    torch.manual_seed(0)
+    context = torch.randn(2, 32)
+    with torch.no_grad():
+        ref_out, _, _, _ = model.encode(context=context, num_output_patches=1)
+        expected = ref_out[0]
+    got, _, _ = tt.encode(context=context, num_output_patches=1)
+    assert got.shape == expected.shape
+    log_golden("tt_encode/device_hidden", got)
+    assert_with_pcc(expected.float(), got, pcc=0.99)
+
+
+def test_tt_forward_pcc(request):
+    """TT Chronos forward (dummy checkpoint, C=32, O=1) vs reference oracle. Single-chip only."""
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+    from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
+    from models.experimental.chronos_forecast.tt.model import TtChronos
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    model = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
+    tt = TtChronos.from_torch_model(mesh_device, model)
+
+    torch.manual_seed(0)
+    context = torch.randn(2, 32)
+    with torch.no_grad():
+        expected = model(context=context, num_output_patches=1).quantile_preds
+    got = tt.forward(context=context, num_output_patches=1)
+    assert got.shape == expected.shape
+    log_golden("tt_forward/device_quantiles", got)
+    assert_with_pcc(expected.float(), got, pcc=0.99)
+
+
+def test_tt_forward_pretrained_pcc(request):
+    """TT forward with real amazon/chronos-2 weights via preprocess_model_parameters.
+
+    Skipped when weights/chronos-2 is absent. Short context (C=512 -> 32
+    patches) keeps L small on the single chip.
+    """
+    pytest.importorskip("ttnn")
+    from pathlib import Path
+
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+    from models.experimental.chronos_forecast.tt.model import TtChronos, tt_chronos_config_from_torch_model
+    from models.experimental.chronos_forecast.tt.model_preprocessing import preprocess_model_parameters
+
+    ckpt = Path("models/experimental/chronos_forecast/weights/chronos-2")
+    if not (ckpt / "config.json").is_file():
+        pytest.skip("weights/chronos-2 absent")
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    model = RefModel.from_pretrained(str(ckpt)).eval()
+    weights = preprocess_model_parameters(
+        model.state_dict(),
+        head_dim=model.config.d_kv,
+        rope_theta=model.config.rope_theta,
+        eps=model.config.layer_norm_epsilon,
+    )
+    tt = TtChronos(mesh_device, weights, tt_chronos_config_from_torch_model(model))
+
+    torch.manual_seed(0)
+    context = torch.randn(2, 512)
+    with torch.no_grad():
+        expected = model(context=context, num_output_patches=1).quantile_preds
+    got = tt.forward(context=context, num_output_patches=1)
+    assert got.shape == expected.shape
+    log_golden("tt_forward_pretrained/device_quantiles", got)
+    assert_with_pcc(expected.float(), got, pcc=0.99)

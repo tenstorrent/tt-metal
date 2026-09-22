@@ -3,12 +3,18 @@
 
 """TTNN Chronos stubs."""
 
-from models.experimental.chronos_forecast.tt.model import TtChronos
+from models.experimental.chronos_forecast.tt.model import (
+    TtChronos,
+    TtChronosConfig,
+    TtChronosWeights,
+    tt_chronos_config_from_torch_model,
+)
 from models.experimental.chronos_forecast.tt.residual_block import (
     TtResidualBlock,
     TtResidualBlockWeights,
 )
 from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, TtMhaWeights
+from models.experimental.chronos_forecast.tt.encoder import TtEncoder, TtEncoderWeights
 from models.experimental.chronos_forecast.tt.encoder_block import (
     TtEncoderBlock,
     TtEncoderBlockWeights,
@@ -43,8 +49,12 @@ __all__ = [
     "Chronos2PackedInputs",
     "Chronos2PatchedInputs",
     "TtChronos",
+    "TtChronosConfig",
+    "TtChronosWeights",
+    "TtEncoder",
     "TtEncoderBlock",
     "TtEncoderBlockWeights",
+    "TtEncoderWeights",
     "TtGroupAttention",
     "TtGroupAttentionWeights",
     "TtMhaCore",
@@ -66,4 +76,5 @@ __all__ = [
     "prepare_patched_future",
     "preprocess_model_parameters",
     "target_encode",
+    "tt_chronos_config_from_torch_model",
 ]

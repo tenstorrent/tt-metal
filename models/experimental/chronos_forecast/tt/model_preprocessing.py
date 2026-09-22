@@ -56,9 +56,113 @@ class Chronos2PatchedInputs:
     target_idx_ranges: list[tuple[int, int]]
 
 
-def preprocess_model_parameters(state_dict, device):
-    """Map a Chronos state_dict onto device tensors."""
-    raise NotImplementedError("Chronos weight conversion is not implemented yet.")
+def preprocess_model_parameters(state_dict, device=None, *, eps: float = 1e-6, rope_theta: float = 10000.0, head_dim: int | None = None):
+    """Map a Chronos-2 state_dict onto host-side ``TtChronosWeights``.
+
+    Expected keys (HF ``Chronos2Model`` format)::
+
+        shared.weight
+        input_patch_embedding.{hidden_layer,output_layer,residual_layer}.{weight,bias}
+        encoder.block.{i}.layer.0.{layer_norm.weight, self_attention.{q,k,v,o}.weight}
+        encoder.block.{i}.layer.1.{layer_norm.weight, self_attention.{q,k,v,o}.weight}
+        encoder.block.{i}.layer.2.{mlp.wi.weight, mlp.wo.weight, layer_norm.weight}
+        encoder.final_layer_norm.weight
+        output_patch_embedding.{hidden_layer,output_layer,residual_layer}.{weight,bias}
+
+    ``device`` is accepted for signature compatibility and ignored: device
+    tensors are created once inside each ``Tt*`` module ``__init__``. ``eps``
+    is the RMSNorm epsilon (not stored in the checkpoint; matches the
+    reference default ``layer_norm_epsilon=1e-6``). ``rope_theta`` rebuilds the
+    RoPE ``inv_freq`` buffer, which the reference registers with
+    ``persistent=False`` and is therefore absent from the state_dict
+    (formula mirrors ``Chronos2RotaryEmbedding.compute_default_rope_parameters``).
+    ``head_dim`` (d_kv) cannot be inferred from shapes alone, so the caller
+    must pass it (e.g. ``model.config.d_kv``); 64 for the released checkpoint.
+    """
+    # Lazy to avoid a module cycle (tt/model.py imports helpers from this file).
+    from models.experimental.chronos_forecast.tt.encoder import TtEncoderWeights
+    from models.experimental.chronos_forecast.tt.encoder_block import TtEncoderBlockWeights
+    from models.experimental.chronos_forecast.tt.group_attention import TtGroupAttentionWeights
+    from models.experimental.chronos_forecast.tt.model import TtChronosWeights
+    from models.experimental.chronos_forecast.tt.residual_block import TtResidualBlockWeights
+    from models.experimental.chronos_forecast.tt.time_attention import TtTimeAttentionWeights
+
+    def _t(key: str) -> torch.Tensor:
+        try:
+            return state_dict[key].detach().clone()
+        except KeyError:
+            raise KeyError(f"preprocess_model_parameters: missing key {key!r}") from None
+
+    def _residual(prefix: str) -> TtResidualBlockWeights:
+        return TtResidualBlockWeights(
+            hidden_weight=_t(f"{prefix}.hidden_layer.weight"),
+            hidden_bias=_t(f"{prefix}.hidden_layer.bias"),
+            output_weight=_t(f"{prefix}.output_layer.weight"),
+            output_bias=_t(f"{prefix}.output_layer.bias"),
+            residual_weight=_t(f"{prefix}.residual_layer.weight"),
+            residual_bias=_t(f"{prefix}.residual_layer.bias"),
+        )
+
+    block_ids = sorted({int(k.split(".")[2]) for k in state_dict if k.startswith("encoder.block.")})
+    if not block_ids:
+        raise KeyError("preprocess_model_parameters: no encoder.block.{i} keys found")
+    if block_ids != list(range(len(block_ids))):
+        raise KeyError(f"preprocess_model_parameters: non-contiguous blocks {block_ids}")
+
+    blocks = []
+    if head_dim is None:
+        raise ValueError("preprocess_model_parameters: pass head_dim=model.config.d_kv (64 for amazon/chronos-2)")
+    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+    for i in block_ids:
+        t = f"encoder.block.{i}.layer.0"
+        q = _t(f"{t}.self_attention.q.weight")
+        if q.shape[0] % head_dim:
+            raise ValueError(f"preprocess_model_parameters: inner {q.shape[0]} not divisible by head_dim {head_dim}")
+        num_heads = q.shape[0] // head_dim
+        time = TtTimeAttentionWeights(
+            wqkv=torch.cat([q, _t(f"{t}.self_attention.k.weight"), _t(f"{t}.self_attention.v.weight")], dim=0),
+            wo=_t(f"{t}.self_attention.o.weight"),
+            rms_weight=_t(f"{t}.layer_norm.weight"),
+            inv_freq=inv_freq.clone(),
+            num_heads=num_heads,
+            head_dim=head_dim,
+            eps=eps,
+        )
+        g = f"encoder.block.{i}.layer.1"
+        gq = _t(f"{g}.self_attention.q.weight")
+        group = TtGroupAttentionWeights(
+            wqkv=torch.cat([gq, _t(f"{g}.self_attention.k.weight"), _t(f"{g}.self_attention.v.weight")], dim=0),
+            wo=_t(f"{g}.self_attention.o.weight"),
+            rms_weight=_t(f"{g}.layer_norm.weight"),
+            num_heads=gq.shape[0] // head_dim,
+            head_dim=head_dim,
+            eps=eps,
+        )
+        f = f"encoder.block.{i}.layer.2"
+        blocks.append(
+            TtEncoderBlockWeights(
+                time=time,
+                group=group,
+                ff_wi=_t(f"{f}.mlp.wi.weight"),
+                ff_wo=_t(f"{f}.mlp.wo.weight"),
+                ff_rms_weight=_t(f"{f}.layer_norm.weight"),
+                ff_eps=eps,
+            )
+        )
+
+    # reg_token_id lives in the HF config, not the state_dict; the reference
+    # sets it to 1 whenever use_reg_token is on (dummy + released checkpoints).
+    return TtChronosWeights(
+        input_embed=_residual("input_patch_embedding"),
+        encoder=TtEncoderWeights(
+            blocks=tuple(blocks),
+            final_rms_weight=_t("encoder.final_layer_norm.weight"),
+            final_eps=eps,
+        ),
+        output_embed=_residual("output_patch_embedding"),
+        shared_weight=_t("shared.weight"),
+        reg_token_id=1,
+    )
 
 
 def prepare_chronos2_inputs(

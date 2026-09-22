@@ -12,7 +12,6 @@ from models.experimental.chronos_forecast.reference.pytorch_chronos import (
     MeanScaleUniformBins,
     create_chronos_config,
 )
-from models.experimental.chronos_forecast.tt.model import TtChronos
 
 
 def test_submodule_src_is_checked_out():
@@ -43,6 +42,20 @@ def test_tokenizer_roundtrip(reset_seeds):
     assert torch.equal(samples[0, 0, :], context[0])
 
 
-def test_tt_chronos_stub_constructs():
-    model = TtChronos(device=None)
-    assert model.config.prediction_length == 64
+def test_tt_chronos_weights_from_dummy():
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+    from models.experimental.chronos_forecast.tests.golden_helpers import DUMMY_MODEL_PATH
+    from models.experimental.chronos_forecast.tt.model import (
+        TtChronosConfig,
+        TtChronosWeights,
+        tt_chronos_config_from_torch_model,
+    )
+
+    model = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
+    weights = TtChronosWeights.from_torch_model(model)
+    config = tt_chronos_config_from_torch_model(model)
+    assert isinstance(config, TtChronosConfig)
+    assert config.d_model == model.config.d_model
+    assert config.num_quantiles == len(model.chronos_config.quantiles)
+    assert weights.shared_weight.shape[0] == model.config.vocab_size
+    assert len(weights.encoder.blocks) == model.config.num_layers

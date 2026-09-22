@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-x = x + TimeSelfAttention(x)    # RoPE, mask (B,H,T,T)
-x = x + GroupSelfAttention(x)   # no RoPE, mask (T,1,B,B), batch-axis
-x = x + MLP(RMSNorm(x))         # Wi (d->d_ff, relu), Wo (d_ff->d), no bias
+reference : models/experimental/chronos_forecast/reference/chronos2/model.py
+    x = x + TimeSelfAttention(x)    # RoPE, mask (B,H,T,T)
+    x = x + GroupSelfAttention(x)   # no RoPE, mask (T,1,B,B), batch-axis
+    x = x + MLP(RMSNorm(x))         # Wi (d->d_ff, relu), Wo (d_ff->d), no bias
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ class TtEncoderBlockWeights:
 
 
 class TtEncoderBlock:
+    """TTNN encoder block. Weights move host -> device once in ``__init__``."""
+
+    def __init__(self, device, weights: TtEncoderBlockWeights):
         self.device = device
         self.weights = weights
         self.time_core = TtMhaCore(device, weights.time.to_mha())
@@ -77,6 +81,43 @@ class TtEncoderBlock:
         )
         return (_weight(weights.ff_wi), _weight(weights.ff_wo), rms_w)
 
+    def forward_device(self, x, cos, sin, time_mask, group_mask):
+        """Device-to-device block. Borrowed tensors (cos/sin/masks) are NOT deallocated.
+
+        Args:
+            x: device (B, T, d) TILE.
+            cos / sin: device (B, 1, T, Dh) TILE (already unsqueezed).
+            time_mask: device (1, 1, T, T) TILE + DRAM.
+            group_mask: device (T, 1, B, B) TILE + DRAM.
+
+        Returns:
+            Device (B, T, d) tensor; caller owns it.
+        """
+        import ttnn
+
+        ff_wi, ff_wo, ff_rms = self._ff
+
+        # Sublayer 1: time attention + residual
+        out = self.time_core(x, time_mask, cos, sin)
+        x = self._residual_add(x, out)
+
+        # Sublayer 2: group attention (batch-axis) + residual vs original layout
+        x_flip = ttnn.permute(x, (1, 0, 2))
+        out = self.group_core(x_flip, group_mask)
+        ttnn.deallocate(x_flip)
+        back = ttnn.permute(out, (1, 0, 2))
+        ttnn.deallocate(out)
+        x = self._residual_add(x, back)
+
+        # Sublayer 3: feedforward (inline) + residual
+        n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, weight=ff_rms)
+        h = ttnn.linear(n, ff_wi, activation="relu", memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(n)
+        m = ttnn.linear(h, ff_wo, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(h)
+        x = self._residual_add(x, m)
+        return x
+
     def forward(
         self,
         x_host: torch.Tensor,
@@ -95,7 +136,6 @@ class TtEncoderBlock:
         """
         import ttnn
 
-        ff_wi, ff_wo, ff_rms = self._ff
         _b, t, _d = x_host.shape
 
         def _upload(m: torch.Tensor):
@@ -113,29 +153,11 @@ class TtEncoderBlock:
         time_mask = _upload(time_mask_host)
         group_mask = _upload(group_mask_host)
 
-        # Sublayer 1: time attention + residual
-        out = self.time_core(x, time_mask, cos, sin)
+        x = self.forward_device(x, cos, sin, time_mask, group_mask)
         ttnn.deallocate(cos)
         ttnn.deallocate(sin)
         ttnn.deallocate(time_mask)
-        x = self._residual_add(x, out)
-
-        # Sublayer 2: group attention (batch-axis) + residual vs original layout
-        x_flip = ttnn.permute(x, (1, 0, 2))
-        out = self.group_core(x_flip, group_mask)
-        ttnn.deallocate(x_flip)
         ttnn.deallocate(group_mask)
-        back = ttnn.permute(out, (1, 0, 2))
-        ttnn.deallocate(out)
-        x = self._residual_add(x, back)
-
-        # Sublayer 3: feedforward (inline) + residual
-        n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, weight=ff_rms)
-        h = ttnn.linear(n, ff_wi, activation="relu", memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(n)
-        m = ttnn.linear(h, ff_wo, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(h)
-        x = self._residual_add(x, m)
 
         # Single download, sliced to T; return float for PCC
         host = ttnn.to_torch(x).float()[:, :t, :]
