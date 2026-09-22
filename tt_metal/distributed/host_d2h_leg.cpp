@@ -68,9 +68,7 @@ struct D2HLeg::Impl {
     }
 };
 
-using D2HLegImpl = D2HLeg::Impl;
-
-D2HLeg::D2HLeg() : impl_(std::make_unique<D2HLegImpl>()) {}
+D2HLeg::D2HLeg() : impl_(std::make_unique<Impl>()) {}
 D2HLeg::~D2HLeg() = default;
 
 std::unique_ptr<D2HLeg> D2HLeg::create(
@@ -86,12 +84,15 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
     if (page % align != 0) {
         err = fmt::format(
             "D2HLeg::create: page {} B (payload {} + trailer {}) is not a multiple of the {} B PCIe alignment",
-            page, cfg.payload_bytes, kFrameTrailerBytes, align);
+            page,
+            cfg.payload_bytes,
+            kFrameTrailerBytes,
+            align);
         return nullptr;
     }
 
     std::unique_ptr<D2HLeg> leg(new D2HLeg());
-    D2HLegImpl& im = *leg->impl_;
+    Impl& im = *leg->impl_;
     im.cfg = cfg;
     im.page_size = page;
     im.fifo_bytes = cfg.ring_pages * page;
@@ -105,8 +106,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
             const CoreCoord logical{i % cfg.grid_width, i / cfg.grid_width};
             // Logical here: D2HSocket does its own translation. The virtual coords below
             // are for the bytes_acked write only.
-            im.core[i].virt =
-                mesh->get_devices()[0]->virtual_core_from_logical_core(logical, tt::CoreType::WORKER);
+            im.core[i].virt = mesh->get_devices()[0]->virtual_core_from_logical_core(logical, tt::CoreType::WORKER);
             im.core[i].socket = std::make_unique<dist::D2HSocket>(
                 mesh,
                 dist::MeshCoreCoord{dist::MeshCoordinate(0, 0), logical},
@@ -151,7 +151,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
 // One pass over every core. Non-blocking; a refusal stops the sweep and the next one
 // resumes there, so sustained backpressure cannot let one core starve the rest.
 uint32_t D2HLeg::poll(const Sink& sink) {
-    D2HLegImpl& im = *impl_;
+    Impl& im = *impl_;
     uint32_t accepted = 0;
 
     for (uint32_t k = 0; k < im.cfg.cores; ++k) {
@@ -178,13 +178,14 @@ uint32_t D2HLeg::poll(const Sink& sink) {
             // writes from one core to one endpoint. An unarmed guard here is corruption.
             if (!tt_uva_frame_armed(t->guard)) {
                 im.fail(fmt::format(
-                    "d2h: core {} page at ring offset {} has guard {:#x}, expected an armed frame", c, off,
-                    t->guard));
+                    "d2h: core {} page at ring offset {} has guard {:#x}, expected an armed frame", c, off, t->guard));
                 break;
             }
             if (t->length + kFrameTrailerBytes > im.page_size) {
                 im.fail(fmt::format(
-                    "d2h: core {} trailer claims {} payload bytes, which does not fit a {} B page", c, t->length,
+                    "d2h: core {} trailer claims {} payload bytes, which does not fit a {} B page",
+                    c,
+                    t->length,
                     im.page_size));
                 break;
             }
@@ -215,7 +216,7 @@ uint32_t D2HLeg::poll(const Sink& sink) {
 // Contiguous prefix only: bytes_acked is one cumulative counter and cannot free a page by
 // name, so the caller must retire in the order poll() emitted.
 void D2HLeg::retire(uint32_t core, uint32_t pages) {
-    D2HLegImpl& im = *impl_;
+    Impl& im = *impl_;
     if (core >= im.cfg.cores || pages == 0) {
         return;
     }
@@ -241,7 +242,7 @@ void D2HLeg::retire(uint32_t core, uint32_t pages) {
 
 // Only on change: an unchanged counter is a PCIe write the kernel would not notice.
 void D2HLeg::credit(uint32_t core, uint64_t pages) {
-    D2HLegImpl& im = *impl_;
+    Impl& im = *impl_;
     const uint32_t v = static_cast<uint32_t>(pages);
     if (core >= im.cfg.cores || im.cfg.consumed_addr == 0 || im.core[core].credited == v) {
         return;
@@ -249,7 +250,10 @@ void D2HLeg::credit(uint32_t core, uint64_t pages) {
     im.core[core].credited = v;
     const auto& c = im.core[core].virt;
     tt::tt_metal::internal::noc_write_immediate(
-        im.device_id, static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y), im.cfg.consumed_addr,
+        im.device_id,
+        static_cast<uint32_t>(c.x),
+        static_cast<uint32_t>(c.y),
+        im.cfg.consumed_addr,
         byte_span(&im.core[core].credited, sizeof(uint32_t)));
 }
 
@@ -267,8 +271,12 @@ std::vector<uint32_t> D2HLeg::config_addresses() const {
 
 std::string D2HLeg::describe() const {
     return fmt::format(
-        "device {} ({} x D2HSocket, fifo {} B, page {} B; {})", impl_->device_id, impl_->cfg.cores,
-        impl_->fifo_bytes, impl_->page_size, impl_->alias->describe());
+        "device {} ({} x D2HSocket, fifo {} B, page {} B; {})",
+        impl_->device_id,
+        impl_->cfg.cores,
+        impl_->fifo_bytes,
+        impl_->page_size,
+        impl_->alias->describe());
 }
 
 std::string D2HLeg::first_error() const { return impl_->err; }

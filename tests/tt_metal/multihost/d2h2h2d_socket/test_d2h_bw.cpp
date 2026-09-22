@@ -141,8 +141,7 @@ int main(int argc, char** argv) {
     }
 
     const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
-    const L1MapNew l1 =
-        L1MapNew::compute(l1_base, static_cast<uint32_t>(device->l1_size_per_core()), o.payload, false);
+    const L1MapNew l1 = L1MapNew::compute(l1_base, static_cast<uint32_t>(device->l1_size_per_core()), o.payload, false);
     if (const std::string e = l1.fits(o.payload); !e.empty()) {
         std::cerr << "error: " << e << "\n";
         return 2;
@@ -157,7 +156,7 @@ int main(int argc, char** argv) {
     dc.payload_bytes = o.payload;
     dc.ring_pages = o.ring;
     dc.consumed_addr = 0;  // no far device, so nothing credits and tt_uva_sync() is unused
-    dc.alias_region_base = HostRegion::reserved_base(); // access the static memory reserved for memory aliasing
+    dc.alias_region_base = HostRegion::reserved_base();  // access the static memory reserved for memory aliasing
     std::unique_ptr<D2HLeg> d2h = D2HLeg::create(mesh, dc, err);
     if (!d2h) {
         std::cerr << "d2h bringup failed: " << err << "\n";
@@ -166,7 +165,11 @@ int main(int argc, char** argv) {
     try {
         // try to alias the d2h rings with the static memory reserved; this gets registered w/RDMA via MPI_Windows
         HostRegion& region = HostRegion::provision(
-            mesh, /*chip=*/0, o.cores, HostTopology{0, 1, 1}, HostRegion::Grid{grid_width, static_cast<uint32_t>(grid.y)});
+            mesh,
+            /*chip=*/0,
+            o.cores,
+            HostTopology{0, 1, 1},
+            HostRegion::Grid{grid_width, static_cast<uint32_t>(grid.y)});
         if (const std::string e = region.verify_header(); !e.empty()) {
             std::cerr << "region header check failed: " << e << "\n";
             HostRegion::release();
@@ -202,8 +205,20 @@ int main(int argc, char** argv) {
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_0,
             .compile_args = {
-                l1.stage_addr, page, l1.payload_addr, o.payload, o.iters, grid_width, 0u, 0u, 1u, 0u, l1.l1_base,
-                0u, l1.verify_addr, warmup_iters}});
+                l1.stage_addr,
+                page,
+                l1.payload_addr,
+                o.payload,
+                o.iters,
+                grid_width,
+                0u,
+                0u,
+                1u,
+                0u,
+                l1.l1_base,
+                0u,
+                l1.verify_addr,
+                warmup_iters}});
     const std::vector<uint32_t> cfg = d2h->config_addresses();
     for (uint32_t i = 0; i < o.cores; ++i) {
         // Nothing routes on dst here, so it names this host: the bytes go to the socket's

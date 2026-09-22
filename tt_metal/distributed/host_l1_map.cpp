@@ -46,14 +46,25 @@ std::string L1MapNew::fits(uint32_t payload_bytes) const {
     }
     return fmt::format(
         "payload {} B does not fit this core's L1: needs {} x {} B plus {} B of control words, in {} B",
-        payload_bytes, payload_copies(), payload_bytes, control_bytes(), l1_size);
+        payload_bytes,
+        payload_copies(),
+        payload_bytes,
+        control_bytes(),
+        l1_size);
 }
 
 std::string L1MapNew::describe() const {
     return fmt::format(
         "payload {:#x} stage {:#x} stop {:#x} verify {:#x} consumed {:#x} dest_word {:#x} deliver {:#x} "
         "(L1 {} B, payload span {} B)",
-        payload_addr, stage_addr, stop_addr, verify_addr, consumed_addr, dest_word_addr, deliver_addr, l1_size,
+        payload_addr,
+        stage_addr,
+        stop_addr,
+        verify_addr,
+        consumed_addr,
+        dest_word_addr,
+        deliver_addr,
+        l1_size,
         stage_addr - payload_addr);
 }
 

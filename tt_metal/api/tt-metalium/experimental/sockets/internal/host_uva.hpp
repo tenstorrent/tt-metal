@@ -74,11 +74,15 @@ constexpr tt_uva_t tt_uva_t6_from_selector(uint32_t selector, uint32_t offset) {
     return tt_uva_encode(kRegionT6, selector, 0, offset);
 }
 
-constexpr uint32_t tt_uva_region(tt_uva_t u) { return static_cast<uint32_t>((tt_uva_bits(u) >> kRegionShift) & kRegionMask); }
+constexpr uint32_t tt_uva_region(tt_uva_t u) {
+    return static_cast<uint32_t>((tt_uva_bits(u) >> kRegionShift) & kRegionMask);
+}
 constexpr uint32_t tt_uva_selector(tt_uva_t u) {
     return static_cast<uint32_t>((tt_uva_bits(u) >> kSelectorShift) & kSelectorMask);
 }
-constexpr uint32_t tt_uva_offset(tt_uva_t u) { return static_cast<uint32_t>((tt_uva_bits(u) >> kOffsetShift) & kOffsetMask); }
+constexpr uint32_t tt_uva_offset(tt_uva_t u) {
+    return static_cast<uint32_t>((tt_uva_bits(u) >> kOffsetShift) & kOffsetMask);
+}
 
 constexpr bool tt_uva_selector_is_t6(tt_uva_t u) {
     const uint32_t r = tt_uva_region(u);
@@ -88,7 +92,6 @@ constexpr uint32_t tt_uva_t6_host(tt_uva_t u, uint32_t chips_per_host) {
     return tt_uva_t6_selector_host(tt_uva_selector(u), chips_per_host);
 }
 constexpr uint32_t tt_uva_t6_core(tt_uva_t u) { return tt_uva_t6_selector_core(tt_uva_selector(u)); }
-
 
 struct HostTopology {
     uint32_t ident;
@@ -115,6 +118,5 @@ constexpr uint32_t tt_uva_target_host(tt_uva_t u, HostTopology t) {
     }
     return kHostNone;
 }
-
 
 }  // namespace tt::tt_metal::experimental

@@ -33,7 +33,9 @@ constexpr uint64_t tt_uva_frame_elapsed_pack(uint64_t issue, uint64_t stall) {
     return ((stall > kFrameElapsedMask ? kFrameElapsedMask : stall) << 32) |
            (issue > kFrameElapsedMask ? kFrameElapsedMask : issue);
 }
-constexpr uint32_t tt_uva_frame_elapsed_issue(uint64_t packed) { return static_cast<uint32_t>(packed & kFrameElapsedMask); }
+constexpr uint32_t tt_uva_frame_elapsed_issue(uint64_t packed) {
+    return static_cast<uint32_t>(packed & kFrameElapsedMask);
+}
 constexpr uint32_t tt_uva_frame_elapsed_stall(uint64_t packed) { return static_cast<uint32_t>(packed >> 32); }
 
 // How the receiver updates the signal word once the payload has landed. SET stamps a value,
