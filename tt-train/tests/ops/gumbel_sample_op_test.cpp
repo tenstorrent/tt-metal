@@ -23,6 +23,7 @@
 #include "metal/ops/gumbel_sample/gumbel_sample.hpp"
 #include "metal/ops/gumbel_sample/gumbel_sample_constants.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"  // to_l1_interleaved, for the buffer-placement test
 
 // Device tests for the fused ttml::metal::gumbel_sample op (plus, for preallocated outputs, the
@@ -640,6 +641,57 @@ TEST_F(GumbelSampleOpTest, TestSamplingGreedyMatchesArgmaxReference) {
             tensor_logits, 0.0F, 7, /* seed_axes */ {}, tensor_mask, make_positions(positions)));
         EXPECT_EQ(positioned, greedy_reference(logits, mask, positions)) << what << ": mask + positions";
     }
+}
+
+TEST_F(GumbelSampleOpTest, TestSamplingGreedyMatchesTtnnArgmax) {
+    // The op's documented contract is that greedy output is identical to
+    // ttnn::argmax(dim=3, keepdim=true) -- this pins it ON DEVICE, against the real op, per dtype.
+    // Random logits catch broad disagreements; the fp32 section additionally plants NEAR-TIES:
+    // column pairs whose gap (2^-20 at magnitude 1) is far below TF32's ~2^-10 resolution, with the
+    // true winner at the HIGHER column index. Both ops break genuine ties toward the lowest index, so the
+    // constructions below are unambiguous either way.
+    constexpr uint32_t kBatch = 2U;
+    constexpr uint32_t kTokens = 37U;  // ragged, so the comparison spans partly-padded tile rows
+    constexpr uint32_t kVocab = 77U;   // ragged vocab: both ops must stop their scan mid-tile
+
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto check_against_argmax = [&](const ttnn::Tensor& tensor_logits, const char* what) {
+        auto greedy = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_logits, 0.0F, 7));
+        auto argmax = ttml::core::to_vector<uint32_t>(ttnn::argmax(tensor_logits, /* dim */ 3, /* keepdim */ true));
+        ASSERT_EQ(greedy.size(), argmax.size()) << what;
+        EXPECT_EQ(greedy, argmax) << what;
+    };
+
+    // Random logits, both supported dtypes. For bf16 the quantization creates genuine exact ties,
+    // so this also covers agreement on the lowest-index tie-break.
+    const xt::xarray<float> random_logits = ttml::test_utils::make_uniform_xarray<float>(
+        xt::xarray<float>::shape_type{kBatch, 1U, kTokens, kVocab}, -2.0F, 2.0F, 4242U);
+    check_against_argmax(ttml::core::from_xtensor(random_logits, device), "bf16, random");
+    check_against_argmax(
+        ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(random_logits, device), "fp32, random");
+
+    // fp32 near-ties (fp32-only: 1 + 2^-20 is not representable in bf16, so a bf16 build of this
+    // grid would collapse the pair into a genuine tie and test nothing). Assert both ops against
+    // the CONSTRUCTED winner, not just against each other -- two implementations agreeing on the
+    // wrong column would satisfy a pure A/B comparison.
+    xt::xarray<float> near_ties = xt::zeros<float>(xt::xarray<float>::shape_type{kBatch, 1U, kTokens, kVocab});
+    near_ties.fill(-1.0F);
+    std::vector<uint32_t> expected(kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            const uint32_t loser = (b * kTokens + t) % (kVocab / 2U);
+            const uint32_t winner = loser + (kVocab / 2U);  // always the higher column of the pair
+            near_ties(b, 0, t, loser) = 1.0F;
+            near_ties(b, 0, t, winner) = 1.0F + 0x1p-20F;
+            expected[b * kTokens + t] = winner;
+        }
+    }
+    auto near_tie_tensor = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(near_ties, device);
+    auto greedy = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(near_tie_tensor, 0.0F, 7));
+    EXPECT_EQ(greedy, expected) << "fp32 near-ties: greedy gumbel must resolve sub-TF32 gaps exactly";
+    auto argmax = ttml::core::to_vector<uint32_t>(ttnn::argmax(near_tie_tensor, /* dim */ 3, /* keepdim */ true));
+    EXPECT_EQ(argmax, expected) << "fp32 near-ties: ttnn::argmax must resolve them too (reference sanity)";
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositions) {
