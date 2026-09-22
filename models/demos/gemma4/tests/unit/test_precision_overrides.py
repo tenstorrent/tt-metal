@@ -10,6 +10,8 @@ precision_overrides.json is silently skipped (31B then loads all-bf16 and
 OOMs the QB2 vLLM CI cell at 256k context).
 """
 
+import json
+
 import ttnn
 from models.demos.gemma4.tt.precision import Gemma4Precision
 
@@ -65,3 +67,31 @@ def test_the_bfp8_ceiling_does_not_apply_on_a_mesh_where_bf16_will_not_fit():
 def test_below_the_ceiling_bfp8_is_kept_on_the_measured_mesh():
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=131072)
     assert o.get("shared_mlp") == ttnn.bfloat8_b
+
+
+def test_ccl_topology_is_model_wide():
+    """31B pins Linear; every other bundled variant leaves the arch default."""
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8)).ccl_topology == "linear"
+    for name in ("gemma-4-12B-it", "gemma-4-26B-A4B-it", "gemma-4-E2B-it"):
+        assert Gemma4Precision.load(f"/x/{name}", (1, 8)).ccl_topology is None
+    # Model-wide, so the mesh key must not change it.
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 2)).ccl_topology == "linear"
+
+
+def test_ccl_topology_rejects_a_mesh_entry(tmp_path, monkeypatch, expect_error):
+    """A mesh entry replaces 'default' wholesale, so this flag must not live there."""
+    overrides = {"m": {"1x8": {"ccl_topology": "ring"}}}
+    path = tmp_path / "precision_overrides.json"
+    path.write_text(json.dumps(overrides))
+    monkeypatch.setattr("models.demos.gemma4.tt.precision._PATH", str(path))
+    with expect_error(ValueError, "model-wide"):
+        Gemma4Precision.load("/x/m", (1, 8))
+
+
+def test_ccl_topology_rejects_an_unknown_name(tmp_path, monkeypatch, expect_error):
+    overrides = {"m": {"ccl_topology": "torus"}}
+    path = tmp_path / "precision_overrides.json"
+    path.write_text(json.dumps(overrides))
+    monkeypatch.setattr("models.demos.gemma4.tt.precision._PATH", str(path))
+    with expect_error(ValueError, "expected 'ring' or 'linear'"):
+        Gemma4Precision.load("/x/m", (1, 8))
