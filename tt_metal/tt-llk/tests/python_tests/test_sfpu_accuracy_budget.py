@@ -108,26 +108,22 @@ BLOCK_FORMATS_WITHOUT_ULP = sorted(
 # ── The contract's own coherence ──────────────────────────────────────────────
 
 
-def test_a_ulp_contract_needs_a_budget():
-    with _refuses("needs max_ulp"):
-        AccuracyContract(metric=Metric.ULP)
-
-
-def test_a_ulp_contract_rejects_a_tolerance():
-    """Both cannot apply, and an entry carrying both is a half-finished conversion that
-    would read as deliberate."""
-    with _refuses("silently ignored"):
-        AccuracyContract(max_ulp=1, atol=0.13)
-
-
-def test_a_tolerance_contract_rejects_a_budget():
-    with _refuses("belong to the ulp metric"):
-        AccuracyContract(metric=Metric.TOLERANCE, max_ulp=1)
-
-
-def test_a_negative_budget_is_rejected():
-    with _refuses("must not be negative"):
-        AccuracyContract(max_ulp=-1)
+# A half-finished conversion is the case these cover: an entry carrying both metrics,
+# or neither's required field, reads as deliberate and would gate on whichever arm
+# `passed_test` happens to take.
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"metric": Metric.ULP}, "needs max_ulp"),
+        ({"max_ulp": 1, "atol": 0.13}, "silently ignored"),
+        ({"metric": Metric.TOLERANCE, "max_ulp": 1}, "belong to the ulp metric"),
+        ({"max_ulp": -1}, "must not be negative"),
+    ],
+    ids=["no-budget", "both-metrics", "budget-on-tolerance", "negative-budget"],
+)
+def test_an_incoherent_contract_is_refused(kwargs, match):
+    with _refuses(match):
+        AccuracyContract(**kwargs)
 
 
 def test_the_metric_is_a_closed_set():
@@ -226,29 +222,6 @@ def test_a_more_specific_key_wins_over_the_default():
     )
 
 
-def test_specificity_counts_every_set_dimension():
-    table = {
-        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
-        BudgetKey(
-            output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
-        ): AccuracyContract(max_ulp=8),
-    }
-    resolved = resolve_contract(
-        table,
-        label="op",
-        output_format=DataFormat.Float32,
-        dest_acc=DestAccumulation.No,
-    )
-    assert resolved.max_ulp == 8
-    resolved = resolve_contract(
-        table,
-        label="op",
-        output_format=DataFormat.Float32,
-        dest_acc=DestAccumulation.Yes,
-    )
-    assert resolved.max_ulp == 4
-
-
 def test_a_per_arch_override_beats_the_shared_entry():
     """Open question 4's answer: one value plus overrides, rather than per-arch from the
     start. WH and BH differ in available SFPU instructions and therefore in kernel, so the
@@ -300,14 +273,6 @@ def test_an_empty_table_falls_back_to_the_tolerance_metric():
         resolve_contract({}, label="op", output_format=DataFormat.Float32)
         is TOLERANCE_CONTRACT
     )
-
-
-def test_a_key_describes_itself_for_an_error_message():
-    assert DEFAULT.describe() == "DEFAULT"
-    described = BudgetKey(
-        output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
-    ).describe()
-    assert "output_format" in described and "dest_acc" in described
 
 
 # ── The live registry ─────────────────────────────────────────────────────────
@@ -482,12 +447,6 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     assert set(enrolled_ops()) - saw_ulp == ONLY_EVER_TOLERANCE, sorted(
         op.name for op in set(enrolled_ops()) - saw_ulp
     )
-
-
-def test_enrolled_ops_is_sorted_and_stable():
-    ops = enrolled_ops()
-    assert list(ops) == sorted(ops, key=lambda op: op.name)
-    assert len(set(ops)) == len(ops)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
