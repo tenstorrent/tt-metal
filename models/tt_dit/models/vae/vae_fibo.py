@@ -215,50 +215,45 @@ class FiboDupUp2D(Module):
     Duplicate-upsamples a ``(B, H, W, C_in)`` tensor to ``(B, F·H, F·W, C_out)`` (where ``F`` is
     ``factor_s``) by repeating each input channel ``C_out * F² // C_in`` times along the channel
     axis and then pixel-shuffling F×F. No learnable parameters.
+
+    Only the two repeat counts FIBO's decoder uses are supported: F², a plain nearest-neighbour
+    upsample, and F, where ``out[F·h + i, F·w + j, c] = x[h, w, F·c + i]``.
     """
 
     def __init__(self, *, in_channels: int, out_channels: int, factor: int) -> None:
         super().__init__()
 
-        total_factor = factor * factor
-        if out_channels * total_factor % in_channels != 0:
+        repeats, remainder = divmod(out_channels * factor * factor, in_channels)
+        if remainder != 0 or repeats not in (factor, factor * factor):
             msg = (
-                f"out_channels * factor_s² ({out_channels * total_factor}) must be divisible by "
-                f"in_channels ({in_channels})"
+                f"unsupported channel ratio: in_channels {in_channels}, out_channels {out_channels}, "
+                f"factor {factor}"
             )
             raise ValueError(msg)
-        self._repeats = out_channels * total_factor // in_channels
+        self._repeats = repeats
         self._factor = factor
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         f = self._factor
 
-        # Both paths need ROW_MAJOR — ``ttnn.upsample`` requires it, and the reshape+permute
-        # path's trailing (f, f) dims would be padded to (32, 32) under TILE_LAYOUT.
-        was_tile = x.layout == ttnn.TILE_LAYOUT
-        if was_tile:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
         if self._repeats == f * f:
-            # Pure nearest-neighbor spatial upsample; no channel mixing.
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.upsample(x, scale_factor=f)
-        else:
-            # (B, H, W, C_in_local) -> repeat each channel `repeats` times -> (B, H, W, C_out_local·F²).
-            # ``C_in_local`` is the per-device channel slice when the input is TP-sharded; the
-            # ``repeats`` ratio is invariant under uniform TP sharding so we don't need a separate
-            # path for replicated vs. sharded inputs.
-            x = ttnn.repeat_interleave(x, repeats=self._repeats, dim=-1)
-            bs, h, w, c_after = x.shape
-            c_out_local = c_after // (f * f)
-            # Pixel-shuffle F×F: (B, H, W, C_out_local·F²) -> (B, F·H, F·W, C_out_local). Treat
-            # the trailing axis as (C_out_local, F_h, F_w); interleave F_h, F_w into H and W.
-            x = ttnn.reshape(x, [bs, h, w, c_out_local, f, f])
-            x = ttnn.permute(x, (0, 1, 4, 2, 5, 3))
-            x = ttnn.reshape(x, [bs, h * f, w * f, c_out_local])
+            return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        if was_tile:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        return x
+        # Row phase i picks every f-th channel, column phase j repeats. The channels are split in
+        # a non-last dim, since a row-major page holds one row of the last dim and ops moving
+        # pages of only f elements are very slow.
+        bs, h, w, c = x.shape
+        x = ttnn.transpose(x, -2, -1)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, [bs, h, c // f, f, w])
+        x = ttnn.permute(x, (0, 1, 3, 2, 4))
+        x = ttnn.reshape(x, [bs, h * f, c // f, w])
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.transpose(x, -2, -1)
+        x = ttnn.upsample(x, scale_factor=[1, f])
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
 
 def _unpatchify(x: ttnn.Tensor, *, patch_size: int, out_channels: int) -> ttnn.Tensor:
