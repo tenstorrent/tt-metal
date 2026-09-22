@@ -2,7 +2,7 @@
 
 ## Run the tests
 
-Both tests require a Blackhole 8×4 mesh, a [tt-metal source build](../../../../INSTALLING.md#source) with its Python environment, the Gemma4-31B-it checkpoint, and the [GPU capture](PREFILL_MIGRATION.md#gpu-reference). The checkpoint and capture are separate from the repository; provision them before running. The commands below use the canonical model paths.
+Both tests require a Blackhole 8×4 mesh, a [tt-metal source build](../../../../INSTALLING.md#source) with its Python environment, the Gemma4-31B-it checkpoint, and the [GPU capture](../tt/runners/kv_validation.py). The checkpoint and capture are separate from the repository; provision them before running. The commands below use the canonical model paths.
 
 From the tt-metal repository root, in both terminals for loopback:
 
@@ -19,7 +19,7 @@ export \
 export PREFILL_TTNN_CACHE="$TT_CACHE_PATH"
 ```
 
-The default GPU reference is in validation channel order. See [Prepared GPU reference](PREFILL_MIGRATION.md#prepared-gpu-reference) to create another copy.
+The default GPU reference is in validation channel order. Use the [capture preparation tool](../tt/runners/prepare_gpu_reference.py) to create another copy.
 
 ### Mock, 16K
 
