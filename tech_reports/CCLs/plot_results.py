@@ -41,7 +41,18 @@ def load():
     if not paths:
         raise SystemExit(f"no results_*.csv in {DATA_DIR}. Run run_bench.sh first.")
     df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
-    return df[df["linkbw_gbps"].notna()].sort_values("bytes")
+    df = df[df["linkbw_gbps"].notna()]
+    # Figure names carry arch and device count only, so a second dtype or packet
+    # size would silently overwrite rather than produce its own figure.
+    for column in ("dtype", "packet"):
+        seen = sorted(df[column].unique())
+        if len(seen) > 1:
+            raise SystemExit(f"{DATA_DIR} holds more than one {column}: {seen}. "
+                             f"Move the runs you are not plotting out of the way.")
+    # A line and a ring run both resolve to a line below the wrap threshold, so the
+    # same cell can be measured twice. Keep one; a repeat is not a second series.
+    df = df.drop_duplicates(["arch", "dtype", "op", "n", "bytes", "memory", "topology_resolved"])
+    return df.sort_values("bytes")
 
 
 def panel(ax, groups, title, line_rate):
@@ -96,8 +107,9 @@ def figure(panels, title, subtitle, dest):
 
 
 def linkbw_figures(df, style):
-    # Architectures differ in line rate, so they never share a figure.
-    for (arch, n), per_n in df[df["memory"] == "dram"].groupby(["arch", "n"]):
+    # Every column that can differ between CSVs belongs in the key, or a series
+    # ends up with two points on the same x.
+    for (arch, dtype, n), per_n in df[df["memory"] == "dram"].groupby(["arch", "dtype", "n"]):
         line_rate = float(per_n["line_rate_gbps"].iloc[0])
         panels = []
         for topology in sorted(per_n["topology_resolved"].unique()):
@@ -107,12 +119,14 @@ def linkbw_figures(df, style):
             panels.append((f"{topology.lower()} topology", groups, line_rate))
         figure(panels, f"CCL link bandwidth - {arch.capitalize()}",
                f"{n} devices, {per_n['links'].iloc[0]} links/direction, "
-               f"{per_n['dtype'].iloc[0]}, DRAM",
+               f"{dtype}, DRAM, {per_n['packet'].iloc[0]} B packet",
                IMAGE_DIR / f"linkbw_{arch}_n{n}.png")
 
 
 def memcfg_figures(df):
-    for (arch, n), per_n in df.groupby(["arch", "n"]):
+    # Every column that can differ between CSVs belongs in the key. Two values of
+    # one on a single series would put two points on every x.
+    for (arch, dtype, n, topology), per_n in df.groupby(["arch", "dtype", "n", "topology_resolved"]):
         # Only ops measured in both memory configs say anything about the memory limit.
         ops = [op for op, g in per_n.groupby("op") if {"l1", "dram"} <= set(g["memory"])]
         if not ops:
@@ -127,10 +141,10 @@ def memcfg_figures(df):
             color, marker = PALETTE[i % len(PALETTE)]
             label = f"{op.replace('_', '-').capitalize()}, {memory.upper()}"
             groups.append((label, color, marker, "-" if memory == "dram" else "--", g))
-        topology = per_n["topology_resolved"].iloc[0].lower()
-        figure([(f"{topology} topology", groups, line_rate)],
+        figure([(f"{topology.lower()} topology", groups, line_rate)],
                f"CCL mem config - {arch.capitalize()}",
-               f"{n} devices, {per_n['links'].iloc[0]} links/direction, {per_n['dtype'].iloc[0]}",
+               f"{n} devices, {per_n['links'].iloc[0]} links/direction, "
+               f"{dtype}, {per_n['packet'].iloc[0]} B packet",
                IMAGE_DIR / f"memcfg_{arch}_n{n}.png")
 
 

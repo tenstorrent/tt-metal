@@ -8,7 +8,7 @@ A collective moves data between devices. Some ops may also reduce, but that arit
 
 The number of bytes a collective puts on a link is closed-form in the tensor size, the device count and the topology. Dividing it out gives achieved bandwidth per link. That single number characterizes any collective on any system, and on a well-optimized implementation it is also independent of datatype, memory layout and page size. Different collectives should converge on the same curve. Where one does not, it has optimization headroom rather than a harder job.
 
-This report measures that number for `all_gather`, `reduce_scatter` and `all_reduce`.
+This report measures that number for `all_gather`, `reduce_scatter`, `all_reduce` and `all_to_all`.
 
 ## What sets the ceiling
 
@@ -39,7 +39,7 @@ This lands near **96%** across the useful range of payload sizes. The payload ce
 
 The ethernet transfer is sized by the bytes in the packet, so a partially filled packet wastes no wire time. Fabric flow control counts slots rather than bytes, and every packet consumes one slot credit whether it is full or empty. This is a property of the current fabric design, not of the hardware.
 
-Slot size is set once at fabric initialization, from `max_packet_payload_size_bytes` on `SetFabricConfig`, and is uniform across router channels. The setting is global for the run. ERISC L1 is fixed, so slot size and slot count trade against each other. A larger payload leaves room for fewer slots and a shallower pipeline, which means the architecture maximum is not always the fastest choice.
+Slot size is set once at fabric initialization, from `max_packet_payload_size_bytes` on the `FabricRouterConfig` passed to `set_fabric_config`, and is uniform across router channels. The setting is global for the run. ERISC L1 is fixed, so slot size and slot count trade against each other. A larger payload leaves room for fewer slots and a shallower pipeline, which means the architecture maximum is not always the fastest choice.
 
 What a partial packet costs is data in flight: the slot count times the payload actually carried per slot. A collective that half-fills its packets has half the data in flight for the same pipeline depth, so the link idles while credits make their way back. Throughput is then data in flight divided by that credit round-trip time.
 
@@ -76,7 +76,7 @@ On a **ring**, the closing link gives every device two links on the axis. Splitt
 
 A single DRAM channel delivers bandwidth of the same order as a single link. Summed over every ethernet core on the chip, the fabric aggregate is competitive with the whole memory system.
 
-The fabric limits a collective because the collective only gets a few links. It communicates along one axis, while the entire memory system is available locally. That leaves single-digit headroom rather than an order of magnitude, so memory can also limit the operation on a system with many fast links.
+The fabric limits a collective because the collective only gets a few links. It communicates along one axis, while the entire memory system is available locally. The headroom between the two is small enough that memory could also limit the operation on a system with many fast links. The L1 versus DRAM section measures whether it does.
 
 The Blackhole aggregate above is derived from device specifications, not measured. No per-bank breakdown for Blackhole was available.
 
@@ -128,7 +128,7 @@ The numerator is the bytes crossing the busiest link, so the result is directly 
 
 ## What we measure
 
-This report sweeps `ttnn.all_gather`, `ttnn.reduce_scatter` and `ttnn.all_reduce` across tensor size, on both line and ring topologies. All measurements are **traced**, so host dispatch is excluded.
+This report sweeps `ttnn.all_gather`, `ttnn.reduce_scatter`, `ttnn.all_reduce` and `ttnn.experimental.all_to_all_async_generic` across tensor size, device count and topology. All measurements are **traced**, so host dispatch is excluded.
 
 The ops query link count, topology and the rest of the machine's wiring themselves, so nothing is configured by hand and no tuning is applied. The curves show what a caller gets out of the box.
 
@@ -140,83 +140,81 @@ Link count and topology are read back from each op's own profiler attributes, so
 | Fabric configuration | 1D routing. Lower per-hop latency and a smaller header than 2D. |
 | Datatype | Only a byte count under this metric. |
 
-Four runs cover the report:
-
-| topology | memory | feeds |
-| --- | --- | --- |
-| ring | DRAM | the main figure |
-| line | DRAM | the main figure |
-| ring | L1 | the residency section |
-| line | L1 | the residency section |
-
 The benchmark is modelled on nccl-tests. Sizes double from 1 KiB upward, rounded to whole tiles, and `busbw` uses nccl's correction factors, so the numbers compare directly to nccl-tests output on other hardware.
 
-```bash
-bash tech_reports/CCLs/run_bench.sh
-```
-
-That runs all four cases and writes a table and a CSV per run into `tech_reports/CCLs/data/`, which is not committed. The tables at the end of this report hold the same numbers. To run one case directly:
+The following was run to generate the data in this report:
 
 ```bash
-TTNN_RUN_CCL_BANDWIDTH_BENCHMARK=1 TT_METAL_DEVICE_PROFILER=1 ENABLE_TRACY=1 \
-CCL_TOPOLOGY=ring CCL_MEMORY=dram \
-python -m tracy -r -p -v -m pytest \
-    tests/ttnn/unit_tests/benchmarks/test_ccl_bandwidth.py -k test_perf
-python tech_reports/CCLs/parse_results.py
+# Link bandwidth on ring topology for every collective
+./tech_reports/CCLs/run_bench.sh galaxy
+
+# To get more comprehensive data:
+# Repeat above for linear topology
+CCL_RUNS="line:dram" ./tech_reports/CCLs/run_bench.sh galaxy
+# Repeat above for L1 memory config (for all_gather only)
+CCL_RUNS="ring:l1" CCL_OPS=all_gather ./tech_reports/CCLs/run_bench.sh galaxy
 ```
 
 ## Results
 
-![](images/per_link_bandwidth.png)
+### Blackhole Galaxy
+
+![](images/linkbw_blackhole_n8.png)
+
+Eight devices along axis 0 of the 8×4 mesh. The two and four device figures are `images/linkbw_blackhole_n2.png` and `images/linkbw_blackhole_n4.png`; both carry a line panel only, since the wrap-around link only exists across the full axis (i.e. only with 8 devices).
+
+### Wormhole LoudBox
 
 <!--
-  TODO(data): per-link bandwidth (GB/s) vs tensor size (bytes, log scale).
-  One figure per system; one panel per topology (line, ring); three series per
-  panel (all_gather, reduce_scatter, all_reduce). Reference line at the payload
-  ceiling. No numbers are quoted in prose until the data lands.
-  State the systems measured and the fabric packet payload they ran at.
+  TODO(data): images/linkbw_wormhole_n8.png, from
+      ./tech_reports/CCLs/run_bench.sh loudbox
+      CCL_RUNS="line:dram" ./tech_reports/CCLs/run_bench.sh loudbox
+  Caption needs the axis, the packet payload and the size range, as above.
+  N300s are not all host-attached, so expect a lower link count than Blackhole
+  and state the count the figure was normalized by.
 -->
 
 ## Interpreting the curve
 
-**The low plateau.** Small collectives reach only a small fraction of line rate. Two mechanisms can produce this, and they predict different shapes.
+**The small sizes.** Small collectives reach a small fraction of line rate. Per-invocation cost and poor packet fill both produce that, and they leave different shapes.
 
 Per-invocation cost acts as a floor. While it dominates, time is roughly constant, so bandwidth rises with size and falls toward zero at the smallest sizes.
 
-Poor packet fill produces a plateau instead. At a given fill, neither data in flight nor credit round-trip time depends on tensor size, so bandwidth sits flat at a reduced level. Fill improves as tensors grow, because larger tensors offer longer contiguous stretches to pack into each packet.
+Poor packet fill produces a flat plateau instead. At a given fill, neither data in flight nor credit round-trip time depends on tensor size, so bandwidth sits at a reduced level independent of size. Fill improves as tensors grow, because larger tensors offer longer contiguous stretches to pack into each packet.
 
-The bottom of the sweep tells them apart. A curve that keeps falling as size shrinks is dominated by per-invocation cost. One that stays flat is dominated by fill.
+In our data, every curve keeps falling as size shrinks, and none of them flatten. Hence per-invocation cost sets the small-size behaviour, not packet fill.
 
-**The ramp.** Fixed costs amortize as the payload grows, and packet fill improves. Compare where the ramp begins against the crossover estimate. A ramp well to the right of it means costs the estimate leaves out:
+**The ramp.** Fixed costs amortize as the payload grows, and packet fill improves. In our data, the ramp begins near the crossover estimate, and the curve does not reach its asymptote until well past it. The crossover estimate from the latency section leaves out:
 
-- per-invocation cost, which the crossover formula ignores
+- per-invocation cost
 - packet fill, which improves with size
 - host dispatch
 - superlinear growth of hop latency with distance
 
-**Steps in the ramp.** Worker cores per link are chosen by size-thresholded heuristics, and so is synchronization granularity. The thresholds differ by collective and by topology. Bandwidth should therefore be piecewise, with discontinuities where those counts change.
+**Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics that differ by collective and topology, so bandwidth should be piecewise. In our data, no steps appear, though the ramp's slope dips slightly where two of the thresholds sit.
 
-**The asymptote.** Fixed costs are negligible here, so the curve should approach the payload ceiling. Three things can account for the remaining gap: framing overhead, memory bandwidth, and packet fill that has not saturated.
+**The asymptote.** Fixed costs are negligible here. In our data, the curves flatten well below the payload ceiling. Framing accounts for a few percent of that gap and the next section rules out memory hierarchy, which leaves the transfer pipeline: packet fill, worker count, and how well the implementation keeps the link fed.
 
-**Line versus ring.** The two should overlay. A ring carries half the bytes per link over half the distance, so it finishes sooner while running each link at the same rate. Overlapping curves are the expected result and a check on the byte accounting. A large gap means one topology carries overhead the other does not.
+**Line versus ring.** A ring carries half the bytes per link over half the distance, so it finishes sooner while running each link at the same rate. In our data, at the same device count the two curves overlay. The ring ramp starts later, because halving the bytes per direction means a larger tensor is needed to clear the fixed-cost floor.
 
-## L1 versus DRAM residency
+## L1 versus DRAM tensors
 
-![](images/residency.png)
+![](images/memcfg_blackhole_n8.png)
 
 <!--
-  TODO(data): per-link bandwidth vs tensor size, DRAM-resident vs L1-resident,
-  at the largest sizes that fit in L1.
+  TODO(data): images/memcfg_wormhole_n8.png, from
+      CCL_RUNS="ring:l1" CCL_OPS=all_gather ./tech_reports/CCLs/run_bench.sh loudbox
 -->
 
-The top of the curve is ambiguous between a fabric limit and a memory limit. Re-running with L1-resident buffers resolves it. Unchanged bandwidth means the fabric is the limit and the gap lies in the transfer pipeline. Improved bandwidth means memory was limiting, by the size of the improvement.
+Moving the tensors from DRAM into L1 does not change collective bandwidth. In our data, the two curves overlay wherever both exist. L1 cannot hold the largest tensors, so its sweep stops earlier.
 
 ## All data
 
 <!--
-  TODO(data): collapsed <details> tables, one per system and topology.
-  Columns: collective, N, topology, num_links, num_directions, tensor size
-  (bytes), bottleneck bytes, kernel time (ns), per-link bandwidth (GB/s),
-  percent of payload ceiling.
-  Record the fabric packet payload each run used.
+  TODO(data): collapsed <details> tables, one per run. parse_results.py already
+  writes them as data/results_{arch}_{fabric_config}_{memory}_{dtype}.md, so
+  these are a paste of that output. data/ is not committed, which is why the
+  tables have to live here.
+  Blackhole Galaxy runs to paste: FABRIC_1D_RING dram, FABRIC_1D dram,
+  FABRIC_1D_RING l1. Wormhole LoudBox: the same three.
 -->

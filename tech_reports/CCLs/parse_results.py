@@ -339,7 +339,8 @@ def main():
         out.append("")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"results_{h.get('arch') or 'unknown'}_{h['topology']}_{h['memory']}_{h['dtype']}"
+    stem = (f"results_{h.get('arch') or 'unknown'}_{h['topology']}_{h['memory']}"
+            f"_{h['dtype']}_{h['packet']}")
     dest = OUT_DIR / f"{stem}.md"
     dest.write_text("\n".join(out) + "\n")
     csv_dest = OUT_DIR / f"{stem}.csv"

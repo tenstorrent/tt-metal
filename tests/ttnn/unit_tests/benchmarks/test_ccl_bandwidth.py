@@ -258,13 +258,14 @@ def test_perf(mesh_device, op, submesh_shape, target_bytes, device_params):
     p = plan(op, target_bytes, n)
     iters = ITERS_LARGE if p["bytes"] > LARGE_BYTES else ITERS
 
-    # Uninitialised on-device allocation. from_torch builds the tensor on the
-    # host first, which dominates the run at multi-GB sizes.
-    tt_in = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(p["dev_shape"]), TT_DTYPE, ttnn.TILE_LAYOUT, submesh, _MEM)
-    out = trace_id = None
+    out = tt_in = trace_id = None
     capturing = False
     try:
+        # Uninitialised on-device allocation. from_torch builds the tensor on the
+        # host first, which dominates the run at multi-GB sizes. Inside the try
+        # because an L1 run is expected to outgrow the buffer and must skip.
+        tt_in = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(p["dev_shape"]), TT_DTYPE, ttnn.TILE_LAYOUT, submesh, _MEM)
         out = run_op(op, tt_in)
         ttnn.synchronize_device(submesh)
         # Free it before capturing, or the traced run allocates a second output
