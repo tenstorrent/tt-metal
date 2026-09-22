@@ -1078,7 +1078,7 @@ TEST_F(PrefetcherPipeFixture, GlobalAndCrossNode_SameProgram_DistinctRegions) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     experimental::CreateCrossNodeDFB(
-        program, mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0})), 256, 4);
+        program, *mesh_device, CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0})), 256, 4);
     AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256);
 
     detail::CompileProgram(mesh_device.get(), program);
@@ -2444,8 +2444,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
 
     // Semaphores are allocated top-down before the PrefetcherPipe. The test-only
     // sender staging scratch is placed immediately above the persistent arena.
-    auto resized_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
-    auto go_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
+    auto resized_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
+    auto go_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
 
     const std::pair<CoreCoord, CoreRangeSet> mapping = {sender_core, receiver_cores};
     auto pipe =

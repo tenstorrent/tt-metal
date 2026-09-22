@@ -1925,9 +1925,12 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Divergences worth reading before trusting one of these: each is xfailed per combination
         # in the sweep rather than smoothed over in the golden.
         MathOperation.Reciprocal,  # 1/+/-0 = +/-inf, 1/+/-inf = +/-0; kernel gives +0 for NaN
-        MathOperation.Sqrt,  # sqrt(-inf) = NaN; kernel gives NaN for sqrt(-0), IEEE gives -0
-        MathOperation.Rsqrt,  # rsqrt(+/-0) = +/-inf; same -0 divergence as Sqrt
-        MathOperation.SqrtCustom,  # sqrt(-inf) gives -inf where IEEE gives NaN (issue #52930)
+        # The sqrt family passes the whole sweep since the signed-zero / -inf fixes. Zero signs
+        # are invisible to passed_test(), so test_sqrt_family_negative_zero_regression reads
+        # the raw bits. The scopes tagged on the entries are argued in the kernel headers.
+        MathOperation.Sqrt,  # sqrt(-inf) = NaN, sqrt(NaN) = NaN, sqrt(+/-0) = +/-0; !FAST_APPROX
+        MathOperation.Rsqrt,  # rsqrt(-inf) = NaN, rsqrt(+/-0) = +/-inf; !FAST_APPROX
+        MathOperation.SqrtCustom,  # as Sqrt, on the NEGATIVE_INFINITY_SAFE instantiation
         # These goldens have to route through torch: math.sin / cos / acos / asin / tan *raise*
         # on a non-finite input instead of returning NaN, so a `math.*` call in a unary golden
         # is the same trap.
@@ -1976,8 +1979,10 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
 #   enrolment depends on that.
 # * A zero's sign is invisible to passed_test(), which judges by torch.isclose, a both-NaN
 #   clause and PCC -- so a wrong zero sign can neither fail nor XPASS.
-# * Only a 32-bit input at dest_acc=Yes delivers a -0.0, which is what scopes Sqrt's and
-#   Rsqrt's xfails to unpack-to-dest.
+# * A real -0.0 reaches the LREG only at dest_acc=Yes with a 32-bit input; at dest_acc=No it
+#   arrives as +0. That unpack_to_dest split is why a signed-zero probe is only meaningful on
+#   one side of it: it scopes Sign's and Heaviside's xfails, and is the pipeline the sqrt
+#   family's regression test runs on.
 #
 # Log stays out: the kernel clamps a non-finite input to the format maximum and logs that, so
 # every special comes back finite where the golden gives inf or NaN. Kernel behaviour with no

@@ -108,8 +108,30 @@ ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
     // factory -- silently pinning the slow fallback, or worse, replaying a native program whose CB
     // addresses were baked in for a free L1 window into a window a live tensor now occupies.
     auto factory = select_program_factory(operation_attributes, tensor_args);
+
+    // Aliasing signature: for each input, the position of the first input backed by the same
+    // MeshTensor. The Metal 2.0 spec-factory cache path (resolve_bindings, in mesh_device_operation
+    // _adapter.hpp) records each input's argument position by first MeshTensor-address match and
+    // freezes that table into the cache entry, so concat([x, x]) binds both inputs to position 0.
+    // Folding this partition into the hash gives aliased and distinct call patterns separate cache
+    // entries: a later concat([a, b]) of the same spec then misses and rebinds both inputs, instead
+    // of hitting the [x, x] entry and silently reading the first input twice. The legacy Buffer*
+    // patcher had an equivalent aliasing bail-out; this restores that guarantee for the ported
+    // factories. (The general fix belongs in resolve_bindings and is tracked separately.)
+    const auto& input_tensors = tensor_args.input_tensors;
+    std::vector<uint32_t> input_alias_signature(input_tensors.size());
+    for (uint32_t i = 0; i < input_tensors.size(); ++i) {
+        input_alias_signature[i] = i;
+        for (uint32_t j = 0; j < i; ++j) {
+            if (&input_tensors[j].mesh_tensor() == &input_tensors[i].mesh_tensor()) {
+                input_alias_signature[i] = j;
+                break;
+            }
+        }
+    }
+
     return tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
-        operation_attributes, tensor_args, factory.index());
+        operation_attributes, tensor_args, factory.index(), input_alias_signature);
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(

@@ -48,16 +48,14 @@ constexpr std::uint16_t ATT_WORKER_ENDPOINT_WORDS[] = {0x40, 0x41};
 constexpr std::uint16_t ATT_FULL_TILE_ENDPOINT_WORDS[] = {0x40, 0x41, 0x00, 0x01, 0x80, 0x81};
 
 // Array index uses tt-metal/UMD-visible y*2+x. Selectors 0..3 match
-// aether_utils.h. The UMD descriptor exposes dispatch at (1,2), while the
-// 2x3_DISPATCH RTL places it at (0,2), so the top-row selector order provides
-// that alias explicitly.
+// aether_utils.h; the top row holds the dispatch tile (0,2) and the PCIe tile.
 constexpr std::uint8_t ATT_TILE_SELECTORS[] = {
     2,
     3,  // y=0: DRAM
     0,
     1,  // y=1: Tensix
-    5,
-    4,  // y=2 UMD view: NOC2AXI, dispatch
+    4,
+    5,  // y=2: dispatch, PCIe
 };
 
 // Matches Aether::configure_aether_dram(GRID_2x3): bank 0 targets (0,0)
@@ -98,11 +96,11 @@ constexpr noc_att::Window REMOTE_WINDOW{
 constexpr std::uint64_t LOCAL_WINDOW_BASE = LOCAL_WINDOW.make_address(/*selector*/ 0, /*local_address*/ 0);
 static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);
 
-// The UMD-visible dispatch tile (1,2): selector from the tile table
-// (ATT_TILE_SELECTORS[y * 2 + x] = 4), aliasing the 2x3_DISPATCH RTL
-// placement at (0,2).
+// The dispatch tile: node (0,2) on the 2x3_DISPATCH soc descriptor (Quasar
+// translation is the identity, so the host publishes (0,2)); selector 4 is its
+// full-tile endpoint (word 0x80). (1,2) is the PCIe stub and must not resolve.
 inline constexpr noc_att::MapData::DispatchEntry DISPATCH_ENTRIES[] = {
-    {.x = 1, .y = 2, .selector = 4, .window = noc_att::WindowClass::FullTile},
+    {.x = 0, .y = 2, .selector = 4, .window = noc_att::WindowClass::FullTile},
 };
 
 // The declarative map: everything the shared resolver needs, as data. This

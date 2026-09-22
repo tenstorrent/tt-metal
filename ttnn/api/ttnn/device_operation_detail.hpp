@@ -18,11 +18,9 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
-namespace tt::tt_metal {
-namespace distributed {
+namespace tt::tt_metal::distributed {
 class MeshDevice;
-}  // namespace distributed
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::distributed
 
 namespace ttnn::device_operation::detail {
 
