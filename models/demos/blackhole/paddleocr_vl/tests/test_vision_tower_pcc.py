@@ -36,7 +36,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 PCC_TARGET = 0.98
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def tower(device):
     model_args = VisionModelArgs(device, instruct=True, max_batch_size=1, max_seq_len=2048)
     device_sd, host_sd = map_vision_state_dict(
