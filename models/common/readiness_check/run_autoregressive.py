@@ -129,10 +129,8 @@ def run_autoregressive(
     """
     build_kwargs = build_kwargs or {}
 
-    # Rendered chat templates can end in a meaningful newline after a role or
-    # thinking marker. Preserve it so the HF control and TT see the exact prompt.
-    prompt_text = prompt_file.read_text(encoding="utf-8")
-    if not prompt_text.strip():
+    prompt_text = prompt_file.read_text(encoding="utf-8").strip()
+    if not prompt_text:
         raise ValueError(f"Prompt file {prompt_file} is empty")
 
     tokenizer = AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
