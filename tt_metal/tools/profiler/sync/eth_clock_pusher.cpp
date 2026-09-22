@@ -305,11 +305,16 @@ __attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
     return true;
 }
 
-// A confirmed step: the old line closes at its last on-line sample and the slope acquisition restarts from the
-// departure.
+// A confirmed step: the old line closes at its last on-line sample, the slope acquisition restarts from the
+// departure, and the kConfirm samples that proved the step open the seam. The glide is already under way while they
+// are counted; a chord from the close to the first sample after them missed its onset by up to hundreds of cycles.
 __attribute__((noinline, cold)) void step(Model& m) {
     write_point(m, m.r_last_on, kp::kSyncLocalClose);
     begin_acquire(m, m.r_dep);
+    for (uint32_t i = kConfirm; i >= 1; i--) {
+        const volatile tt_l1_ptr Raw& e = ring()[(m.ring_n - i) & (kRingSamples - 1)];
+        raw_feed(m, raw_r(e), raw_w(e));
+    }
 }
 
 inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w) {
