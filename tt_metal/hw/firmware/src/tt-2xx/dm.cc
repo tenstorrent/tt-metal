@@ -380,6 +380,22 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
+#if DFB_CENTRAL_INVAL
+                // Invalidate the whole DFB config region once, here, instead of each worker
+                // invalidating its own blob. Must happen BEFORE the subordinates are released.
+                {
+                    const uint32_t inval_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                    if (inval_dfbs != 0) {
+                        // [config base, signal region) = global header + every hart's init blob,
+                        // i.e. a superset of the per-worker blob invalidates this replaces. The
+                        // signal region itself is only ever touched uncached.
+                        const uintptr_t inval_base = reinterpret_cast<uintptr_t>(dfb_l1_base);
+                        const uint32_t inval_len = *dfb_l1_uncached_u32_ptr(
+                            inval_base + offsetof(dfb_global_header_t, dfb_signal_region_off));
+                        invalidate_l2_cache_range(inval_base, inval_len);
+                    }
+                }
+#endif
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.

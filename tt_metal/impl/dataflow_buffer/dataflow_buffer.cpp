@@ -268,7 +268,7 @@ static uint32_t hart_blob_byte_size(
         for (const auto& rc : dfb->groups[0].hw_risc_configs) {
             if (rc.risc_id == hartid) { num_tcs = rc.config.num_tcs_to_rr; break; }
         }
-        sz += dfb_hart_init_entry_byte_size(num_tcs);
+        sz += dfb_hart_init_entry_byte_size_for(num_tcs, hartid < ::dfb::TENSIX_RISC_OFFSET);
     }
     if (n == 0) {
         sz = 4u;  // minimal {0,0,0,0} blob for non-participating hart
@@ -286,8 +286,12 @@ uint32_t compute_dfb_config_serialized_size(
     uint32_t payload = dfb_config_header_size();
     payload += dm1_remapper_blob_core_size(dfbs_on_core);
     payload += dm0_isr_blob_region_size(dfbs_on_core);
+    // Must mirror the emitter exactly: the hart-blob region starts 8B-aligned and every blob is
+    // rounded to 8, so the device can copy the image with ld/sd. Sizing this without the rounding
+    // under-allocates and the signal region runs off the end of the buffer.
+    payload = (payload + 7u) & ~7u;
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
-        payload += hart_blob_byte_size(h, dfbs_on_core);
+        payload += (hart_blob_byte_size(h, dfbs_on_core) + 7u) & ~7u;
     }
     // Signal region: per-producer byte slots (NUM_DFBS * MAX_PRODUCERS_PER_DFB) + uint32_t expected per DFB.
     payload += static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB) +
@@ -367,6 +371,14 @@ void verify_dfb_hart_blobs(
             blob_off);
 
         const uint8_t* blob = config_bytes.data() + blob_off;
+
+#if DFB_IFACE_IMAGE
+        // Under DFB_IFACE_IMAGE a DM entry is an 8B control prefix + a LocalDFBInterface image,
+        // not a dfb_hart_init_entry_t, so the field checks below do not apply to it.
+        if (hartid < ::dfb::TENSIX_RISC_OFFSET) {
+            continue;
+        }
+#endif
 
         // Walk init entries and verify they are self-consistent with DFB data.
         uint32_t cursor = 0u;
@@ -540,14 +552,49 @@ size_t serialize_dfb_config_for_core(
 
     // Pre-compute per-hart blob sizes to fill hart_blob_offset[].
     std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS> hart_blob_sizes{};
-    uint32_t running = hart_blobs_base;
+    // Every hart blob starts 8B-aligned so the device can copy the image with ld/sd. Two things
+    // have to hold, not just one: the region base must be 8-aligned AND every blob size must be a
+    // multiple of 8 -- otherwise one odd-sized blob knocks every later hart off alignment. The
+    // non-participating stub (4B) was exactly such a case.
+    uint32_t running = (hart_blobs_base + 7u) & ~7u;
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
-        uint32_t sz = hart_blob_byte_size(h, dfbs_on_core);
+        uint32_t sz = (hart_blob_byte_size(h, dfbs_on_core) + 7u) & ~7u;
         ghdr.hart_blob_offset[h] = static_cast<uint16_t>(running);
         hart_blob_sizes[h] = sz;
         running += sz;
     }
     ghdr.dfb_signal_region_off = running;
+
+    // Packed per-hart view of the four scalars the device prologue reads, so it can fetch them all
+    // with one uncached load. Filled from the SAME values written above, then cross-checked: this
+    // is a second copy of a layout the emitter already computes, and every bug in this file so far
+    // has come from two places computing one layout and only one of them being updated.
+    TT_FATAL(
+        ghdr.dfb_signal_region_off <= 0xFFFFu,
+        "DFB config: signal region offset {} does not fit hart_desc::signal_region_off (uint16)",
+        ghdr.dfb_signal_region_off);
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+        const uint8_t n = dfb_hart_participation_count(ghdr.participation_mask[h]);
+        ghdr.hart_desc[h].num_entries = n;
+        ghdr.hart_desc[h]._rsvd = 0;
+        ghdr.hart_desc[h].blob_start = ghdr.hart_blob_offset[h];
+        ghdr.hart_desc[h].blob_len = static_cast<uint16_t>(hart_blob_sizes[h]);
+        ghdr.hart_desc[h].signal_region_off = static_cast<uint16_t>(ghdr.dfb_signal_region_off);
+        const uint32_t desc_end = static_cast<uint32_t>(ghdr.hart_desc[h].blob_start) +
+                                  static_cast<uint32_t>(ghdr.hart_desc[h].blob_len);
+        const uint32_t emitted_end = (h + 1u < ::dfb::NUM_PARTICIPATING_HARTIDS)
+                                         ? static_cast<uint32_t>(ghdr.hart_blob_offset[h + 1u])
+                                         : ghdr.dfb_signal_region_off;
+        TT_FATAL(
+            desc_end == emitted_end,
+            "DFB config: hart_desc[{}] end {} != emitted blob end {} — the packed per-hart "
+            "descriptor and hart_blob_offset[] have diverged",
+            h, desc_end, emitted_end);
+        TT_FATAL(
+            hart_blob_sizes[h] <= 0xFFFFu,
+            "DFB config: hart {} blob size {} does not fit hart_desc::blob_len (uint16)",
+            h, hart_blob_sizes[h]);
+    }
 
     // ---------------------------------------------------------------------------
     // 3. Emit header.
@@ -605,6 +652,8 @@ size_t serialize_dfb_config_for_core(
     //      (4B-padded end)
     //    num_entries = popcount(participation_mask[h]); not stored in the blob.
     // ---------------------------------------------------------------------------
+    // Skip to the 8B-aligned blob region base computed above.
+    offset = (offset + 7u) & ~7u;
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
         const uint32_t blob_start = offset;
         TT_FATAL(
@@ -620,16 +669,16 @@ size_t serialize_dfb_config_for_core(
         }
 
         if (num_entries == 0) {
-            // Minimal 4-byte blob: {0, 0, 0, 0}
-            TT_FATAL(offset + 4u <= out.size(), "DFB config overflow (minimal hart blob h={})", h);
-            std::memset(out.data() + offset, 0, 4u);
-            offset += 4u;
+            // Minimal blob, 8B so it cannot knock later harts off 8B alignment.
+            TT_FATAL(offset + 8u <= out.size(), "DFB config overflow (minimal hart blob h={})", h);
+            std::memset(out.data() + offset, 0, 8u);
+            offset += 8u;
             continue;
         }
 
         TT_FATAL(
-            blob_start % 4u == 0u,
-            "hart {} blob offset {} is not 4B-aligned",
+            blob_start % 8u == 0u,
+            "hart {} blob offset {} is not 8B-aligned (the device copies the image with ld/sd)",
             h,
             blob_start);
 
@@ -648,7 +697,8 @@ size_t serialize_dfb_config_for_core(
                 "DFB {}: no risc_config for hart {} on core ({},{})", dfb->id, h, core.x, core.y);
             const DFBRiscConfig& rc = *rc_ptr;
             const uint8_t num_tcs = rc.config.num_tcs_to_rr;
-            const uint32_t entry_sz = dfb_hart_init_entry_byte_size(num_tcs);
+            const bool hart_is_dm = h < ::dfb::TENSIX_RISC_OFFSET;
+            const uint32_t entry_sz = dfb_hart_init_entry_byte_size_for(num_tcs, hart_is_dm);
             TT_FATAL(offset + entry_sz <= out.size(),
                 "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
 
@@ -712,6 +762,50 @@ size_t serialize_dfb_config_for_core(
                                            ? rc.config.intra_shadow_tc_id
                                            : 0xFFu;
 
+#if DFB_IFACE_IMAGE
+            if (hart_is_dm) {
+                // Emit the control prefix + the finished LocalDFBInterface image. The device copies
+                // the image verbatim, so every value the interface needs is finalized here.
+                //
+                // The TC slots are carried as full interface slots, not as the shared
+                // dfb_blob_tc_pair_t tail. That duplicates base_addr three times (rd_ptr == wr_ptr
+                // == base_addr at init), 8 redundant bytes per slot -- but reusing the shared tail
+                // was measured at +230 retired instructions, because it brings back the guarded
+                // ptc_w0/ptc_w1 preloads and the per-slot select/variable-shift/mask that the image
+                // deletes. The bytes are the cheaper side of that trade.
+                uint32_t tc_bases[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                uint32_t tc_limits[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                uint8_t tc_ptcs[::dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
+                for (uint8_t t = 0; t < num_tcs; t++) {
+                    tc_bases[t] = rc.config.base_addr[t];
+                    tc_limits[t] = rc.config.limit[t];
+                    tc_ptcs[t] = rc.config.packed_tile_counter[t];
+                }
+                dfb_write_dm_image_entry(
+                    out.data() + offset,
+                    static_cast<uint16_t>(entry.logical_dfb_id * DFB_DM_IFACE_SIZE),
+                    entry.flags,
+                    dfb_precomp_signal_slot(entry.logical_dfb_id, producer_signal_bit[di][h]),
+                    entry.capacity,
+                    entry.remapper_pair_index,
+                    num_tcs,
+                    dfb->config.entry_size,  // cb_addr_shift == 0 on DM
+                    entry.stride_size_precomp,
+                    entry.txn_ids,
+                    entry.threshold,
+                    entry.num_entries_per_txn_id,
+                    entry.num_entries_per_txn_id_per_tc,
+                    entry.num_txn_ids,
+                    static_cast<uint8_t>((entry.flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u),
+                    entry.num_entries,
+                    tc_bases,
+                    tc_limits,
+                    tc_ptcs);
+                offset += entry_sz;
+                continue;
+            }
+#endif
+
             // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
             std::memset(out.data() + offset, 0, entry_sz);
 
@@ -762,7 +856,9 @@ size_t serialize_dfb_config_for_core(
         }
 
         // Pad blob to 4B boundary.
-        const uint32_t blob_end_padded = (offset + 3u) & ~3u;
+        // Pad to 8, matching the size reserved in hart_blob_offset[] above. 4B padding here would
+        // leave the next hart's blob 4B-misaligned and the device's ld would fault.
+        const uint32_t blob_end_padded = (offset + 7u) & ~7u;
         if (blob_end_padded > offset) {
             std::memset(out.data() + offset, 0, blob_end_padded - offset);
             offset = blob_end_padded;
@@ -1415,7 +1511,8 @@ uint32_t DataflowBufferImpl::serialized_size() const {
     TT_FATAL(!groups.empty(), "DFB {} has no groups (configs not finalized?)", id);
     uint32_t sz = 0;
     for (const auto& rc : groups[0].hw_risc_configs) {
-        sz += dfb_hart_init_entry_byte_size(rc.config.num_tcs_to_rr);
+        sz += dfb_hart_init_entry_byte_size_for(
+            rc.config.num_tcs_to_rr, rc.risc_id < ::dfb::TENSIX_RISC_OFFSET);
     }
     return sz;
 }

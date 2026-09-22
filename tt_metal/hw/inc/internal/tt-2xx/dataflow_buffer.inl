@@ -78,7 +78,7 @@ inline uint32_t DataflowBuffer::get_local_num_entries() const {
     return 0;
 #else
     const dfb::PackedTileCounter packed_tc =
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+        dfb_iface_ptc(local_dfb_interface_, local_dfb_interface_.tc_idx);
     const uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC)
     return static_cast<uint32_t>(ckernel::trisc::tile_counters[tc_id].f.buf_capacity);
@@ -141,7 +141,7 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+        dfb_iface_ptc(local_dfb_interface_, local_dfb_interface_.tc_idx);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
@@ -153,7 +153,7 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
         while (!ready) {
             ready = true;
             for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-                dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+                dfb::PackedTileCounter ptc = dfb_iface_ptc(local_dfb_interface_, i);
                 ASSERT(overlay::llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
                 if (overlay::llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) < num_entries) {
                     ready = false;
@@ -173,7 +173,7 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 
 inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
-    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+    dfb::PackedTileCounter packed_tc = dfb_iface_ptc(local_dfb_interface_, local_dfb_interface_.tc_idx);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
@@ -182,7 +182,7 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
     if (__builtin_expect(local_dfb_interface_.broadcast_tc, 0)) {
         // DM-DM BLOCKED: post to all N TCs; wr_ptr tracked on slot 0
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-            dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+            dfb::PackedTileCounter ptc = dfb_iface_ptc(local_dfb_interface_, i);
             ASSERT(overlay::llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
             overlay::llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), num_entries);
         }
@@ -209,7 +209,7 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
 inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
     WAYPOINT("WFW");
-    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+    dfb::PackedTileCounter packed_tc = dfb_iface_ptc(local_dfb_interface_, local_dfb_interface_.tc_idx);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
@@ -228,7 +228,7 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
 
 inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
 #if !DFB_IS_COMPUTE_MATH
-    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+    dfb::PackedTileCounter packed_tc = dfb_iface_ptc(local_dfb_interface_, local_dfb_interface_.tc_idx);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
@@ -256,7 +256,7 @@ inline void DataflowBuffer::wait_relay_consumer_caught_up() const {
     while (!all_acked) {
         all_acked = true;
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-            const dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+            const dfb::PackedTileCounter packed_tc = dfb_iface_ptc(local_dfb_interface_, i);
             const uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             const uint8_t tc_id = dfb::get_counter_id(packed_tc);
             if (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) !=
@@ -283,7 +283,7 @@ inline void DataflowBuffer::finish_impl() {
     while (!all_acked) {
         all_acked = true;
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-            dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+            dfb::PackedTileCounter packed_tc = dfb_iface_ptc(local_dfb_interface_, i);
             uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
             // TRISC drain: finish() must not return until this TC is empty (posted == 0).
@@ -361,7 +361,7 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     uint8_t tail_txn_id = local_dfb_interface_.txn_ids[tail_txn_idx];
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
-    dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
+    dfb::PackedTileCounter ptc0 = dfb_iface_ptc(local_dfb_interface_, 0);
     uint16_t expected_slot0 = transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u);
 
     auto read_actual_slot0 = [&]() -> uint16_t {
@@ -437,7 +437,7 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     uint16_t actual_slot0 = read_actual_slot0();
     if (static_cast<int16_t>(actual_slot0 - expected_slot0) < 0) {
         for (uint8_t i = 0; i < N; i++) {
-            dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+            dfb::PackedTileCounter ptc = dfb_iface_ptc(local_dfb_interface_, i);
             uint8_t tensix_id = dfb::get_tensix_id(ptc);
             uint8_t tc_id     = dfb::get_counter_id(ptc);
             uint16_t expected = transactions_issued / N + (i < (transactions_issued % N) ? 1u : 0u);
@@ -526,7 +526,7 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
 // Preamble for implicit-sync read: spin until previous reads are posted and there is space in the tile counters.
 // Returns the txn_id to stamp on the next NOC read.
 inline uint32_t DataflowBuffer::prepare_implicit_read() {
-    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+    dfb::PackedTileCounter packed_tc = dfb_iface_ptc(local_dfb_interface_, local_dfb_interface_.tc_idx);
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     const uint32_t txn_id = local_dfb_interface_.txn_ids[ptxn_id_index_];
@@ -565,7 +565,7 @@ inline void DataflowBuffer::commit_implicit_read() {
 // Preamble for implicit-sync write: spin until previous writes are acked and data is available in the tile counters.
 // Returns the txn_id to stamp on the next NOC write.
 inline uint32_t DataflowBuffer::prepare_implicit_write() {
-    dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
+    dfb::PackedTileCounter packed_tc = dfb_iface_ptc(local_dfb_interface_, local_dfb_interface_.tc_idx);
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     const uint32_t txn_id = local_dfb_interface_.txn_ids[ctxn_id_index_];

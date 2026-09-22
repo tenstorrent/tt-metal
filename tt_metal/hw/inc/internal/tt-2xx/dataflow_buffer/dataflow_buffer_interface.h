@@ -58,6 +58,7 @@ struct LocalDFBInterface {
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 89, "LocalDFBInterface (pack TRISC) size is incorrect");
+inline dfb::PackedTileCounter dfb_iface_ptc(const LocalDFBInterface& i, uint32_t t) { return i.tc_slots[t].packed_tile_counter; }
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -83,23 +84,23 @@ struct LocalDFBInterface {
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface (unpack TRISC) size is incorrect");
+inline dfb::PackedTileCounter dfb_iface_ptc(const LocalDFBInterface& i, uint32_t t) { return i.tc_slots[t].packed_tile_counter; }
 
 #else
 
 // Per–tile-counter slot (DM).
 //
-// All u32 fields are at 4B-aligned offsets and the struct pads to 20B to keep every
-// tc_slots[] element 4B-aligned within LocalDFBInterface.
+// Exactly 16B with no padding. packed_tile_counter used to live here, which forced the struct to
+// pad 17 -> 20 and cost that padding once per slot (6x). It now lives in LocalDFBInterface::ptc[],
+// where the six bytes are contiguous. 16 is a power of two, so slot indexing is a shift.
 struct DFBTCSlot {
     uint32_t rd_ptr;
     uint32_t wr_ptr;
     uint32_t base_addr;
     uint32_t limit;
-    dfb::PackedTileCounter packed_tile_counter;
-    uint8_t _align[3];  // pad 17 → 20B so every slot in tc_slots[] is 4B-aligned
 };
 
-struct LocalDFBInterface {
+struct alignas(8) LocalDFBInterface {
     uint32_t entry_size;
     uint32_t stride_size;
 
@@ -116,11 +117,24 @@ struct LocalDFBInterface {
 
     uint16_t num_entries;
 
+    // Hoisted out of DFBTCSlot: six contiguous bytes here cost 6, where one byte per slot cost 18
+    // in padding. Also puts all six in one cache line for the TC programming loop.
+    dfb::PackedTileCounter ptc[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    uint8_t _pad1[4];  // 28 -> 32 so tc_slots[] is 8B-aligned and the struct reaches 128
+
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 };
 
-static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 144, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(DFBTCSlot) == 16, "DFBTCSlot size is incorrect");
+// 128 = power of two (array index is a shift, not a multiply) and exactly two 64B cache lines,
+// so every slot is line-aligned instead of rotating through offsets 0/16/32/48.
+static_assert(alignof(LocalDFBInterface) >= 8, "iface must be 8B-aligned so the image copy can use ld/sd");
+static_assert(sizeof(LocalDFBInterface) == 128, "LocalDFBInterface size is incorrect");
+static_assert(offsetof(LocalDFBInterface, tc_slots) == 32, "tc_slots must start at 32");
+
+// Uniform accessor so call sites do not need to know where the byte lives. On DM it was hoisted
+// out of DFBTCSlot (see above); on the TRISC variants it is still inside the slot.
+inline dfb::PackedTileCounter dfb_iface_ptc(const LocalDFBInterface& i, uint32_t t) { return i.ptc[t]; }
 
 #endif
 
