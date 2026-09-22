@@ -317,7 +317,11 @@ def configure_spec_decode_smoke_env():
         if uses_ci_config_only_checkpoint():
             os.environ["HF_MODEL"] = "google/gemma-4-31B-it"
         os.environ.setdefault("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it")
-        os.environ.setdefault("GEMMA4_NUM_LAYERS", "4")
+        # Need both layer types in the truncated target: 31B is 5×sliding then
+        # full, so the first full is index 5. The it-assistant is SSSF and does
+        # ``shared_kv[lt]`` for each type; NUM_LAYERS=4 left only sliding and
+        # KeyError'd on ``full_attention`` in test_spec_decode_matches_greedy.
+        os.environ.setdefault("GEMMA4_NUM_LAYERS", "6")
 
     path = resolve_assistant_model_path()
     if path:
