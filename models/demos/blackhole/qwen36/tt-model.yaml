@@ -52,8 +52,9 @@ runtime:
   vllm: {version: "0.26.0"}                                    # the validated serving venv; the dispatch relies on 0.26.0 calling
                                                                # load_general_plugins() before parsing `vllm serve` (arg_utils.py:2733)
   # vllm-tt-plugin branch pd-disagg (superset of the DFlash2 package's 7ddf2c8): PD connector + FabricSocketTransport + launch
-  # layer + the TT_SERVE_LAUNCHER dispatch / pd_container supervisor (adc415b, 802 tests). Pinned to the pushed commit.
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: adc415b69a91704a8943fed65c35cfcf2b348adf}
+  # layer + the TT_SERVE_LAUNCHER dispatch / pd_container supervisor, plus the 2026-09-22 p1d1 optimizations (handoff mirror,
+  # claim hold, compact host sampler, torch threads under mpirun, fused-decode defaults; 98f1a35, 372 tests). Pinned to the pushed commit.
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 98f1a35a2405520e58c0e2185a9db1022ad64fcb}
   extra_models_dir: models/demos/blackhole/qwen36/vllm_bundle    # main_class Qwen36DFlashForCausalLM (tp2-dflash2); the plain
                                                                # profiles select Qwen36ForCausalLM via TT_MODEL_CLASS_OVERRIDES
 
