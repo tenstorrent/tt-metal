@@ -96,6 +96,9 @@ class Arch:
     ring_size: int  # TP factor
     l1_bytes: int
     source: str
+    # Compute cores of the ring joint SDPA: (full_grid.x - 1) x full_grid.y, one column for the fused CCL workers
+    # (attention_minimax_h3.py sdpa_worker_grid). Tracy's CORE COUNT includes those workers.
+    sdpa_compute_cores: int = 0
 
     def peak_flops(self, fidelity: str = "HiFi2", cores: int | None = None) -> float:
         cores = self.ring_matmul_cores if cores is None else cores
@@ -126,10 +129,11 @@ WH = Arch(
     ring_size=4,
     l1_bytes=1464 * 1024,  # tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml:132
     source="sdpa_perf_utils.py, utils/matmul.py:407, ccl_common.cpp:2130, common.py:134, wormhole_b0_80_arch.yaml",
+    sdpa_compute_cores=63,  # 7x9
 )
 
 BH = Arch(
-    name="Blackhole Galaxy 4x8 (constants inherited from cglagovich/agmm_analysis: 2 links)",
+    name="Blackhole Galaxy 4x8 (4x8nl2: TP=4 / SP=8, Ring, 2 links)",
     short="BH",
     clock_hz=1.35e9,
     ring_matmul_cores=108,  # 12x9
@@ -140,8 +144,11 @@ BH = Arch(
     num_links=2,  # BH_GALAXY channels count 2 -- tools/scaleout/generate_mgd/generate_mgd.cpp
     ring_size=4,
     l1_bytes=1536 * 1024,  # blackhole_140_arch.yaml:109 (the artifacts budget 1400 KB of it for CBs)
-    source="origin/cglagovich/agmm_analysis:agmm/roofline_lib.py (298.6 TFLOP/s, 512 GB/s, 25 GB/s/link)",
+    source="origin/cglagovich/agmm_analysis:agmm/roofline_lib.py (298.6 TFLOP/s, 512 GB/s, 25 GB/s/link); "
+    "mesh row minimax_h3/common.py:165, pipeline_minimax_h3.py:179",
+    sdpa_compute_cores=110,  # 11x10
 )
+ARCHES = {"wh": WH, "bh": BH}
 
 
 # The ops themselves (shapes, fusion, blocking, 2026-09-17 baselines, colours) live in `minimax_h3_ops.py`.
@@ -247,17 +254,20 @@ def roofline(
 
 
 def load_measured_csv(path: str, M: int, ops: list[Op]) -> dict[str, float]:
-    """Best `OK` device_kernel_duration per op from a `sweep_mm_block_sizes.py` results CSV, in us."""
+    """Best `OK` device_kernel_duration per op, in us, from a `sweep_mm_block_sizes.py` results CSV or an
+    `agmm_unit_sweep.py` one (whose rows carry a `mode`; only the fused rows count)."""
     by_kn = {(op.K, op.N): op.name for op in ops}
     best: dict[str, float] = {}
     with open(path, newline="") as handle:
         for row in csv.DictReader(handle):
             if row.get("status") != "OK" or int(row["M"]) != M:
                 continue
+            if row.get("mode") not in (None, "", "fused"):
+                continue
             name = by_kn.get((int(row["K"]), int(row["N"]))) or SWEEP_USE_CASE_TO_OP.get(row.get("use_case", ""))
             if name is None:
                 continue
-            us = int(row["device_kernel_duration_ns"]) / 1e3
+            us = float(row["device_kernel_duration_ns"]) / 1e3
             best[name] = min(us, best.get(name, math.inf))
     return best
 
@@ -897,6 +907,7 @@ def selftest() -> None:
 # whole transformer block from a Tracy ops_perf_results CSV
 # ----------------------------------------------------------------------------------------------
 
+# The Wormhole fsdp1 15 s block profile of 2026-09-17; only used for --arch wh. Other arches need --profile-csv.
 DEFAULT_PROFILE_CSV = "generated/profiler/reports/2026_09_17_21_33_20/ops_perf_results_2026_09_17_21_33_20.csv"
 DTYPE_BYTES = {
     "BFLOAT16": 2,
@@ -908,7 +919,6 @@ DTYPE_BYTES = {
     "BFLOAT4_B": 0.5625,
     "UINT8": 1,
 }
-SDPA_COMPUTE_CORES = 63  # 7x9: CORE COUNT reads 71 because it includes the fused CCL workers (attention_minimax_h3.py ccl_core_grid_offset)
 OTHER_SHARE = 0.01  # ops below this share of the block are grouped as "other"
 CLASS_COLOR = {
     "compute": RESOURCE_COLOR["compute"],
@@ -917,12 +927,19 @@ CLASS_COLOR = {
     "other": "#8a8983",
 }
 CLASS_LABEL = {"compute": "compute-bound", "dram": "DRAM-bound", "fabric": "fabric-bound", "other": "measured only"}
-BOUND_NOTE = (
-    "Bound models (per op class, stated assumptions): compute = 2·FLOPs / (op's core count × 2048 FLOP/cycle × 1.0 GHz, HiFi2); "
-    "DRAM = bytes in + out of DRAM-resident tensors / 288 GB/s;\n"
-    "fabric = ring volume (R−1)·shard / (2·links) / 12.5 GB/s per link; ideal = max of the terms that apply. "
-    "\nSDPA FLOPs = 4·S_local·S_total·d·heads (full joint attention) on 63 compute cores. Ops under 1% of the block are 'other' (measured only)."
-)
+
+
+def bound_note(arch: Arch, fidelity: str) -> str:
+    """The bound models printed on every block figure, with this arch's constants."""
+    per_cycle = LOFI_FLOP_PER_CYCLE_PER_CORE // FIDELITY_CYCLES[fidelity]
+    return (
+        f"Bound models (per op class, stated assumptions): compute = 2·FLOPs / (op's core count × {per_cycle} FLOP/cycle "
+        f"× {arch.clock_hz / 1e9:.2f} GHz, {fidelity}); DRAM = bytes in + out of DRAM-resident tensors / "
+        f"{arch.dram_bw / 1e9:.0f} GB/s;\n"
+        f"fabric = ring volume (R−1)·shard / (2·links) / {arch.link_bw / 1e9:.1f} GB/s per link; ideal = max of the "
+        f"terms that apply. \nSDPA FLOPs = 4·S_local·S_total·d·heads (full joint attention) on {arch.sdpa_compute_cores} "
+        "compute cores. Ops under 1% of the block are 'other' (measured only)."
+    )
 
 
 @dataclass
@@ -1037,10 +1054,10 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
             heads, s_local, d = ins[0][0][1], ins[0][0][2], ins[0][0][3]
             s_total = ins[3][0][2] if len(ins) > 3 else s_local
             flops = 4.0 * s_local * s_total * d * heads
-            tc = flops / (SDPA_COMPUTE_CORES * per_cycle * arch.clock_hz)
+            tc = flops / (arch.sdpa_compute_cores * per_cycle * arch.clock_hz)
             td = _bytes(ins + outs) / dram_bw
             name, klass = "RingJointSDPA", "compute"
-            formula = f"4·{s_local}·{s_total}·{d}·{heads} = {flops / 1e12:.2f} TFLOP on {SDPA_COMPUTE_CORES} cores"
+            formula = f"4·{s_local}·{s_total}·{d}·{heads} = {flops / 1e12:.2f} TFLOP on {arch.sdpa_compute_cores} cores"
         elif code == "MinimalMatmulDeviceOperation":
             m_rows, k, n = ins[0][0][2], ins[1][0][2], ins[1][0][3]
             tc = 2.0 * m_rows * k * n / (cores * per_cycle * arch.clock_hz)
@@ -1207,7 +1224,7 @@ def fig_block_stacked(ops: list[BlockOp], arch: Arch, fidelity: str, title: str,
     )
     fig.suptitle(title, fontsize=12, color=INK, x=0.01, ha="left")
     fig.text(0.01, 0.945, f"{_constants_line(arch, fidelity)}   ·   source {source}", fontsize=8.5, color=INK_2)
-    fig.text(0.01, 0.005, BOUND_NOTE, fontsize=7.8, color=INK_MUTED, va="bottom", linespacing=1.4)
+    fig.text(0.01, 0.005, bound_note(arch, fidelity), fontsize=7.8, color=INK_MUTED, va="bottom", linespacing=1.4)
     fig.tight_layout(rect=(0, 0.08, 1, 0.9))
     return fig
 
@@ -1241,7 +1258,7 @@ def fig_block_ops(ops: list[BlockOp], arch: Arch, fidelity: str, title: str, sou
     ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8)
     fig.suptitle(title, fontsize=12, color=INK, x=0.01, ha="left")
     fig.text(0.01, 0.93, f"{_constants_line(arch, fidelity)}   ·   source {source}", fontsize=8.5, color=INK_2)
-    fig.text(0.01, 0.005, BOUND_NOTE, fontsize=7.8, color=INK_MUTED, va="bottom", linespacing=1.4)
+    fig.text(0.01, 0.005, bound_note(arch, fidelity), fontsize=7.8, color=INK_MUTED, va="bottom", linespacing=1.4)
     fig.tight_layout(rect=(0, 0.1, 1, 0.91))
     return fig
 
@@ -1270,8 +1287,16 @@ def main() -> None:
         choices=sorted(FIDELITY_CYCLES),
         help="math fidelity of the speed-of-light (model runs HiFi2)",
     )
-    p.add_argument("--dram", default="spec", help="WH DRAM BW: spec (288) | measured (267) | perf_model (258) | <GB/s>")
-    p.add_argument("--links", type=int, default=None, help="override WH links per direction (mesh config uses 4)")
+    p.add_argument(
+        "--arch",
+        default="wh",
+        choices=sorted(ARCHES),
+        help="the galaxy the block profile / measured CSV come from and the roofline figures are drawn for",
+    )
+    p.add_argument(
+        "--dram", default="spec", help="DRAM BW of --arch: spec | measured (267, WH) | perf_model (258, WH) | <GB/s>"
+    )
+    p.add_argument("--links", type=int, default=None, help="override --arch's links per direction")
     p.add_argument(
         "--M", type=int, default=M_15S_768P_16_9, help="rows per device (default 13664 = 15 s / 768P / 16:9 at SP=8)"
     )
@@ -1286,7 +1311,8 @@ def main() -> None:
     p.add_argument(
         "--include-refiner", action="store_true", help="add the token-refiner instances of the selected ops at M=64"
     )
-    p.add_argument("--no-bh", action="store_true", help="drop the Blackhole side of the comparison")
+    p.add_argument("--no-bh", action="store_true", help="drop the Blackhole side of the comparison figures")
+    p.add_argument("--no-wh", action="store_true", help="drop the Wormhole side of the comparison figures")
     p.add_argument(
         "--measured-csv",
         default=None,
@@ -1295,8 +1321,8 @@ def main() -> None:
     p.add_argument("--no-measured", action="store_true", help="do not overlay measured times")
     p.add_argument(
         "--profile-csv",
-        default=DEFAULT_PROFILE_CSV,
-        help="Tracy ops_perf_results CSV of one block (fsdp1 15 s profile by default)",
+        default=None,
+        help="Tracy ops_perf_results CSV of one block on --arch (default for wh: the fsdp1 15 s profile of 2026-09-17)",
     )
     p.add_argument(
         "--no-block",
@@ -1314,23 +1340,36 @@ def main() -> None:
         if not args.dump and args.figs == "none":
             return
 
-    dram_bw = WH_DRAM_BW.get(args.dram)
-    if dram_bw is None:
+    base = ARCHES[args.arch]
+    if args.dram == "spec":
+        dram_bw = base.dram_bw
+    elif args.arch == "wh" and args.dram in WH_DRAM_BW:
+        dram_bw = WH_DRAM_BW[args.dram]
+    else:
         dram_bw = float(args.dram) * 1e9
-    wh = replace(WH, dram_bw=dram_bw, num_links=args.links or WH.num_links)
-    arches = [wh] if args.no_bh else [wh, BH]
+    main_arch = replace(base, dram_bw=dram_bw, num_links=args.links or base.num_links)
+    others = [a for key, a in ARCHES.items() if key != args.arch]
+    if args.no_bh:
+        others = [a for a in others if a is not BH]
+    if args.no_wh:
+        others = [a for a in others if a is not WH]
+    arches = [main_arch] + others
+    if args.profile_csv is None and args.arch == "wh":
+        args.profile_csv = DEFAULT_PROFILE_CSV
 
     ops = select_ops(args.ops + (",ff2" if args.include_ff2 else ""))
     measured: dict[str, float] = {}
     if not args.no_measured:
-        measured = dict(MEASURED_US_WH_15S) if args.M == M_15S_768P_16_9 else {}
+        # The registry's shipped-blocking numbers are the Wormhole 2026-09-17 baseline; other arches only have
+        # what --measured-csv provides.
+        measured = dict(MEASURED_US_WH_15S) if args.M == M_15S_768P_16_9 and args.arch == "wh" else {}
         if args.measured_csv:
             measured.update(load_measured_csv(args.measured_csv, args.M, ops))
 
     rows_by_arch: dict[str, list[Roofline]] = {}
     for arch in arches:
         rows = [
-            roofline(args.M, op, arch, args.fidelity, measured_us=measured.get(op.name) if arch is wh else None)
+            roofline(args.M, op, arch, args.fidelity, measured_us=measured.get(op.name) if arch is main_arch else None)
             for op in ops
         ]
         if args.include_refiner:
@@ -1340,8 +1379,8 @@ def main() -> None:
     all_rows = [r for rows in rows_by_arch.values() for r in rows]
     block_ops = None
     if not args.no_block:
-        if os.path.exists(args.profile_csv):
-            block_ops = load_block_profile(args.profile_csv, wh, args.fidelity)
+        if args.profile_csv and os.path.exists(args.profile_csv):
+            block_ops = load_block_profile(args.profile_csv, main_arch, args.fidelity)
         else:
             print(
                 f"note: no block profile at {args.profile_csv}; block figures skipped (pass --profile-csv or --no-block)"
@@ -1350,7 +1389,8 @@ def main() -> None:
         print(
             dump_block_table(
                 block_ops,
-                f"Transformer block — {wh.name}, per device, {args.fidelity}, {os.path.basename(args.profile_csv)}",
+                f"Transformer block — {main_arch.name}, per device, {args.fidelity}, "
+                f"{os.path.basename(args.profile_csv)}",
             )
         )
         print()
@@ -1389,13 +1429,13 @@ def main() -> None:
             measured_note = "measured, shipped blocking (Tracy, 2026-09-17)"
         if "roofline" in figs:
             fig = fig_roofline(
-                rows_by_arch[wh.short],
-                wh,
+                rows_by_arch[main_arch.short],
+                main_arch,
                 args.fidelity,
-                f"Roofline on the Wormhole Galaxy, {op_names} — {shape_title}",
+                f"Roofline on the {main_arch.name.split(' (')[0]}, {op_names} — {shape_title}",
                 measured_note,
             )
-            path = os.path.join(args.out_dir, f"roofline_wh_{tag}.png")
+            path = os.path.join(args.out_dir, f"roofline_{main_arch.short.lower()}_{tag}.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
         if "bars" in figs:
@@ -1418,23 +1458,23 @@ def main() -> None:
         if block_ops and "block_stacked" in figs:
             fig = fig_block_stacked(
                 block_ops,
-                wh,
+                main_arch,
                 args.fidelity,
                 f"Roofline vs measured, every op — {shape_title}",
                 os.path.basename(args.profile_csv),
             )
-            path = os.path.join(args.out_dir, f"block_stacked_{tag}.png")
+            path = os.path.join(args.out_dir, f"block_stacked_{main_arch.short.lower()}_{tag}.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
         if block_ops and "block_ops" in figs:
             fig = fig_block_ops(
                 block_ops,
-                wh,
+                main_arch,
                 args.fidelity,
                 f"Per-op roofline vs measured — {shape_title}",
                 os.path.basename(args.profile_csv),
             )
-            path = os.path.join(args.out_dir, f"block_ops_{tag}.png")
+            path = os.path.join(args.out_dir, f"block_ops_{main_arch.short.lower()}_{tag}.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
         if "nstar" in figs:

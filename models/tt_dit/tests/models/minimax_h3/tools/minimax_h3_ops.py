@@ -19,10 +19,12 @@ multiplies over; K_local = K / TP is what each device holds. N is the per-device
 ff1, the pre-reduce-scatter width for ff2); N_out is the per-device output width.
 
 Shapes at 15 s / 768P / 16:9: hidden 5376, inner 7168 (56 heads x 128), ffn 14336, 13664 rows per device
-(Tracy block breakdown, 2026-09-17). Blockings are what the model resolves at this M:
-to_qkv / to_out from `AGMM_BLOCK_SIZES` (`agmm_config.py`, subblock fixed at 2x2 by `get_matmul_config`), ff1 and
-ff2 from the swept `grid_88_configs` / `grid_89_configs` entries (`models/tt_dit/utils/matmul.py`), which win
-over the model's `default_block_size`.
+(Tracy block breakdown, 2026-09-17). Blockings, grids and `measured_us_wh_15s` are the WORMHOLE galaxy baseline at
+this M: to_qkv / to_out from `AGMM_BLOCK_SIZES` (`agmm_config.py`, subblock fixed at 2x2 by `get_matmul_config`),
+ff1 and ff2 from the swept `grid_88_configs` / `grid_89_configs` entries (`models/tt_dit/utils/matmul.py`), which
+win over the model's `default_block_size`. On another architecture the model resolves different grids and possibly
+different blockings; the AGMM sweep (`test_h3_agmm_sweep`) records the blocking it resolves at run time in its
+sidecar instead of reading these fields.
 
 Torch-side helpers (`prepare_weight`, `make_extra_inputs`, `golden`, `output_parts`) import torch lazily.
 """
@@ -45,12 +47,12 @@ class OpSpec:
     N: int  # per-device weight width
     N_out: int  # per-device output width
     fusion: str  # short label for tables and figures
-    blocks: tuple[int, int, int, int, int]  # M_block, K_block, N_block, subblock_h, subblock_w the model runs
-    grid: tuple[int, int]
+    blocks: tuple[int, int, int, int, int]  # M_block, K_block, N_block, subblock_h, subblock_w the model runs on WH
+    grid: tuple[int, int]  # WH worker grid (8x8 AGMM, 8x9 full); BH is 12x9 / 11x10, resolved at run time by the sweep
     sweep_use_case: str  # `USE_CASE_CONFIGS` key in models/tt_dit/utils/sweep_mm_block_sizes.py
     sweep_is_agmm: bool
     op_code: str  # Tracy OP CODE
-    measured_us_wh_15s: float  # 2026-09-17 baseline at M=13664, HiFi2, shipped blocking (sweep_mm_block_sizes.py)
+    measured_us_wh_15s: float  # WH 2026-09-17 baseline at M=13664, HiFi2, shipped blocking (sweep_mm_block_sizes.py)
     color: str
     marker: str
     chunks: int = 1

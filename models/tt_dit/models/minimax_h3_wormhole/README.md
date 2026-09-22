@@ -419,6 +419,11 @@ MM_SWEEP_PROFILER_DUMP_EVERY=100000 python -m pytest \
   -k "13664_5376_7168_8x8_agmm_ff1_swiglu and wh_4x8_ring" -s
 ```
 
+A second sweep set, run from the AGMM unit test rather than the harness, compares the fused op against the unfused
+all-gather + matmul pair with each step swept on its own knobs (all-gather hyperparameters, matmul blocking on
+8x8 and on the model's 8x9), at 4736 / 9184 / 13664 rows per device, with a PCC per combo:
+[agmm_fused_vs_unfused.md](agmm_fused_vs_unfused.md).
+
 Wormhole's compute grid is **8x9 = 72 cores** against Blackhole's 12x10, so the AGMM worker grid is
 8x8 (`agmm_worker_grid` reserves the in0-mux row) rather than 12x9, and ff2's plain matmul runs on
 the full 8x9. Neither grid is one Blackhole produces, so every H3 blocking the model carried for
