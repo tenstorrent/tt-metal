@@ -21,7 +21,6 @@ namespace ckl = compute_kernel_lib;
 
 template <
     std::uint32_t block_w,
-    std::uint32_t num_subblocks_w,
     std::uint32_t subblock_w,
     std::uint32_t dfb_in_id,
     std::uint32_t dfb_max_scaler_id,
@@ -57,7 +56,6 @@ void kernel_main() {
     constexpr std::uint32_t block_h = get_arg(args::block_h);
     constexpr std::uint32_t block_w = get_arg(args::block_w);
     constexpr std::uint32_t subblock_w = get_arg(args::subblock_w);
-    constexpr std::uint32_t num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr bool causal_mask = get_arg(args::causal_mask);
     constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask);
 #ifdef NUMERIC_STABLE
@@ -108,7 +106,7 @@ void kernel_main() {
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
         dfb_x_obj.wait_front(block_w);
-        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>();
+        calc_numeric_stable<block_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>();
 #endif
 
         reconfig_data_format(dfb::exps, dfb::sum_scaler);
@@ -116,7 +114,7 @@ void kernel_main() {
 #else
 
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, dfb::in0, dfb::max_scaler, dfb::max, dfb::exps>();
+        calc_numeric_stable<block_w, subblock_w, dfb::in0, dfb::max_scaler, dfb::max, dfb::exps>();
 #else
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w),

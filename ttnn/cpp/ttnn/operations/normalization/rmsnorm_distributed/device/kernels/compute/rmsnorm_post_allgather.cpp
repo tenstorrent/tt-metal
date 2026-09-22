@@ -83,7 +83,7 @@ void kernel_main() {
 
         // 1/sqrt(var + eps)
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(cb_var_idx),

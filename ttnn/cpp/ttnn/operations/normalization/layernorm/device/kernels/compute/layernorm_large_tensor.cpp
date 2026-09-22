@@ -304,7 +304,7 @@ void kernel_main() {
         //  dfb_ex2pe =   -------------
         //               √(Var(X) + ε)
         ckl::eltwise_chain(
-            ckl::IterationShape::tiles(onetile),
+            ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_ex2_id),
@@ -314,7 +314,7 @@ void kernel_main() {
 
         // broadcasts the tile since dfb_ex2pe is a column vector that contains the important data
         ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(dfb_ex2pe_id), ckl::output(dfb_ex2pe_id)>(
-            ckl::IterationShape::tiles(onetile));
+            ckl::IterationShape::one_tile());
         dfb_ex2pe.wait_front(onetile);
 
         // End of
