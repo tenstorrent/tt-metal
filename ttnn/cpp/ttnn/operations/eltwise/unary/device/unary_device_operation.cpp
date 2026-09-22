@@ -147,19 +147,18 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         if (op.type() == operations::unary::UnaryOpType::POWER ||
             op.type() == operations::unary::UnaryOpType::POWER_ITERATIVE) {
             // Both kernels compute in float (2^(p*log2(x)) / repeated float multiply). An integer tile
-            // would be consumed as float32 bit patterns and the float result stored through an integer
-            // output tensor (#56853). Integer pow is handled in the composite via int multiply.
-            const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
+            // would be consumed as float32 bit patterns and the float result stored back through the
+            // integer output tensor. Integer pow is handled in the composite via int multiply.
+            //
+            // Only the input is checked. An integer output is either already rejected upstream --
+            // unary_impl refuses a preallocated output that mixes integer and float with the input --
+            // or legitimate: a chain ending in TYPECAST sets output_dtype to the cast target, so
+            // [POWER, TYPECAST(int32)] computes in float and narrows afterwards, which is correct.
             TT_FATAL(
                 tt::tt_metal::is_floating_point(input_tensor.dtype()),
                 "Unary: {} requires a floating point input, got dtype {}",
                 op.type(),
                 input_tensor.dtype());
-            TT_FATAL(
-                tt::tt_metal::is_floating_point(effective_out),
-                "Unary: {} requires a floating point output, got dtype {}",
-                op.type(),
-                effective_out);
         }
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
             TT_FATAL(

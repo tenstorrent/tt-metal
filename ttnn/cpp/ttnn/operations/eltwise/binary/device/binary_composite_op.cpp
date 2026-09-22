@@ -1115,7 +1115,7 @@ Tensor pow(
     const std::optional<Tensor>& output_tensor) {
     if (!tt::tt_metal::is_floating_point(input.dtype())) {
         // Integer tensors: the unary POWER / POWER_ITERATIVE kernels compute in float and would read
-        // the integer bits as float32 (#56853). Compute exactly with the integer multiply instead,
+        // the integer bits as float32. Compute exactly with the integer multiply instead,
         // following torch.pow semantics for integer tensors.
         TT_FATAL(
             exponent >= 0,

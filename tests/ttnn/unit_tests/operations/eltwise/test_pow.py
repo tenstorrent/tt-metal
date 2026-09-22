@@ -631,7 +631,7 @@ def test_pow_arange_masking_fp32(exponent, device):
     assert_allclose(golden, result, atol=5e-4, rtol=8e-7)
 
 
-# Integer tensors with an integer scalar exponent (issue #56853). The unary POWER kernels compute
+# Integer tensors with an integer scalar exponent. The unary POWER kernels compute
 # in float, so before the composite routed integer inputs through them the int32 bits were read as
 # float32 and the float result was stored back into the INT32 tensor. The integer path is now
 # exponentiation-by-squaring on the integer SFPU multiply, so it must be bit-exact with torch,
