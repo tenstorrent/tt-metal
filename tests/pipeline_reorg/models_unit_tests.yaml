@@ -1694,7 +1694,7 @@
     bh_quietbox_2:
       timeout: 10
       tier: 3
-  owner_id: D0B8130N4BW # Dalar Vartanians
+  owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
   budget_type: unit
 
