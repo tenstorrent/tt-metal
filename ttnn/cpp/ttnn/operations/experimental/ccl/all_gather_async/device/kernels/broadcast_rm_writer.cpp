@@ -259,5 +259,14 @@ void kernel_main() {
 
     close_connections(fabric_connection);
 
+    // The local semaphore increment above is a non-posted NOC atomic. Returning from
+    // kernel_main() while its acknowledgement is still in flight lets the next kernel on this
+    // RISC start against an outstanding transaction, which the watcher reports as an
+    // inter-kernel data race ("missing NOC non-posted atomics flushed barrier", issue #49081).
+    // A write barrier does not cover atomics: they are tracked by NIU_MST_ATOMIC_RESP_RECEIVED
+    // against noc_nonposted_atomics_acked, a separate counter pair. The sibling writers of this
+    // op already do this -- minimal_default_writer.cpp barriers writes and atomics,
+    // llama_shapes_sharded_writer.cpp uses a full barrier.
     noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }
