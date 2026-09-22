@@ -89,7 +89,7 @@ ALWI void two_pass_stats_init_shifted() { MATH((llk_math_two_pass_sfpu_init()));
  */
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_update_rows(std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
-    ASSERT(start_row + num_rows <= TILE_WIDTH);
+    ASSERT(start_row + num_rows <= TILE_HEIGHT);
     MATH((llk_math_two_pass_sfpu_update_rows<dual_m2>(input_dst_idx, start_row, num_rows)));
 }
 
@@ -110,7 +110,7 @@ ALWI void two_pass_stats_update_shifted_rows(
     std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
     constexpr bool accumulate_m2 = accumulation == TwoPassAccumulation::CentredM2;
     constexpr bool initialize_anchor = anchor == TwoPassAnchor::Initialise;
-    ASSERT(start_row + num_rows <= TILE_WIDTH);
+    ASSERT(start_row + num_rows <= TILE_HEIGHT);
     ASSERT(!initialize_anchor || num_rows > 0);
     MATH((llk_math_two_pass_sfpu_update_shifted_rows<accumulate_m2, initialize_anchor, dual_accumulator>(
         input_dst_idx, start_row, num_rows)));
@@ -293,7 +293,7 @@ ALWI void welford_update_rows(
     ASSERT((reciprocal_size == 0) || (start_idx < reciprocal_size));
 
     // Check limits on the start row and number of rows.
-    ASSERT(start_row + num_rows <= TILE_WIDTH);
+    ASSERT(start_row + num_rows <= TILE_HEIGHT);
 
     MATH((llk_math_welfords_sfpu_calculate_welfords_partial_tile_<reciprocal_size>(
         input_dst_idx, start_idx, start_row, num_rows, reciprocal_lut)));

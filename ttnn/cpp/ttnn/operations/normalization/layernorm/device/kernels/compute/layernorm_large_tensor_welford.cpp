@@ -80,34 +80,38 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             dfb_pre_add_fp32_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
         }
         if constexpr (fp32_sfpu_finalizer) {
+            constexpr uint32_t pre_add_input_dst = 0;
+            constexpr uint32_t pre_add_residual_dst = 1;
+            constexpr uint32_t pre_add_second_input_dst = 2;
+            constexpr uint32_t pre_add_second_residual_dst = 3;
             dfb_in_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
             dfb_inb_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
             copy_init(dfb_in_fp32);
             for (uint32_t i = 0; i < block.local().size(); i += 2) {
                 const bool has_second_tile = i + 1 < block.local().size();
                 tile_regs_acquire();
-                copy_tile(dfb_in_fp32, i, 0);
+                copy_tile(dfb_in_fp32, i, pre_add_input_dst);
                 reconfig_data_format_srca(dfb_in_fp32, dfb_inb_fp32);
                 copy_init(dfb_inb_fp32);
-                copy_tile(dfb_inb_fp32, i, 1);
+                copy_tile(dfb_inb_fp32, i, pre_add_residual_dst);
                 if (has_second_tile) {
                     reconfig_data_format_srca(dfb_inb_fp32, dfb_in_fp32);
                     copy_init(dfb_in_fp32);
-                    copy_tile(dfb_in_fp32, i + 1, 2);
+                    copy_tile(dfb_in_fp32, i + 1, pre_add_second_input_dst);
                     reconfig_data_format_srca(dfb_in_fp32, dfb_inb_fp32);
                     copy_init(dfb_inb_fp32);
-                    copy_tile(dfb_inb_fp32, i + 1, 3);
+                    copy_tile(dfb_inb_fp32, i + 1, pre_add_second_residual_dst);
                 }
                 add_binary_tile_init();
-                add_binary_tile(0, 1, 0);
+                add_binary_tile(pre_add_input_dst, pre_add_residual_dst, pre_add_input_dst);
                 if (has_second_tile) {
-                    add_binary_tile(2, 3, 2);
+                    add_binary_tile(pre_add_second_input_dst, pre_add_second_residual_dst, pre_add_second_input_dst);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, dfb_interm_pre_add);
+                pack_tile(pre_add_input_dst, dfb_interm_pre_add);
                 if (has_second_tile) {
-                    pack_tile(2, dfb_interm_pre_add);
+                    pack_tile(pre_add_second_input_dst, dfb_interm_pre_add);
                 }
                 tile_regs_release();
                 reconfig_data_format_srca(dfb_inb_fp32, dfb_in_fp32);

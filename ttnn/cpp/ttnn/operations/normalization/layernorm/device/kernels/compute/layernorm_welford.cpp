@@ -147,6 +147,10 @@ void kernel_main() {
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
     constexpr uint32_t retained_input_dst = 3;
+    // Retain the first three inputs in slots 3, 1 and 2; slot 0 holds the streaming/last input.
+    // Statistics overwrite the rows consumed as columns after transpose; other columns are unused.
+    // Unlike reductions with observable output padding, LayerNorm can therefore reuse var_dst.
+    // A fourth retained input would alias slot 3 and overwrite the first one.
     constexpr uint32_t num_front_retained_limit = 3;
 
     // The number of valid columns in the last tile in width dimension.
@@ -188,20 +192,22 @@ void kernel_main() {
             dfb_x_welford_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
 #endif
 #ifdef COMPACT_FP32_PRE_ADD
+            constexpr uint32_t pre_add_input_dst = 0;
+            constexpr uint32_t pre_add_residual_dst = 1;
             dfb_in_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
             dfb_inb_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
             copy_init(dfb_in_fp32);
             for (auto i : block.local()) {
                 tile_regs_acquire();
-                copy_tile(dfb_in_fp32, i, 0);
+                copy_tile(dfb_in_fp32, i, pre_add_input_dst);
                 reconfig_data_format_srca(dfb_in_fp32, dfb_inb_fp32);
                 copy_init(dfb_inb_fp32);
-                copy_tile(dfb_inb_fp32, i, 1);
+                copy_tile(dfb_inb_fp32, i, pre_add_residual_dst);
                 add_binary_tile_init();
-                add_binary_tile(0, 1, 0);
+                add_binary_tile(pre_add_input_dst, pre_add_residual_dst, pre_add_input_dst);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, dfb_x);
+                pack_tile(pre_add_input_dst, dfb_x);
                 tile_regs_release();
                 reconfig_data_format_srca(dfb_inb_fp32, dfb_in_fp32);
                 copy_init(dfb_in_fp32);

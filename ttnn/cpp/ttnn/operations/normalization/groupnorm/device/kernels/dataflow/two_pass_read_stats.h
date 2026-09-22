@@ -21,12 +21,14 @@ inline void read_two_pass_stats_block(
     std::uint32_t start_tile,
     std::uint32_t row_stride,
     std::uint32_t rows) {
+    // Tuned Blackhole read batch size, not a hardware limit on outstanding NOC reads.
+    constexpr std::uint32_t max_tiles_per_read_batch = 8;
     const std::uint32_t tiles = rows * TilesPerRow;
     for (std::uint32_t tile = 0; tile < tiles;) {
         const std::uint32_t address = input.get_write_ptr();
         // A reservation must never cross the CB's physical wrap boundary.
         const std::uint32_t count =
-            std::min<std::uint32_t>(8, std::min(tiles - tile, (ring_end - address) / TileBytes));
+            std::min<std::uint32_t>(max_tiles_per_read_batch, std::min(tiles - tile, (ring_end - address) / TileBytes));
         input.reserve_back(count);
         if constexpr (HasAlias) {
             alias.reserve_back(count);
