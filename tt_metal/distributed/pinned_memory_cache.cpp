@@ -9,8 +9,9 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <context/metal_context.hpp>
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -43,8 +44,8 @@ std::set<ChipId> PinnedMemoryCache::compute_device_ids(
     return device_ids;
 }
 
-std::set<ChipId> PinnedMemoryCache::compute_mmio_device_ids(const std::set<ChipId>& device_ids) {
-    auto& cluster = MetalContext::instance().get_cluster();
+std::set<ChipId> PinnedMemoryCache::compute_mmio_device_ids(
+    const tt::Cluster& cluster, const std::set<ChipId>& device_ids) {
     std::set<ChipId> mmio_ids;
     for (ChipId device_id : device_ids) {
         mmio_ids.insert(cluster.get_associated_mmio_device(device_id));
@@ -180,14 +181,15 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     }
     const void* host_addr = static_cast<const void*>(buffer_bytes.data());
     const size_t buffer_size = buffer_bytes.size();
-    const size_t global_cache_limit = MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes();
+    auto& metal_env = mesh_device.impl().metal_env();
+    const size_t global_cache_limit = metal_env.get_rtoptions().get_pinned_memory_cache_limit_bytes();
     const size_t per_mmio_pin_limit = params.max_total_pin_size;
     std::set<ChipId> target_device_ids = compute_device_ids(mesh_device, coordinate_range_set);
     if (target_device_ids.empty()) {
         return nullptr;
     }
 
-    std::set<ChipId> target_mmio_ids = compute_mmio_device_ids(target_device_ids);
+    std::set<ChipId> target_mmio_ids = compute_mmio_device_ids(metal_env.get_cluster(), target_device_ids);
 
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -308,7 +310,7 @@ void PinnedMemoryCache::release(const void* host_address) {
 
 void PinnedMemoryCache::release_for_device(distributed::MeshDevice& mesh_device) {
     // Compute the set of MMIO device IDs for all chips in this MeshDevice.
-    auto& cluster = MetalContext::instance().get_cluster();
+    auto& cluster = mesh_device.impl().metal_env().get_cluster();
     std::set<ChipId> mmio_device_ids;
     for (ChipId chip_id : mesh_device.get_device_ids()) {
         mmio_device_ids.insert(cluster.get_associated_mmio_device(chip_id));
