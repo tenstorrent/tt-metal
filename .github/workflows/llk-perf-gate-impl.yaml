@@ -151,7 +151,7 @@ jobs:
           pattern: perf-data-${{ inputs.arch }}-*
           merge-multiple: true
           path: current_perf
-          run-id: ${{ inputs.perf_run_id }}
+          run-id: ${{ inputs.perf_run_id || github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check that perf data arrived
