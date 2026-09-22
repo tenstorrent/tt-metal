@@ -18,7 +18,7 @@ import torch
 import ttnn
 
 from ..config import MeshConfig, ModeConfig
-from ..tt.ccl import default_l1_small_size, fabric_router_config_from_env
+from ..tt.ccl import default_l1_small_size, fabric_router_config_from_env, is_t3k_cluster
 from ..tt.model_config import Gemma4ModelArgs
 
 _DEFAULT_MODEL_PATH = "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
@@ -440,14 +440,27 @@ def _is_device_discovery_failure(exc):
     return any(marker in msg for marker in _DEVICE_DISCOVERY_FAILURE_MARKERS)
 
 
-def with_l1_small(device_params=None):
-    """Ensure ``device_params`` reserve L1_SMALL for CCL all_gather semaphores.
+def with_l1_small(device_params=None, mesh_shape=None):
+    """Reserve L1_SMALL for CCL all_gather semaphores, where they are allocated.
 
     ``all_gather_multicast_factory`` allocates barrier semaphores in L1_SMALL
-    when that region is sized; otherwise it fragments the main L1 pool and
-    logs a warning. Callers that already set ``l1_small_size`` are unchanged.
+    when that region is sized; otherwise it fragments the main L1 pool and logs
+    a warning.
+
+    Deliberately scoped to multi-device meshes on a Wormhole T3K, which is what
+    this branch tunes and measured. The reservation is not free -- ttnn's
+    default is 0 (DEFAULT_L1_SMALL_SIZE), so this takes 24 KB per core off the
+    main pool -- and a single-device mesh runs no collective at all, while every
+    other cluster is outside the measurement. Both keep the default, so their
+    gemma4 legs open exactly as they do today.
+
+    Callers that already set ``l1_small_size`` are unchanged.
     """
     out = dict(device_params or {})
+    if mesh_shape is not None and tuple(mesh_shape) == (1, 1):
+        return out
+    if not is_t3k_cluster():
+        return out
     out.setdefault("l1_small_size", default_l1_small_size())
     return out
 
@@ -460,16 +473,18 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
 
     ``device_params_extra`` (dict) is merged into every param's device_params —
     e.g. ``{"trace_region_size": 256_000_000}`` for tests that capture a trace.
-    ``l1_small_size`` defaults to ``default_l1_small_size()`` so CCL all_gather
-    semaphores land in L1_SMALL (override via extra or ``GEMMA4_L1_SMALL_SIZE``).
+    Multi-device meshes on a Wormhole T3K also reserve ``l1_small_size`` so CCL
+    all_gather semaphores land in L1_SMALL rather than fragmenting the main
+    pool; see ``with_l1_small`` for why that is not applied more widely.
 
     Fabric is enabled (FABRIC_1D) for multi-device shapes, and disabled for
     (1, 1). Launching fabric on a 1x1 mesh on a multi-device system fails the
     is_device_active() check because fabric expects every device in the system
     to be opened, but only device 0 is open in a 1x1 mesh. Multi-device params
-    also apply ``fabric_router_config_from_env`` (Wormhole uses 6144 B packets
-    so 2048 B CCL pages pack 3-wide; Blackhole keeps Fabric's 4352 B default)
-    unless ``device_params_extra`` already sets ``fabric_router_config``.
+    also apply ``fabric_router_config_from_env`` (a Wormhole T3K uses 6144 B
+    packets so 2048 B CCL pages pack 3-wide; every other cluster keeps Fabric's
+    4352 B default) unless ``device_params_extra`` already sets
+    ``fabric_router_config``.
 
     Default shapes: (1,1) single card, (1,2) N300, (1,8) T3K.
 
@@ -497,7 +512,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         params = [
             pytest.param(
                 (1, 1),
-                with_l1_small({"fabric_config": None, **dict(device_params_extra or {})}),
+                {"fabric_config": None, **dict(device_params_extra or {})},
                 id="device-unavailable",
                 marks=pytest.mark.skip(reason=f"Device discovery failed (unhealthy runner): {e}"),
             )
@@ -521,7 +536,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     if os.getenv("CI") == "true" and len(mesh_shapes) > 1:
         mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
-    extra = with_l1_small(device_params_extra)
+    extra = dict(device_params_extra or {})
     if not mesh_shapes:
         params = [
             pytest.param(
@@ -535,10 +550,13 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         router = None if "fabric_router_config" in extra else fabric_router_config_from_env()
         params = []
         for shape in mesh_shapes:
-            device_params = {
-                "fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D,
-                **extra,
-            }
+            device_params = with_l1_small(
+                {
+                    "fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D,
+                    **extra,
+                },
+                mesh_shape=shape,
+            )
             if shape != (1, 1) and router is not None:
                 device_params["fabric_router_config"] = router
             params.append(pytest.param(shape, device_params, id=f"{shape[0]}x{shape[1]}"))
