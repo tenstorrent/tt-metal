@@ -6,6 +6,7 @@ Q/K-norm: HF-correct (1+weight) uniformly at prefill and decode.
 Keep Q bf16 into SDPA unless bf8 mode (QWEN_SDPA_BF8=1).
 Weights interleaved per device; x replicated in, output reduce-scattered on dim=3.
 """
+
 import os
 
 import torch
@@ -180,6 +181,9 @@ class TPAttention:
         # the per-k-chunk handshakes of the GQA K/V multicast schedule, TT_SDPA_GQA_MCAST=1, at 2x the K/V CB L1).
         # QWEN36_SDPA_FULLSYNC=1: dst_full_sync_en for the SDPA compute config (8 fp32 dest tiles -> 2x4 subblocks).
         self._sdpa_k_chunk = int(os.environ.get("QWEN36_SDPA_K_CHUNK", "128"))
+        # QWEN36_SDPA_Q_CHUNK: Q chunk of the FLEXIBLE (chunk_start_idx_tensor) chunked SDPA, i.e. the traced serving
+        # path. Must divide the 2048-token chunk. 128 = the pre-tuning value; see lane A results for the TP=1 sweep.
+        self._sdpa_q_chunk = int(os.environ.get("QWEN36_SDPA_Q_CHUNK", "128"))
         self._sdpa_compute_cfg = self.compute_cfg
         # QWEN36_SDPA_BF16_DEST=1: bf16 DEST accumulation for the chunked SDPA (8 dest tiles -> 2x4 subblocks; numerics change,
         # gate on long-context PCC). QWEN36_SDPA_FULLSYNC=1: dst_full_sync_en (8 fp32 dest tiles).
@@ -536,8 +540,12 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=self._pf_mc), tw["q_norm"], memory_config=self._pf_mc)
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=self._pf_mc), tw["k_norm"], memory_config=self._pf_mc)
+        q = ttnn.multiply(
+            ttnn.rms_norm(q, epsilon=1e-6, memory_config=self._pf_mc), tw["q_norm"], memory_config=self._pf_mc
+        )
+        k = ttnn.multiply(
+            ttnn.rms_norm(k, epsilon=1e-6, memory_config=self._pf_mc), tw["k_norm"], memory_config=self._pf_mc
+        )
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim, memory_config=self._pf_mc)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim, memory_config=self._pf_mc)
 
@@ -1132,8 +1140,12 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=self._pf_mc), tw["q_norm"], memory_config=self._pf_mc)
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=self._pf_mc), tw["k_norm"], memory_config=self._pf_mc)
+        q = ttnn.multiply(
+            ttnn.rms_norm(q, epsilon=1e-6, memory_config=self._pf_mc), tw["q_norm"], memory_config=self._pf_mc
+        )
+        k = ttnn.multiply(
+            ttnn.rms_norm(k, epsilon=1e-6, memory_config=self._pf_mc), tw["k_norm"], memory_config=self._pf_mc
+        )
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim, memory_config=self._pf_mc)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim, memory_config=self._pf_mc)
 
@@ -1229,7 +1241,7 @@ class TPAttention:
         # chunk_start_idx % q_chunk_size == 0; FLEXIBLE path uses one program per trace.
         # q/k_chunk=128 is valid (chunk_start always divisible by 2048) and faster than 64/256.
         if chunk_start_idx_tensor is not None:
-            qk_chunk = 128
+            qk_chunk = self._sdpa_q_chunk
         else:
             cap = 128 if S >= 2048 else 64  # 128 beats 256
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
