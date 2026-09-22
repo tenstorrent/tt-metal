@@ -127,10 +127,10 @@ profiles:
       sdpa_k_chunk_size: 32
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
-      # CSA Lightning Indexer. on = attach it when the checkpoint has the weights
-      # (the default). off = dense causal CSA. always / auto are the same switch.
+      # CSA Lightning Indexer. true attaches it when the checkpoint has the
+      # weights. false keeps dense causal CSA.
       # env: DEEPSEEK_V4_INDEXER / DEEPSEEK_V4_INDEX_TOPK
-      indexer: "on"
+      indexer: false
       index_topk: 512
       # 0 = compress_rate(CSA) * index_topk. Shorter sequences keep dense causal
       # SDPA and are captured as their own trace; longer ones use the indexer.
@@ -247,10 +247,10 @@ profiles:
       sdpa_k_chunk_size: 32
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
-      # CSA Lightning Indexer. on = attach it when the checkpoint has the weights
-      # (the default). off = dense causal CSA.
+      # CSA Lightning Indexer. true attaches it when the checkpoint has the
+      # weights. false keeps dense causal CSA.
       # env: DEEPSEEK_V4_INDEXER / DEEPSEEK_V4_INDEX_TOPK
-      indexer: "on"
+      indexer: false
       index_topk: 512
       # 0 = compress_rate(CSA) * index_topk. Shorter sequences keep dense causal
       # SDPA and are captured as their own trace; longer ones use the indexer.
