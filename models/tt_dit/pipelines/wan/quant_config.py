@@ -370,3 +370,37 @@ def set_quant_config_from_env(pipeline, *, rewarm: bool = True, var: str = QUANT
         logger.info("re-running the eager warmup so the quantized programs are compiled before trace capture")
         pipeline._warmup()
     return name
+
+
+# ---------------------------------------------------------------------------
+# Trace-execution mode opt-in (same spirit: test plumbing, default unchanged)
+# ---------------------------------------------------------------------------
+
+TRACE_MODE_ENV = "WAN5B_TRACE_MODE"
+TRACE_MODES = ("blocking", "nonblocking", "2cq")
+
+
+def trace_mode_from_env(var: str = TRACE_MODE_ENV) -> str:
+    """`blocking` (default), `nonblocking`, or `2cq` (non-blocking + input uploads on queue 1)."""
+    mode = os.environ.get(var, "blocking").strip().lower() or "blocking"
+    if mode not in TRACE_MODES:
+        msg = f"{var}={mode!r}; expected one of {TRACE_MODES}"
+        raise ValueError(msg)
+    return mode
+
+
+def device_params_for_trace_mode(base: dict, var: str = TRACE_MODE_ENV) -> dict:
+    """Add `num_command_queues=2` to `base` when the env selects the two-queue mode."""
+    if trace_mode_from_env(var) == "2cq":
+        return {**base, "num_command_queues": 2}
+    return dict(base)
+
+
+def configure_trace_mode_from_env(pipeline, var: str = TRACE_MODE_ENV) -> str:
+    """Apply the env-selected mode through `pipeline.configure_trace_execution`; return it."""
+    mode = trace_mode_from_env(var)
+    if mode == "nonblocking":
+        pipeline.configure_trace_execution(blocking=False)
+    elif mode == "2cq":
+        pipeline.configure_trace_execution(blocking=False, input_cq_id=1)
+    return mode

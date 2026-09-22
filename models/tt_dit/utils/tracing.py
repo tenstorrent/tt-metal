@@ -157,6 +157,12 @@ class Tracer:
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
+        # Two-queue input path: the compute-queue event after the last execution (the input
+        # buffers may be overwritten only once it has fired) and the host tensors of the last
+        # upload, kept alive until the next call so an in-flight non-blocking write never reads
+        # freed host memory.
+        self._consumed_event: Any = None
+        self._pending_host_inputs: list[ttnn.Tensor] = []
 
     def __call__(
         self,
@@ -165,6 +171,7 @@ class Tracer:
         tracer_cq_id: int = 0,
         tracer_blocking_execution: bool = True,
         tracer_execute_on_capture: bool = True,
+        tracer_input_cq_id: int | None = None,
         **kwargs: Any,
     ) -> Any:
         """Capture or execute trace.
@@ -184,6 +191,14 @@ class Tracer:
             tracer_execute_on_capture: Whether to execute the trace immediately after capturing it
                 on the first call. If ``False``, only the trace is captured and outputs are not
                 computed.
+            tracer_input_cq_id: Command queue for the per-call host-to-device input copies. When
+                set and different from ``tracer_cq_id`` (a device opened with two command queues),
+                the copies are issued on this queue and fenced with events: the input queue waits
+                for the previous execution on the compute queue to finish reading the input
+                buffers, the compute queue waits for the copies before executing the trace. With
+                ``tracer_blocking_execution=False`` this lets the host run ahead and overlap the
+                next call's input upload with the current execution. Device-side input updates
+                (``ttnn.copy`` between device tensors) stay on the compute queue.
             *args: Positional inputs to pass to the wrapped function.
             **kwargs: Named inputs to pass to the wrapped function.
 
@@ -211,6 +226,9 @@ class Tracer:
             tracer_blocking_execution = False
             logger.warning("blocking execution is not supported with multiple devices")
 
+        if tracer_input_cq_id is not None and (tracer_input_cq_id == tracer_cq_id or len(self._devices) != 1):
+            tracer_input_cq_id = None
+
         if self._trace_ids is None:
             self._capture(
                 args,
@@ -220,7 +238,9 @@ class Tracer:
                 execute=tracer_execute_on_capture,
             )
         else:
-            self._execute(args, kwargs, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
+            self._execute(
+                args, kwargs, cq_id=tracer_cq_id, blocking=tracer_blocking_execution, input_cq_id=tracer_input_cq_id
+            )
 
         return self._outputs
 
@@ -287,6 +307,7 @@ class Tracer:
         *,
         cq_id: int,
         blocking: bool,
+        input_cq_id: int | None = None,
     ) -> None:
         trace_ids = self._trace_ids
         assert trace_ids is not None
@@ -299,12 +320,50 @@ class Tracer:
             msg = f"expected kwargs {sorted(self._kwargs)}, got {sorted(kwargs)}"
             raise TypeError(msg)
 
-        _tree_map(self._update_input, self._args, args, path_label="args")
+        if input_cq_id is None:
+            _tree_map(self._update_input, self._args, args, path_label="args")
+            for name, new in kwargs.items():
+                _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
+
+            for d, trace_id in zip(self._devices, trace_ids, strict=True):
+                ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking)
+            return
+
+        # Two command queues: host->device input copies on `input_cq_id`, everything else
+        # (device->device input copies, the trace) on `cq_id`, fenced with events:
+        #   input queue  waits for the previous execution to finish reading the input buffers
+        #   input queue  copies the host inputs
+        #   compute queue waits for those copies, then executes the trace
+        # Same scheme as models/tt_cnn/tt/executor.py's 2CQ trace executor.
+        (device,) = self._devices
+        host_slots: list[tuple[ttnn.Tensor, ttnn.Tensor]] = []  # (trace input buffer, new host tensor)
+
+        def update(prev: Any, new: Any, *, path_label: str) -> None:
+            if isinstance(new, ttnn.Tensor) and new.device() is None:
+                if new.shape != prev.shape or new.dtype != prev.dtype or new.layout != prev.layout:
+                    msg = f"input '{path_label}' tensor properties do not match the initial value"
+                    raise ValueError(msg)
+                host_slots.append((prev, new))
+                return
+            self._update_input(prev, new, path_label=path_label)  # device-side, compute queue
+
+        _tree_map(update, self._args, args, path_label="args")
         for name, new in kwargs.items():
-            _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
+            _tree_map(update, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
+
+        if host_slots:
+            if self._consumed_event is not None:
+                ttnn.wait_for_event(input_cq_id, self._consumed_event)
+            for prev, new in host_slots:
+                ttnn.copy_host_to_device_tensor(new, prev, cq_id=input_cq_id)
+            write_event = ttnn.record_event(device, input_cq_id)
+            ttnn.wait_for_event(cq_id, write_event)
+            self._pending_host_inputs = [new for _, new in host_slots]
 
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking)
+        if host_slots:
+            self._consumed_event = ttnn.record_event(device, cq_id)
 
     @property
     def trace_captured(self) -> bool:
