@@ -30,27 +30,44 @@ def load(directory: Path) -> list[dict]:
 
 
 def table(records: list[dict]) -> str:
-    stages = [s for s in STAGE_ORDER if any(s in r["timings_s"] for r in records)]
-    # Node is a column, not a footnote: two boxes can sweep into one directory, and a table that
-    # silently mixes them reads as one machine.
-    header = ["Mode", "Clip", "Frames", "Canvas", "Fwd", "Padded", *stages, "Total", "s / video s", "CLIP", "Node"]
-    lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
-    for r in records:
-        row = [
-            r["task"],
-            f"{r['duration_s']} s",
-            str(r["num_frames"]),
-            f"{r['width']}x{r['height']}",
-            str(r["num_forwards"]),
-            str(r["padded_len"]),
-            *[f"{r['timings_s'][s]:.1f}" if s in r["timings_s"] else "--" for s in stages],
-            f"{r['total_compute_s']:.1f}",
-            f"{r['s_per_video_second']:.1f}",
-            f"{r['clip']['mean']:.2f}",
-            r.get("node", "?"),
-        ]
-        lines.append("| " + " | ".join(row) + " |")
-    return "\n".join(lines)
+    """One table per mode, each carrying every stage the mode actually pays.
+
+    Split by mode rather than one combined table because the stage set differs -- only fl2va has a
+    keyframe encode, only ref2va a reference encode -- so a shared header spends most of its width
+    on columns that are "--" for two thirds of the rows.
+    """
+    blocks = []
+    for task in TASK_ORDER:
+        rows = [r for r in records if r["task"] == task]
+        if not rows:
+            blocks.append(f"### {task}\n\nNot measured.")
+            continue
+        stages = [s for s in STAGE_ORDER if any(s in r["timings_s"] for r in rows)]
+        # Node is a column, not a footnote: two boxes can sweep into one artifact directory, and a
+        # table that silently mixes them reads as one machine.
+        header = ["Clip", "Frames", "Canvas", "Fwd", "Padded", *stages, "Total", "s / video s", "CLIP", "Node"]
+        lines = [f"### {task}", "", "| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+        for r in rows:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"{r['duration_s']} s",
+                        str(r["num_frames"]),
+                        f"{r['width']}x{r['height']}",
+                        str(r["num_forwards"]),
+                        str(r["padded_len"]),
+                        *[f"{r['timings_s'][s]:.1f}" if s in r["timings_s"] else "--" for s in stages],
+                        f"{r['total_compute_s']:.1f}",
+                        f"{r['s_per_video_second']:.1f}",
+                        f"{r['clip']['mean']:.2f}",
+                        r.get("node", "?"),
+                    ]
+                )
+                + " |"
+            )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def render(records: list[dict]) -> str:

@@ -25,14 +25,25 @@ Independently corroborated on g03blx04, which measured 15.2 s for the same 8-for
 
 ## Results
 
-| Mode | Clip | Frames | Canvas | Fwd | Padded | Encoder | Keyframe encode | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| t2va | 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | -- | 9.4 | 3.6 | 1.2 | 14.5 | 2.8 | 37.53 | bh-glx-120-b09u02 |
-| t2va | 10 s | 243 | 1344x768 | 8 | 73472 | 0.4 | -- | 23.1 | 7.3 | 1.3 | 32.1 | 3.2 | 36.94 | bh-glx-120-b09u02 |
-| t2va | 15 s | 362 | 1344x768 | 8 | 109312 | 0.4 | -- | 43.7 | 11.3 | 1.5 | 56.9 | 3.8 | 35.19 | bh-glx-120-b09u02 |
-| fl2va | 5 s | 124 | 1344x768 | 8 | 41984 | 1.9 | 1.5 | 10.8 | 3.4 | 1.2 | 18.7 | 3.6 | 34.12 | bh-glx-120-b09u02 |
-| fl2va | 10 s | 243 | 1344x768 | 8 | 77568 | 2.2 | 1.3 | 30.2 | 7.3 | 1.2 | 42.1 | 4.2 | 37.19 | bh-glx-120-c06u08 |
-| fl2va | 15 s | 362 | 1344x768 | 8 | 113152 | 2.2 | 1.3 | 58.5 | 10.8 | 1.5 | 74.2 | 4.9 | 37.44 | bh-glx-120-c06u08 |
+### t2va
+
+| Clip | Frames | Canvas | Fwd | Padded | Encoder | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | 9.4 | 3.6 | 1.2 | 14.5 | 2.8 | 37.53 | bh-glx-120-b09u02 |
+| 10 s | 243 | 1344x768 | 8 | 73472 | 0.4 | 23.1 | 7.3 | 1.3 | 32.1 | 3.2 | 36.94 | bh-glx-120-b09u02 |
+| 15 s | 362 | 1344x768 | 8 | 109312 | 0.4 | 43.7 | 11.3 | 1.5 | 56.9 | 3.8 | 35.19 | bh-glx-120-b09u02 |
+
+### fl2va
+
+| Clip | Frames | Canvas | Fwd | Padded | Encoder | Keyframe encode | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 5 s | 124 | 1344x768 | 8 | 41984 | 1.9 | 1.5 | 10.8 | 3.4 | 1.2 | 18.7 | 3.6 | 34.12 | bh-glx-120-b09u02 |
+| 10 s | 243 | 1344x768 | 8 | 77568 | 2.2 | 1.3 | 30.2 | 7.3 | 1.2 | 42.1 | 4.2 | 37.19 | bh-glx-120-c06u08 |
+| 15 s | 362 | 1344x768 | 8 | 113152 | 2.2 | 1.3 | 58.5 | 10.8 | 1.5 | 74.2 | 4.9 | 37.44 | bh-glx-120-c06u08 |
+
+### ref2va
+
+Not measured.
 
 **Not measured:** ref2va 5 s, ref2va 10 s, ref2va 15 s.
 
