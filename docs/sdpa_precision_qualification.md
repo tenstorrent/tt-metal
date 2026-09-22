@@ -200,6 +200,43 @@ compute/CB descriptors with the resident benchmark and unifying host exceptions.
 Artifacts: external `sdpa-pr1-cleanup-validation-20260922/sdpa-review-*`;
 `review-compare.py` checks coverage, numerical equality and timing deltas.
 
+## PR2 joint-adapter qualification (2026-09-22)
+
+Revision `36d92f2e167`, same Blackhole/toolchain as PR1. The initial adapter
+reuses the compute kernel, numerical policies, preparation kernels and CB depths.
+Only segment addressing and shared host dispatch change; joint tails/ring are
+not enabled yet.
+
+- Joint release: **70 passed**, including 42 synthetic numerical cases and
+  14 pinned FLUX.2 capture replays. All **56 numerical cases match dense output
+  bit-for-bit** within this build; FP64 L2/PCC and row-error metrics are recorded.
+- PR1 regression: **281 passed, 2 existing skips**. All 147 frozen hashes and
+  recorded numerical metrics remain exact.
+- Combined Watcher/asserts: **181 passed**. Seven opt-in performance cases skip
+  in correctness runs; they are exercised separately.
+- Performance: **35 passed** (28 existing modes plus 7 joint-versus-dense).
+  Resident time changed by less than 0.1%; other existing modes stayed within 1%.
+- Legacy joint smoke: **4 passed**. Host policy/resolver: **13 passed**.
+- Fresh-address cache reuse, changed segment boundaries, both output buffers,
+  trace replay, input immutability and unsupported-input rejection are covered.
+
+Matched trace wall times below use Q=K=4608, four heads, D128, 4x4 grid,
+Q256/K512, and a 4096+512 joint split. Preparation is outside timing.
+These are not device-profiler times or full-model speedups.
+
+| Variant | Dense ms | Joint ms | Joint overhead |
+| --- | ---: | ---: | ---: |
+| A | 1.5994 | 1.6295 | +1.88% |
+| B | 1.9180 | 1.9190 | +0.05% |
+| C | 3.0223 | 3.0236 | +0.04% |
+| D | 3.9581 | 3.9603 | +0.06% |
+| E_bf16 | 1.6560 | 1.6554 | -0.04% |
+| E_bfp8 | 1.6519 | 1.6552 | +0.20% |
+| E_bfp4 | 1.6280 | 1.6277 | -0.02% |
+
+Artifacts: external `sdpa-pr2-validation-20260922/`, including logs/XML,
+`run.sh`, `qualify.sh` and `compare.py`.
+
 ## Continuous coverage
 
 The [SDPA sanity group](../tests/pipeline_reorg/ttnn_sanity_tests.yaml) runs the

@@ -63,6 +63,23 @@ multi-device meshes and unsupported architectures. They also reject an explicit
 those numerical decisions. They never silently fall back to legacy attention.
 Do not zero-pad K/V to bypass these checks; that changes the softmax denominator.
 
+## Joint attention: PR2 work in progress
+
+`joint_scaled_dot_product_attention` accepts the same `precision` and
+`inputs_prepared` arguments. Apply LOW_PRECISION preparation separately to both
+Q/K/V segments. Omitting `precision` preserves the existing joint implementation.
+
+The initial joint adapter supports `joint_strategy="rear"` and the same device,
+dtype, D128, batch-one and grid restrictions above. Each segment must have positive
+tile-aligned lengths; **total** Q length must be divisible by 256 and **total** K
+length by 512. Segment boundaries may occur inside a Q or K chunk.
+
+The reader maps virtual concatenated tile addresses to the two input segments;
+the writer maps output tiles back to their respective tensors. There is no
+materialized concatenation or output slicing, and the compute kernel, CB depths
+and softmax-state lifetime are identical to dense attention. Tail masking and
+ring integration are not enabled by this initial adapter.
+
 ## Examples
 
 ```python

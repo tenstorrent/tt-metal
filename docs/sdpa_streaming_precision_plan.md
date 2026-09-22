@@ -39,6 +39,20 @@ model evidence. Include masked tails, appropriate head dimensions, GQA, and
 joint/ring/paged/chunked/MLA coverage as applicable; qualify multiple devices and
 fresh pretrained-model quality/performance before changing model defaults.
 
+PR2 is developed on `cglagovich/sdpa-streaming-pr2`, stacked on PR1. Its first
+slice adds joint segment addressing with unchanged compute and shared accuracy
+tests. It does not yet qualify PR2 for merge. Remaining integration gates:
+
+- Add tail masking and required geometry without duplicating recipe arithmetic.
+- Separate Q-block release from final normalization before ring integration.
+  Preserve raw maxima, denominators, numerators and pending compensated groups
+  across ring steps, including state staging for multiple Q blocks.
+- Reuse existing ring communication/scheduling, including skipped iterations and
+  replicated versus sharded joint KV. Normalize only after the final active KV
+  contribution, not separately per segment or ring step.
+- Qualify single- and multiple-Q-block ring paths on real multi-device hardware;
+  extend applicable prefill variants and migrate callers only with model evidence.
+
 **PR 3:** delete non-streaming loops only after every in-scope supported
 configuration has a qualified replacement. Retain utilities needed by sparse,
 decode and CCL consumers. Decode and independent training attention are not part
