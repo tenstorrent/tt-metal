@@ -5,6 +5,7 @@
 
 import argparse
 import json
+import math
 import os
 import random
 import struct
@@ -504,8 +505,10 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         real_len = min(real_len, golden_cap)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
-    if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name in ("gpt_oss_d_p", "llama_3p1_8b"):
+        return _read_slot_kv_and_check_pcc_gqa(
+            table, device_map, slot_id, real_len, trace_dir, require_all_layers=ADAPTER.name == "llama_3p1_8b"
+        )
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -517,28 +520,53 @@ def _num_model_configs(table) -> int:
     return sum(1 for name in _config_names(table) if name.isdigit())
 
 
-def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode):
-    from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-
+def _read_kv_slice(
+    table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, require_single_owner=False
+):
     rows = []
-    for pos in range(0, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+    for pos in range(0, read_len, _KV_CHUNK_TOKENS):
         loc = table.lookup(layer, pos, slot_id, config_id)
-        unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+        nodes = table.get_device_group(loc.device_group_index).fabric_node_ids
+        if require_single_owner and (len(nodes) != 1 or loc.size_bytes != (head_dim // 32) * _BFP8_TILE_BYTES):
+            raise ValueError(f"invalid GQA page ownership or size: config={config_id}, layer={layer}, position={pos}")
+        unique_id = _resolve_unique_id(nodes, device_map)
         raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+        if len(raw) != loc.size_bytes:
+            raise ValueError(f"incomplete KV page read: expected {loc.size_bytes} bytes, got {len(raw)}")
         rows.append(decode(raw, head_dim))
     return torch.cat(rows, dim=0)[:read_len]
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_gqa(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, *, require_all_layers=False
+):
     from pathlib import Path
 
     from safetensors import safe_open
 
-    from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
+    if real_len <= 0 or NUM_LAYERS <= 0:
+        raise ValueError("GQA verification requires a nonempty prefix and at least one layer")
+    if require_all_layers:
+        if (NUM_LAYERS, n_kv, head_dim) != (32, 8, 128):
+            raise ValueError("Llama GQA verification requires all 32 layers, 8 KV heads and head dimension 128")
+        expected_names = [f"{kind}_h{head}" for kind in ("k", "v") for head in range(n_kv)]
+        if _config_names(table) != expected_names:
+            raise ValueError(f"Llama GQA table requires config order {expected_names}")
+        for config_id in range(2 * n_kv):
+            config = table.config(config_id)
+            if (config.num_layers, config.num_slots, config.chunk_n_tokens, config.chunk_size_bytes) != (
+                NUM_LAYERS,
+                2,
+                _KV_CHUNK_TOKENS,
+                (head_dim // 32) * _BFP8_TILE_BYTES,
+            ):
+                raise ValueError(f"Llama GQA config {config_id} has unsupported layer/slot/page geometry")
+            if not 0 <= slot_id < config.num_slots or real_len > config.max_sequence_length:
+                raise ValueError(f"Llama GQA request exceeds config {config_id} slot or sequence capacity")
     rotary_dim = getattr(mc, "ROTARY_DIM", head_dim)
     half = rotary_dim // 2
     perm = list(range(head_dim))
@@ -546,9 +574,7 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
         perm[m] = half * (m % 2) + (m // 2)
     perm = torch.tensor(perm, dtype=torch.long)
 
-    read_len = ((real_len + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) * (
-        NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    )
+    read_len = ((real_len + _KV_CHUNK_TOKENS - 1) // _KV_CHUNK_TOKENS) * _KV_CHUNK_TOKENS
     kv_dir = Path(trace_dir) / "kv_cache"
     mins = {"k": 1.0, "v": 1.0}
     checked = 0
@@ -557,35 +583,71 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
         try:
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
         except KeyError:
+            if require_all_layers:
+                raise
             continue
         checked += 1
         dev_k = torch.stack(
             [
-                _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                _read_kv_slice(
+                    table,
+                    device_map,
+                    h,
+                    layer,
+                    slot_id,
+                    read_len,
+                    head_dim,
+                    _decode_bfp8_chunk,
+                    require_single_owner=require_all_layers,
+                )
                 for h in range(n_kv)
             ],
             dim=0,
         )[:, :real_len]
         dev_v = torch.stack(
             [
-                _read_kv_slice(table, device_map, n_kv + h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                _read_kv_slice(
+                    table,
+                    device_map,
+                    n_kv + h,
+                    layer,
+                    slot_id,
+                    read_len,
+                    head_dim,
+                    _decode_bfp8_chunk,
+                    require_single_owner=require_all_layers,
+                )
                 for h in range(n_kv)
             ],
             dim=0,
         )[:, :real_len]
 
         with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as h:
-            g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
-            g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
-
+            golden = [h.get_tensor(f"{kind}_cache_layer_{layer}").float() for kind in ("key", "value")]
+        for tensor in golden:
+            if (
+                tensor.ndim != 4
+                or tuple(tensor.shape[:2]) != (1, n_kv)
+                or tensor.shape[2] < real_len
+                or tensor.shape[3] != head_dim
+            ):
+                raise ValueError(f"layer {layer}: golden GQA cache must have shape [1,{n_kv},>={real_len},{head_dim}]")
+        # Hugging Face K uses half-split rotary pairs; the device stores adjacent Meta pairs.
+        # V has no rotary transform. GPT-OSS may rotate only a prefix of the head dimensions.
+        g_k = golden[0][0, :, :real_len, :][..., perm]
+        g_v = golden[1][0, :, :real_len, :]
+        if any(not torch.isfinite(tensor).all() for tensor in (g_k, g_v, dev_k, dev_v)):
+            raise ValueError(f"layer {layer}: GQA cache comparison contains nonfinite values")
         pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
         pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
+        if not math.isfinite(pcc_k) or not math.isfinite(pcc_v):
+            raise ValueError(f"layer {layer}: GQA cache comparison produced nonfinite PCC")
         mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
         logger.info(f"  layer {layer:>2}: K={pcc_k:.5f} V={pcc_v:.5f}")
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
+        f"[producer] slot {slot_id} {ADAPTER.name} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
     if checked == 0:
