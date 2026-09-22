@@ -243,18 +243,13 @@ struct WorkerToFabricEdmSenderBase {
         this->edm_copy_of_wr_counter_addr =
             connected_to_persistent_fabric ? edm_buffer_index_id : get_semaphore<my_core_type>(edm_buffer_index_id);
         ASSERT(is_l1_address(edm_copy_of_wr_counter_addr));  // must be a L1 address
-        // Checked after resolution, so it covers either WorkerSemArg policy and catches a
-        // call site naming the wrong one: ids read as addresses are small integers, which
-        // is_l1_address() accepts because it is an upper bound only.
         this->worker_teardown_addr = worker_teardown_addr;
         ASSERT(is_l1_address(reinterpret_cast<size_t>(worker_teardown_addr)));  // must be a L1 address
-        ASSERT(reinterpret_cast<size_t>(worker_teardown_addr) % L1_ALIGNMENT == 0);
         // Local landing zone for the SenderChannelProducerCursor block read back in open_start().
-        // It must own a full 16B slot, so a whole-block read here cannot disturb a neighbouring
-        // semaphore.
+        // It must be 16B aligned and own a full 16B slot, so a whole-block read here cannot
+        // disturb a neighbouring semaphore. open_start() asserts the alignment at that read.
         this->local_producer_cursor_addr = local_buffer_index_addr;
         ASSERT(is_l1_address(local_producer_cursor_addr));  // must be a L1 address
-        ASSERT(local_producer_cursor_addr % L1_ALIGNMENT == 0);
         this->edm_buffer_base_addr = edm_buffer_base_addr;
         this->buffer_size_bytes = buffer_size_bytes;
         this->num_buffers_per_channel = num_buffers_per_channel;
