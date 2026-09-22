@@ -21,6 +21,8 @@
 #define MEM_SYSENG_ETH_HEARTBEAT 0x7CC70
 #define MEM_SYSENG_ETH_API_TABLE 0x7CF00
 #define MEM_SYSENG_BOOT_RESULTS_BASE 0x7CC00
+#define MEM_SYSENG_ETH_DEBUG_BUF_ADDR 0x7C400
+#define MEM_SYSENG_ETH_DEBUG_BUF_SIZE 2048
 #define NUM_SERDES_LANES 8
 
 #define ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR 0xFFB14020
@@ -51,6 +53,12 @@ enum port_status_e : uint32_t {
     PORT_UP,
     PORT_DOWN,
     PORT_UNUSED,
+};
+
+enum serdes_sync_status_e : uint32_t {
+    SERDES_SYNC_TRAINING,
+    SERDES_SYNC_TRAINED,
+    SERDES_SYNC_FAILED,
 };
 
 struct fw_version_t {
@@ -200,6 +208,75 @@ struct eth_live_status_t {
     uint32_t spare2[64 - 52];  // 52-63
 };
 
+// SysEng base firmware debug buffer. Fields metal does not consume stand in for SysEng
+// register unions and enums of the same width.
+struct debug_buf_t {
+    uint32_t serdes_init_lead_message_expected;
+    uint32_t serdes_init_follow_message_expected;
+
+    uint32_t txq0_resend_cnt_last;
+    uint32_t txq1_resend_cnt_last;
+    uint32_t txq2_resend_cnt_last;
+    uint32_t rxq0_pkt_drop_last;
+    uint32_t rxq1_pkt_drop_last;
+    uint32_t rxq2_pkt_drop_last;
+
+    eth_live_status_t link_stability_last_live_status;
+
+    uint32_t serdes_tx_eq_afe_val[NUM_SERDES_LANES];
+
+    uint32_t serdes_ctrl_lock_counter;
+
+    serdes_sync_status_e lead_eth_serdes_status;
+    serdes_sync_status_e follow_eth_serdes_status;
+
+    uint16_t serdes_partner_eth_id;
+    uint8_t serdes_partner_eth_x;
+    uint8_t serdes_partner_eth_y;
+
+    uint32_t eth_ctrl_intp_stat_raw;
+    uint32_t eth_ctrl_intp_stat;
+    uint32_t mac_rx_int;
+    uint32_t mac_tx_int;
+    uint32_t pcs_tx_int;
+    uint32_t pcs_rx_int;
+    uint32_t pma_int;
+
+    uint32_t user_command;
+    uint32_t link_down_cnt;
+    uint32_t link_recovery_cnt;
+    uint32_t link_recovery_retry_cnt;
+    uint32_t link_recovery_give_up_cnt;
+
+    uint32_t runtime_serdes_retrain_cnt;
+    uint32_t runtime_serdes_reinit_cnt;
+    uint32_t runtime_macpcs_reinit_cnt;
+    uint32_t runtime_macpcs_only_reinit_cnt;
+
+    uint32_t spare[400 - 100];
+
+    uint32_t eth_api_metrics[64];
+
+    uint64_t eth_link_recovery_backoff_timestamp;
+    uint64_t eth_link_status_check_timestamp;
+    uint64_t eth_dynamic_state_check_timestamp;
+    uint32_t timestamp_spare[496 - 470];
+
+    uint32_t scratchpad[16];
+};
+
+static_assert(sizeof(debug_buf_t) == MEM_SYSENG_ETH_DEBUG_BUF_SIZE, "debug_buf_t size is not 2048 bytes");
+static_assert(
+    MEM_SYSENG_ETH_DEBUG_BUF_ADDR + MEM_SYSENG_ETH_DEBUG_BUF_SIZE == MEM_SYSENG_BOOT_RESULTS_BASE,
+    "debug_buf_t must end where the boot results begin");
+
+#define MEM_AERISC_PTP_TRACE_ADDR (MEM_SYSENG_ETH_DEBUG_BUF_ADDR + offsetof(debug_buf_t, scratchpad))
+
+struct aerisc_ptp_trace_t {
+    uint64_t fw_entry_ptp;
+    uint64_t fw_exit_ptp;  // 0 while runtime FW owns the core
+};
+
 struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
     uint32_t* service_eth_msg_ptr;        // Pointer to the service eth msg function
@@ -253,6 +330,18 @@ struct boot_results_t {
 #include "internal/ethernet/tt_eth_api.h"
 #include "hostdev/dev_msgs.h"
 
+// Watcher builds can leave runtime FW through erisc_exit()'s longjmp, which bypasses the exit stamp
+// in main(). The one place covering both exits is active_erisc-crt0.cc, but this header cannot be
+// included there: its non-inline functions collide with active_erisc.cc at link time. Stamping the
+// erisc_exit() call sites instead goes silently missing when a new caller is added. Compile the
+// trace out under watcher rather than record one without its exit.
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0) && \
+    !(defined(WATCHER_ENABLED) && !defined(FORCE_WATCHER_OFF))
+#define AERISC_PTP_TRACE_ENABLED 1
+#else
+#define AERISC_PTP_TRACE_ENABLED 0
+#endif
+
 uint64_t get_next_link_status_check_timestamp() {
     return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp));
 }
@@ -261,6 +350,29 @@ void update_next_link_status_check_timestamp() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     uint64_t timestamp = eth_read_wall_clock() + (ETH_CLOCK_CYCLE_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
+#endif
+}
+
+FORCE_INLINE uint64_t eth_read_ptp_clock() {
+    // Reading TIMER_LO latches TIMER_HI, so order is important
+    uint32_t ptp_timer_lo = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR);
+    uint32_t ptp_timer_hi = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR);
+    return (((uint64_t)ptp_timer_hi) << 32) | ptp_timer_lo;
+}
+
+static __attribute__((unused)) void aerisc_ptp_trace_entry() {
+#if AERISC_PTP_TRACE_ENABLED
+    volatile tt_l1_ptr aerisc_ptp_trace_t* trace = (volatile tt_l1_ptr aerisc_ptp_trace_t*)MEM_AERISC_PTP_TRACE_ADDR;
+    // Clear the stale exit first so a core that dies in between reads as resident, not as exited.
+    trace->fw_exit_ptp = 0;
+    trace->fw_entry_ptp = eth_read_ptp_clock();
+#endif
+}
+
+static __attribute__((unused)) void aerisc_ptp_trace_exit() {
+#if AERISC_PTP_TRACE_ENABLED
+    volatile tt_l1_ptr aerisc_ptp_trace_t* trace = (volatile tt_l1_ptr aerisc_ptp_trace_t*)MEM_AERISC_PTP_TRACE_ADDR;
+    trace->fw_exit_ptp = eth_read_ptp_clock();
 #endif
 }
 
