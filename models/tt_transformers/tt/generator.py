@@ -1362,7 +1362,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
 
             logger.info(
-                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
+                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, "
+                f"trace: {enable_trace_current_prompt}, batched_prefill: {use_batched_prefill} "
+                f"(users={len(empty_slots) if use_batched_prefill else 1})"
             )
 
             if page_table is not None:
@@ -1472,6 +1474,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     model_id=model_id,
                     num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
                     batch_size=padded_batch if use_batched_prefill else 1,
+                    return_hidden_states=return_hidden_states,
                     **local_kwargs,
                 )
             if use_batched_prefill:
@@ -1587,6 +1590,52 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         output_tokens,
                         output_log_probs,
                     )
+                elif return_hidden_states:
+                    # Embedding batched-prefill path: slice per-user hidden states and
+                    # apply final norm (no LM head) instead of producing full-vocab logits.
+                    #
+                    # Fast path: when all users share the same tile-aligned last-token
+                    # offset (typical — batched prefill already requires all users to
+                    # share a padded prefill_seq_len), run slice + norm + to_layout once
+                    # on the whole [padded_batch, 1, S, H] tensor and do a single host
+                    # copy + synchronize. That keeps the post-trace tail compute-bound
+                    # on device instead of serialized by N host-device round trips — on
+                    # Qwen3-Embedding-0.6B at batch=32 / ISL=512 this collapses ~96 OOB
+                    # device ops + 32 syncs down to 3 ops + 1 sync.
+                    tile_offsets = [(last_token_idx[slot] // 32) * 32 for slot in empty_slots]
+                    if (
+                        len(tile_offsets) > 0
+                        and len(set(tile_offsets)) == 1
+                        and self.model_args[model_id].num_devices == 1
+                    ):
+                        batch_hidden_norm = self.model[model_id].process_hidden_states_after_prefill_trace_batched(
+                            logits, tile_offsets[0]
+                        )
+                        batch_host = batch_hidden_norm.cpu(blocking=False)
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        batch_torch = ttnn.to_torch(ttnn.get_device_tensors(batch_host)[0])
+                        dim_full = self.model_args[model_id].dim
+                        for local_idx, slot in enumerate(empty_slots):
+                            last_token_idx_relative = last_token_idx[slot] % 32
+                            output_tensor[slot] = batch_torch[slot, 0, last_token_idx_relative, :dim_full]
+                    else:
+                        for local_idx, slot in enumerate(empty_slots):
+                            user_hidden = logits[slot : slot + 1, :, :, :]
+                            user_hidden_norm = self.model[model_id].process_hidden_states_after_prefill_trace(
+                                user_hidden, last_token_idx[slot]
+                            )
+                            user_hidden_host = user_hidden_norm.cpu(blocking=False)
+                            ttnn.synchronize_device(self.model[model_id].mesh_device)
+                            last_token_idx_relative = last_token_idx[slot] % 32
+                            if self.model_args[model_id].num_devices == 1:
+                                hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(user_hidden_host)[0])
+                                output_tensor[slot] = hidden_states_torch[
+                                    0, 0, last_token_idx_relative, : self.model_args[model_id].dim
+                                ]
+                            else:
+                                output_tensor[slot] = self.model[model_id].process_output_prefill_hidden_states(
+                                    user_hidden_host, last_token_idx=last_token_idx_relative
+                                )
                 else:
                     if return_hidden_states:
                         # Embedding models: trace returns hidden states; extract last-token hidden per slot
@@ -1630,20 +1679,63 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
                         logits, last_token_idx_for_trace
                     )
-                    prefill_results.append(
-                        {
-                            "idx": idx,
-                            "model_id": model_id,
-                            "last_token_idx": last_token_idx,
-                            "hidden_states": hidden_states.cpu(blocking=False),
-                        }
-                    )
+                    if batch_size == 1 and not use_batched_prefill:
+                        hidden_states_host = hidden_states.cpu(blocking=False)
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        num_cached_tokens_local = int(start_pos[idx]) if start_pos is not None else 0
+                        last_token_idx_relative = last_token_idx - num_cached_tokens_local
+                        if self.model_args[model_id].num_devices == 1:
+                            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                            output_tensor[idx] = hidden_states_torch[
+                                0, 0, (last_token_idx_relative % 32), : self.model_args[model_id].dim
+                            ]
+                        else:
+                            output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
+                                hidden_states_host, last_token_idx=(last_token_idx_relative % 32)
+                            )
+                    else:
+                        prefill_results.append(
+                            {
+                                "idx": idx,
+                                "model_id": model_id,
+                                "last_token_idx": last_token_idx,
+                                "hidden_states": hidden_states.cpu(blocking=False),
+                            }
+                        )
                     continue
                 else:
                     logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx_for_trace)
             else:
                 if return_hidden_states:
-                    raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
+                    # Same post-prefill path as trace: slice last tile, apply final norm (no LM head).
+                    # Non-trace still runs ttnn_prefill_forward on device; only trace capture is skipped.
+                    hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
+                        logits, last_token_idx
+                    )
+                    if batch_size == 1 and not use_batched_prefill:
+                        hidden_states_host = hidden_states.cpu(blocking=False)
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        num_cached_tokens_local = int(start_pos[idx]) if start_pos is not None else 0
+                        last_token_idx_relative = last_token_idx - num_cached_tokens_local
+                        if self.model_args[model_id].num_devices == 1:
+                            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                            output_tensor[idx] = hidden_states_torch[
+                                0, 0, (last_token_idx_relative % 32), : self.model_args[model_id].dim
+                            ]
+                        else:
+                            output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
+                                hidden_states_host, last_token_idx=(last_token_idx_relative % 32)
+                            )
+                    else:
+                        prefill_results.append(
+                            {
+                                "idx": idx,
+                                "model_id": model_id,
+                                "last_token_idx": last_token_idx,
+                                "hidden_states": hidden_states.cpu(blocking=False),
+                            }
+                        )
+                    continue
 
             self._append_prefill_result(
                 prefill_results,
@@ -1878,6 +1970,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         model_id=-1,
         num_cached_tokens: int = 0,
         batch_size=1,
+        return_hidden_states: bool = False,
         **kwargs,
     ):
         seq_len = tokens.shape[-1]
@@ -1979,10 +2072,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
-                    get_last_token=self._chunk_prefill_get_last_token(
-                        is_last_chunk=is_last_chunk,
-                        last_token_idx_in_chunk=last_token_idx_in_chunk,
-                        chunk_size=chunk_size,
+                    # Embedding / pooling needs the full pre-norm sequence on the final
+                    # chunk so process_hidden_states_after_prefill_trace can slice to the
+                    # last-token tile; mirrors the non-chunked path below.
+                    get_last_token=(
+                        -1
+                        if (return_hidden_states and is_last_chunk)
+                        else self._chunk_prefill_get_last_token(
+                            is_last_chunk=is_last_chunk,
+                            last_token_idx_in_chunk=last_token_idx_in_chunk,
+                            chunk_size=chunk_size,
+                        )
                     ),
                     kv_cache=kv_cache,
                     batch_size=batch_size,
@@ -2003,13 +2103,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, *_ = inputs
 
+            # Embedding / pooling: need full pre-norm sequence so process_hidden_states_after_prefill_trace
+            # can slice to the last-token tile. With a tile-only get_last_token, forward returns 32 positions
+            # and slicing at (last_token_idx//32)*32 fails (see slice_device_operation shape mismatch).
+            if return_hidden_states:
+                get_last_token = -1
+            else:
+                get_last_token = -1 if batch_size > 1 else (last_token_idx // 32) * 32
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
                 rot_mats_global=rot_mats_global_prefill,
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
+                get_last_token=get_last_token,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )
