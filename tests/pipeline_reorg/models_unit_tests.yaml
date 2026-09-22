@@ -1620,7 +1620,7 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests (single BH galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
