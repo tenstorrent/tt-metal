@@ -241,6 +241,10 @@ class DecoderLoop:
         )
 
     def __call__(self, residual, position, page_table, rotary_position=None, tokens=None):
+        # Both residual phases share one TensorAccessor specification. Match
+        # the native layer's input conversion before substituting the L1
+        # reduction output on the second phase and subsequent layers.
+        residual = ttnn.to_memory_config(residual, self.body.layers[0].local_residual_memcfg)
         return self.body(
             residual,
             self.first,

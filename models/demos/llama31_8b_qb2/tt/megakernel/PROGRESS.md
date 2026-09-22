@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 16:46 UTC. **Verified partial prototype; full decode megakernel incomplete.**
+Updated 2026-09-22 17:06 UTC. **Verified partial prototype; full decode megakernel incomplete.**
 
 Base origin/main: `b8915544692d8f9feb2c890afbc2f22791560cd2`.
 Branch: `codex/llama31-qb2-megakernel`. Last hardware-qualified checkpoint:
@@ -21,12 +21,13 @@ to have its owner release the hardware. Do not kill/reset underneath it.
 Our blocked mesh-opening process was terminated only after preserving evidence.
 `artifacts/OWNERSHIP_BLOCKED` guards the serialized runner and reset script.
 Check `/proc/*/status` NSpid when interpreting a container PID; fuser without
-root cannot enumerate all another user's FDs. Latest check16:45 still live.
+root cannot enumerate all another user's FDs. Released by16:57; full connectivity and ring mesh open/close passed16:58.
+The guard was archived after verifying release; device testing resumed.
 
 Mark permits unlimited device resets during this allocation; no further reset
 approval is needed after ownership is clear. Last reset13:44 passed all4-device
 enumeration, current-runtime full connectivity and ring mesh open/close.
-No hardware work has run since the conflicting workload took the device lock.
+No reset was needed after the conflict ended. See the latest qualification below.
 
 ## Environment and commands
 
@@ -257,3 +258,21 @@ max code/config54,240B, local CB peak unchanged. Logs:
 `compile-mock-token-inactive.log`, `read-alignment-audit.json`.
 Use pytest --timeout=0 under the bounded device runner so its triage runs before
 terminating a hung experiment, rather than the inner pytest timeout intervening.
+
+## Hardware composition qualification (17:06 UTC)
+
+Access resumed16:58. Gather tail and output-projection tail pass. Initial
+attention-tail PCC.99001 exposed native read_q's local-Q optimization on its
+output core: relocation must set reader is_output_core=false as well as patch
+Q-source coordinates. Corrected attention tail and complete decoder both pass
+12checks with bitwise output/allKV,127→129/255→257, physicalpage migration and
+in-place table remap/replay. Logs layer-attention-tail-hw-v2/layer-decoder-hw-1703.
+
+Loop initially produced corrupt residuals despite exactKV: its public entry
+accepted DRAM input while the second residual phase uses L1 with the same
+TensorAccessor layout. Added native-equivalent to_memory_config conversion.
+One- and two-layer device loops (real layer0/31) now pass with exact output/KV,
+three inactive position-1 warmups preserving allKV, positions127→129, in-place
+remapping and eight repeated replays. Failed output/cache tensors preserved.
+Logs decoder-loop-one-hw-v2/decoder-loop-two-hw-1705. Full32-layer and terminal
+head qualification are next; no full-megakernel latency claim yet.

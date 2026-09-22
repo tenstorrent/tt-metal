@@ -171,9 +171,26 @@ def test_fused_layer_real_weights(qb2_mesh, mode, reuse_scratch):
                     copy_to(torch.tensor([pos], dtype=torch.int32), position, mesh)
                     for trace in traces:
                         ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-                    metrics = compare(to_host(outputs[1]), to_host(outputs[0]))
-                    for actual, expected in zip(caches[1], caches[0]):
-                        torch.testing.assert_close(to_host(actual), to_host(expected), rtol=0, atol=0)
+                    actual_output, expected_output = to_host(outputs[1]), to_host(outputs[0])
+                    try:
+                        metrics = compare(actual_output, expected_output)
+                        for actual, expected in zip(caches[1], caches[0]):
+                            torch.testing.assert_close(to_host(actual), to_host(expected), rtol=0, atol=0)
+                    except AssertionError:
+                        if destination := os.environ.get("QB2_MEGAKERNEL_ARTIFACT_DIR"):
+                            folder = Path(destination)
+                            folder.mkdir(parents=True, exist_ok=True)
+                            torch.save(
+                                {
+                                    "actual": actual_output,
+                                    "expected": expected_output,
+                                    "position": pos,
+                                    "mapping": mapping,
+                                    "cache": [[to_host(t) for t in pair] for pair in caches],
+                                },
+                                folder / f"layer-{mode}-{pos}-{remap}-failure.pt",
+                            )
+                        raise
                     saved = to_host(outputs[1]).clone()
                     ttnn.execute_trace(mesh, traces[1], cq_id=0, blocking=True)
                     torch.testing.assert_close(to_host(outputs[1]), saved, rtol=0, atol=0)

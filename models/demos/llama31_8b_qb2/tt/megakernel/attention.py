@@ -64,6 +64,10 @@ class FusedAttention:
         offsets = set()
         for core in self.cores:
             args = list(reader_rt[core.x][core.y])
+            # Native read_q treats the output worker as the local Q owner.
+            # Relocation separates those cores, so every reader must use the
+            # explicit source coordinates, including the output worker.
+            args[9] = 0
             args[20:22] = [q_physical.x, q_physical.y]
             reader_rt[core.x][core.y] = args
             args = list(writer_rt[core.x][core.y])
