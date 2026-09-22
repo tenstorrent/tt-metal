@@ -1020,6 +1020,7 @@
 
 - name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k@8k"
   fabric_profile: 1d
+  artifact_subdir: gemma4_mock256k
   cmd: |
     export TT_METAL_HOME=/home/user/tt-metal
     export HF_HUB_OFFLINE=1
