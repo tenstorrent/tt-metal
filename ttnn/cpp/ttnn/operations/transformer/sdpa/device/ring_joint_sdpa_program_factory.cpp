@@ -2495,9 +2495,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         remainder_changes_owner && build_kv_chains &&
         // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
         !use_head_chain &&
-        // Only streaming compute consumes rotated IDs. Sink paths remain excluded;
-        // balanced allocation and per-Q skips are incompatible with this schedule.
-        use_streaming_compute && !use_attention_sink && !args.is_balanced &&
+        // Only streaming compute consumes rotated IDs. The reader loads a sink for the
+        // scheduled Q head only on final normalization, so sinks need no ownership handoff.
+        // Balanced allocation and per-Q skips are incompatible with this schedule.
+        use_streaming_compute && !args.is_balanced &&
         // Every core needs a real chunk: padded reader slots decode my_count - 1.
         rotated_base_chunks >= 1;
 

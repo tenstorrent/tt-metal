@@ -1633,6 +1633,7 @@ def run_ring_joint_sdpa_chunked(
     runtime: RingJointSDPARuntime = None,
     reserve_llk_kernel_config: bool = True,
     circular_kv_cache: bool = False,
+    attention_sink_values: torch.Tensor = None,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1669,6 +1670,8 @@ def run_ring_joint_sdpa_chunked(
         assert model.d_v <= model.d_k, f"latent V (d_v={model.d_v}) must fit within the K/V latent (d_k={model.d_k})"
     if use_attention_sink:
         assert not use_ring_mla, "attention sink coverage requires separate K/V ring joint SDPA"
+    if attention_sink_values is not None:
+        assert use_attention_sink, "attention_sink_values requires use_attention_sink"
     # circular_kv_cache: the per-device K/V input is the 2-slab circular cache of the bounded
     # sliding-window layout (current chunk + predecessor at slab g % 2) instead of the full growing
     # prefix; logical_n / kv_actual_isl stay absolute and the op derives the wrap on-device.
@@ -1761,7 +1764,12 @@ def run_ring_joint_sdpa_chunked(
         operator_sink = None
         if use_attention_sink:
             scale = d_q**-0.5
-            model_sink = torch.linspace(-4.0, 12.0, nhq).reshape(1, nhq, 1, 1)
+            model_sink = (
+                torch.linspace(-4.0, 12.0, nhq).reshape(1, nhq, 1, 1)
+                if attention_sink_values is None
+                else attention_sink_values
+            )
+            assert model_sink.shape == (1, nhq, 1, 1)
             operator_sink = model_sink / scale
 
         # do_check=False (perf/profiling) skips the full-sequence CPU torch reference: it is an
@@ -6021,6 +6029,62 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_accuracy():
         qk_configs=[(32, 512)],
         persistent_buffer_mode="reuse_max",
     )
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("q_chunk_size", [32, 64], ids=["q32", "q64"])
+@pytest.mark.parametrize("local_q_chunks", [8, 15], ids=["base_one", "base_two"])
+def test_ring_joint_attention_rotated_q_sink_accuracy_and_cache_reuse(q_chunk_size, local_q_chunks):
+    """Rotated chunks select their own head's sink once, on the last active iteration.
+
+    Seventeen heads leave a partial multicast row on both QuietBox and Galaxy, so
+    padded reader slots must not push sinks. The first prefill chunk has partial
+    active ring masks; later chunks migrate ownership through the complete ring.
+    """
+    model = replace(MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"], nhq=17)
+    work_units = model.nhq * local_q_chunks
+    base, remainder = divmod(work_units, MESH_CONFIG.sdpa_cores)
+    assert base == (1 if local_q_chunks == 8 else 2)
+    assert 0 < remainder < MESH_CONFIG.sdpa_cores - MESH_CONFIG.sdpa_cols
+    assert remainder % MESH_CONFIG.sdpa_cols != 0
+    chunk_size = local_q_chunks * q_chunk_size * MESH_CONFIG.sp_size
+    sink_values = torch.linspace(-4.0, 12.0, model.nhq * MESH_CONFIG.tp_size).reshape(1, -1, 1, 1)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        cache_entries = None
+        # Reverse per-head values on a cached dispatch: ignoring sinks or using the
+        # previous owner's head must fail the CPU-reference accuracy checks.
+        for values in (sink_values, sink_values.flip(1)):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                chunk_size=chunk_size,
+                total_seq=3 * chunk_size,
+                qk_configs=[(q_chunk_size, 512)],
+                persistent_buffer_mode="reuse_max",
+                use_attention_sink=True,
+                attention_sink_values=values,
+                runtime=runtime,
+            )
+            current_entries = runtime.mesh_device.num_program_cache_entries()
+            assert current_entries > 0
+            if cache_entries is not None:
+                assert current_entries == cache_entries, "Changing sink values must reuse the cached program"
+            cache_entries = current_entries
+        run_ring_joint_sdpa_chunked(
+            MESH_CONFIG,
+            model,
+            chunk_size=chunk_size,
+            total_seq=3 * chunk_size,
+            qk_configs=[(q_chunk_size, 512)],
+            persistent_buffer_mode="reuse_max",
+            use_attention_sink=True,
+            num_iterations=3,
+            runtime=runtime,
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
 @pytest.mark.timeout(1200)

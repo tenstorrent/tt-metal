@@ -913,9 +913,9 @@ void kernel_main() {
                 !has_sliding_window && q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
             // A sink is one virtual key in the global softmax. It is consumed exactly once,
-            // during final-iteration normalization; retain it in the one-tile CB across all
-            // preceding full-causal ring iterations. Padded chain/mcast iterations have no
-            // compute consumer and must not produce a sink tile.
+            // during final-iteration normalization. Decode its head from this iteration's
+            // scheduled chunk, including migrated chunks; no sink state crosses ring iterations.
+            // Padded chain/mcast iterations have no consumer and must not produce a sink tile.
             if constexpr (use_attention_sink) {
                 if (is_last_ring_iter && !is_padded_iter) {
                     constexpr uint32_t sink_tiles = 1;
