@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 17:06 UTC. **Verified partial prototype; full decode megakernel incomplete.**
+Updated 2026-09-22 17:16 UTC. **Full token-to-logits prototype verified at B1/context128; slower than baseline.**
 
 Base origin/main: `b8915544692d8f9feb2c890afbc2f22791560cd2`.
 Branch: `codex/llama31-qb2-megakernel`. Last hardware-qualified checkpoint:
@@ -276,3 +276,23 @@ three inactive position-1 warmups preserving allKV, positions127→129, in-place
 remapping and eight repeated replays. Failed output/cache tensors preserved.
 Logs decoder-loop-one-hw-v2/decoder-loop-two-hw-1705. Full32-layer and terminal
 head qualification are next; no full-megakernel latency claim yet.
+
+## Full32-layer token-to-logits qualification (17:16 UTC)
+
+`decode_token` now runs BF16 embedding, all32decoder layers through one reused
+body/weight-KV table andscratch, final gather/native norm/HiFi2 head in one
+four-chip program. Prefill andnative sampler remain separate. Full realmodel
+B1/context128/32tokens/selected precision andgreedy settings: teacherlogits and
+all64KV bitwise exact,32/32 greedy outputs,3stable repeated generations.
+`model-decode-token-128-v2`:11.153716ms/token median versus8.785510baseline
+(26.96% slower). Fullprogram is numerically qualified at this configuration,
+not a performance improvement or serving qualification.
+
+First32-layer run exhausted PacketHeaderPool in nativefabricwriter. Full
+tt-triage/lightweight assertion saved before terminating ownPID2176497;
+reset17:12 plus4-chipenumeration/connectivity/ringmesh allpassed. Reset pool
+before each nativephase after previous writes drain/connections close, using
+currentAPI; realSFPI compilation andfullmodel retry passed. Originalfailedrun
+andallrecovery evidence retained. Currentcontext2048baseline rerun fixes
+teacherstream toHF reference (earlier2048baseline useddifferentstream).
+Deviceprofiles/traffic andcurrentbaseline refresh remain next work.
