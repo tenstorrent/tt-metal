@@ -3,6 +3,41 @@ name: "LLK perf gate"
 on:
   pull_request:
     types: [labeled, synchronize]
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+    inputs:
+      perf_run_id:
+        description: "Workflow run holding the CURRENT side's perf artifacts"
+        required: true
+        type: string
+      baseline_run_id:
+        description: "Workflow run holding the BASELINE side's perf artifacts"
+        required: true
+        type: string
+      arch:
+        description: "Architecture to gate on"
+        required: false
+        default: wormhole
+        type: choice
+        options:
+          - wormhole
+          - blackhole
+      run_types:
+        description: "Comma-separated run types to compare"
+        required: false
+        default: L1_TO_L1
+        type: string
+      pr_number:
+        description: "PR to name in the report (labelling only; nothing is posted to it)"
+        required: false
+        type: string
+      notify_on_success:
+        description: "Post to Slack even when the gate passes"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -13,11 +48,24 @@ jobs:
   llk-perf-gate:
     name: "LLK perf regression gate"
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push'
+       && startsWith(github.event.head_commit.message, '[gate-trial]')) ||
       (
-        (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
-        (github.event.action == 'synchronize'
-         && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+          (github.event.action == 'synchronize'
+           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        )
       )
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      arch: ${{ inputs.arch || vars.LLK_GATE_PILOT_ARCH || 'wormhole' }}
+      run_types: ${{ inputs.run_types || vars.LLK_GATE_PILOT_RUN_TYPES || 'L1_TO_L1' }}
+      perf_run_id: ${{ inputs.perf_run_id || vars.LLK_GATE_PILOT_PERF_RUN_ID || '' }}
+      baseline_run_id: >-
+        ${{ inputs.baseline_run_id || vars.LLK_GATE_PILOT_BASELINE_RUN_ID || '' }}
+      pr_number: ${{ inputs.pr_number || '' }}
+      notify_on_success: ${{ inputs.notify_on_success || false }}
     secrets: inherit
