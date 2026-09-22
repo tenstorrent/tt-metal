@@ -898,10 +898,11 @@ class Qwen36KVTransfer:
                 ttnn.deallocate(t)
             if self.timing:
                 logger.info(
-                    f"[PD_TIMING] export T={num_tokens} nblk={nblk} slot={slot} B={dn.B}: kv {1e3 * (t1 - t0):.1f} ms "
-                    f"(mirrored {len(mirrored)}/{nchunks} chunks), gdn {1e3 * (t_sync - t1):.1f} ms = taps read "
+                    # `kv X ms, gdn Y ms` first: profiles/pd/p3f_handoff_table.py parses exactly that prefix
+                    f"[PD_TIMING] export T={num_tokens} nblk={nblk} slot={slot} B={dn.B}: kv {1e3 * (t1 - t0):.1f} ms, "
+                    f"gdn {1e3 * (t_sync - t1):.1f} ms (mirrored {len(mirrored)}/{nchunks} chunks; gdn = taps read "
                     f"{1e3 * (t_taps - t1):.1f} + rec copies {1e3 * (t_rec - t_taps):.1f} + rows files "
-                    f"{1e3 * (t_rows - t_rec):.1f} + sync {1e3 * (t_sync - t_rows):.1f}"
+                    f"{1e3 * (t_rows - t_rec):.1f} + sync {1e3 * (t_sync - t_rows):.1f})"
                 )
 
     # ----------------------------------------------------------------------------------------------------------- #
