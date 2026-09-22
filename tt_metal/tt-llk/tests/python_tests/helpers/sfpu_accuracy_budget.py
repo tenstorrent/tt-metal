@@ -477,8 +477,10 @@ def usable_budget_ceiling(output_format: DataFormat) -> float:
     ``MAX_MEANINGFUL_ULP`` is the wrong bound: ``2**mantissa_bits`` is roughly 100%
     relative error, so it admits budgets that gate nothing -- and since ``passed_test``
     returns on the ULP verdict and skips both ``isclose`` and PCC, such a budget *is* the
-    whole gate. Measured, approximate tanh on an fp32 output reached 2,949,120 steps,
-    about 35% relative error, on an op bounded in (-1, 1).
+    whole gate. Measured, approximate tanh on an fp32 output reaches 655,360 steps, about
+    7.8% relative error, on an op bounded in (-1, 1) -- and that is *after* #57179 traded
+    the 3-segment SFPLUT for a 6-entry table; the same measurement was 2,949,120 steps,
+    about 35%, before it. A bound that admits either is not a gate.
 
     The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
     budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.

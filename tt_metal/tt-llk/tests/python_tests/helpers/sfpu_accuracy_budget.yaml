@@ -2893,21 +2893,21 @@ Tan:
 Tanh:
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 81920}  # max 65536 ULP, p99.9 65536.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 2}  # max 2 ULP, p99.9 1.0, 83% exact, ~22 mantissa bits, 2048 pts, 2026-09-17
-  - {in: Float32, out: Float32, approx: "Yes", metric: tolerance}  # max 2424832 ULP, p99.9 2405616.0, 0% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 3007020, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float32, out: Float32, approx: "Yes", metric: tolerance}  # max 655360 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 819200, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP, p99.9 1.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-  - {in: Float32, out: Float16_b, approx: "Yes", metric: tolerance}  # max 37 ULP, p99.9 37.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 47, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float32, out: Float16_b, approx: "Yes", metric: tolerance}  # max 10 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 13, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
   - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 81920}  # max 65536 ULP, p99.9 65536.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
   - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 40675}  # max 32666 ULP, p99.9 32540.0, 0% exact, ~8 mantissa bits, 2048 pts, 2026-09-17
-  - {in: Float16_b, out: Float32, approx: "Yes", metric: tolerance}  # max 2424832 ULP, p99.9 2371584.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 2964480, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float16_b, out: Float32, approx: "Yes", metric: tolerance}  # max 655360 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 819200, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP, p99.9 1.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-17; measured 0, floored to 1 (a finite sample cannot assert exactness)
-  - {in: Float16_b, out: Float16_b, approx: "Yes", metric: tolerance}  # max 37 ULP, p99.9 36.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 45, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float16_b, out: Float16_b, approx: "Yes", metric: tolerance}  # max 10 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 13, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
   - {in: Float16, out: Float32, approx: "No", dest: "No", max_ulp: 61440}  # max 49152 ULP, p99.9 49152.0, 19% exact, ~7 mantissa bits, 2048 pts, 2026-09-17
   - {in: Float16, out: Float32, approx: "No", dest: "Yes", max_ulp: 5110}  # max 4093 ULP, p99.9 4088.0, 0% exact, ~11 mantissa bits, 2048 pts, 2026-09-17
-  - {in: Float16, out: Float32, approx: "Yes", metric: tolerance}  # max 2418176 ULP, p99.9 2406400.0, 10% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 3008000, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float16, out: Float32, approx: "Yes", metric: tolerance}  # max 638976 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 798720, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
   - {in: Float16, out: Float16_b, approx: "No", max_ulp: 2}  # max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
-  - {in: Float16, out: Float16_b, approx: "Yes", metric: tolerance}  # max 37 ULP, p99.9 37.0, 32% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 47, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float16, out: Float16_b, approx: "Yes", metric: tolerance}  # max 10 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 13, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", max_ulp: 6}  # max 3 ULP, wormhole, 2026-09-21
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", max_ulp: 6}  # max 3 ULP, wormhole, 2026-09-21
   - {in: Bfp4_b, out: Float16, approx: "No", dest: "No", max_ulp: 5}  # max 4 ULP, wormhole, 2026-09-21
@@ -2933,6 +2933,23 @@ Tanh:
   - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 8}  # max 7 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
+  # Approximate tanh re-measured 2026-09-22 after #57179 replaced the 3-segment SFPLUT with
+  # the 6-entry SFPLUTFP32 table. The old skip on Float16/Float16_b/Float32 outputs is gone
+  # with it, so these cells run for the first time. Only the narrow-input Bfp8_b cells clear
+  # their ceiling; every other output stays on tolerance, now for a measured reason.
+  - {in: Float32, out: Float16, approx: "Yes", metric: tolerance}  # max 79 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 99, past the 51-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float16_b, out: Float16, approx: "Yes", metric: tolerance}  # max 78 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 98, past the 51-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float16, out: Float16, approx: "Yes", metric: tolerance}  # max 78 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 98, past the 51-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Bfp8_b, out: Float16, approx: "Yes", metric: tolerance}  # max 78 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 98, past the 51-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Bfp4_b, out: Float16, approx: "Yes", metric: tolerance}  # max 74 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 93, past the 51-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", max_ulp: 14}  # max 11 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget 14 clears the 25-step Bfp8_b ceiling, so enrolled
+  - {in: Bfp8_b, out: Bfp8_b, approx: "Yes", max_ulp: 14}  # max 11 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget 14 clears the 25-step Bfp8_b ceiling, so enrolled
+  - {in: Float16_b, out: Bfp8_b, approx: "Yes", max_ulp: 14}  # max 11 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget 14 clears the 25-step Bfp8_b ceiling, so enrolled
+  - {in: Float16, out: Bfp8_b, approx: "Yes", metric: tolerance}  # max 15233 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 19042, past the 25-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Float32, out: Bfp8_b, approx: "Yes", metric: tolerance}  # max 15236 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 19045, past the 25-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Bfp4_b, out: Float16_b, approx: "Yes", metric: tolerance}  # max 9 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 12, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Bfp8_b, out: Float16_b, approx: "Yes", metric: tolerance}  # max 10 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 13, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+  - {in: Bfp8_b, out: Float32, approx: "Yes", metric: tolerance}  # max 655360 ULP, wormhole, 2026-09-22, 10 runs, 6-entry SFPLUTFP32 (#57179); budget would be 819200, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
 TanhDerivative:
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
