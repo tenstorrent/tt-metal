@@ -401,49 +401,65 @@ void kernel_main() {
         cb_push_back(cb_sum_plain, Bt);
         cb_push_back(cb_out_seed, row_tiles);
 
-        // ---- this core's update closes the packet.
-        {
-            DeviceZoneScopedN("WAIT-COMPUTE");
-            cb_wait_front(cb_out_out, row_tiles);
-            cb_wait_front(cb_max_out, Bt);
-            cb_wait_front(cb_sum_out, Bt);
-        }
-        // ---- the next timestep's Q to the compute kernel first (see
-        // receive_query); its slot was popped at the end of t - 1.
-        if (t + 1u < kTimesteps) {
-            receive_query(t + 1u, g + 1u, prefetched_next);
-            query_pushed_next = true;
-        }
+        // ---- this core's update closes the packet. The compute kernel hands
+        // a forwarded row's state over one query tile at a time (a finished
+        // row's whole, at the end), and each tile's forward is issued as it
+        // arrives, so the bulk of the state is in flight under the compute
+        // kernel's last columns and only the last tile's write and the
+        // completion follow the timestep.
+        const bool forwarded = receiver != kNoCore;
+        const bool spilled = !forwarded && sched.has_later_active(i, t);
         {
             DeviceZoneScopedN("SEND-STATE");
+            const uint32_t out_tile_bytes = qWt * fp32_bytes;
+            for (uint32_t a = 0; a < Bt; ++a) {
+                {
+                    DeviceZoneScopedN("WAIT-COMPUTE");
+                    cb_wait_front(cb_out_out, (a + 1u) * qWt);
+                    cb_wait_front(cb_max_out, a + 1u);
+                    cb_wait_front(cb_sum_out, a + 1u);
+                }
+                const uint32_t o_off = a * out_tile_bytes;
+                const uint32_t s_off = a * fp32_bytes;
+                if (receiver == my_core) {
+                    noc_async_write(os + o_off, get_noc_addr(dst_out + o_off), out_tile_bytes);
+                    noc_async_write(ms + s_off, get_noc_addr(dst_max + s_off), fp32_bytes);
+                    noc_async_write(ls + s_off, get_noc_addr(dst_sum + s_off), fp32_bytes);
+                } else if (forwarded) {
+                    noc_async_write(os + o_off, get_noc_addr(receiver_x, receiver_y, dst_out + o_off), out_tile_bytes);
+                    noc_async_write(ms + s_off, get_noc_addr(receiver_x, receiver_y, dst_max + s_off), fp32_bytes);
+                    noc_async_write(ls + s_off, get_noc_addr(receiver_x, receiver_y, dst_sum + s_off), fp32_bytes);
+                } else if (spilled) {
+                    // Streak end with a later streak: spill the state, then
+                    // (below) complete the write and certify it for the later
+                    // streak's reload.
+                    for (uint32_t k = 0; k < qWt; ++k) {
+                        noc_async_write_page(acc_page(i, a * qWt + k), state_acc, os + o_off + k * fp32_bytes);
+                    }
+                    noc_async_write_page(stat_page(i, a, 0u), state_stats, ms + s_off);
+                    noc_async_write_page(stat_page(i, a, 1u), state_stats, ls + s_off);
+                }
+                // Else the row's last visit: the compute kernel finished it and
+                // the write kernel stores it.
+            }
+            // ---- the next timestep's Q to the compute kernel before this
+            // state's completion (see receive_query); its slot was popped at
+            // the end of t - 1.
+            if (t + 1u < kTimesteps) {
+                receive_query(t + 1u, g + 1u, prefetched_next);
+                query_pushed_next = true;
+            }
             if (receiver == my_core) {
-                noc_async_write(os, get_noc_addr(dst_out), stride_out);
-                noc_async_write(ms, get_noc_addr(dst_max), stride_stat);
-                noc_async_write(ls, get_noc_addr(dst_sum), stride_stat);
                 noc_async_write_barrier();
                 noc_semaphore_set(ready_st_sem[dst], u + 1u);
-            } else if (receiver != kNoCore) {
-                noc_async_write(os, get_noc_addr(receiver_x, receiver_y, dst_out), stride_out);
-                noc_async_write(ms, get_noc_addr(receiver_x, receiver_y, dst_max), stride_stat);
-                noc_async_write(ls, get_noc_addr(receiver_x, receiver_y, dst_sum), stride_stat);
+            } else if (forwarded) {
                 noc_async_write_barrier();
                 noc_inline_dw_write(
                     get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_st_sem_id[dst])), u + 1u);
-            } else if (sched.has_later_active(i, t)) {
-                // Streak end with a later streak: spill the state, complete
-                // the write, and certify it for the later streak's reload.
-                for (uint32_t k = 0; k < row_tiles; ++k) {
-                    noc_async_write_page(acc_page(i, k), state_acc, os + k * fp32_bytes);
-                }
-                for (uint32_t a = 0; a < Bt; ++a) {
-                    noc_async_write_page(stat_page(i, a, 0u), state_stats, ms + a * fp32_bytes);
-                    noc_async_write_page(stat_page(i, a, 1u), state_stats, ls + a * fp32_bytes);
-                }
+            } else if (spilled) {
                 noc_async_write_barrier();
                 noc_semaphore_set(endpoint_sem[my_core - 1u], g + 1u);
             }
-            // Else the row's last visit: the compute kernel finished it and
-            // the write kernel stores it.
         }
         cb_pop_front(cb_out_out, row_tiles);
         cb_pop_front(cb_max_out, Bt);
