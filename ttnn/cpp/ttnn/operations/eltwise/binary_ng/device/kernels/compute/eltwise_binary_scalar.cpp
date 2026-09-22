@@ -17,8 +17,10 @@ void kernel_main() {
     constexpr auto cb_pre_lhs_id = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs_id = tt::CBIndex::c_1;
 
-    CircularBuffer cb_post_lhs(HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id);
-    CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
+    constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
+    constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
+    CircularBuffer cb_post_lhs(cb_post_lhs_id);
+    CircularBuffer cb_post_rhs(cb_post_rhs_id);
     CircularBuffer cb_out(tt::CBIndex::c_2);
 
     // FPU operands are unpacked from these CBs straight into srcA/srcB, so the swapped
@@ -27,9 +29,15 @@ void kernel_main() {
     // c_0/c_1 because the host already swapped the activation lists before emitting the defines.
     // Swapping them here as well would apply each activation to the wrong operand.
 #if SCALAR_IS_LHS
+    static_assert(
+        cb_post_rhs_id == BINARY_FPU_SRCA_FORMAT_CB,
+        "binary_ng: FPU SrcA startup operand disagrees with the preprocessing restore reference");
     CircularBuffer& cb_op_a = cb_post_rhs;
     CircularBuffer& cb_op_b = cb_post_lhs;
 #else
+    static_assert(
+        cb_post_lhs_id == BINARY_FPU_SRCA_FORMAT_CB,
+        "binary_ng: FPU SrcA startup operand disagrees with the preprocessing restore reference");
     CircularBuffer& cb_op_a = cb_post_lhs;
     CircularBuffer& cb_op_b = cb_post_rhs;
 #endif

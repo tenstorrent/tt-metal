@@ -230,6 +230,32 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: adding a ReduceParams field must be a deliberate choice — hash it below, or
+    // exclude it like the two scalars, which the kernels read as runtime args.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 15,
+        "ReduceParams gained or lost a field: add it to compute_program_hash or document why it is "
+        "excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<ReduceDeviceOperation>,
+        operation_attributes.math_op,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.negate,
+        operation_attributes.scaler_mode,
+        operation_attributes.row_major_w_dense_path,
+        operation_attributes.row_major_h_dense_path,
+        operation_attributes.use_sfpu_reduce,
+        operation_attributes.num_h_slices,
+        operation_attributes.output_layout,
+        tensor_args);
+}
+
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
@@ -268,6 +294,7 @@ ttnn::Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate,
     float post_mul_scaler,
+    ScalerMode scaler_mode,
     bool row_major_w_dense_path,
     bool row_major_h_dense_path,
     bool use_sfpu_reduce,
@@ -284,6 +311,7 @@ ttnn::Tensor reduce(
             sub_core_grids,
             negate,
             post_mul_scaler,
+            scaler_mode,
             row_major_w_dense_path,
             row_major_h_dense_path,
             use_sfpu_reduce,

@@ -59,7 +59,9 @@ The following DataFormat reconfigurations are currently supported:
 
 - `reconfig_data_format` API should be used to reconfigure the hardware between calls to operations that use CBs of different DataFormats.
 - `pack_reconfig_data_format` API is called independently of `reconfig_data_format`, when the output CB changes DataFormats
-- Programmers should always use the API calls providing both the old and the new operand CB index, as this enables faster reconfiguration and dynamic checks for eligible conversions.
+- Prefer the overloads providing both old and new operand CB indices when the current configuration is known. They compare operand descriptors, not the current hardware state: the old operand is a claim by the caller. A different buffer may serve as that reference only when its relevant descriptor fields are equivalent.
+- A stale old-operand reference can make the comparison skip a required reconfiguration. For example, if SrcA is configured for FP32, passing two BF16 references does not switch it to BF16. The format guard compares both unpack source and destination formats. When operands and descriptors are compile-time known, the comparison can be constant-folded; this is not a hardware-state query.
+- When the old configuration is unknown, use the new-only overload. This removes the need to identify the old operand, **not** the need to choose the correct target when restoring after a temporary operation.
 
 ## Examples:
 TO DO
