@@ -88,18 +88,18 @@ struct OutputContext {
     uint32_t* const stack_ptr;
     const uint32_t stack_buffer_size;
 
-    const uint32_t output_dfb_addr;
+    const uint32_t output_addr;
     const uint32_t write_out_count;
 
     OutputContext() = delete;
     OutputContext(const OutputContext&) = delete;
 
-    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_dfb_addr, uint32_t out_count) :
+    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_addr, uint32_t out_count) :
         collected_count(0),
         output_page_id(0),
         stack_ptr(ptr),
         stack_buffer_size(size),
-        output_dfb_addr(dst_dfb_addr),
+        output_addr(dst_addr),
         write_out_count(out_count) {}
 };
 
@@ -301,7 +301,7 @@ void collect_row_major_output(const uint32_t new_values[], uint32_t count, Outpu
     }
 
     auto* stack_ptr = ctx.stack_ptr;
-    auto* dfb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_dfb_addr);
+    auto* out_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_addr);
 
     for (uint32_t idx = 0; idx < count; idx++) {
         const uint32_t write_index = curr_collected + idx;
@@ -309,8 +309,8 @@ void collect_row_major_output(const uint32_t new_values[], uint32_t count, Outpu
             // Accumulate into the on stack array
             stack_ptr[write_index] = new_values[idx];
         } else {
-            // Write directly into the output DFB
-            dfb_ptr[write_index] = new_values[idx];
+            // Write directly into the output scratchpad
+            out_ptr[write_index] = new_values[idx];
         }
     }
 
@@ -332,27 +332,27 @@ void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContex
     uint32_t collected_count = output_ctx.collected_count;
     uint32_t output_page_id = output_ctx.output_page_id;
 
-    auto dst_dfb_addr = output_ctx.output_dfb_addr;
-    const CoreLocalMem<uint32_t> dst_dfb_mem(dst_dfb_addr);
+    auto dst_addr = output_ctx.output_addr;
+    const CoreLocalMem<uint32_t> dst_mem(dst_addr);
 
     uint32_t sent_count = 0;
     while (collected_count > 0) {
         // When keepdim is true, argmax values are accumulated in an on-stack buffer.
-        // Otherwise, argmax values are accumulated directly in the output DFB.
+        // Otherwise, argmax values are accumulated directly in the output scratchpad.
         if constexpr (keepdim) {
             auto* stack_ptr = output_ctx.stack_ptr;
-            auto* dst_dfb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_dfb_addr);
-            // Copy one page of output data into the output DFB.
+            auto* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+            // Copy one page of output data into the output scratchpad.
             for (uint32_t idx = 0; idx < output_page_elements; idx++) {
-                dst_dfb_ptr[idx] = stack_ptr[sent_count + idx];
+                dst_ptr[idx] = stack_ptr[sent_count + idx];
             }
         }
 
         const uint32_t write_size = output_page_elements * sizeof(uint32_t);
-        // Quasar DM cores stage output through the cached L1 view, so flush it to TL1 before this NoC
+        // Quasar DM cores stage output through the cached view, so flush it to SRAM before this NoC
         // read. No-op on WH/BH, where CPU stores are already coherent with the NoC.
-        scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_dfb_addr), write_size);
-        noc.async_write(dst_dfb_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
+        scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), write_size);
+        noc.async_write(dst_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
 
         sent_count += output_page_elements;
         collected_count -= output_page_elements;

@@ -17,7 +17,7 @@
  * For each (outer, global_w) position, scan all H tiles and rows; index is 0..logical_height-1.
  *
  * Loop order: for fixed (outer, w_tile), load each (h_tile, w_tile) tile once; one pass over the
- * tile in L1 updates all in-tile columns (avoids repeated NOC reads and repeated full-tile scans).
+ * tile in SRAM updates all in-tile columns (avoids repeated NOC reads and repeated full-tile scans).
  */
 
 void kernel_main() {
@@ -49,7 +49,7 @@ void kernel_main() {
     auto default_val = get_default_value<src_data_format>();
     using src_element_type = decltype(default_val);
 
-    // Required by OutputContext; unused with collect_row_major_output<false> (values go to output DFB).
+    // Required by OutputContext; unused with collect_row_major_output<false> (values go to the output scratchpad).
     uint32_t stack_unused[1] = {0};
 
     // Batching must match the output buffer page size. Do not use keepdim ? 1 : width (one uint32

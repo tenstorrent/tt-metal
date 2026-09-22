@@ -184,11 +184,10 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
                           : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
     }
 
-    // The reader takes a raw write pointer into both src and dst and never runs a FIFO operation on
-    // either. dst is private scratch, so it is a Scratchpad. src stays a self-loop DFB only because
-    // its declared data format is read kernel-side via get_dataformat(dfb::src); a scratchpad has no
-    // such field. A single toucher cannot present a producer and a consumer on distinct kernels, so
-    // the reader is bound as both endpoints of src.
+    // This reader is the only accessor of both src and dst: it fills and drains each through a raw
+    // pointer and makes no FIFO calls. dst is private scratch, so it is a Scratchpad. src is a
+    // DataflowBuffer because the kernel reads its data format via get_dataformat(dfb::src), which a
+    // Scratchpad does not carry. With a single accessor, src is bound as both producer and consumer.
     KernelSpec reader{
         .unique_id = READER,
         .source = kernel_path,

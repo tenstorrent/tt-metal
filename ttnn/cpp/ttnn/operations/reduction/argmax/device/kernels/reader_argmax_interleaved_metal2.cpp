@@ -29,7 +29,7 @@ void kernel_main() {
 
     // This is the number of elements in the last dimension of the output
     // i.e. for an input tensor of shape (.., N, C, H, W), this is H.
-    // This dictates the page size in the output dfb
+    // This dictates the page size in the output scratchpad
     constexpr auto inner_dim_units = get_arg(args::inner_dim_units);
 
     // This is the number of elements in the input tensor along the reduction dim (W)
@@ -46,11 +46,11 @@ void kernel_main() {
     DataflowBuffer src_dfb(dfb::src);
     Scratchpad<uint32_t> dst(scratch::dst);
 
-    // DFB in L1 memory for storing input
+    // DFB in SRAM for storing input
     const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
     constexpr DataFormat src_dfb_addr_data_format = get_dataformat(dfb::src);
 
-    // Scratchpad in L1 memory for storing output
+    // Scratchpad in SRAM for storing output
     const uint32_t dst_addr = dst.get_base_address();
     volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
 
@@ -81,7 +81,7 @@ void kernel_main() {
 
         // The results were written at dst's base address, and that is where this send reads from.
         if constexpr (not reduce_all) {
-            // Quasar DM cores fill dst through the cached L1 view, so flush it to TL1 before the NoC
+            // Quasar DM cores fill dst through the cached view, so flush it to SRAM before the NoC
             // reads it below. No-op on WH/BH, where CPU stores are already coherent with the NoC.
             scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), dst_page_size);
             noc.async_write(dst, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
@@ -92,7 +92,7 @@ void kernel_main() {
     // TODO: Generalize write for argmax for other dims
     if constexpr (reduce_all) {
         out_idxs[0] = max_idx;
-        // Flush the CPU-written index to TL1 before the NoC reads it (Quasar DM only; no-op on WH/BH).
+        // Flush the CPU-written index to SRAM before the NoC reads it (Quasar DM only; no-op on WH/BH).
         scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), dst_page_size);
         noc.async_write(dst, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
         noc.async_write_barrier();
