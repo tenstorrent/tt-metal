@@ -18,9 +18,16 @@ namespace ttnn::operations::data_movement::transpose {
 
 namespace detail {
 
-using namespace tt::tt_metal::experimental;
 using namespace tt;
 using tt::tt_metal::BufferType;
+
+// True for a sharded MemoryConfig whose shard geometry still has to be synthesized. An ND-only
+// config carries no legacy shard_spec but is already fully specified by its nd_shard_spec, so
+// testing shard_spec() alone misreads it as geometry-less and invites callers to overwrite it.
+inline bool needs_shard_spec_synthesis(const tt::tt_metal::MemoryConfig& mc) {
+    return mc.is_sharded() && !mc.shard_spec().has_value() &&
+           !(mc.created_with_nd_shard_spec() && mc.nd_shard_spec().has_value());
+}
 
 inline Tensor transpose_(
     const Tensor& a,
@@ -28,8 +35,16 @@ inline Tensor transpose_(
     const std::optional<MemoryConfig>& output_mem_config,
     float pad_value = 0.0f) {
     MemoryConfig output_mem_constructed;
-    if (!output_mem_config.has_value() ||
-        (output_mem_config.value().is_sharded() && !output_mem_config.value().shard_spec().has_value())) {
+    // Tracks whether output_mem_constructed ends up as the caller's output_mem_config verbatim
+    // (already expressed in the output coordinate frame) vs. defaulted/mirrored from the input
+    // (still needs reindexing to the output frame downstream). Forwarded to the device op so
+    // derive_effective_output_memory_config() doesn't have to guess from ND provenance alone.
+    bool output_mem_config_is_explicit = false;
+    // A fully-specified caller config (including an ND-only one) is routed to the verbatim branch;
+    // only a geometry-less sharded request gets derived from the input here.
+    const bool caller_requested_shard_derivation =
+        output_mem_config.has_value() && needs_shard_spec_synthesis(output_mem_config.value());
+    if (!output_mem_config.has_value() || caller_requested_shard_derivation) {
         // Native sharded subset: derive output shard_spec from input's. Otherwise fall back to L1
         // interleaved (the interleaved factories handle non-native via TensorAccessor).
         const bool native = is_native_transpose_sharding(a.tensor_spec());
@@ -37,7 +52,16 @@ inline Tensor transpose_(
             // Seed: honor user's requested sharded layout (spec gets synthesized below); else
             // inherit input config so downstream can promote (e.g. N=C=1 → WIDTH_SHARDED).
             const bool user_requested_layout = output_mem_config.has_value() && output_mem_config.value().is_sharded();
-            output_mem_constructed = user_requested_layout ? output_mem_config.value() : a.memory_config();
+            const MemoryConfig allocation_flag_source =
+                user_requested_layout ? output_mem_config.value() : a.memory_config();
+            output_mem_constructed = allocation_flag_source;
+            output_mem_config_is_explicit = user_requested_layout;
+            // ND-created inputs keep their legacy expression here on purpose: select_program_factory
+            // picks the native factories off output_memory_config.shard_spec(), which an ND-only
+            // config doesn't carry, so re-expressing the output as ND-only just to hold the
+            // created_with_nd_shard_spec bit would demote every native sharded transpose. No
+            // placement is lost — only ROUND_ROBIN_1D specs can be native, and re-deriving the ND
+            // spec from the output's legacy spec reproduces that same strategy and grid.
             // If shard geometry can't scale to a valid output shard, hand back a shard-spec-less
             // sharded MemoryConfig (device op synthesizes via generate_transpose_shard_spec) when
             // the user requested sharded; otherwise fall back to L1 interleaved.
@@ -103,10 +127,18 @@ inline Tensor transpose_(
                         std::move(adjusted));
                 }
             }
+            // Every rebuild above goes through a public MemoryConfig constructor, and
+            // derive_effective_output_memory_config() can't recover the flags either: it
+            // early-returns once shard_spec() is set. Reapply from the seed config. Skipped for the
+            // interleaved fallback, where neither flag applies.
+            if (output_mem_constructed.is_sharded()) {
+                copy_experimental_allocation_flags(allocation_flag_source, output_mem_constructed);
+            }
         } else if (output_mem_config.has_value()) {
             // User-requested sharded output (no spec): honor the layout; device op will synthesize
             // the spec. Must precede the non-native fallback below so it isn't overridden.
             output_mem_constructed = output_mem_config.value();
+            output_mem_config_is_explicit = true;
         } else if (a.is_sharded()) {
             // Non-native sharded input → mirror input's memory_layout (no shard_spec, device op
             // synthesizes via adjust_shard_spec_to_shape / generate_transpose_shard_spec). Preserve
@@ -117,11 +149,14 @@ inline Tensor transpose_(
                 input_memory_config.created_with_nd_shard_spec()
                     ? MemoryConfig(input_memory_config.buffer_type(), input_memory_config.nd_shard_spec())
                     : MemoryConfig(input_memory_config.memory_layout(), input_memory_config.buffer_type());
+            // Reapply from the input so a caller's allocation mode survives the fallback.
+            copy_experimental_allocation_flags(input_memory_config, output_mem_constructed);
         } else {
             output_mem_constructed = a.memory_config();
         }
     } else {
         output_mem_constructed = output_mem_config.value();
+        output_mem_config_is_explicit = true;
     }
 
     auto prim_permute = [&](const ttnn::Tensor& input, const ttsl::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
@@ -172,7 +207,7 @@ inline Tensor transpose_(
             break;
         default: break;
     }
-    return ttnn::prim::transpose(a, transpose_dim, output_mem_constructed, pad_value);
+    return ttnn::prim::transpose(a, transpose_dim, output_mem_constructed, pad_value, output_mem_config_is_explicit);
 }
 
 ttnn::Tensor transpose_nd(
@@ -219,8 +254,7 @@ ttnn::Tensor transpose_impl(
                 input_orientation_hint = input_tensor.shard_spec()->orientation;
             }
             auto resolved_mc = memory_config_arg;
-            if (memory_config_arg.has_value() && memory_config_arg->is_sharded() &&
-                !memory_config_arg->shard_spec().has_value()) {
+            if (memory_config_arg.has_value() && detail::needs_shard_spec_synthesis(*memory_config_arg)) {
                 const auto& input_padded = input_tensor.padded_shape();
                 const uint32_t n1 = input_logical.get_normalized_index(dim1);
                 const uint32_t n2 = input_logical.get_normalized_index(dim2);
@@ -231,6 +265,7 @@ ttnn::Tensor transpose_impl(
                     input_tensor, output_padded_shape, memory_config_arg->memory_layout(), input_orientation_hint);
                 resolved_mc = tt::tt_metal::MemoryConfig(
                     memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
+                copy_experimental_allocation_flags(*memory_config_arg, *resolved_mc);
             }
             const auto interleaved_l1 =
                 tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
