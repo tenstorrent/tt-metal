@@ -12,6 +12,7 @@
 // Order matters: each half is defined before the glue that converts into it and folds it.
 
 #include "hybrid_program_factory.hpp"
+#include "hybrid_routed_expert_ffn_device_operation.hpp"
 
 // Each half's own types, which its body below is written against. The headers that used to carry
 // these were the per-half program factory headers; the interface they declared is now one call.

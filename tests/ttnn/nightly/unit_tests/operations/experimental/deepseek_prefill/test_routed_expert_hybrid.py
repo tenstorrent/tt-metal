@@ -215,8 +215,8 @@ def _xfail_blackhole(request, silicon_arch_name):
 
 def _isl_params(active_sweep, only_models=None):
     """Per-model dims and shipped threshold crossed with a token sweep, all against the fixed
-    _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so non-baseline models stay gated
-    `only_models` restricts to a subset of model names.
+    _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so every model runs; `only_models`
+    restricts to a subset of model names.
 
     A model with no threshold is dropped rather than run at `None`: that is the single-op path
     test_single_routed_expert already grades, and it would not exercise a split at all.

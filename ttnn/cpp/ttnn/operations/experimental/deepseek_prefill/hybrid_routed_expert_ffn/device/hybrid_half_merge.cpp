@@ -17,7 +17,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert
 
 namespace {
 
-using tt::tt_metal::CBDescriptor;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::ProgramDescriptor;

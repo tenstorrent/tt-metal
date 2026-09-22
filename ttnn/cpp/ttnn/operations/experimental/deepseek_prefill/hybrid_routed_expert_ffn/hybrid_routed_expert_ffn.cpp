@@ -99,7 +99,12 @@ ttnn::Tensor hybrid_routed_expert_moe(
     if (fused_half_runs) {
         auto* device = dispatched_buffer.device();
         const uint32_t arena_bytes = hybrid_l1_arena_bytes(device);
-        const uint32_t cols = arena_bytes / 2;  // bfloat16 elements
+        // Whole bfloat16 elements. hybrid_l1_arena_bytes rounds down to 64B units, so the halving
+        // is exact; check it here rather than trust a rule that lives in another file, because an
+        // odd byte count would silently drop the tail of every core's shard instead of failing.
+        TT_FATAL(
+            arena_bytes % 2 == 0, "arena is {} bytes, which is not a whole number of bfloat16 elements", arena_bytes);
+        const uint32_t cols = arena_bytes / 2;
         const tt::tt_metal::CoreRangeSet grid(tt::tt_metal::CoreRange(
             tt::tt_metal::CoreCoord{0, kOriginY}, tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1}));
         l1_arena = ttnn::empty(

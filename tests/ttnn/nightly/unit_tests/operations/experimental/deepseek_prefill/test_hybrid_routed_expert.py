@@ -307,6 +307,113 @@ def test_hybrid_routed_expert_k3_saturated(
     )
 
 
+@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
+def test_hybrid_routed_expert_threshold_zero(device):
+    """threshold=0 gives the fused half an empty band, so the factory returns the unified
+    descriptor and never merges. That is a different program from every other case here: no CB
+    overlay, no shared semaphore block, no pass barrier -- and nothing else covers it."""
+    run_hybrid_routed_expert(
+        device,
+        _ISL_ALLOCATED_TOKENS,
+        DeepSeekV3Config.EMB_SIZE,
+        DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+        active_tokens=512,
+        x_row_major=True,
+        threshold=0,
+    )
+
+
+# Counts straddling _THRESHOLD, so the two halves each own experts inside ONE dispatch and the
+# per-expert region offsets are all non-zero but the first.
+_MULTI_EXPERT_COUNTS = [96, 512, 160, 640]
+
+
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
+def test_hybrid_routed_expert_multi_expert(device, x_row_major: bool):
+    """Several experts with DISTINCT weights, split across both halves, graded per expert region.
+
+    Every other correctness case runs one expert, so nothing checks that each half writes the
+    right rows for the right expert: a swapped region offset, a stale per-expert weight address
+    or cross-expert CB state would all still pass them. Runs twice on different buffers, because
+    the per-expert weight addresses are re-patched on a program-cache hit and a wrong slot there
+    only shows on the second call.
+    """
+    emb_dim, hidden_dim = DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE
+    counts = _MULTI_EXPERT_COUNTS
+    offsets, running = [], 0
+    for c in counts:
+        offsets.append(running)
+        running += c
+    assert running <= _ISL_ALLOCATED_TOKENS
+    assert any(c <= _THRESHOLD for c in counts) and any(
+        c > _THRESHOLD for c in counts
+    ), "the point of this case is that both halves run; counts must straddle the threshold"
+
+    def one_pass(seed: int):
+        torch.manual_seed(seed)
+        weights = [
+            {
+                "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+                "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+                "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+            }
+            for _ in counts
+        ]
+        torch_input = torch.zeros(_ISL_ALLOCATED_TOKENS, emb_dim, dtype=torch.float32)
+        for off, cnt in zip(offsets, counts):
+            torch_input[off : off + cnt] = torch.randn(cnt, emb_dim, dtype=torch.float32)
+
+        idx_tt = _idx_tensor(device, list(range(len(counts))))
+        tt_expert = TtRoutedExpert(
+            mesh_device=device,
+            experts_per_chip=len(counts),
+            global_expert_idx_table=idx_tt,
+            emb_dim=emb_dim,
+            hidden_dim=hidden_dim,
+            max_tokens=_ISL_ALLOCATED_TOKENS,
+            torch_weights=weights,
+            activations_dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat4_b,
+            activation=ttnn.RoutedExpertActivation.Silu,
+        )
+        tt_input = ttnn.from_torch(
+            torch_input,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
+            device=device,
+            dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
+        )
+        tt_output = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
+            tt_input,
+            _idx_tensor(device, offsets),
+            _idx_tensor(device, counts),
+            idx_tt,
+            tt_expert.gate_projs,
+            tt_expert.up_projs,
+            tt_expert.down_projs,
+            max_dispatched_tokens_per_expert=_ISL_ALLOCATED_TOKENS,
+            hybrid_token_threshold=_THRESHOLD,
+            compute_kernel_config=tt_expert.compute_kernel_config,
+            activation=ttnn.RoutedExpertActivation.Silu,
+        )
+        got = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+
+        for e, (off, cnt) in enumerate(zip(offsets, counts)):
+            rows = torch_input[off : off + cnt]
+            with torch.no_grad():
+                want = TorchExpert(
+                    emb_dim, hidden_dim, weights[e], activation=_TORCH_ACTIVATION[ttnn.RoutedExpertActivation.Silu]
+                )(rows)
+            half = "fused" if cnt <= _THRESHOLD else "unified"
+            _, pcc = comp_pcc(want, got[off : off + cnt])
+            logger.debug(f"expert {e} ({cnt} rows, {half} half): PCC {pcc:.6f}")
+            assert pcc >= 0.97, f"expert {e} ({half} half, rows {off}..{off + cnt}) PCC {pcc:.6f}"
+
+    one_pass(seed=42)
+    one_pass(seed=7)  # different buffers: grades the cache-hit re-patch of per-expert addresses
+
+
 # Every model that measured a crossover runs 256 routed experts over 8 chips.
 _MODEL_EXPERTS_PER_CHIP = 32
 
