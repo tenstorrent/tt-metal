@@ -9,7 +9,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import DeviceShape, adapter, expect_error
+# Pytest discovers these imported fixtures by name.
+from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import adapter  # noqa: F401
+from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import expect_error  # noqa: F401
+from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import DeviceShape
 
 
 def _cache(blocks=288, heads=2, block_size=64, head_dim=256):

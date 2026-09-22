@@ -8,6 +8,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+# Pytest discovers these imported fixtures by name.
+from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import adapter  # noqa: F401
+from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import decoder_width_for  # noqa: F401
+from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import expect_error  # noqa: F401
+from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import model  # noqa: F401
 from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import (
     DeviceResult,
     ScratchTensor,
@@ -15,10 +20,6 @@ from models.demos.gemma4.tests.unit.test_dflash_contract_adapter import (
     _ordinary,
     _prefill,
     _tensor,
-    adapter,
-    decoder_width_for,
-    expect_error,
-    model,
 )
 
 
