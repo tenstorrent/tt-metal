@@ -407,7 +407,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         rh::ReduceAuxiliaryArgs(local_auxiliary).append_to(config.reduce_auxiliary_args);
         // The cross-core raw reduction either applies the global scale or
         // carries a first-stage scaled result through with an identity scaler.
-        rh::ReduceAuxiliaryArgs({1, {{cinv, rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
+        // Round BF16 scalers on the host, then widen for the FP32 recipe encoding.
+        // The dataflow conversion truncates, so passing unrounded cinv would lose
+        // a BF16 ULP for scales such as 1/41. Keep FP32 scaler tiles at full precision.
+        const float global_scale = rh::round_reduce_auxiliary_value(cinv, dfb_data_format);
+        rh::ReduceAuxiliaryArgs({1, {{global_scale, rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
             .append_to(config.reduce_auxiliary_args);
         rh::ReduceAuxiliaryArgs({1, {{1.0F, rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
             .append_to(config.reduce_auxiliary_args);

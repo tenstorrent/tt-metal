@@ -13,11 +13,20 @@
 #include <numeric>
 
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 
 namespace ttnn::kernel_lib::host {
+
+float round_reduce_auxiliary_value(float value, tt::DataFormat data_format) {
+    TT_FATAL(
+        data_format == tt::DataFormat::Float16_b || data_format == tt::DataFormat::Float32,
+        "Reduce auxiliary values require BF16 or FP32 tiles");
+    return data_format == tt::DataFormat::Float16_b ? static_cast<float>(bfloat16(value)) : value;
+}
+
 namespace {
 
 using compute_kernel_lib::ReduceAlgorithm;
@@ -399,6 +408,9 @@ ReducePlan make_tiled_plan(
     const auto output_format = tt::tt_metal::datatype_to_dataformat_converter(block.output_dtype);
     const auto aux_format =
         input_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    for (auto& tile : plan.auxiliary_tiles) {
+        tile.value = round_reduce_auxiliary_value(tile.value, aux_format);
+    }
     const std::uint32_t input_tile_bytes = block.input_tile.get_tile_size(input_format);
     const std::uint32_t output_tile_bytes = block.output_tile.get_tile_size(output_format);
     const std::uint32_t aux_tile_bytes = tt::tile_size(aux_format);
@@ -757,7 +769,8 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
                 plan.post_scale = 1.0F;
                 const auto scaler_tiles = plan.auxiliary_tiles.size() - (has_output_mask(plan) ? 1U : 0U);
                 for (std::size_t i = 0; i < scaler_tiles; ++i) {
-                    plan.auxiliary_tiles[i].value = reader_scaler;
+                    plan.auxiliary_tiles[i].value =
+                        round_reduce_auxiliary_value(reader_scaler, plan.find_cb(ReduceCbRole::Auxiliary)->data_format);
                 }
             }
         }

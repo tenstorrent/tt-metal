@@ -113,6 +113,10 @@ struct ReduceAuxiliaryTileSpec {
     std::uint32_t num_valid_elements = 0;
 };
 
+// Resolve the tile's precision on the host while retaining FP32 recipe encoding.
+// BF16 values are rounded to nearest-even and widened; FP32 values are unchanged.
+float round_reduce_auxiliary_value(float value, tt::DataFormat data_format);
+
 // The one shared auxiliary CB recipe for a complete planning unit. It carries
 // the CB ID as well as the physical tiles to materialize. Calls refer to
 // contiguous slices of `tiles`; equal call recipes share the same slice.

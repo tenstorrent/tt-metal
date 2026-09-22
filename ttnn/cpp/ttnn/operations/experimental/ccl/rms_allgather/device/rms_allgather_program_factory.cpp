@@ -729,7 +729,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(writer_compile_time_args);
     // The first local reduction is still the raw reduce_tile loop; describe
     // its scaler explicitly. Cross-core calls use the planner's recipes.
-    rh::ReduceAuxiliaryArgs({in2_cb_index, {{1.0F / (block_wt * 32), rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
+    rh::ReduceAuxiliaryArgs({in2_cb_index,
+                             {{rh::round_reduce_auxiliary_value(1.0F / (block_wt * 32), tt::DataFormat::Float16_b),
+                               rh::ReduceAuxiliaryTileType::FirstRow,
+                               32}}})
         .append_to(writer_compile_time_args);
     rh::ReduceAuxiliaryArgs({pre_in4_cb_index, first_stage_call.plan.auxiliary_tiles})
         .append_to(writer_compile_time_args);

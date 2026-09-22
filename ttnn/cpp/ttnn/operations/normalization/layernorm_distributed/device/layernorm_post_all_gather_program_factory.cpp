@@ -332,6 +332,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         reduce_auxiliary.tiles = reduce_plan.auxiliary_tiles;
         scaler_data_format = reduce_plan.find_cb(rh::ReduceCbRole::Auxiliary)->data_format;
     }
+    for (auto& tile : reduce_auxiliary.tiles) {
+        tile.value = rh::round_reduce_auxiliary_value(tile.value, scaler_data_format);
+    }
     const auto reduce_auxiliary_args = rh::ReduceAuxiliaryArgs(reduce_auxiliary).get_compile_time_args();
     const uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
 
