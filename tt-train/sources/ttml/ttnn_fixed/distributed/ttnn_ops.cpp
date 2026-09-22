@@ -5,9 +5,9 @@
 #include "ttnn_ops.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <functional>
 #include <limits>
+#include <set>
 #include <string>
 
 #include <tt-metalium/distributed.hpp>
@@ -347,7 +347,7 @@ std::vector<ttnn::Tensor> ring_shift_many(
     if (tensors.empty()) {
         return {};
     }
-    const RingPlan plan = plan_ring(cluster_axis, direction, transport, connections);
+    RingPlan plan = plan_ring(cluster_axis, direction, transport, connections);
     TT_FATAL(plan.ring_size % 2 == 0, "ring_shift requires an even number of devices in the ring, got {}", plan.ring_size);
     if (plan.ring_size <= 1U) {
         return tensors;
@@ -362,36 +362,74 @@ std::vector<ttnn::Tensor> ring_shift_many(
         return outputs;
     }
 
-    // Direct: every tensor in one launch. On a single ring every chip sends
-    // to one neighbour and receives from the other at once, so every link
-    // is busy: one launch per shift. On a mesh of several rings side by side
-    // (the 2x4 loudbox mesh) that launch loses the fabric handshake's
-    // answers and hangs, while each half of the ring alone is fine, so there
-    // the shift is two launches, even chips sending and then odd chips --
-    // the two-phase shift's order, at its bandwidth, with all tensors in
-    // each launch. The connections are the two-phase shift's two sockets in
-    // both cases; a chip that is both a sender and a receiver of one socket
-    // hangs as well.
+    // Direct: every tensor in one launch where the fabric allows it (below),
+    // else two launches, even chips sending and then odd chips: the
+    // two-phase shift's order, at its bandwidth, with all tensors in each
+    // launch. The connections are the two-phase shift's two sockets in both
+    // cases; a chip that is both a sender and a receiver of one socket is
+    // never built.
     auto& ctx = ttml::autograd::ctx();
     auto& socket_manager = ctx.get_socket_manager();
     auto distributed_ctx = ctx.get_distributed_context();
     const auto mesh_shape = ctx.get_device_ptr()->shape();
+    // One launch needs every chip to host its senders and its receiver at
+    // once, and a fabric router's worker channel takes one connection. A
+    // receiver answers toward the chip that sends to it; on a ring laid
+    // along a mesh row without wrap, an end chip reaches both neighbours in
+    // one direction, so its receiver competes with its senders for the same
+    // routers and one link must be left to it. On a ring with wrap (the 1x8
+    // descriptor) the two neighbours lie in opposite directions and every
+    // link can send.
+    const auto neighbour_of = [&](const tt::tt_fabric::MeshCoordinate& coord, const bool ahead) {
+        const uint32_t idx = coord[plan.cluster_axis];
+        const bool forward = (direction == RingShiftDirection::Forward) == ahead;
+        tt::tt_fabric::MeshCoordinate other = coord;
+        other[plan.cluster_axis] = forward ? (idx + 1U) % plan.ring_size : (idx + plan.ring_size - 1U) % plan.ring_size;
+        return other;
+    };
+    auto mesh_device_ptr = ctx.get_device_ptr();
+    bool shares_direction = false;
+    uint32_t links_available = std::numeric_limits<uint32_t>::max();
+    for (const auto& coord : ttnn::MeshCoordinateRange(mesh_shape)) {
+        const auto self = mesh_device_ptr->get_fabric_node_id(coord);
+        const auto to_next = mesh_device_ptr->get_fabric_node_id(neighbour_of(coord, true));
+        const auto from_prev = mesh_device_ptr->get_fabric_node_id(neighbour_of(coord, false));
+        std::set<tt::tt_metal::CoreCoord> send_routers;
+        const auto send_links = tt::tt_fabric::get_forwarding_link_indices(self, to_next);
+        for (const auto link : send_links) {
+            send_routers.insert(tt::tt_fabric::get_forwarding_eth_core(self, to_next, link));
+        }
+        links_available = std::min(links_available, static_cast<uint32_t>(send_links.size()));
+        for (const auto link : tt::tt_fabric::get_forwarding_link_indices(self, from_prev)) {
+            shares_direction |= send_routers.contains(tt::tt_fabric::get_forwarding_eth_core(self, from_prev, link));
+        }
+    }
     // A ring of two is left to the two-launch order: a chip's two neighbours
     // are the same chip there, an untested case for the one-launch mode.
-    const bool single_ring = mesh_shape.mesh_size() == plan.ring_size && plan.ring_size >= 4U;
+    const bool single_ring = plan.ring_size >= 4U && (!shares_direction || links_available >= 2U);
+    if (single_ring && shares_direction) {
+        plan.cores_per_pair = std::min(plan.cores_per_pair, links_available - 1U);
+    }
     static bool logged = false;
     if (!logged) {
         logged = true;
-        if (single_ring) {
+        if (single_ring && shares_direction) {
+            log_info(
+                tt::LogAlways,
+                "ring shift: one launch per shift, every chip sending and receiving at once; the ring's end chips "
+                "reach both neighbours through one direction, so {} of {} links send and one carries the answers",
+                plan.cores_per_pair,
+                links_available);
+        } else if (single_ring) {
             log_info(
                 tt::LogAlways, "ring shift: one launch per shift, every chip sending and receiving at once ({} chips)",
                 plan.ring_size);
         } else {
             log_info(
                 tt::LogAlways,
-                "ring shift: two launches per shift (even chips send, then odd) -- a mesh of {} rings of {}, where a "
-                "full ring at once hangs the fabric handshake",
-                mesh_shape.mesh_size() / plan.ring_size, plan.ring_size);
+                "ring shift: two launches per shift (even chips send, then odd): a ring of {} on {} chips",
+                plan.ring_size,
+                mesh_shape.mesh_size());
         }
     }
     std::vector<tt::tt_metal::distributed::SocketConnection> even_to_odd;

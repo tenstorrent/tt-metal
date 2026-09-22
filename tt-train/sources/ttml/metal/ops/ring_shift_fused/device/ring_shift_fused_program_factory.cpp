@@ -5,6 +5,7 @@
 #include "ring_shift_fused_program_factory.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <set>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -181,6 +182,8 @@ ChipProgram build_chip_program(
             tt::tt_metal::WriterDataMovementConfig({kHeaderCb, handshake_page_size, num_tensors}));
     }
 
+    // The fabric routers (ethernet cores) this chip's workers have taken.
+    std::set<CoreCoord> routers_in_use;
     for (uint32_t c = 0; c < roles.sender_cores.size(); ++c) {
         const auto& core = roles.sender_cores[c];
         std::vector<uint32_t> reader_args;
@@ -197,8 +200,9 @@ ChipProgram build_chip_program(
         const auto peer = roles.sender_peers[c];
         const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(self_node, peer);
         TT_FATAL(!link_indices.empty(), "ring_shift_fused: no fabric link from chip {} to its neighbour", coord);
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            self_node, peer, link_indices[c % link_indices.size()], program, core, writer_args);
+        const uint32_t link = link_indices[c % link_indices.size()];
+        routers_in_use.insert(tt::tt_fabric::get_forwarding_eth_core(self_node, peer, link));
+        tt::tt_fabric::append_fabric_connection_rt_args(self_node, peer, link, program, core, writer_args);
         tt::tt_metal::SetRuntimeArgs(program, reader, core, reader_args);
         tt::tt_metal::SetRuntimeArgs(program, writer, core, writer_args);
     }
@@ -211,8 +215,32 @@ ChipProgram build_chip_program(
         const auto peer = roles.receiver_peers[c];
         const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(self_node, peer);
         TT_FATAL(!link_indices.empty(), "ring_shift_fused: no fabric link from chip {} back to its sender", coord);
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            self_node, peer, link_indices[c % link_indices.size()], program, core, receiver_args);
+        // A router's worker channel takes one connection: the fabric helper
+        // wires every worker to sender channel 0, and the worker adapter's
+        // open() has no exclusivity check, so two workers on one router share
+        // its slot cursor and credit record silently and the handshake hangs.
+        // A receiver answers toward the chip that sends to it; where that
+        // chip lies in the same direction as the chip this one sends to (the
+        // end chips of a ring laid along a mesh row without wrap), the
+        // direction-based link choice lands on a router a sender already
+        // holds. Take a link whose router is free, or refuse.
+        std::optional<uint32_t> link;
+        for (uint32_t k = 0; k < link_indices.size() && !link.has_value(); ++k) {
+            const uint32_t candidate = link_indices[(c + k) % link_indices.size()];
+            if (!routers_in_use.contains(tt::tt_fabric::get_forwarding_eth_core(self_node, peer, candidate))) {
+                link = candidate;
+            }
+        }
+        TT_FATAL(
+            link.has_value(),
+            "ring_shift_fused: chip {} has no fabric router left for its receiver: its {} sender core(s) and this "
+            "receiver all route through the same {} link(s) (its two ring neighbours lie in one direction from it). "
+            "Give this chip fewer sender cores, or shift its ring in two launches (even chips, then odd).",
+            coord,
+            roles.sender_cores.size(),
+            link_indices.size());
+        routers_in_use.insert(tt::tt_fabric::get_forwarding_eth_core(self_node, peer, *link));
+        tt::tt_fabric::append_fabric_connection_rt_args(self_node, peer, *link, program, core, receiver_args);
         tt::tt_metal::SetRuntimeArgs(program, receiver, core, receiver_args);
     }
 

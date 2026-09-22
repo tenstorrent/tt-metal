@@ -84,6 +84,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
+#include "api/dataflow/circular_buffer.h"  // invalidate_l1_cache
 
 #ifndef DENSE_MODE
 #define DENSE_MODE 0
@@ -229,6 +230,10 @@ uint32_t lazy_need_mask() {
         constexpr float scale = __builtin_bit_cast(float, scaler_bits);
         constexpr float threshold = FW_LAZY_THRESHOLD / scale;
         constexpr int32_t threshold_bits = __builtin_bit_cast(int32_t, threshold);
+        // The packer rewrote these words this timestep; the CB credit orders
+        // them, the fence keeps a RISC data cache (off by default) from
+        // serving last timestep's verdict.
+        invalidate_l1_cache();
         for (uint32_t a = 0; a < Bt; ++a) {
             const uint32_t address = get_tile_l1_byte_address(get_operand_id(cb_block_max), a);
             const volatile int32_t* words = reinterpret_cast<const volatile int32_t*>(address);
@@ -892,8 +897,10 @@ void kernel_main() {
                     }
                     pack_tile</* out_of_order */ true>(b, cb_probs, b);
                 }
-                pack_rounding(false);
+                // After the release: it drains the packer, so the rounding
+                // bit cannot change under the last tiles' pack.
                 tile_regs_release();
+                pack_rounding(false);
                 cb_push_back(cb_probs, Bt);
             };
 
@@ -1186,6 +1193,10 @@ void kernel_main() {
                 cb_pop_front(cb_rescale, Bt);
             }
         }
+        // The token is pushed by the pack thread while the slot's pops above
+        // run on the unpack thread, and nothing orders the two; it is safe
+        // because every unpack read of the slot precedes the last pack this
+        // push follows. Do not add an unpack read of the slot after it.
         cb_reserve_back(cb_slot_release, 1);
         cb_push_back(cb_slot_release, 1);
     }

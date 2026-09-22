@@ -54,10 +54,29 @@ transport's launches only:
 | fp32, same shape (4.2 MB) | 226 us | 168 us (-26%) | 223 us |
 | the backward step's set: K, V bf16 + dK, dV fp32, 10 heads x 5632 rows (43 MB a chip) | 1472 us | 907 us (-38%) | 1605 us (+10%) |
 
-On the single ring the gain is the links' other half; the two-launch
-fallback saves only the launches, which at these sizes is nothing, and its
-per-byte cost is a little higher than the two-phase transport's, so on the
-2x4 mesh it is a wash.
+On the single ring the gain is the links' other half. On the 2x4 mesh the
+one launch (since 22 September, below) sends on one link per chip and
+carries the answers on the other, so the bytes move at the two-launch rate
+and it is a wash: the backward set measures 1709 us against 1848 for the
+two-phase transport on the same day (-8%), within the day-to-day spread.
+
+### Why the full ring hung on the 2x4 mesh, and the fix (22 September)
+
+A fabric router's worker channel takes one connection: the connection
+helper wires every worker to sender channel 0, and the worker adapter's
+`open()` has no exclusivity check, so two workers on one router silently
+share its slot cursor and credit record, and the handshake's answers are
+lost. A receiver answers toward the chip that sends to it. On the 1x8 ring a
+chip's two neighbours lie in opposite directions and the direction-based
+link choice keeps the roles apart; on a ring of four laid along a mesh row
+without wrap, the end chips reach both neighbours through one direction,
+and their sender and receiver both took link index 0 of that direction, the
+same router. Each half of the ring alone works because no chip then has
+both roles. The tt-llk noc-sync audit skill found this from the code; the
+fix, in the driver, asks the fabric per chip which routers each role would
+use and leaves one link to the receiver where they coincide (the fused op
+refuses, naming the cause, if a receiver has no router left). With it the
+one-launch mode passes the two `RingShiftFused*` tests on the 2x4 mesh.
 
 In the ring step (`DISABLED_CompareStepTimes`, 1x8 ring, zigzag, the
 cyclic forward and backward, median of five) and in training
