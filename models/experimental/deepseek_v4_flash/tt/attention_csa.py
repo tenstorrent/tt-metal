@@ -205,8 +205,8 @@ class DeepSeekV4CSACompressor:
             self.position_bias = _rm_width_sharded(self.position_bias, self.compress_rate, 2 * self.head_dim)
         self._win_offsets: ttnn.Tensor | None = None
         self.indexer: DeepSeekV4Indexer | None = None
-        # ``indexer: "on"`` (the default) attaches the indexer when the checkpoint
-        # has its weights. ``off`` attaches nothing, so the prefetcher never queues
+        # ``indexer: true`` (the default) attaches the indexer when the checkpoint
+        # has its weights. ``false`` attaches nothing, so the prefetcher never queues
         # weights no matmul pops. Decode writes index keys every step and scores
         # them once the sequence is long enough for top-k (see
         # :meth:`DeepSeekV4Attention.decode_static`).
