@@ -17,6 +17,9 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+
+pytestmark = pytest.mark.skipif(not is_blackhole(), reason="the phased chunk_gated_delta_rule prims are Blackhole-only")
 
 CHUNK = 32  # Ct=1: the production chunk size; the prims' in-kernel WY inverse is exact here
 KDIM = 128

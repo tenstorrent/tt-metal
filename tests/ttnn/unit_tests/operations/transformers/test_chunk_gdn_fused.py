@@ -23,6 +23,11 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+
+pytestmark = pytest.mark.skipif(
+    not is_blackhole(), reason="the fused and phased chunk_gated_delta_rule paths are Blackhole-only"
+)
 
 CHUNK = 32  # Ct=1: the production chunk size
 KDIM = 128

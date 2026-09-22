@@ -668,3 +668,52 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
             f"device {late} late: {bad.numel()} output rows differ from the synchronized reference "
             f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
         )
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_tp_prefill_fused_vs_phased_bit_exact(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """Layer-level gate for the fused prep->scan op: TPGatedDeltaNet.forward_prefill with real weights,
+    run with QWEN_GDN_PATH=phased and =fused on the same tokens, must agree BIT FOR BIT. The op is
+    bit-exact in its unit tests; a difference here would be in how the model invokes it (flat q/k/v,
+    in-kernel norm, state carry). QWEN_GDN_PATH is read per call, so one layer instance serves both.
+    Path proof: the switch to fused must compile the fused prim (a program-cache delta), since equal
+    outputs alone cannot tell the two paths apart.
+
+    T=256 only: the layer's GDN output projection is not usable for a bit-exact A/B at larger T yet —
+    on main its row-parallel matmul_reduce_scatter_async FATALs at T >= 1024 (ccl worker-core
+    selection), and the column-parallel all-gather matmul that replaces it is run-to-run
+    non-deterministic at T=2048 without a device sync before it. The op-level tests cover T=2048."""
+    T = 256
+    os.environ.setdefault("HF_MODEL", model_path())
+    if mesh_device.get_num_devices() == 1:
+        pytest.skip("TP-only")
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), TT_CCL(mesh_device))
+    composer = tp_composer(mesh_device)
+    x_tt = shard_to_device(mesh_device, torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16), dim=-1)
+
+    def run(path):
+        monkeypatch.setenv("QWEN_GDN_PATH", path)
+        gdn.reset_state()
+        o = gdn.forward_prefill(x_tt)
+        out = ttnn.to_torch(o, mesh_composer=composer)[0, 0].float().clone()
+        ttnn.deallocate(o)
+        return out
+
+    phased = run("phased")
+    phased_again = run("phased")
+    n_phased = mesh_device.num_program_cache_entries()
+    fused = run("fused")
+    n_fused = mesh_device.num_program_cache_entries()
+    assert torch.equal(phased, phased_again), "phased layer output is not deterministic"
+    assert n_fused > n_phased, "QWEN_GDN_PATH=fused compiled no new program: the fused prim did not run"
+    d = (phased - fused).abs()
+    assert torch.equal(phased, fused), (
+        f"T={T}: fused layer output differs from phased (max|d|={d.max().item():.3e}, "
+        f"first differing row {int(torch.nonzero(d.sum(-1))[0])})"
+    )
