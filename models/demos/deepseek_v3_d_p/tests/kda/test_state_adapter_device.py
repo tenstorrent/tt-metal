@@ -134,14 +134,20 @@ def _single_stage_layout(mesh_device, slab, count):
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
-def test_slabs_round_trip_replay_and_table(mesh_device, device_params):
+@pytest.mark.parametrize(
+    "layer_ids,num_slots",
+    [(LAYER_IDS, NUM_SLOTS), ((1,), 1)],
+    ids=["2layers-2slots", "1layer-1slot"],
+)
+def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids, num_slots):
+    """The one-layer, one-slot case matters: a slice over a whole slab can hand back the slab itself."""
     geometry = _geometry(mesh_device)
-    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=LAYER_IDS, num_slots=NUM_SLOTS)
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=layer_ids, num_slots=num_slots)
     rows, cols = tuple(mesh_device.shape)
     tp = geometry.tensor_parallel_size
 
     patterns = {
-        (slot, layer): _global_patterns(geometry, slot, layer) for slot in range(NUM_SLOTS) for layer in LAYER_IDS
+        (slot, layer): _global_patterns(geometry, slot, layer) for slot in range(num_slots) for layer in layer_ids
     }
     natives = {key: _native_from_global(mesh_device, geometry, *value) for key, value in patterns.items()}
     for (slot, layer), state in natives.items():
@@ -191,9 +197,9 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params):
         ttnn.deallocate(back.convolution)
 
     # 3. A captured export follows the carry's contents on replay and touches nothing else.
-    victim = natives[(0, LAYER_IDS[0])]
+    victim = natives[(0, layer_ids[0])]
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    slabs.export_layer(victim, 0, LAYER_IDS[0])
+    slabs.export_layer(victim, 0, layer_ids[0])
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     new_rec, new_conv = _global_patterns(geometry, 5, 9)
     staged = _native_from_global(mesh_device, geometry, new_rec, new_conv)
@@ -202,7 +208,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params):
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(mesh_device)
     ttnn.release_trace(mesh_device, trace_id)
-    patterns[(0, LAYER_IDS[0])] = (new_rec, new_conv)
+    patterns[(0, layer_ids[0])] = (new_rec, new_conv)
     rec_shards = _shards(slabs.recurrent, mesh_device)
     conv_shards = _shards(slabs.convolution, mesh_device)
     for (slot, layer), (recurrent, convolution) in patterns.items():
@@ -220,13 +226,13 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params):
     # 4. The address table resolves every (layer, segment, slot) to the right bytes, and the segment
     #    numbering alone reassembles the global state.
     disagg = ttnn.experimental.disaggregation
-    layer_rows = list(LAYER_IDS)
+    layer_rows = list(layer_ids)
     configs = {}
     for name, kind in (("1", "kda_recurrent"), ("2", "kda_convolution")):
         cfg = disagg.KvChunkAddressTableConfig()
         cfg.num_layers = max(layer_rows) + 1
         cfg.max_sequence_length = kda_segments_per_layer(geometry, kind)
-        cfg.num_slots = NUM_SLOTS
+        cfg.num_slots = num_slots
         cfg.chunk_n_tokens = 1
         cfg.chunk_size_bytes = kda_segment_bytes(geometry, kind)
         configs[name] = cfg
@@ -240,9 +246,9 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params):
             TP_AXIS,
             geometry,
             kind,
-            num_users=NUM_SLOTS,
+            num_users=num_slots,
             config_id=table.config_id_of(name),
-            stage_layout=_single_stage_layout(mesh_device, slab, len(LAYER_IDS)),
+            stage_layout=_single_stage_layout(mesh_device, slab, len(layer_ids)),
             layer_rows=layer_rows,
         )
     assert table.num_device_groups() == tp
@@ -266,9 +272,10 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params):
 
     # 5. A UMD read at the documented address matches the table's own read.
     fid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, 0))
-    loc = table.lookup(LAYER_IDS[1], 5, 1, table.config_id_of("1"))
+    probe_layer, probe_slot = layer_ids[-1], num_slots - 1
+    loc = table.lookup(probe_layer, 5, probe_slot, table.config_id_of("1"))
     assert loc.size_bytes == geometry.recurrent_segment_bytes
-    shard = slabs.batch_index(1, LAYER_IDS[1]) * geometry.recurrent_shards_per_layer + 5
+    shard = slabs.batch_index(probe_slot, probe_layer) * geometry.recurrent_shards_per_layer + 5
     banks = mesh_device.dram_grid_size().x
     assert loc.noc_addr == ((shard % banks) << 32) | (
         slabs.recurrent.buffer_address() + (shard // banks) * geometry.recurrent_segment_bytes
