@@ -8,13 +8,16 @@ The mathematical references in this module are production-owned so tests,
 sweeps, and operation registration all use the same implementation.
 """
 
+from __future__ import annotations
+
 import math
 from typing import Optional
 
 
-MASKED_INDEX = 0xFFFFFFFF  # sparse_sdpa masked-slot sentinel
-SENTINEL = -1  # sparse_sdpa_msa masked-block sentinel
-BLK_KV = 128  # MSA block size in tokens (= 4 tile rows)
+# Head dims (k_dim, v_dim) are supplied by each test, not baked in here. MASKED_INDEX is the op's sentinel.
+MASKED_INDEX = 0xFFFFFFFF  # sentinel: a masked slot (scores -inf, contributes 0); a contiguous tail per row
+SENTINEL = -1  # masked/invalid block id; contiguous tail per (group, query) row
+BLK_KV = 128  # MSA block size in tokens (= 4 tile-rows)
 
 
 def _scalar(value, default=None):
@@ -333,7 +336,7 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
     """Decode reference migrated from ``mla_test_utils.py``."""
     import torch
 
-    b, nh, _, _ = Q.shape
+    b, nh, _, _ = Q.shape  # b, nh, 1, d
     _, nkv, _, _ = K.shape
 
     attn_mask = None
@@ -345,15 +348,17 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
     else:
         raise AssertionError("Non-causal attention is not supported in this function.")
 
-    Q_slice = Q[:, :nh, :, :]
-    K_slice = K[:, :nkv, :padded_layer_len, :]
+    Q_slice = Q[:, :nh, :, :]  # b, nh, 1, d
+    K_slice = K[:, :nkv, :padded_layer_len, :]  # b, nkv, S, d
     K_slice = torch.cat([K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
-    V_slice = V[:, :, :padded_layer_len, :]
+    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
     V_slice = torch.cat([V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
-    attn_mask_slice = attn_mask[:, :nh, :, :]
-    return torch.nn.functional.scaled_dot_product_attention(
+    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
+    out = torch.nn.functional.scaled_dot_product_attention(
         Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-    )
+    )  # b, nh, 1, d
+
+    return out
 
 
 def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=True):
@@ -362,7 +367,16 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
     Q: (B, nh, S, d_qk), K/V: (B, nkv, S, d)
 
     Chunks over heads (and, only for very long sequences, the Q sequence) so
-    the [B, nh, S, S] attention matrix never materializes at full size.
+    the [B, nh, S, S] attention matrix never materializes at full size — CPU
+    SDPA's math kernel otherwise allocates it in fp32 and OOMs on large
+    nh/batch/seq configs. GQA heads are gathered per head-chunk (HEAD_CHUNK at
+    a time) rather than expanding the whole KV tensor up front via
+    repeat_interleave (a copy).
+
+    Within a head-chunk we keep the fast fused/flash SDPA kernel via the
+    is_causal flag whenever the Q-chunk spans the whole sequence; an explicit
+    causal mask (which forces the slow O(S^2) math kernel) is only built for
+    offset Q-chunks, i.e. when S > SEQ_CHUNK.
     """
     import torch
 
@@ -378,7 +392,7 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
     for h_start in range(0, nh, HEAD_CHUNK):
         h_end = min(h_start + HEAD_CHUNK, nh)
         # Map each Q head in the chunk to its KV head (GQA broadcast) without
-        # copying the full KV tensor.
+        # copying the full KV tensor — gather is limited to HEAD_CHUNK heads.
         kv_idx = torch.arange(h_start, h_end) // head_rep
         k_heads = K[:, kv_idx]
         v_heads = V[:, kv_idx]
@@ -387,10 +401,14 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
             seq_end = min(seq_start + SEQ_CHUNK, S)
             q_chunk = q_heads[:, :, seq_start:seq_end]
             if is_causal and seq_start == 0 and seq_end == S:
+                # Full-sequence chunk: the square is_causal flag is exactly
+                # correct and lets PyTorch pick the fast fused kernel.
                 out = torch.nn.functional.scaled_dot_product_attention(
                     q_chunk, k_heads, v_heads, scale=scale, is_causal=True
                 )
             elif is_causal:
+                # Offset Q-chunk: the square is_causal flag doesn't apply, so
+                # build the explicit causal mask for this chunk's positions.
                 q_pos = torch.arange(seq_start, seq_end).unsqueeze(1)
                 k_pos = torch.arange(seq_end).unsqueeze(0)
                 mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
@@ -400,6 +418,7 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
             else:
                 out = torch.nn.functional.scaled_dot_product_attention(q_chunk, k_heads, v_heads, scale=scale)
             attn_out[:, h_start:h_end, seq_start:seq_end] = out
+
     return attn_out
 
 
@@ -724,10 +743,10 @@ def paged_flash_multi_latent_attention_decode_golden(
 
 
 def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
-    """Torch reference for sparse MLA prefill.
-
-    ``q [1,H,S,K_DIM]``, ``kvpe [T,K_DIM]``,
-    ``indices [1,1,S,k]`` -> ``out [1,H,S,v_dim]``.
+    """Torch reference for the sparse-MLA prefill op. Absorbed MQA over the top-k selected latents named by
+    `indices` (one shared latent KV head); masking is baked into `indices` (index == MASKED_INDEX scores -inf).
+    Dims are derived from the inputs; V is the leading `v_dim` cols of the K_DIM-wide kvpe.
+        q [1,H,S,K_DIM], kvpe [T,K_DIM], indices [1,1,S,k] uint32  ->  out [1,H,S,v_dim]
     """
     import torch
 
@@ -736,14 +755,14 @@ def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
     T = kvpe.shape[0]
     idx = indices.reshape(B, S, k)
     masked = idx == MASKED_INDEX
-    idx_safe = torch.where(masked, torch.zeros_like(idx), idx).to(torch.int64)
+    idx_safe = torch.where(masked, torch.zeros_like(idx), idx).to(torch.int64)  # clamp sentinels in-bounds
     kv = kvpe.unsqueeze(0).expand(B, T, Dk)
-    sel = torch.gather(
+    sel = torch.gather(  # gather the k selected KV rows (shared across heads): [B,T,Dk] -> [B,S,k,Dk]
         kv.unsqueeze(1).expand(B, S, T, Dk),
         2,
         idx_safe.view(B, S, k, 1).expand(B, S, k, Dk),
     )
-    scores = torch.einsum("bhsd,bsjd->bhsj", q, sel) * scale
+    scores = torch.einsum("bhsd,bsjd->bhsj", q, sel) * scale  # full-K_DIM scores [B,H,S,k]
     scores = scores.masked_fill(masked.view(B, 1, S, k), float("-inf"))
     if attention_sink is not None:
         sink_scores = attention_sink.float().expand(B, H, S, 1) * scale
@@ -751,7 +770,7 @@ def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
     probs = scores.softmax(dim=-1, dtype=torch.float32).to(q.dtype)
     if attention_sink is not None:
         probs = probs[..., :-1]
-    return torch.einsum("bhsj,bsjd->bhsd", probs, sel[..., :v_dim])
+    return torch.einsum("bhsj,bsjd->bhsd", probs, sel[..., :v_dim])  # weighted sum of V views [B,H,S,v_dim]
 
 
 def sparse_sdpa_golden(
@@ -776,7 +795,18 @@ def sparse_sdpa_golden(
 
 
 def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=False, chunk_start_idx=0):
-    """MSA block-sparse reference: attend selected blocks, softmax, then PV."""
+    """MSA block-sparse reference: attend the selected blocks, softmax, then PV with separate V.
+
+        q       [B, H, S, d]            (post-rope, post-qk-norm — done upstream)
+        k, v    [B, n_kv, T, d]         (separate tensors; T % blk_kv == 0)
+        indices [B, n_kv, S, topk]      block-ids per (group, query); SENTINEL (-1) = masked, contiguous tail
+        -> out  [B, H, S, v_dim]        (v_dim = v.shape[-1])
+
+    `causal=True` enables a token-level causality — required for correctness on the diagonal block,
+    whose selected tokens after the query position are future and must not be attended.
+
+    Query heads sharing a KV head also share that KV head's block selection. All-masked rows return 0.
+    """
     import torch
 
     B, H, S, _ = q.shape
@@ -789,9 +819,10 @@ def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=F
     qf, kf, vf = q.float(), k.float(), v.float()
     v_dim = vf.shape[-1]
 
-    # block_mask[b, g, s, blk] — set True only for valid selected blocks.
+    # block_mask[b, g, s, blk] — set True only for valid (non-sentinel) selected blocks (flat index_put so a
+    # sentinel clamped to block 0 can never overwrite a genuinely-selected block 0).
     block_mask = torch.zeros(B, n_kv, S, nblk, dtype=torch.bool)
-    valid = (indices >= 0) & (indices != MASKED_INDEX)
+    valid = indices >= 0
     idx_safe = torch.where(valid, indices, torch.zeros_like(indices)).long()
     flat_mask = block_mask.view(-1, nblk)
     flat_valid = valid.reshape(-1, topk)
@@ -799,12 +830,15 @@ def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=F
     row = torch.arange(flat_mask.shape[0]).unsqueeze(1)
     flat_mask[row.expand_as(flat_idx)[flat_valid], flat_idx[flat_valid]] = True
 
-    token_mask = block_mask.repeat_interleave(blk_kv, dim=3).repeat_interleave(G, dim=1)
-    kf = kf.repeat_interleave(G, dim=1)
-    vf = vf.repeat_interleave(G, dim=1)
-    scores = torch.einsum("bhsd,bhtd->bhst", qf * scale, kf)
+    token_mask = block_mask.repeat_interleave(blk_kv, dim=3)  # [B,n_kv,S,T]
+    token_mask = token_mask.repeat_interleave(G, dim=1)  # [B,H,S,T]
+    kf = kf.repeat_interleave(G, dim=1)  # [B,H,T,d]
+    vf = vf.repeat_interleave(G, dim=1)  # [B,H,T,d]
+
+    scores = torch.einsum("bhsd,bhtd->bhst", qf * scale, kf)  # [B,H,S,T]
     scores = scores.masked_fill(~token_mask, float("-inf"))
     if causal:
+        # Strictly-future keys (only ever inside the diagonal block; past blocks are all <= query pos).
         q_pos = (torch.arange(S) + chunk_start_idx).view(1, 1, S, 1)
         kv_pos = torch.arange(T).view(1, 1, 1, T)
         scores = scores.masked_fill(kv_pos > q_pos, float("-inf"))
@@ -812,7 +846,7 @@ def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=F
     row_has_value = (scores > float("-inf")).any(dim=-1, keepdim=True)
     scores = torch.where(row_has_value, scores, torch.zeros_like(scores))
     attn = torch.where(row_has_value, scores.softmax(dim=-1, dtype=torch.float32), torch.zeros_like(scores))
-    return torch.einsum("bhst,bhtd->bhsd", attn, vf[..., :v_dim])
+    return torch.einsum("bhst,bhtd->bhsd", attn, vf[..., :v_dim])  # [B,H,S,v_dim]
 
 
 def sparse_sdpa_msa_golden(
@@ -848,7 +882,8 @@ def torch_sdpa_reference(q, k, v, is_causal=False, attention_sink=None):
     Memory-efficient PyTorch reference for ring joint attention.
 
     Chunks over heads and the combined Q sequence so the [B, H, Sq, Sk]
-    attention matrix never materializes at full size.
+    attention matrix never materializes at full size — CPU SDPA's math
+    kernel otherwise allocates it in fp32 and OOMs on long sequences.
     """
     import torch
 
@@ -869,7 +904,8 @@ def torch_sdpa_reference(q, k, v, is_causal=False, attention_sink=None):
     if attention_sink is not None:
         assert is_causal, "attention sink reference is defined for causal attention only"
         # Unlike PyTorch SDPA, the virtual sink key has no V row. Compute the
-        # sink-aware softmax explicitly in compact blocks.
+        # sink-aware softmax explicitly, using compact blocks to keep the
+        # full-causal M3 reference bounded in host memory.
         SEQ_CHUNK = 512
         HEAD_CHUNK = 4
         scale = q.shape[-1] ** -0.5
@@ -921,7 +957,42 @@ def torch_sdpa_reference(q, k, v, is_causal=False, attention_sink=None):
                 else:
                     out = torch.nn.functional.scaled_dot_product_attention(q_chunk, k_heads, v_heads)
                 attn_out[:, h_start:h_end, seq_start:seq_end] = out
+
     return attn_out
+
+
+def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
+    """Ring-merge reference migrated from ``test_ring_joint_attention.py``."""
+    import torch
+
+    scale = k.size(-1) ** -0.5
+    seq_len = k.size(2)
+    slice_seq_len = seq_len // num_devices
+    out = None
+    lse = None
+    lse_list = []
+    Q = torch.cat([q, joint_q], dim=2)
+    for ring_id in range(num_devices):
+        k_slice = k[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
+        v_slice = v[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
+        if ring_id == num_devices - 1:
+            k_slice = torch.cat([k_slice, joint_k], dim=2)
+            v_slice = torch.cat([v_slice, joint_v], dim=2)
+        attn_weights = torch.matmul(Q, k_slice.transpose(-2, -1)) * scale
+        cur_max, _ = torch.max(attn_weights, dim=-1, keepdim=True)
+        attn_weights = torch.exp(attn_weights - cur_max)
+        cur_sum = torch.sum(attn_weights, dim=-1, keepdim=True)
+        cur_out = torch.matmul(attn_weights, v_slice) / cur_sum
+        cur_lse = cur_max + torch.log(cur_sum)
+        if ring_id == 0:
+            out = cur_out
+            lse = cur_lse
+        else:
+            sig = torch.nn.functional.sigmoid(cur_lse - lse)
+            out = out - sig * (out - cur_out)
+            lse = lse - torch.nn.functional.logsigmoid(lse - cur_lse)
+        lse_list.append(lse)
+    return out, lse_list
 
 
 def _ring_runtime_cache_selection(
@@ -1180,6 +1251,22 @@ def ring_distributed_scaled_dot_product_attention_golden(
     return torch.cat([first_chunk, second_chunk], dim=-2)
 
 
+# Pure-torch implementations of the gated delta rule.
+#
+# Extracted from FLA (Flash Linear Attention) library:
+#   https://github.com/fla-org/flash-linear-attention/blob/main/fla/ops/gated_delta_rule/naive.py
+#
+# These are reference implementations with no CUDA/Triton dependencies.
+# They serve as the mathematical specification for TTNN conversion.
+#
+# Tensor layout convention (FLA style):
+#   q, k: [B, T, H, K]   (batch, time, heads, key_dim)
+#   v:    [B, T, H, V]   (batch, time, heads, value_dim)
+#   beta: [B, T, H]      (batch, time, heads)
+#   g:    [B, T, H]      (batch, time, heads) -- log-space decay
+#   state:[B, H, K, V]   (batch, heads, key_dim, value_dim)
+
+
 def l2_norm(x, dim: int = -1, eps: float = 1e-6):
     """L2 normalization along a given dimension."""
     import torch
@@ -1193,33 +1280,83 @@ def recurrent_gated_delta_rule(
     v,
     beta,
     g,
-    scale: Optional[float] = None,
-    initial_state=None,
+    scale: float = None,
+    initial_state = None,
     output_final_state: bool = False,
     use_qk_l2norm: bool = False,
-):
-    """Token-by-token recurrent gated delta rule."""
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Token-by-token recurrent gated delta rule. Used for decode (T=1).
+
+    For each timestep t:
+      1. Decay the state:  h = h * exp(g_t)
+      2. Read from state:  v_read = sum_k(h * k_t)
+      3. Compute delta:    delta = (v_t - v_read) * beta_t
+      4. Write to state:   h = h + outer(k_t, delta)
+      5. Query state:      o_t = h @ q_t
+
+    Args:
+        q: [B, T, H, K] query
+        k: [B, T, H, K] key
+        v: [B, T, H, V] value
+        beta: [B, T, H] write strength (sigmoid output)
+        g: [B, T, H] log-space decay gate
+        scale: attention scale factor, defaults to 1/sqrt(K)
+        initial_state: [B, H, K, V] previous recurrent state
+        output_final_state: whether to return the final state
+        use_qk_l2norm: apply L2 normalization to q, k
+
+    Returns:
+        output: [B, T, H, V]
+        final_state: [B, H, K, V] or None
+    """
     import torch
 
     if use_qk_l2norm:
         q = l2_norm(q, dim=-1)
         k = l2_norm(k, dim=-1)
+
+    # Transpose to [B, H, T, D] for head-first processing
     q, k, v, beta, g = [x.transpose(1, 2).contiguous().to(torch.float32) for x in (q, k, v, beta, g)]
+
     B, H, T, K = k.shape
     V = v.shape[-1]
-    scale = K**-0.5 if scale is None else scale
+
+    if scale is None:
+        scale = K**-0.5
     q = q * scale
-    output = torch.zeros(B, H, T, V, device=v.device, dtype=v.dtype)
-    state = torch.zeros(B, H, K, V, device=v.device, dtype=v.dtype)
+
+    o = torch.zeros(B, H, T, V, device=v.device, dtype=v.dtype)
+    h = torch.zeros(B, H, K, V, device=v.device, dtype=v.dtype)
     if initial_state is not None:
-        state = initial_state.to(torch.float32)
-    for index in range(T):
-        state = state.clone() * g[:, :, index].exp()[..., None, None]
-        delta = v[:, :, index].clone() - (state.clone() * k[:, :, index, :, None]).sum(-2)
-        delta = delta * beta[:, :, index, None]
-        state = state.clone() + k[:, :, index].unsqueeze(-1) * delta.unsqueeze(-2)
-        output[:, :, index] = torch.einsum("bhd,bhdm->bhm", q[:, :, index], state)
-    return output.transpose(1, 2).contiguous(), state if output_final_state else None
+        h = initial_state.to(torch.float32)
+
+    for i in range(T):
+        b_q = q[:, :, i]  # [B, H, K]
+        b_k = k[:, :, i]  # [B, H, K]
+        b_v = v[:, :, i].clone()  # [B, H, V]
+        b_beta = beta[:, :, i]  # [B, H]
+
+        # 1. Decay the state
+        h = h.clone() * g[:, :, i].exp()[..., None, None]
+
+        # 2. Read from state: contract over K dimension
+        b_v = b_v - (h.clone() * b_k[..., None]).sum(-2)
+
+        # 3. Scale by beta (write strength)
+        b_v = b_v * b_beta[..., None]
+
+        # 4. Write to state via outer product
+        h = h.clone() + b_k.unsqueeze(-1) * b_v.unsqueeze(-2)
+
+        # 5. Query the state
+        o[:, :, i] = torch.einsum("bhd,bhdm->bhm", b_q, h)
+
+    final_state = h if output_final_state else None
+
+    # Transpose back to [B, T, H, V]
+    o = o.transpose(1, 2).contiguous()
+    return o, final_state
 
 
 def chunk_gated_delta_rule(
@@ -1229,19 +1366,46 @@ def chunk_gated_delta_rule(
     g,
     beta,
     chunk_size: int = 64,
-    scale: Optional[float] = None,
-    initial_state=None,
+    scale: float = None,
+    initial_state = None,
     output_final_state: bool = False,
     use_qk_l2norm: bool = False,
-):
-    """Chunked gated delta rule migrated from the FLA-derived model reference."""
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Chunked gated delta rule. Used for prefill (processing full sequences).
+
+    Processes the sequence in chunks of `chunk_size` tokens.
+    Within each chunk, uses matrix operations for parallelism.
+    Across chunks, propagates the recurrent state sequentially.
+
+    Args:
+        q: [B, T, H, K] query
+        k: [B, T, H, K] key
+        v: [B, T, H, V] value
+        g: [B, T, H] log-space decay gate
+        beta: [B, T, H] write strength (sigmoid output)
+        chunk_size: number of tokens per chunk
+        scale: attention scale factor, defaults to 1/sqrt(K)
+        initial_state: [B, H, K, V] previous recurrent state
+        output_final_state: whether to return the final state
+        use_qk_l2norm: apply L2 normalization to q, k
+
+    Returns:
+        output: [B, T, H, V]
+        final_state: [B, H, K, V] or None
+    """
     import torch
 
     if use_qk_l2norm:
         q = l2_norm(q, dim=-1)
         k = l2_norm(k, dim=-1)
-    scale = q.shape[-1] ** -0.5 if scale is None else scale
+
+    if scale is None:
+        scale = q.shape[-1] ** -0.5
+
+    # Transpose to [B, H, T, D]
     q, k, v, beta, g = [x.transpose(1, 2).contiguous().to(torch.float32) for x in (q, k, v, beta, g)]
+
     T = q.shape[-2]
     pad_len = (chunk_size - (T % chunk_size)) % chunk_size
     if pad_len > 0:
@@ -1256,45 +1420,79 @@ def chunk_gated_delta_rule(
     q = q * scale
     v_beta = v * beta[..., None]
     k_beta = k * beta[..., None]
+
+    # Upper triangular mask for causal masking within chunks
     mask_upper = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=q.device), diagonal=0)
 
+    # Reshape into chunks: [B, H, num_chunks, chunk_size, D]
     def to_chunks(x):
         return x.reshape(B, H, -1, chunk_size, x.shape[-1])
 
-    q_c, k_c, v_c = to_chunks(q), to_chunks(k), to_chunks(v)
-    k_beta_c, v_beta_c = to_chunks(k_beta), to_chunks(v_beta)
+    q_c = to_chunks(q)
+    k_c = to_chunks(k)
+    v_c = to_chunks(v)
+    k_beta_c = to_chunks(k_beta)
+    v_beta_c = to_chunks(v_beta)
+
+    # Cumulative decay within each chunk
     g_c = g.reshape(B, H, -1, chunk_size)
     decay = g_c.cumsum(dim=-1)
     decay_exp = decay.exp()[..., None]
+
+    # Intra-chunk decay mask: L_mask[i,j] = exp(cumsum_g[i] - cumsum_g[j]) for j <= i
     L_mask = (decay.unsqueeze(-1) - decay.unsqueeze(-2)).tril().exp().tril()
+
+    # Woodbury identity: resolve intra-chunk dependencies
     attn = -((k_beta_c @ k_c.transpose(-1, -2)) * L_mask).masked_fill(mask_upper, 0)
-    for index in range(1, chunk_size):
-        attn[..., index, :index] = attn[..., index, :index].clone() + (
-            attn[..., index, :index, None].clone() * attn[..., :index, :index].clone()
-        ).sum(-2)
+    for i in range(1, chunk_size):
+        attn[..., i, :i] = attn[..., i, :i].clone() + (attn[..., i, :i, None].clone() * attn[..., :i, :i].clone()).sum(
+            -2
+        )
     attn = attn + torch.eye(chunk_size, dtype=torch.float, device=q.device)
+
+    # Corrected values and keys after resolving dependencies
     v_corrected = attn @ v_beta_c
     k_cumdecay = attn @ (k_beta_c * decay_exp)
 
-    state = torch.zeros(B, H, K, V, device=q.device, dtype=q.dtype)
+    # Recurrent state propagation across chunks
+    S = torch.zeros(B, H, K, V, device=q.device, dtype=q.dtype)
     if initial_state is not None:
-        state = initial_state.to(torch.float32)
+        S = initial_state.to(torch.float32)
+
     num_chunks = L // chunk_size
-    output = torch.zeros_like(v_corrected)
+    o = torch.zeros_like(v_corrected)
     mask_causal = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=q.device), diagonal=1)
-    for index in range(num_chunks):
-        q_i, k_i = q_c[:, :, index], k_c[:, :, index]
-        v_i = v_corrected[:, :, index]
-        intra_attn = (q_i @ k_i.transpose(-1, -2) * L_mask[:, :, index]).masked_fill_(mask_causal, 0)
-        v_new = v_i - k_cumdecay[:, :, index] @ state
-        o_inter = (q_i * decay[:, :, index, :, None].exp()) @ state
-        output[:, :, index] = o_inter + intra_attn @ v_new
-        state = (
-            state * decay[:, :, index, -1, None, None].exp()
-            + (k_i * (decay[:, :, index, -1, None] - decay[:, :, index]).exp()[..., None]).transpose(-1, -2) @ v_new
+
+    for i in range(num_chunks):
+        q_i = q_c[:, :, i]
+        k_i = k_c[:, :, i]
+        v_i = v_corrected[:, :, i]
+
+        # Intra-chunk attention
+        intra_attn = (q_i @ k_i.transpose(-1, -2) * L_mask[:, :, i]).masked_fill_(mask_causal, 0)
+
+        # Cross-chunk: subtract state contribution from corrected values
+        v_prime = k_cumdecay[:, :, i] @ S
+        v_new = v_i - v_prime
+
+        # Cross-chunk: query the state
+        o_inter = (q_i * decay[:, :, i, :, None].exp()) @ S
+
+        # Combine intra-chunk attention + cross-chunk state
+        o[:, :, i] = o_inter + intra_attn @ v_new
+
+        # Update state for next chunk
+        S = (
+            S * decay[:, :, i, -1, None, None].exp()
+            + (k_i * (decay[:, :, i, -1, None] - decay[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
         )
-    output = output.reshape(B, H, -1, V)[:, :, :T].transpose(1, 2).contiguous()
-    return output, state if output_final_state else None
+
+    final_state = S if output_final_state else None
+
+    # Reshape back, un-pad, transpose to [B, T, H, V]
+    o = o.reshape(B, H, -1, V)[:, :, :T]
+    o = o.transpose(1, 2).contiguous()
+    return o, final_state
 
 
 def chunk_gated_delta_rule_golden(
@@ -1400,5 +1598,6 @@ __all__ = [
     "sparse_mla",
     "sparse_sdpa_golden",
     "sparse_sdpa_msa_golden",
+    "torch_sdpa",
     "torch_sdpa_reference",
 ]
