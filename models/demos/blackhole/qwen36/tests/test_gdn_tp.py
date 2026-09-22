@@ -25,7 +25,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import (
     compute_pcc,
     get_pcc_threshold,
@@ -525,7 +525,20 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
 
     import models.demos.blackhole.qwen36.tt.gdn.fused_chunk as fc
 
-    assert fc.fused_chunk_enabled(), "fused chunk must be ON by default (production prefill path)"
+    # The production prefill path is arch-dependent. On Blackhole it is the fused
+    # ttnn.transformer.chunk_gated_delta_rule op; on Wormhole fused_chunk_enabled() is off and
+    # forward_prefill falls back to chunk_gated_delta_rule_seq_adapter, because the fused op's own
+    # correctness gate (test_chunk_gated_delta_rule.py) is skipif(not is_blackhole()). Guard the BH
+    # default against regression, and skip the fused-vs-seq comparison where fused is not shipped --
+    # QWEN36_GDN_FUSED=1 re-enables it to probe the fused op on Wormhole.
+    if is_blackhole():
+        assert fc.fused_chunk_enabled(), "fused chunk must be ON by default (production prefill path)"
+    elif not fc.fused_chunk_enabled():
+        pytest.skip(
+            "fused chunk_gated_delta_rule is not the production prefill path on Wormhole; the seq "
+            "adapter it falls back to is covered by test_gdn_tp_prefill. Set QWEN36_GDN_FUSED=1 to "
+            "probe the fused op here."
+        )
 
     # ---- Fused chunk kernel (default) ----
     gdn.reset_state()
