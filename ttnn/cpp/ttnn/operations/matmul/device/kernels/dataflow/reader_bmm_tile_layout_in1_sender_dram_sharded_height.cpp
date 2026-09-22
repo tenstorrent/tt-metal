@@ -5,8 +5,8 @@
 // Batch-sharded DRAM matmul - in1 reader and output writer kernel
 // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Each worker handles B/num_workers batches independently
-// Input B (weights) is DRAM sharded by batch - each bank has B/12 complete [N, K] matrices
-// Output is NOC written to OUTPUT STORAGE CORES (different from worker cores)
+// Input B (weights) is DRAM sharded by batch - each bank has B/num_workers complete [K, N] matrices
+// Output is NOC written to the output storage cores, which are the worker cores themselves
 
 #include <stdint.h>
 
@@ -39,22 +39,17 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     constexpr auto in1_page_size = get_arg(args::in1_page_size);
-    constexpr auto in1_num_pages = get_arg(args::in1_num_pages);
-    constexpr auto in1_block_w = get_arg(args::in1_block_w);                    // K tiles per block
-    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);    // in0_block_w * K
-    constexpr auto num_blocks = get_arg(args::num_blocks);                      // N / in0_block_w
-    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);    // M * K
+    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);    // in0_block_w * per_core_N
+    constexpr auto num_blocks = get_arg(args::num_blocks);                      // K / in0_block_w
+    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);    // per_core_M * per_core_N
     constexpr auto num_batches_per_core = get_arg(args::num_batches_per_core);  // B / num_cores
     constexpr auto in1_tensor_stride_batch_bytes =
         get_arg(args::in1_tensor_stride_batch_bytes);  // bytes per batch in in1
     constexpr auto out_tensor_stride_batch_bytes =
-        get_arg(args::out_tensor_stride_batch_bytes);                           // bytes per batch in output
-    constexpr auto out_shard_size_bytes = get_arg(args::out_shard_size_bytes);  // full output shard size
+        get_arg(args::out_tensor_stride_batch_bytes);  // bytes per batch in output
 
 #ifdef FUSE_BIAS
-    constexpr auto in3_page_size = get_arg(args::in3_page_size);
-    constexpr auto in3_num_pages = get_arg(args::in3_num_pages);
-    constexpr auto in3_block_tiles = get_arg(args::in3_block_tiles);  // K tiles for bias
+    constexpr auto in3_block_tiles = get_arg(args::in3_block_tiles);  // per_core_N tiles for bias
 #endif
 
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb::in1);
@@ -78,7 +73,7 @@ void kernel_main() {
         const uint32_t in1_batch_offset = batch * in1_tensor_stride_batch_bytes;
         uint32_t l1_read_addr_in1 = 0;
 
-        // Read all N blocks of weights for this batch
+        // Read all K blocks of weights for this batch
         for (uint32_t block = 0; block < num_blocks; ++block) {
             dfb_in1.reserve_back(in1_block_num_tiles);
 
