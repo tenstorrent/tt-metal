@@ -9,9 +9,10 @@ costs ``O(compress_rate)``.
 
 HCA has no lightning indexer: every closed window is visible to every query, which is why the
 valid KV set is a contiguous prefix and the caller can bound SDPA by a position instead of an
-additive mask (see :func:`~.attention.sdpa_causal_ok`). The compressor's state is the one-window
-``win_kv`` / ``win_gate`` pair, kept as TILE DRAM ``[B, 1, compress_rate, Dh]`` for
-``paged_update_cache``.
+additive mask (see :func:`~.attention.sdpa_causal_ok`). CSA's short-sequence trace (sequence
+length below ``compress_rate * index_topk``) and its long-sequence indexer trace both leave
+HCA on that dense path. The compressor's state is the one-window ``win_kv`` / ``win_gate``
+pair, kept as TILE DRAM ``[B, 1, compress_rate, Dh]`` for ``paged_update_cache``.
 
 Pooling runs only on the steps that close a window -- an entry is emitted once every
 ``compress_rate`` tokens and the additive block-bias exposes entries
@@ -121,13 +122,15 @@ class DeepSeekV4HCACompressor:
             cache_file_name=cache.file("compressor.position_bias"),
         )
 
-    def prefetch_weights(self):
+    def prefetch_weights(self, *, index_sparse: bool = False):
         """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
 
         Queued kv before gate, the order :meth:`_project` pops them off their shared GCB;
         both stay DRAM ND-sharded ``[D, Dh]``, the prefetcher pushing their pages into the
-        matmul's in1 buffer.
+        matmul's in1 buffer. ``index_sparse`` is the CSA indexer trace flag; HCA has no
+        indexer, so it is ignored.
         """
+        del index_sparse
         self.kv_proj.fetch_weights()
         self.gate_proj.fetch_weights()
 

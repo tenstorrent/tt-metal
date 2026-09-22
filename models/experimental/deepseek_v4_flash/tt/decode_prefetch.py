@@ -84,7 +84,8 @@ DECODE_LAYOUTS = {
     # the Ca/Cb pair at 2*128; q_b is 64*128; weights_proj is one tile of heads.
     # Prefetch rides existing rings where the B-core count matches: kv/gate on the
     # router gate's 8-receiver ring (same ``[4096, 256]`` cut), q_b on the 64-receiver
-    # shared ring; weights_proj is 2 cores and gets its own ring via ensure_named_gcb.
+    # shared ring. weights_proj is 2 cores, which does not divide the 8 DRAM banks,
+    # so it stays on the per-step DRAM -> L1 copy.
     "indexer.kv_proj": {"K": 4096, "N": 256, "n_blocks": 8},
     "indexer.q_b_proj": {"K": 1024, "N": 8192, "n_blocks": 64},
     "indexer.weights_proj": {"K": 4096, "N": 64, "n_blocks": 2},

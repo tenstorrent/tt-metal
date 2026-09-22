@@ -534,7 +534,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         attention: the replicated q_a/kv projections, the row-parallel o_b output, the
         norm weights and the sinks. Sliding layers have no compressor, so they get the
         first eight only; CSA/HCA layers add the four ``compressor.*`` keys, one per
-        ``[K, N]`` projection plus the ``position_bias`` vector."""
+        ``[K, N]`` projection plus the ``position_bias`` vector. CSA also adds the
+        lightning-indexer tensors; without them the indexer is never built and the
+        long-sequence trace stays on dense SDPA."""
         keys = [
             "q_a_proj.weight",
             "q_a_norm.weight",
@@ -551,6 +553,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 "compressor.gate_proj.weight",
                 "compressor.kv_norm.weight",
                 "compressor.position_bias",
+            ]
+        if layer_type == "compressed_sparse_attention":
+            keys += [
+                "compressor.indexer.kv_proj.weight",
+                "compressor.indexer.gate_proj.weight",
+                "compressor.indexer.kv_norm.weight",
+                "compressor.indexer.position_bias",
+                "compressor.indexer.q_b_proj.weight",
+                "compressor.indexer.weights_proj.weight",
             ]
         return keys
 
@@ -1126,10 +1137,78 @@ class DeepSeekV4Model(DeepSeekV4Module):
         selects the trace variant for the whole stack."""
         return self._SDPA_CAUSAL and pos + 1 >= self.sliding_window
 
-    def _variant_key(self, pos: int) -> tuple[bool, int]:
-        """The ``[2]``-tuple identifying the captured trace variant to replay at ``pos``:
-        (SDPA mode, pool phase)."""
-        return (self._sdpa_causal_step(pos), self._pool_phase_index(pos))
+    def _variant_key(self, pos: int) -> tuple[bool, int, bool]:
+        """The ``[3]``-tuple identifying the captured trace variant to replay at ``pos``:
+        (SDPA mode, pool phase, CSA indexer).
+
+        The third entry is true once the sequence is long enough that CSA top-k is
+        legal (``seq_len >= compress_rate * index_topk``, unless the profile overrides
+        it). Shorter positions keep dense causal SDPA and are a different capture:
+        top-k refuses a valid length below ``k``, and the two programs are not the
+        same op sequence.
+        """
+        return (self._sdpa_causal_step(pos), self._pool_phase_index(pos), self._index_sparse_step(pos))
+
+    def _indexer_active(self) -> bool:
+        """True when some CSA layer actually built a lightning indexer."""
+        for layer in self.layers:
+            indexer = getattr(getattr(layer.self_attn, "compressor", None), "indexer", None)
+            if indexer is not None:
+                return True
+        return False
+
+    def _index_dense_limit(self) -> int:
+        """Sequence length at which CSA switches from dense SDPA to the indexer.
+
+        ``attention.index_dense_max_positions`` overrides this; ``0`` means
+        ``compress_rate * index_topk``. Below the limit there are fewer closed
+        windows than ``index_topk``.
+        """
+        configured = int(self.system_config.attention.index_dense_max_positions)
+        cr = int(self.config.compress_rates.get("compressed_sparse_attention", 0))
+        floor = cr * int(getattr(self.config, "index_topk", 0))
+        if configured <= 0:
+            return floor
+        # Top-k rejects a valid length below k, so the dense region cannot shrink
+        # past the first position where ``index_topk`` windows are closed.
+        return max(configured, floor)
+
+    def _index_sparse_step(self, pos: int) -> bool:
+        """Whether CSA at ``pos`` attends through the lightning indexer."""
+        limit = self._index_dense_limit()
+        if limit <= 0 or not self._indexer_active():
+            return False
+        return (pos + 1) >= limit
+
+    def _capture_packet_pos(self, pos: int, causal: bool, index_sparse: bool) -> int:
+        """Position a compile run may execute at.
+
+        Replay reads the real position from the packet, so this value is only the
+        dry run's. Masked traces address the short page table (``sliding_window``
+        rows). Feeding them ``DEEPSEEK_V4_START_POS`` walks the compressor write
+        off that table and the paged update never completes. Every dry run is
+        also at least at the first closed CSA window, so the index-cache row is
+        not negative. The indexer dry run needs at least ``index_topk`` closed
+        windows.
+        """
+        # A pooling dry run still executes the cache write. Below the first
+        # closed CSA window that row is negative and the index-cache update
+        # never returns.
+        first_closed = max(int(self.config.compress_rates.get("compressed_sparse_attention", 1)) - 1, 0)
+        if index_sparse:
+            packet_pos = max(pos, self._index_dense_limit() - 1, first_closed)
+        elif self._SDPA_CAUSAL and not causal:
+            packet_pos = min(max(pos, first_closed), max(self.sliding_window - 1, 0))
+        else:
+            packet_pos = max(pos, first_closed)
+        if self._decode_max_seq:
+            packet_pos = min(packet_pos, self._decode_max_seq - 1)
+        return max(packet_pos, 0)
+
+    def _indexer_head_dim(self, li: int) -> int | None:
+        """``index_head_dim`` when layer ``li`` has an indexer, else ``None``."""
+        indexer = getattr(getattr(self.layers[li].self_attn, "compressor", None), "indexer", None)
+        return None if indexer is None else indexer.head_dim
 
     def _reachable_phases(self, causal: bool) -> list[int]:
         """Pool-phase indices (``[n_phases]`` at most) that can co-occur with this SDPA mode.
@@ -1145,23 +1224,40 @@ class DeepSeekV4Model(DeepSeekV4Module):
             return list(range(len(self._pool_phases)))
         return sorted({self._pool_phase_index(p) for p in range(max(self.sliding_window - 1, 0))})
 
-    def _reachable_variants(self) -> list[tuple[bool, int]]:
-        """Every (SDPA mode, pool phase) pair a step can actually ask for, as
-        ``[n_variants, 2]``."""
+    def _reachable_variants(self) -> list[tuple[bool, int, bool]]:
+        """Every (SDPA mode, pool phase, indexer) triple a step can actually ask for.
+
+        The indexer trace exists only past the dense limit, which is above the sliding
+        window, so it has no masked twin: HCA on that trace is causal whenever causal
+        SDPA is enabled. Sub-limit positions keep the dense family, including the masked
+        captures below the sliding window.
+        """
         modes = [False, True] if self._SDPA_CAUSAL else [False]
-        return [(causal, phase) for causal in modes for phase in self._reachable_phases(causal)]
+        dense = [(causal, phase, False) for causal in modes for phase in self._reachable_phases(causal)]
+        max_seq = self._decode_max_seq or 0
+        limit = self._index_dense_limit()
+        if not self._indexer_active() or limit <= 0 or max_seq < limit:
+            return dense
+        long_causal = bool(self._SDPA_CAUSAL)
+        sparse = [(long_causal, phase, True) for phase in self._reachable_phases(long_causal)]
+        return dense + sparse
 
     @staticmethod
-    def _sm_pool_key(sm: dict, pool_flags: dict[int, bool], causal: bool) -> tuple:
-        """A submesh's slice of a global variant -- a ``[len(sm["pool_crs"]) + 1]`` tuple:
-        only the rates its own layers use, plus the SDPA mode (which only compressor layers
-        observe).
+    def _sm_pool_key(sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: bool = False) -> tuple:
+        """A submesh's slice of a global variant -- a tuple of the rates its own layers
+        use, the SDPA mode (which only compressor layers observe), and whether this
+        submesh's CSA layers run the indexer.
 
         Submeshes that host no compressor layer (or only one of the rates) collapse
         several global variants onto the same capture — a sliding-only submesh is
-        captured exactly once however many variants the stack has.
+        captured exactly once however many variants the stack has. A submesh with no
+        CSA layer likewise ignores the indexer bit.
         """
-        return (causal and bool(sm["pool_crs"]), tuple(pool_flags[cr] for cr in sm["pool_crs"]))
+        return (
+            causal and bool(sm["pool_crs"]),
+            tuple(pool_flags[cr] for cr in sm["pool_crs"]),
+            index_sparse and bool(sm.get("has_csa")),
+        )
 
     # -- decode KV-cache state -------------------------------------------------- #
     def reset_caches(self, max_seq: int) -> None:
@@ -1182,6 +1278,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 self.config.head_dim,
                 max_seq,
                 self.config.compress_rates,
+                index_head_dim=self._indexer_head_dim(li),
             )
             for li in range(self.num_layers)
         ]
@@ -1410,7 +1507,18 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ``[B, 1, cr, Dh]``); sliding layers keep none."""
         for sm in self.submeshes_io:
             for li, scache in sm["scaches"].items():
-                for name in ("win_kv", "win_gate", "prev_kv", "prev_gate"):
+                for name in (
+                    "win_kv",
+                    "win_gate",
+                    "prev_kv",
+                    "prev_gate",
+                    "idx_win_kv",
+                    "idx_win_gate",
+                    "idx_prev_kv",
+                    "idx_prev_gate",
+                    "idx_key_cache",
+                    "combined",
+                ):
                     if getattr(scache, name) is not None:
                         yield sm, li, name
 
@@ -1423,9 +1531,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         other window buffer -- ``[B*cr, 1, 1, F]`` on CSA, ``[B, 1, cr, Dh]`` on HCA --
         is filled with 0.
         """
-        return _MASK_NEG if name == "prev_gate" else 0.0
+        return _MASK_NEG if name in ("prev_gate", "idx_prev_gate") else 0.0
 
-    def _window_host_tensor(self, buf: ttnn.Tensor, shape, fill, device) -> ttnn.Tensor:
+    def _window_host_tensor(self, buf: ttnn.Tensor, shape, fill, device, mesh_mapper=None) -> ttnn.Tensor:
         """DRAM INTERLEAVED clone of a compressor window, used for held-aside group
         state and the per-slot blanking source: ``[B*cr, 1, 1, F]`` for a packed CSA
         window, ``[B, 1, cr, Dh]`` (or one row of it) for a TILE one.
@@ -1443,8 +1551,19 @@ class DeepSeekV4Model(DeepSeekV4Module):
             layout=buf.layout,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.tp_size > 1 else None,
+            mesh_mapper=mesh_mapper,
         )
+
+    def _state_mesh_mapper(self, name: str, device):
+        """Mesh placement of a held-aside copy of buffer ``name``.
+
+        Compressor buffers, including the index-key cache and the dense
+        combined-KV mirror, are replicated across the TP mesh.
+        """
+        del name
+        if self.tp_size <= 1:
+            return None
+        return ttnn.ReplicateTensorToMesh(device)
 
     def _copy_window(self, src: ttnn.Tensor, dest: ttnn.Tensor) -> None:
         """Write ``src`` into preallocated ``dest`` (same shape, ``[B*cr, 1, 1, F]`` or
@@ -1476,7 +1595,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for sm, li, name in self._compressor_slots():
             buf = getattr(sm["scaches"][li], name)
             state[(sm["index"], li, name)] = self._window_host_tensor(
-                buf, buf.shape, self._empty_compressor_fill(name), sm["device"]
+                buf,
+                buf.shape,
+                self._empty_compressor_fill(name),
+                sm["device"],
+                mesh_mapper=self._state_mesh_mapper(name, sm["device"]),
             )
         return state
 
@@ -1493,7 +1616,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
             buf = getattr(sm["scaches"][li], name)
             slot_rows = buf.shape[0] // self._decode_batch if buf.is_sharded() else 1
             rows[(sm["index"], li, name)] = self._window_host_tensor(
-                buf, [slot_rows, *list(buf.shape)[1:]], self._empty_compressor_fill(name), sm["device"]
+                buf,
+                [slot_rows, *list(buf.shape)[1:]],
+                self._empty_compressor_fill(name),
+                sm["device"],
+                mesh_mapper=self._state_mesh_mapper(name, sm["device"]),
             )
         return rows
 
@@ -1704,6 +1831,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         w = self.sliding_window
         if not self.kv_caches:
             raise RuntimeError("call reset_caches(max_seq) before decode()")
+        index_sparse = self._index_sparse_step(pos)
+        if index_sparse:
+            logger.info(f"indexer trace pos={pos}")
         for li, layer in enumerate(self.layers):
             if self.use_submeshes:
                 current_submesh_id = self._submesh_id_for_layer(li)
@@ -1756,6 +1886,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 win_slot=win_slot,
                 win_row=win_row,
                 sdpa_cur_pos=sdpa_cur_pos,
+                index_sparse=index_sparse and layer_type == "compressed_sparse_attention",
             )
             if self.mtp_submesh is not None and li in self._dspark_tap_ids:
                 self._ensure_mtp_buffers(self._decode_batch)
@@ -1785,7 +1916,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             if leaves_submesh:
                 next_on_device = self._next_layer_on_submesh(li)
                 if next_on_device is not None:
-                    self.layers[next_on_device].prefetch_weights()
+                    self.layers[next_on_device].prefetch_weights(index_sparse=index_sparse)
         with _region("HC_HEAD"):
             hidden = self.hc_head(streams)
         with _region("FINAL_NORM"):
@@ -1825,6 +1956,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self.config.compress_rates,
             paged=self._paged is not None,
             batch=self._decode_batch,
+            index_head_dim=self._indexer_head_dim(li),
         )
 
     def _build_block_pool(self, li: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -2051,6 +2183,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 "page_tables": {},
                 "page_tables_masked": {},
                 "pool_crs": self._compress_rates_for(types),
+                "has_csa": "compressed_sparse_attention" in types,
                 "traces": {},  # local variant key -> (trace id, persistent output)
                 "tids": {},  # global variant key -> trace id
                 "outputs": {},  # global variant key -> persistent output
@@ -2270,16 +2403,20 @@ class DeepSeekV4Model(DeepSeekV4Module):
             win_pos_f,
         )
 
-    def _decode_submesh_static(self, sm: dict, pool_flags: dict[int, bool], causal: bool) -> ttnn.Tensor:
+    def _decode_submesh_static(
+        self, sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: bool = False
+    ) -> ttnn.Tensor:
         """Run one submesh's layers over the per-step input packet / in-place caches
         (shared by the compile run and the trace capture).
 
         ``pool_flags`` maps each compress rate to whether this trace variant re-pools that
         compressor; ``causal`` selects causal SDPA (bounded by an on-device ``cur_pos``)
-        over the additive mask for the compressor layers. Both are fixed at capture time
-        (a trace is a flat op sequence, so it cannot branch on the device-side position),
-        which is why the capture emits one variant per (SDPA mode, window phase) pair --
-        see :meth:`_capture_traces`. Returns the global-last layer's head output
+        over the additive mask for the compressor layers; ``index_sparse`` selects the
+        CSA lightning-indexer program instead of dense SDPA. All three are fixed at
+        capture time (a trace is a flat op sequence, so it cannot branch on the
+        device-side position), which is why the capture emits one variant per
+        (SDPA mode, window phase, indexer) triple -- see :meth:`_capture_traces`. Returns
+        the global-last layer's head output
         ``[B, 1, 1, D]`` (``[B, 1, 1, V]`` with a folded-in ``lm_head``), or ``None`` for
         the MTP submesh, whose only job is the receive.
 
@@ -2304,6 +2441,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         So plain round-robin sends on every layer boundary (the ring), while PGS=1 makes a
         device's contiguous run of layers chain locally.
         """
+        logger.info(f"decode_submesh_static with sparse_indexer: {index_sparse}")
         if sm.get("mtp_recv"):
             self._recv_mtp_pack()
             return None
@@ -2465,6 +2603,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sdpa_cur_pos=sdpa_cur_pos,
                 win_slot=win_slot,
                 win_row=win_row,
+                index_sparse=index_sparse and lt == "compressed_sparse_attention",
             )
             if self.mtp_submesh is not None and li in self._dspark_tap_ids:
                 self._slice_write_mtp_hidden(streams, self._dspark_tap_ids.index(li))
@@ -2493,7 +2632,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 streams_rm.deallocate()
                 next_on_device = self._next_layer_on_submesh(li)
                 if next_on_device is not None:
-                    self.layers[next_on_device].prefetch_weights()
+                    self.layers[next_on_device].prefetch_weights(index_sparse=index_sparse)
         return out if out is not None else streams
 
     def _step_tokens(self, token_id) -> list[int]:
@@ -2586,10 +2725,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return out.reshape(self._decode_batch, 1, -1)
 
     def _capture_traces(self, token_id, pos: int) -> None:
-        """Capture the decode traces: per submesh, one variant per (SDPA mode, phase).
+        """Capture the decode traces: per submesh, one variant per (SDPA mode, phase, indexer).
 
-        ``token_id`` / ``pos`` describe the step about to be replayed; each compile run
-        below is fed that packet over the H2D socket (see :meth:`_write_packet`).
+        ``token_id`` / ``pos`` describe the step about to be replayed. Each compile run
+        is fed a packet (see :meth:`_write_packet`) at :meth:`_capture_packet_pos`,
+        not necessarily ``pos``: masked traces only have a ``sliding_window`` page
+        table, and the indexer dry run needs ``index_topk`` closed windows. Replay
+        still reads the real position from the packet.
 
         A ttnn trace is a flat, fixed sequence of device ops, so it cannot skip the
         compressor pool on the steps that do not close a window, nor switch between causal
@@ -2599,11 +2741,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
         capture instead: one variant per entry of :meth:`_reachable_variants`, selected per
         step by :meth:`_variant_key`. With the default rates that is five (three causal
         phases -- pool nothing / CSA / CSA+HCA -- plus the two masked phases reachable
-        below the sliding window).
+        below the sliding window). When the CSA lightning indexer is attached, positions
+        at or above ``compress_rate * index_topk`` add one more family: the same causal
+        pool phases, but with CSA attending through the indexer instead of dense SDPA.
+        That short-sequence prefix stays on the five dense captures.
 
         Variants are deduplicated per submesh via :meth:`_sm_pool_key`: a submesh only
         distinguishes what its own layers observe, so a sliding-only submesh is captured
-        once and replays that single trace for every variant.
+        once and replays that single trace for every variant. A submesh with no CSA
+        layer ignores the indexer bit the same way.
 
         Ordering matters twice over. *Every* variant's compile run (which JITs the programs
         -- trace capture itself cannot) has to be issued before the *first* capture: once a
@@ -2632,11 +2778,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         plan = []
         planned_keys: list[set] = [set() for _ in self.submeshes_io]
         for variant in self._reachable_variants():
-            causal, phase_idx = variant
+            causal, phase_idx, index_sparse = variant
             flags = dict(zip(self._pool_crs, self._pool_phases[phase_idx]))
             pending = []
             for i, sm in enumerate(self.submeshes_io):
-                key = self._sm_pool_key(sm, flags, causal)
+                key = self._sm_pool_key(sm, flags, causal, index_sparse)
                 if key not in planned_keys[i]:
                     planned_keys[i].add(key)
                     pending.append(sm)
@@ -2651,18 +2797,22 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for variant, flags, pending in plan:
             if not pending:
                 continue
-            causal, phase_idx = variant
+            causal, phase_idx, index_sparse = variant
             compile_outs = []
             # The compile run *executes*, so submesh 0's in-trace ``recv_async_h2d`` would
-            # park forever without a page of its own; give every round the upcoming step's
-            # packet.
-            self._write_packet(token_id, pos)
+            # park forever without a page of its own. The packet position has to be one
+            # this variant can execute (see :meth:`_capture_packet_pos`).
+            packet_pos = self._capture_packet_pos(pos, causal, index_sparse)
+            if self._paged is not None and packet_pos > pos:
+                self.ensure_session_capacity(packet_pos)
+            self._write_packet(token_id, packet_pos)
             for sm in self.submeshes_io:
                 logger.info(
                     f"[traced-decode] compiling submesh {sm['index']} "
-                    f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags} causal={causal}"
+                    f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags} "
+                    f"causal={causal} index_sparse={index_sparse} packet_pos={packet_pos}"
                 )
-                compile_outs.append(self._decode_submesh_static(sm, flags, causal))  # JITs the programs
+                compile_outs.append(self._decode_submesh_static(sm, flags, causal, index_sparse))  # JITs the programs
             # The run also *sends* an output, so drain it: an unread output would sit in
             # the socket FIFO and eventually backpressure the sender kernel. Discarded --
             # the real per-step outputs all come from the replay loop.
@@ -2673,21 +2823,24 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         # Pass 2 -- record the captures and bind every variant to a trace.
         for variant, flags, pending in plan:
-            causal, phase_idx = variant
+            causal, phase_idx, index_sparse = variant
             for sm in pending:
                 device = sm["device"]
                 logger.info(
                     f"[traced-decode] capturing submesh {sm['index']} "
-                    f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags} causal={causal}"
+                    f"({len(sm['layers'])} layers) phase {phase_idx} pool={flags} "
+                    f"causal={causal} index_sparse={index_sparse}"
                 )
                 tid = ttnn.begin_trace_capture(device, cq_id=0)
                 with _trace_capture_guard():
-                    out = self._decode_submesh_static(sm, flags, causal)
+                    out = self._decode_submesh_static(sm, flags, causal, index_sparse)
                 ttnn.end_trace_capture(device, tid, cq_id=0)
                 # ``out`` is persistent; overwritten in place by every execute_trace.
-                sm["traces"][self._sm_pool_key(sm, flags, causal)] = (tid, out)
+                sm["traces"][self._sm_pool_key(sm, flags, causal, index_sparse)] = (tid, out)
             for sm in self.submeshes_io:
-                sm["tids"][variant], sm["outputs"][variant] = sm["traces"][self._sm_pool_key(sm, flags, causal)]
+                sm["tids"][variant], sm["outputs"][variant] = sm["traces"][
+                    self._sm_pool_key(sm, flags, causal, index_sparse)
+                ]
         self._traced_captured = True
 
     def decode_traced(self, token_id, pos: int) -> torch.Tensor:
@@ -2829,6 +2982,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         if not self._traced_captured:
             raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
+        if self._variant_key(pos)[2]:
+            logger.info(f"indexer trace pos={pos}")
         self._ensure_replay_thread()
         self._replay_queue.put(pos)
 
