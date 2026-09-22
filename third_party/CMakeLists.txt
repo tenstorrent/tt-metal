@@ -489,6 +489,17 @@ if(TT_METAL_USE_EMULE)
         GIT_TAG 67266c752b51e97d1c73a2abc5910a37901af4eb
         EXCLUDE_FROM_ALL YES
     )
+    # The engine now lives in the tt-emule runtime library; a header-only tt-emule revision (or a
+    # TT_EMULE_PATH not pointing at a checkout that carries src/emulation) defines no such target, and
+    # the tt_metal targets below would fail with an opaque generator-expression error. Fail clearly.
+    if(NOT TARGET tt_emule_runtime)
+        message(
+            FATAL_ERROR
+            "TT_METAL_USE_EMULE=ON requires a tt-emule that provides the tt_emule_runtime library. "
+            "Set -DTT_EMULE_PATH=<tt-emule-blaze checkout>, or bump the tenstorrent/tt-emule GIT_TAG "
+            "in this file past the src/emulation runtime move."
+        )
+    endif()
 endif()
 
 ############################################################################################################################

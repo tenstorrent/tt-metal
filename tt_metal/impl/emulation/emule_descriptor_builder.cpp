@@ -145,7 +145,7 @@ SocView build_soc_view(IDevice* device, Program& program) {
 
 // ── EmuleProgramDescriptor: mirrors collect_kernels / init_core_* / semaphores reads.
 EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
-    (void)device;
+    (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
 
@@ -255,7 +255,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     TT_FATAL(
                         num_rt == 0,
                         "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
-                        "(binding '{}' has num_runtime_field_crta_words={}).",
+                        "(binding '{}' has num_runtime_field_crta_words={}). Wire the per-"
+                        "binding word count through Metal2BindingsSnapshot::TaEntry, the "
+                        "cache key, and emit_metal2_namespaces' get_common_vararg base "
+                        "before enabling this path.",
                         name,
                         num_rt);
                     kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off});
