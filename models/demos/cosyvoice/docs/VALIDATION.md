@@ -356,10 +356,37 @@ captures one trace, not the in-place path's 65); and the `StreamState` fix above
 
 Two different warm-ups are in play here and they are worth keeping apart. The one this
 test already performs warms the flow decoder and the vocoder before the AR trace is
-captured; reversing that order hangs Blackhole outright, so it is a design constraint
-rather than a lead. The one that mattered for the probe above warms the AR decoder's
-own prefill. This test does not do that second one — its prefill still compiles under
-a live trace, after capture — which makes it the cheapest thing to try next.
+captured. The one that mattered for the probe above warms the AR decoder's own prefill.
+This test does not do that second one — its prefill still compiles under a live trace,
+after capture — which makes it the cheapest thing to try next.
+
+**The warm-before-capture constraint no longer holds on Blackhole, as of the carry-buffer
+fix.** That constraint is what made this lead hard to test without a Wormhole: reversing
+the order — capture the decode trace first, then drive the flow decoder and the vocoder
+*through* it — used to hang Blackhole outright, log frozen and JIT cache flat. It is the
+same mechanism the Wormhole hang is now narrowed to, and it is reproducible on hardware
+that is available.
+
+`scripts/probe_warm_order.py --order reversed` forces exactly that ordering. Measured on
+`p150a` at the commit that fixed the streaming carry buffers:
+
+| JIT cache | result |
+|---|---|
+| warm | survives; capture at `0.2 s`, warm-up through the traced path at `3.8 s`, interleaved pass complete at `6.2 s` |
+| **cleared** | survives; capture at `10.7 s`, warm-up at `258.8 s`, interleaved pass complete at `273.8 s` |
+
+The cleared-cache row is the one that matters, because the recorded hang was reproducible
+"with a cleared cache on a freshly reset board" — so in that run `248 s` of kernels
+genuinely compiled while the trace was live, which is the condition the constraint
+existed for.
+
+What that does and does not say. It says the Blackhole-reproducible instance of
+"allocating under a live trace wedges the board" is fixed by holding the carried buffers
+in allocations made before capture. It does **not** say the n300 hang is fixed: n300 was
+unavailable throughout this work and the claim has not been tested there. What it changes
+is the priority — the next person with an n300 should run
+`tests/perf/test_streaming_perf.py` unskipped before investigating further, because the
+mechanism it was blocked on now survives the equivalent test on the other architecture.
 
 ### An n300/Blackhole amplitude difference on a synthetic case — open
 
