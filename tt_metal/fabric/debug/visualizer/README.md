@@ -31,7 +31,7 @@ Capture never invents topology. It requires:
 
 1. **A fabric manifest** written by each MPI rank to disk after fabric routers reach `READY_FOR_TRAFFIC`. Each MPI rank writes:
   `<logs_dir>/generated/fabric/fabric_manifest_rank_<rank+1>_of_<world_size>.json`
-   `logs_dir` is the process CWD unless `TT_METAL_LOGS_PATH` is set. The file lists meshes, chips, directed links, HAL/builder addresses, and the ethernet cores that are actually fabric routers (`is_local`, `physical_chip_id`, `asic_id`, `eth_chan`, logical/translated coordinates). Remote chips appear for topology but are not peek targets on this host. File present means the last fabric init in this cwd completed router sync.
+   `logs_dir` is the process CWD unless `TT_METAL_LOGS_PATH` is set. The file lists meshes, chips, directed links, HAL/builder addresses, and the ethernet cores that are actually fabric routers (`is_local`, `physical_chip_id`, `asic_id`, `eth_chan`, logical/translated coordinates). Remote chips appear for topology but are not peek targets on this host. File present means the last fabric init in this cwd completed router sync. How that file is produced is described in [MANIFEST.md](MANIFEST.md).
 2. **The JSON schemas** in `schema/`. These are the stability boundary for the tool — consumers depend on `manifest_version` / `snapshot_version` and the documented shapes, not on ControlPlane C++ signatures.
   - `schema/fabric_manifest_schema.json` — topology artifact from fabric init
   - `schema/fabric_snapshot_schema.json` — live peek artifact from capture
