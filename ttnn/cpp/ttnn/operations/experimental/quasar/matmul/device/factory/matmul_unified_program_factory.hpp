@@ -65,8 +65,8 @@ struct UnifiedMatmulPlan {
     bool alias_C_partials_onto_C_slice = false;
     uint64_t l1_bytes = 0;  // total DFB footprint per core
 
-    // Only valid for a sharded output: the shard layout implied by how the C slices tile C.
-    tt::tt_metal::TensorMemoryLayout sharded_output_layout() const;
+    // Only meaningful for a sharded output: the layout implied by how the C slices tile C.
+    tt::tt_metal::TensorMemoryLayout sharded_output_layout{};
 };
 
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
