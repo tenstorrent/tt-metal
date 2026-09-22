@@ -232,7 +232,7 @@ All verified by reading the code; none implemented.
    M, qkv@1024, proj_out and to_kv were on the warned 8x8x8 default. 720p/121f (M=3424) is not
    tabled.
 
-   *Swept (2026-09-22), 10 of 11 shapes* — device kernel time, best of ~330-380 L1-feasible combos
+   *Swept (2026-09-22), all 11 shapes* — device kernel time, best of ~310-380 L1-feasible combos
    per shape, against the blocking that ran before:
 
    | shape | M | before | after | gain |
@@ -247,11 +247,11 @@ All verified by reading the code; none implemented.
    | ff2 (MMRS) | 2336 | 410.6 us (v2.3) | 357.7 | 12.9% |
    | proj_out | 1024 | 35.4 us | 33.7 | 5.0% |
    | proj_out | 2336 | 74.7 us | 70.2 | 6.0% |
+   | cross-attn to_kv | 512 | 58.7 us (default) | 54.7 | 6.8% |
 
    At 720p the pattern is one full M block per core (73 M tiles over 12 columns -> M_block 7) with
    K_block 6, and the top-5 combos per shape sit within ~1% of each other, so the winners are not
-   noise picks. Cross-attn `to_kv` (512x3072x1536) is still PRE-SWEEP. E2E perf gates not yet
-   re-run with the swept table.
+   noise picks. E2E perf gates not yet re-run with the swept table.
 
    **The sweep fills the disk.** It compiles one program per combo and the kernel JIT cache
    (`~/.cache/tt-metal-cache`) keeps every one: ~118 GB across 587k files for ten shapes, plus
