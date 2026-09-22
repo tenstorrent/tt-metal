@@ -87,6 +87,11 @@ def _build_condition_for_test_case(
         return torch.ones_like(base, dtype=torch_format)
     if test_case == "all_zeros":
         return torch.zeros_like(base, dtype=torch_format)
+    if test_case == "all_negative_zeros":
+        return torch.full_like(base, -0.0, dtype=torch_format)
+    if test_case == "signed_zeros":
+        pattern = torch.tensor([0.0, -0.0, 1.0, -1.0], dtype=torch_format)
+        return pattern.repeat(base.numel() // 4).reshape(base.shape)
     # "mixed" — raw stimuli as condition (mostly non-zero, exercises true branch).
     return base.to(torch_format)
 
@@ -95,7 +100,7 @@ def _build_condition_for_test_case(
 @parametrize(
     formats_dest_acc=get_valid_formats_dest_acc(),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
-    test_case=runtime(["mixed", "all_ones", "all_zeros"]),
+    test_case=runtime(["mixed", "all_ones", "all_zeros", "all_negative_zeros", "signed_zeros"]),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
 def test_sfpu_where_quasar(
