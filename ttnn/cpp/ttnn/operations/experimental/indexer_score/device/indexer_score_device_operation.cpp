@@ -254,6 +254,33 @@ void validate_fused_runtime_values(const operation_attributes_t& attrs, const te
     }
 }
 
+// Structural checks shared by every 1-element metadata tensor the fused reader consumes
+// (chunk_start_idx_tensor, valid_end_tensor, cache_batch_idx_tensor). Their VALUES are read
+// on-device, so only the container can be checked here -- and all three must satisfy the same
+// contract, so keep it in one place rather than three drifting copies.
+//
+// The DRAM pin is load-bearing, not style: the reader bakes each buffer's TensorAccessorArgs in as
+// COMPILE-TIME args while the program hash records only that the metadata is present, so an L1
+// tensor on one dispatch and a DRAM one on the next would cache-hit a binary built for the other
+// address space and resolve the address against the wrong accessor.
+void validate_scalar_metadata_tensor(const Tensor& m, const Tensor& q, std::string_view name) {
+    TT_FATAL(
+        m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
+        "indexer_score: {} must be allocated on device",
+        name);
+    TT_FATAL(m.device() == q.device(), "indexer_score: {} must be on the same mesh device as q", name);
+    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: {} must be UINT32 (got {})", name, m.dtype());
+    TT_FATAL(m.layout() == Layout::ROW_MAJOR, "indexer_score: {} must be ROW_MAJOR (got {})", name, m.layout());
+    TT_FATAL(
+        m.logical_volume() == 1, "indexer_score: {} must hold exactly 1 element (got {})", name, m.logical_volume());
+    TT_FATAL(
+        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "indexer_score: {} must be interleaved (a sharded 1-element tensor would not sit at the single fixed "
+        "address the kernel reads page 0 from)",
+        name);
+    TT_FATAL(m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: {} must be in DRAM", name);
+}
+
 // Validate metadata properties available without reading its device-resident value.
 void validate_chunk_start_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
     if (!t.has_chunk_start_metadata()) {
@@ -275,26 +302,7 @@ void validate_chunk_start_metadata(const operation_attributes_t& attrs, const te
         "indexer_score: chunk_start_idx_tensor requires the block-cyclic layout (block_cyclic_chunk_local), "
         "whose sp/chunk_local are what the kernel derives kv_len and the causal rotation from");
 
-    const auto& m = *t.chunk_start_idx_tensor;
-    TT_FATAL(
-        m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
-        "indexer_score: chunk_start_idx_tensor must be allocated on device");
-    TT_FATAL(m.device() == t.q.device(), "indexer_score: chunk_start_idx_tensor must be on the same mesh device as q");
-    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: chunk_start_idx_tensor must be UINT32 (got {})", m.dtype());
-    TT_FATAL(
-        m.layout() == Layout::ROW_MAJOR,
-        "indexer_score: chunk_start_idx_tensor must be ROW_MAJOR (got {})",
-        m.layout());
-    TT_FATAL(
-        m.logical_volume() == 1,
-        "indexer_score: chunk_start_idx_tensor must hold exactly 1 element (got {})",
-        m.logical_volume());
-    TT_FATAL(
-        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "indexer_score: chunk_start_idx_tensor must be interleaved (a sharded 1-element tensor would not sit at "
-        "the single fixed address the kernel reads page 0 from)");
-    TT_FATAL(
-        m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: chunk_start_idx_tensor must be in DRAM");
+    validate_scalar_metadata_tensor(*t.chunk_start_idx_tensor, t.q, "chunk_start_idx_tensor");
 }
 // Structural checks for the real-token-end tensor. Mirrors validate_chunk_start_metadata; the value is
 // read on-device, so only the container and the co-requirements can be checked here.
@@ -314,24 +322,7 @@ void validate_valid_end_metadata(const operation_attributes_t& attrs, const tens
         attrs.has_block_cyclic(),
         "indexer_score: valid_end_tensor requires the block-cyclic layout, whose sp/chunk_local are what "
         "the kernel derives the uncapped bound from");
-    const auto& m = *t.valid_end_tensor;
-    TT_FATAL(
-        m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
-        "indexer_score: valid_end_tensor must be allocated on device");
-    TT_FATAL(m.device() == t.q.device(), "indexer_score: valid_end_tensor must be on the same mesh device as q");
-    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: valid_end_tensor must be UINT32 (got {})", m.dtype());
-    TT_FATAL(m.layout() == Layout::ROW_MAJOR, "indexer_score: valid_end_tensor must be ROW_MAJOR (got {})", m.layout());
-    TT_FATAL(
-        m.logical_volume() == 1,
-        "indexer_score: valid_end_tensor must hold exactly 1 element (got {})",
-        m.logical_volume());
-    TT_FATAL(
-        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "indexer_score: valid_end_tensor must be interleaved (a sharded 1-element tensor would not sit at "
-        "the single fixed address the kernel reads page 0 from)");
-    // Same reason as cache_batch_idx_tensor: the reader bakes this buffer's TensorAccessorArgs in as
-    // COMPILE-TIME args while the hash records only presence, so the address space must not vary.
-    TT_FATAL(m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: valid_end_tensor must be in DRAM");
+    validate_scalar_metadata_tensor(*t.valid_end_tensor, t.q, "valid_end_tensor");
 }
 
 void validate_metadata_mode(const operation_attributes_t& attrs, const tensor_args_t& t) {
@@ -369,27 +360,7 @@ void validate_cache_slot_metadata(const operation_attributes_t& attrs, const ten
         "indexer_score: index_cache_layer_idx {} must be < index_cache_num_layers {}",
         attrs.index_cache_layer_idx,
         attrs.index_cache_num_layers);
-    const auto& m = *t.cache_batch_idx_tensor;
-    TT_FATAL(m.storage_type() == StorageType::DEVICE, "indexer_score: cache_batch_idx_tensor must be on device");
-    TT_FATAL(m.device() == t.q.device(), "indexer_score: cache_batch_idx_tensor must be on the same mesh device as q");
-    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: cache_batch_idx_tensor must be UINT32 (got {})", m.dtype());
-    TT_FATAL(
-        m.layout() == Layout::ROW_MAJOR,
-        "indexer_score: cache_batch_idx_tensor must be ROW_MAJOR (got {})",
-        m.layout());
-    TT_FATAL(
-        m.logical_volume() == 1,
-        "indexer_score: cache_batch_idx_tensor must hold exactly 1 element (got {})",
-        m.logical_volume());
-    TT_FATAL(
-        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "indexer_score: cache_batch_idx_tensor must be interleaved");
-    // The reader bakes this buffer's TensorAccessorArgs in as COMPILE-TIME arguments, while the program
-    // hash records only that slot metadata is present. An L1 tensor on one dispatch and a DRAM one on the
-    // next would therefore cache-hit a binary built for the other address space and resolve the address
-    // against the wrong accessor. Pin it to the documented DRAM placement, as chunk_start_idx_tensor is.
-    TT_FATAL(
-        m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: cache_batch_idx_tensor must be in DRAM");
+    validate_scalar_metadata_tensor(*t.cache_batch_idx_tensor, t.q, "cache_batch_idx_tensor");
 }
 
 }  // namespace
