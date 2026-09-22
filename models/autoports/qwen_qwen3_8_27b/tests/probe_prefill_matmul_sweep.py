@@ -59,6 +59,7 @@ VARIANTS = {
         prefill_out_block_w=4,
     ),
     "fusedmlp": dict(minimal_mlp=True),
+    "packed_swiglu": dict(prefill_packed_swiglu=True),
     "2dblocked1": dict(
         minimal_prefill=False,
         minimal_prefill_roles=[],

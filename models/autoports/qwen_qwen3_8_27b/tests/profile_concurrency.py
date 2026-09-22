@@ -27,6 +27,11 @@ def main():
     parser.add_argument("--distinct-prompts", action="store_true")
     parser.add_argument("--compare-prefill", action="store_true", help="Compare serial and grouped prefill in one load")
     parser.add_argument("--compare-fused-mlp", action="store_true", help="Fuse prefill MLP only; decode unchanged")
+    parser.add_argument(
+        "--compare-packed-swiglu",
+        action="store_true",
+        help="Replace packed-MLP slices and multiply with the exact packed consumer during prefill",
+    )
     parser.add_argument("--compare-single-step", action="store_true", help="Experimental B16 decode recurrence")
     parser.add_argument("--compare-sharded-prefill", action="store_true", help="Prefill-only sharded residual")
     parser.add_argument(
@@ -49,6 +54,7 @@ def main():
                 args.compare_prefill,
                 args.compare_sdpa,
                 args.compare_fused_mlp,
+                args.compare_packed_swiglu,
                 args.compare_single_step,
                 args.compare_sharded_prefill,
                 args.compare_row_parallel_norm,
@@ -118,6 +124,7 @@ def main():
                 if args.compare_prefill
                 or args.compare_sdpa
                 or args.compare_fused_mlp
+                or args.compare_packed_swiglu
                 or args.compare_single_step
                 or args.compare_sharded_prefill
                 or args.compare_row_parallel_norm
@@ -160,6 +167,12 @@ def main():
                     generator.batched_prefill = True
                     for layer in generator.model.layers:
                         layer.policy["minimal_mlp"] = trial >= 2
+                if args.compare_packed_swiglu and repeat == 0:
+                    generator._release_traces()
+                    generator.prefill_signatures.clear()
+                    generator.batched_prefill = True
+                    for layer in generator.model.layers:
+                        layer.policy["prefill_packed_swiglu"] = trial >= 2
                 ttnn.synchronize_device(mesh)
                 begin = time.perf_counter()
                 decoded, _ = adapter.prefill_forward(
@@ -192,6 +205,7 @@ def main():
                 row = dict(
                     batched_prefill=generator.batched_prefill,
                     fused_prefill_mlp=args.compare_fused_mlp and trial >= 2,
+                    packed_prefill_swiglu=args.compare_packed_swiglu and trial >= 2,
                     sharded_prefill=args.compare_row_parallel_norm or (args.compare_sharded_prefill and trial >= 2),
                     row_parallel_norm=args.compare_row_parallel_norm and 2 <= trial < 4,
                     selected_baseline=args.compare_row_parallel_norm,

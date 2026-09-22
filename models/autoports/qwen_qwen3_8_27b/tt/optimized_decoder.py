@@ -587,13 +587,18 @@ class OptimizedDecoder(LightweightModule):
         elif self.policy.get("packed_mlp", False):
             packed = self._linear(n, "mlp.gate_up")
             width = self.config.intermediate_size
-            if x.shape[0] > 1 and x.shape[1] > 1 and self.policy.get("prefill_split_mlp", False):
+            if x.shape[0] > 1 and x.shape[1] > 1 and self.policy.get("prefill_packed_swiglu", False):
+                from models.autoports.qwen_qwen3_8_27b.tt.packed_swiglu import packed_swiglu
+
+                product = packed_swiglu(packed)
+            elif x.shape[0] > 1 and x.shape[1] > 1 and self.policy.get("prefill_split_mlp", False):
                 batch, length, _ = packed.shape
                 gate, up = ttnn.split(ttnn.reshape(packed, [1, batch, length, 2 * width]), width, dim=3)
                 gate, up = [ttnn.reshape(part, [batch, length, width]) for part in (gate, up)]
+                product = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
             else:
                 gate, up = packed[:, :, :width], packed[:, :, width:]
-            product = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+                product = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         else:
             gate = self._linear(
                 n, "mlp.gate_proj", activation="silu" if self.policy.get("gate_epilogue", True) else None
