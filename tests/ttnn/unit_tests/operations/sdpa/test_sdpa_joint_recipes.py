@@ -11,6 +11,7 @@ import ttnn
 
 from models.common.utility_functions import is_blackhole
 from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, metrics, prepare, reference
+from .test_sdpa_recipe_model_capture import model_capture
 
 
 def config(grid):
@@ -80,6 +81,28 @@ def test_joint_recipe_matches_dense(device, joint_case, variant, record_property
     for key, value in observed.items():
         record_property(key, value)
     assert original == [digest(ttnn.to_torch(x)) for segment in inputs for x in segment]
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_joint_recipe_model_capture(device, model_capture, variant, record_property):
+    name, host, expected = model_capture
+    grid = (4, 4)
+    dense = ttnn.transformer.scaled_dot_product_attention(
+        *upload(device, host, variant), is_causal=False, **options(variant, grid)
+    )
+    segments = [
+        upload(device, [x[..., start:end, :].contiguous() for x in host], variant)
+        for start, end in ((0, 4096), (4096, 4608))
+    ]
+    actual = joined(joint(segments, variant, grid))
+    assert digest(actual) == digest(ttnn.to_torch(dense))
+    observed = metrics(actual, expected)
+    assert observed["pcc"] > 0.9
+    record_property("variant", variant)
+    record_property("capture", name)
+    record_property("dense_output_equal", True)
+    for key, value in observed.items():
+        record_property(key, value)
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
