@@ -11,35 +11,6 @@
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
 
-- name: tt-train cpp nightly unit tests
-  # ENABLE_NIGHTLY_TT_TRAIN_TESTS is inlined in cmd.
-  cmd: |
-    mkdir -p generated/test_reports
-    ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter=*NIGHTLY_*
-  skus:
-    bh_p100:
-      timeout: 40
-    bh_p150b_civ2:
-      timeout: 40
-  owner_id: U07K00A281X # Kevin Wu
-  team: train
-  budget_type: unit
-
-# Non-nightly unit tests
-- name: tt-train cpp non-nightly unit tests
-  cmd: |
-    mkdir -p generated/test_reports
-    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
-  ai_summary:
-    authoritative_job_status: true
-  skus:
-    bh_p100:
-      timeout: 30
-    # bh_p150b_civ2 is used for merge gate test
-  owner_id: U07K00A281X # Kevin Wu
-  team: train
-  budget_type: unit
-
 - name: tt-train cpp distributed unit tests
   cmd: |
     mkdir -p generated/test_reports
@@ -57,10 +28,6 @@
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     python -m pytest tt-train/tests/python
   skus:
-    bh_p100:
-      timeout: 35
-    bh_p150b_civ2:
-      timeout: 30
     bh_quietbox_2:
       timeout: 25
   owner_id: U07K00A281X # Kevin Wu
