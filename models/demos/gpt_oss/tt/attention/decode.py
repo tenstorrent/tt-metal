@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import torch
+from loguru import logger
+
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
@@ -104,10 +109,68 @@ def decode_forward(
     # DEBUG: Check for NaN/Inf in Q/K after rope (enable with DEBUG_ATTENTION=1)
     # Disabled by default to avoid performance impact
 
+    # DIAGNOSTIC: with identical activations across users (e.g. one prompt broadcast to all),
+    # position_idx must be identical for every user at every step -- it is just each user's
+    # token count so far. GPT_OSS_DUMP_POSITION_IDX=1 reports cross-user agreement on it right
+    # before the cache write, separating "wrong position bookkeeping" from "wrong cache
+    # content/attention math at a correct position".
+    if os.getenv("GPT_OSS_DUMP_POSITION_IDX") == "1":
+        import collections
+
+        # position_idx is row-sharded, column-replicated (ShardTensor2dMesh dims=(0, None)):
+        # take one device per mesh row (col 0) and concat, avoiding the 2D mesh composer's
+        # "no replicated axis" restriction entirely.
+        _mesh_cols = mesh_device.shape[1]
+        _row_shards = [
+            ttnn.to_torch(t) for i, t in enumerate(ttnn.get_device_tensors(position_idx)) if i % _mesh_cols == 0
+        ]
+        _pos_t = torch.cat([s.flatten() for s in _row_shards])
+        _n = _pos_t.shape[0]
+        _by = collections.defaultdict(set)
+        for _u in range(_n):
+            _by[_u % 8].add(int(_pos_t[_u]))
+        logger.warning(
+            f"POSITION_IDX: {_n} entries, distinct values overall {sorted(set(_pos_t.tolist()))} | "
+            "by idx%8 (should each be a single value): " + " ".join(f"{c}:{sorted(_by[c])}" for c in sorted(_by))
+        )
+
     # Update KV cache
     k_cache, v_cache = kv_cache
     tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
     tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
+
+    # DIAGNOSTIC: compare the K about to be written against what paged_update_cache actually
+    # stores, for a healthy user (local idx 0) and a broken one (local idx 4), row 0 only.
+    # Isolates the WRITE: if the stored content already differs from tt_k for the broken user,
+    # the defect is in paged_update_cache/page_table addressing, not in a later read (SDPA).
+    _dump_kv = os.getenv("GPT_OSS_DUMP_KV") == "1"
+    if _dump_kv:
+        if not hasattr(decode_forward, "_dump_kv_calls"):
+            decode_forward._dump_kv_calls = 0
+        decode_forward._dump_kv_calls += 1
+        # decode_forward is called once per layer per decode step, layers in order 0..N-1.
+        # GPT_OSS_DUMP_KV_STRIDE = num_layers selects which LAYER to dump via the remainder
+        # (GPT_OSS_DUMP_KV_LAYER_OFFSET, 0 = layer 0, 1 = layer 1, ...); cap total dumps to
+        # GPT_OSS_DUMP_KV_MAX_CALLS steps of that one layer.
+        _stride = int(os.getenv("GPT_OSS_DUMP_KV_STRIDE", "1"))
+        _layer_offset = int(os.getenv("GPT_OSS_DUMP_KV_LAYER_OFFSET", "0"))
+        _max_calls = int(os.getenv("GPT_OSS_DUMP_KV_MAX_CALLS", "6")) * _stride
+        _dump_kv = (decode_forward._dump_kv_calls <= _max_calls) and (
+            (decode_forward._dump_kv_calls - 1 - _layer_offset) % _stride == 0
+        )
+    if _dump_kv:
+        _mesh_cols = mesh_device.shape[1]
+        _row = int(os.getenv("GPT_OSS_DUMP_KV_ROW", "0"))
+        _row_dev = _row * mesh_device.shape[1]
+        _tt_k_row0 = ttnn.to_torch(list(ttnn.get_device_tensors(tt_k))[_row_dev])
+        _block_size = int(os.getenv("GPT_OSS_KV_BLOCK_SIZE", "64"))
+        _pt_row0 = (
+            ttnn.to_torch(list(ttnn.get_device_tensors(page_table))[_row_dev]) if page_table is not None else None
+        )
+        _posidx_row0 = ttnn.to_torch(list(ttnn.get_device_tensors(position_idx))[_row_dev]).flatten()
+        logger.warning(f"DUMP_KV: tt_k per-device shape {tuple(_tt_k_row0.shape)}")
+        if _pt_row0 is not None:
+            logger.warning(f"DUMP_KV: page_table per-device shape {tuple(_pt_row0.shape)}")
 
     ttnn.experimental.paged_update_cache(
         k_cache,
@@ -121,6 +184,27 @@ def decode_forward(
         update_idxs_tensor=position_idx,
         page_table=page_table,
     )
+
+    if _dump_kv:
+        _kcache_row0 = ttnn.to_torch(list(ttnn.get_device_tensors(k_cache))[_row_dev])
+        logger.warning(f"DUMP_KV: k_cache per-device shape {tuple(_kcache_row0.shape)}")
+        for _u in (0, 4):
+            _pos = int(_posidx_row0[_u])
+            _blk_in_seq = _pos // _block_size
+            _off = _pos % _block_size
+            _blk_id = int(_pt_row0[_u, _blk_in_seq]) if _pt_row0 is not None else _u
+            try:
+                _written = _tt_k_row0[..., _u, :, :].flatten()[:8].tolist()
+            except Exception as e:
+                _written = f"<index error: {e}>"
+            try:
+                _stored = _kcache_row0[_blk_id, :, _off, :].flatten()[:8].tolist()
+            except Exception as e:
+                _stored = f"<index error: {e}>"
+            logger.warning(
+                f"DUMP_KV: user {_u} pos={_pos} block_id={_blk_id} offset={_off} | "
+                f"tt_k(about to write)[:8]={_written} | k_cache(stored)[:8]={_stored}"
+            )
 
     tt_k.deallocate(True)
     tt_v.deallocate(True)
@@ -179,6 +263,18 @@ def decode_forward(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
+    if _dump_kv:
+        _sdpa_row0 = ttnn.to_torch(list(ttnn.get_device_tensors(tt_sdpa_tensor))[_row_dev])
+        logger.warning(
+            f"DUMP_KV: sdpa output per-device shape {tuple(_sdpa_row0.shape)} (seq, batch, heads_local, head_dim)"
+        )
+        for _u in (0, 4):
+            try:
+                _val = _sdpa_row0[0, _u].flatten()[:8].tolist()  # all heads for user _u, first 8 values
+            except Exception as e:
+                _val = f"<index error over shape {tuple(_sdpa_row0.shape)}: {e}>"
+            logger.warning(f"DUMP_KV: sdpa_out user {_u} (all heads, first 8 vals)={_val}")
+
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection
@@ -187,9 +283,31 @@ def decode_forward(
     )
     tt_sdpa_tensor.deallocate(True)
 
+    if _dump_kv:
+        _concat_row0 = ttnn.to_torch(list(ttnn.get_device_tensors(tt_sdpa_out))[_row_dev])
+        logger.warning(f"DUMP_KV: concat_heads output per-device shape {tuple(_concat_row0.shape)}")
+        _flat = _concat_row0.reshape(-1, _concat_row0.shape[-1])
+        for _u in (0, 4):
+            try:
+                _val = _flat[_u].flatten()[:8].tolist()
+            except Exception as e:
+                _val = f"<index error: {e}>"
+            logger.warning(f"DUMP_KV: concat_out user {_u}[:8]={_val}")
+
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
+
+    if _dump_kv:
+        _oproj_row0 = ttnn.to_torch(list(ttnn.get_device_tensors(tt_out))[_row_dev])
+        logger.warning(f"DUMP_KV: o_proj output per-device shape {tuple(_oproj_row0.shape)}")
+        _flat2 = _oproj_row0.reshape(-1, _oproj_row0.shape[-1])
+        for _u in (0, 4):
+            try:
+                _val = _flat2[_u].flatten()[:8].tolist()
+            except Exception as e:
+                _val = f"<index error: {e}>"
+            logger.warning(f"DUMP_KV: oproj_out user {_u}[:8]={_val}")
 
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -221,6 +339,12 @@ def decode_forward(
         tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
         tt_out = ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)
 
+    if _dump_kv:
+        _pre_ar_row0 = ttnn.to_torch(list(ttnn.get_device_tensors(tt_out))[_row_dev])
+        _flat3 = _pre_ar_row0.reshape(-1, _pre_ar_row0.shape[-1])
+        for _u in (0, 4):
+            logger.warning(f"DUMP_KV: pre-all_reduce user {_u}[:8]={_flat3[_u].flatten()[:8].tolist()}")
+
     # Tensor parallel all-reduce (AllBroadcast, ~80μs vs RS+AG ~138μs).
     if mesh_config.tp > 1:
         tt_out = ttnn.all_reduce(
@@ -230,5 +354,11 @@ def decode_forward(
             cluster_axis=mesh_config.tp_axis,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+
+    if _dump_kv:
+        _post_ar_row0 = ttnn.to_torch(list(ttnn.get_device_tensors(tt_out))[_row_dev])
+        _flat4 = _post_ar_row0.reshape(-1, _post_ar_row0.shape[-1])
+        for _u in (0, 4):
+            logger.warning(f"DUMP_KV: post-all_reduce user {_u}[:8]={_flat4[_u].flatten()[:8].tolist()}")
 
     return tt_out

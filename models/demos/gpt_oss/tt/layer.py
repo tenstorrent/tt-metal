@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+from loguru import logger
+
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
@@ -88,6 +92,7 @@ class DecoderLayer:
             create_kv_cache=create_kv_cache,
         )
         self.mesh_device = mesh_device
+        self.layer_idx = layer_idx
 
     def __call__(
         self,
@@ -127,6 +132,20 @@ class DecoderLayer:
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
+
+        # DIAGNOSTIC: bisect a decoder layer into its attention-half and MLP-half output, under
+        # the real prefill+decode pipeline (unlike the unit tests, which decode at position 0
+        # against an empty cache). GPT_OSS_LAYER_BISECT=<layer_idx> reports cross-user agreement
+        # right after each residual add, on that one layer only, for decode steps up to
+        # GPT_OSS_LAYER_BISECT_STEPS (default 3). Requires identical activations across users
+        # (e.g. one prompt broadcast to all users) for the report to be meaningful.
+        _bisect_layer = os.getenv("GPT_OSS_LAYER_BISECT")
+        if _bisect_layer is not None and is_decode and self.layer_idx == int(_bisect_layer):
+            if not hasattr(self, "_bisect_step"):
+                self._bisect_step = 0
+            if self._bisect_step < int(os.getenv("GPT_OSS_LAYER_BISECT_STEPS", "3")):
+                self._report_bisect(hidden_states, "post-attention")
+
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
@@ -138,4 +157,26 @@ class DecoderLayer:
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
 
+        if _bisect_layer is not None and is_decode and self.layer_idx == int(_bisect_layer):
+            if self._bisect_step < int(os.getenv("GPT_OSS_LAYER_BISECT_STEPS", "3")):
+                self._report_bisect(hidden_states, "post-mlp")
+            self._bisect_step += 1
+
         return hidden_states
+
+    def _report_bisect(self, hidden_states, label):
+        import collections
+
+        comp = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=tuple(self.mesh_device.shape))
+        t = ttnn.to_torch(hidden_states, mesh_composer=comp).float()
+        m = t.reshape(-1, t.shape[-1])
+        n = m.shape[0]
+        d = (m - m[0]).abs().amax(dim=1)
+        by = collections.defaultdict(float)
+        for u in range(n):
+            by[u % 8] = max(by[u % 8], float(d[u]))
+        logger.warning(
+            f"LAYER BISECT layer {self.layer_idx:02d} [{label}] step {self._bisect_step}: "
+            f"{int((d == 0).sum())}/{n} bit-identical; max {d.max():.6f} | by idx%8 "
+            + " ".join(f"{c}:{by[c]:.4f}" for c in sorted(by))
+        )
