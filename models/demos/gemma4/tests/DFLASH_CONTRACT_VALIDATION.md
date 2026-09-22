@@ -77,12 +77,16 @@ recomputes the complete supplied prefix from zero through eager prefill. The
 paired plugin supplies that prefix through `prompt_lens`. This fallback avoids
 depending on an unavailable or incomplete sliding tail from a previous chunk.
 The fallback preserves row ownership and page-table sanitation but adds repeated
-prefill work. Device correctness and the continuation cost remain unverified.
+prefill work. The recorded P150x8 pair below validates external continuation in
+the tested configuration. Continuation cost and behavior outside that configuration remain
+unverified.
 
 `supports_narrow_decode=True` is backed by initial ordinary completion handling.
 `supports_async_decode` and `supports_async_spec_decode` both default to false.
-`GEMMA4_CONTRACT_ASYNC=1` enables the experimental validation path. The async
-default must remain false until the device checklist passes.
+`GEMMA4_CONTRACT_ASYNC=1`, set before adapter import, enables the explicitly
+tested asynchronous path in the configuration documented below. A default change
+requires a separate rollout decision; completion of Step 3 does not enable
+either declaration automatically.
 
 The contract resolves `GEMMA4_DFLASH_VERIFY` once, defaulting to five drafts.
 `spec_plan` and both decoder construction paths use that count, so physical
@@ -106,8 +110,9 @@ the committed anchor before attention reads target KV. The bounded ring needs
 at least `P_v - 1` positions beyond `sliding_window`, or every candidate position
 must precede the first ring wrap. An unsafe position returns zero drafts before
 `contract_commit`, reconstruction, or replay, and ordinary decoding continues. The contract
-does not enlarge the bounded KV pool. Device correctness of this fallback and
-of speculative execution with sufficient ring headroom remains unverified.
+does not enlarge the bounded KV pool. The current hardware evidence below
+records bounded fallback and ring-headroom coverage, including the separately identified exact-ring supplemental witness.
+Behavior outside the tested extents remains unverified.
 Bounded eager-only execution also declines drafts while prepared verification
 widths remain uncaptured. Lazy capture writes through zero page tables at
 position zero, but bounded slot zero owns those physical blocks. Bounded
@@ -147,8 +152,9 @@ The controlled experiments do not prove parity with natural batch selection or
 all request histories. A cancelled request ends at different token counts, and
 some proposal histories differ despite equal completed outputs. Synthetic
 operator checks establish consistency on their tested operands, not improved
-FP64-reference accuracy. Current-source natural-batch validation and performance
-remain unverified. Both async capability defaults remain false.
+FP64-reference accuracy. The current hardware evidence below records
+natural-batch validation. Performance remains unverified. Both async capability
+defaults remain false.
 
 ## Contract packed ring read order
 
@@ -176,10 +182,102 @@ separate persistent page table; all KV writes retain the natural ring table.
 The common six-row read table starts at the first query's oldest live chunk.
 When later queries cross a 64-token window boundary, later queries can mask an
 entire leading chunk. Host tests establish exact physical membership across
-these boundaries; full-model numerical parity remains unverified. Synthetic
+these boundaries. The current hardware evidence below records full-model output
+comparisons for the tested request corpus. Synthetic
 P150x8 checks show that the paired table/mask rotation can match ordinary SDPA
-on the tested post-wrap operands. The additional host-to-device page-row copy
+on the tested post-wrap operands. The latency cost of the additional
+host-to-device page-row copy
 and full-model performance remain unverified. Both async defaults remain false.
+
+## Current P150x8 evidence
+
+The tested model source is `c285a6688ef1c4fe67e88563fbb04599abc2123b`,
+paired with vllm-tt-plugin `d1b6a5dadb261856b507123a7cc5e91ab4cf71b8`.
+The target is `google/gemma-4-31B-it` at checkpoint
+`842da3794eaa0b77d5f08bae87a17459d91ff475`; the drafter is
+`z-lab/gemma-4-31B-it-DFlash` at checkpoint
+`eabd648301ce28583cc14757912e5e0f84e152e1`. The reserved P150x8 runs use
+native traces, greedy K=5, six physical verification positions, 64-token pages,
+a 4096-token model context, and natural batch-1/batch-32 target selection.
+Prefix caching and hybrid KV groups are disabled. Synchronous scheduling uses
+`GEMMA4_CONTRACT_ASYNC=0`; asynchronous scheduling uses
+`GEMMA4_CONTRACT_ASYNC=1`. The latter opt-in enables both async declarations.
+Neither declaration is enabled by default. These schedules use one or two live
+requests. The physical batch-32 path does not establish support for 32 concurrent
+requests. Other checkpoints, devices, draft counts, and sampling modes remain
+unverified.
+
+All 316 production host tests pass with lower device operations stubbed.
+Independent source review and CI pre-commit also pass. Host checks do not
+substitute for the following device evidence.
+
+`sync-ring-policy-50` and `async-ring-policy-51` each complete the same 29
+schedules with a 2048-position bounded ring and 1024-token sliding window.
+The runs complete 1,288 and 1,290 speculative replays. All 49 completed request
+streams match token for token, totaling 4,908 tokens per mode. Both runs drain
+request and ring state, exit zero, and close TT devices. Independent audits
+verify the frozen harness, source and runtime hashes, checkpoint manifests,
+5,260/5,264 ownership snapshots, 52 released generations per mode, and 30
+fresh-wave clear/trace-recapture sequences per mode.
+
+The observer records initial narrow bootstrap, initial batched ordinary decode,
+real proposals at peer arrival, the original request resuming speculation after
+batched decode, page crossings, cancellation, row reuse, and physical page reuse.
+Async execution records a new ordinary submission while an earlier native
+readback remains unresolved. `release_request` calls `_contract_synchronize`
+before releasing rings for two cancelled generations. Those `ContractRequest`
+objects remain invalid when their delayed completions arrive. These observations
+establish native submission/readback ordering;
+physical DMA overlap and equality of every device KV element remain unverified.
+
+The original strict synchronous gate passes. The strict paired comparison
+retains different action prefixes in dynamic schedules 004/005/006 and a
+cancelled request with 13 versus 14 output tokens. That cancelled request's
+common prefix is exact. A comparison policy frozen before these runs permits
+those three dynamic schedules to use cancellation-prefix and lifecycle checks,
+while requiring every completed surviving output to match. That separate
+29-case comparison passes. The strict failure is preserved; complete output
+parity does not assert identical cancellation timing or proposal histories.
+
+`sync-ring-exact-52b` and `async-ring-exact-53` complete five schedules
+with a 1024-position ring and a 1024-token sliding window. All ten completed
+request streams, totaling 664 tokens per mode, match exactly; action definitions
+and committed action prefixes also match. Both runs exit zero and close TT
+devices. The synchronous strict gate passes. The asynchronous strict gate retains
+one coverage failure: the original 1016-token schedule does not witness a peer
+prefill while a real proposal remains outstanding. The unchanged 1008-token
+supplement observes that transition and passes its own gate. Aggregate coverage
+passes, while the original strict failure remains recorded.
+
+`sync-ring-chunked-54` and `async-ring-chunked-55` use unbounded KV with
+external 128-token prefill grants. The runs complete 39 and 40 speculative
+replays, respectively. A returns 96 tokens and B returns 16; all token IDs,
+action definitions, and committed/admission prefixes match exactly. Both strict
+chunked gates pass. The observer records positive-start peer continuation,
+ordinary decode between peer chunks, outstanding proposals, and survivor
+resumption. Both runs drain state, exit zero, and close TT devices.
+
+Synthetic P150x8 checks separately compare ordinary B1/B32 and packed SDPA
+using the same saved device Q/K/V operands. Paired read-table/mask rotation
+matches ordinary output for the first query at all seven tested starts. The
+checks also verify all six packed rows' physical membership and stable repeats.
+Shared queries 2111 and 2124 match across their packed row placements under
+both traversal orders. These observations establish operation sensitivity to
+traversal and masked-chunk placement; they do not prove arbitrary-input parity
+or improved numerical accuracy.
+
+The installed upstream vLLM finalizer calls `model.modules()` on the TT wrapper
+and emits an ignored exception. TT trace release and device closure complete,
+but warning-free upstream teardown remains unresolved. Both chunked-prefill logs
+also retain active-trace allocation and `decode_input_update_contract` legacy
+reload warnings. The tests do not establish that every warning is harmless.
+During shutdown, the validation harness skips
+`torch.accelerator.empty_cache` when PyTorch reports no accelerator allocator.
+TT device closure still runs. This host-runtime accommodation is not a model
+change. Performance, larger-context memory capacity, forced
+preemption, higher actual request concurrency, and ordinary-reference numerical
+equivalence remain unverified by this corpus. The generic registry default
+switch and throughput comparison remain separate rollout work.
 
 ## Host regression command
 
@@ -227,46 +325,71 @@ partial allocation cleanup, and final release. Continuation tests check eager
 dispatch and restoration after errors. These host checks do not establish TT
 numerical equivalence or memory sufficiency.
 
-## Required device evidence before readiness
+## Step 3 coverage
 
-Use a reserved P150x8 endpoint. Record the exact tt-metal and plugin commits,
-checkpoint revisions, environment, trace mode, and all local changes. The plugin
-revision must include the generic model-owned contract and K+1 KV lookahead.
-Do not use an unrelated plugin PR as an implicit dependency.
+The checked items below are established for the pinned 31B/P150x8 greedy K=5
+configuration in `sync-ring-policy-50` / `async-ring-policy-51`,
+`sync-ring-exact-52b` / `async-ring-exact-53`, and
+`sync-ring-chunked-54` / `async-ring-chunked-55`, supported by
+actual-production host regressions. These checks describe the tested corpus;
+they do not establish universal numerical equivalence or default rollout.
 
-- [ ] Initial solo ordinary decode produces nonzero drafts after its completion.
-- [ ] Initial batched ordinary decode completes, and an originally batched
-      survivor later produces nonzero drafts.
-- [ ] A real solo proposal remains outstanding when a peer prefills and joins.
-      The original request survives `1 -> 2 -> 1` and resumes real drafting.
-- [ ] The ordinary batch submits a second decode before the first readback
-      completes. Record controller submission counters and actual scheduled rows.
-- [ ] No speculative device work runs while a later ordinary completion remains
-      unapplied. Record proposal, completion, and device submission ordering.
-- [ ] Cancellation before readback, cancellation after verification, owner
-      cancellation, non-owner cancellation, row movement, and physical page reuse
-      preserve the surviving request's output and reject stale generations.
-- [ ] Greedy K=5 cases cross page boundaries from input lengths 63, 64, 65, 127,
-      128, and 129 during initial decode and both batch transitions.
-- [ ] Async output matches synchronous output from the same contract adapter for
-      identical request schedules. Compare token IDs, not decoded text prefixes.
-- [ ] First reconstruction at anchor 158 and transition reconstruction at anchors
-      192 or 193 preserve committed serving KV. Compare synchronous and async
-      candidate/posterior rows at anchor 201 without forced reconstruction delay.
-- [ ] Initial solo and initial batch common-prefix outputs agree after scratch
-      reconstruction, including the observed output-index-4 discrepancy.
-- [ ] A partial peer prefill resumes from a positive `start_pos`, uses complete
-      prefix eager execution, preserves live peer KV, and finishes cleanly.
-- [ ] Repeated runs confirm captured buffers, target KV, drafter context, and
-      readback events remain valid. Include bounded sliding KV coverage separately.
-- [ ] Exact-window bounded rings decline proposals before unsafe candidate writes
-      and continue ordinary decoding across the ring boundary. A separate bounded
-      run with sufficient ring headroom produces real proposals across that boundary.
-- [ ] Record ordinary-reference differences at identical prefixes. Numerical
-      differences are not automatically evidence of correctness.
+- [x] `propose_draft_tokens` initializes real speculative state after the first
+      ordinary narrow completion. `_contract_rebuild` also restores drafting for
+      a surviving request that initially prefilled in a batch.
+- [x] `ContractStep` preserves submitted page-table snapshots.
+      `_contract_refresh` refreshes the surviving owner's tables before
+      speculative commit and replay. Host tests check table mutation isolation;
+      hardware observers check native call order.
+- [x] A peer prefills and joins while real drafts remain outstanding.
+      `decode_forward` validates the retained proposal and returns its posterior
+      for plugin-owned acceptance. `Gemma4DFlashContractForCausalLM` handles row
+      changes and subsequent ordinary work while retaining the original
+      request's ownership.
+- [x] The original request survives `1 -> 2 -> 1` and resumes real drafting after
+      batched ordinary decoding. Page-boundary cases cover input lengths
+      63, 64, 65, 127, 128 and 129; bounded headroom cases cross the ring boundary.
+- [x] Pending ordinary completions retain their request generations. Native
+      ordinary submissions overlap unresolved readback; older completions decline
+      drafts while later completions remain queued. Cancellation, row reuse and
+      physical page reuse reject released generations, with synchronization before
+      bounded-ring storage is released.
+- [x] All 49 completed request streams match synchronous versus asynchronous
+      execution of the same contract adapter. The exact original-survivor case
+      passes. The separate predeclared categorized comparison passes all 29 cases;
+      the strict paired result remains false for dynamic frontiers in 004/005/006.
+      Cancelled A has 13 versus 14 tokens with an identical common prefix.
+- [x] Repeated solo output, per-case cleanup, fresh-wave trace recapture, final
+      ownership drain and TT device closure pass. These observations do not
+      directly compare all device buffers or every KV value.
+- [x] `sync-ring-exact-52b` and `async-ring-exact-53` validate safe speculative
+      execution, unsafe-write fallback, and subsequent ordinary progress. All ten
+      completed streams match. The original async strict missing-witness failure
+      remains separate from the passing 1008-token supplement and aggregate gate.
+- [x] `sync-ring-chunked-54` and `async-ring-chunked-55` validate positive-start
+      continuation, decode between peer chunks, outstanding proposals, survivor
+      resumption, lifecycle cleanup, and strict same-adapter token equality.
 
-Host tests use the actual adapter with stub device operations. Host tests check
-ordering, ownership, context snapshots, bootstrap, cancellation, and state
-transitions. Host tests do not verify device buffers, captured traces, KV values,
-or readback event behavior. Until the device checklist passes, this implementation
-is a draft and does not establish hardware readiness or performance parity.
+## Separate numerical and rollout limits
+
+Host tests execute `Gemma4DFlashContractForCausalLM` with lower device operations
+stubbed.
+Host tests establish ordering, ownership, snapshots, bootstrap, cancellation and
+state transitions. Hardware observations establish the recorded native events
+and completed outputs, but direct equality of all target KV values, captured
+buffer contents, rotated device read tables and physical DMA overlap remains
+unverified. Equal completed outputs do not require equal proposal histories.
+
+Same-adapter sync/async equality does not establish ordinary-reference numerical
+correctness. The wider plan's ordinary-only baseline, full-vocabulary host
+readback and host-sampling validation remain separate Step 6 work. Forced
+preemption and ordinary-reference comparison in the wider Step 5 acceptance bar
+also remain unverified; cancellation and reuse are not substituted for preemption.
+
+Throughput, transition latency, larger-context memory capacity, higher live
+concurrency, broader devices/checkpoints/sampling modes and the registry/default
+switch remain separate Step 7 rollout work. Both async defaults remain false.
+The upstream `model.modules()` finalizer exception remains visible despite
+successful TT closure. The implementation and hardware evidence establish
+Step 3 within the explicit support boundary above. This conclusion does not establish universal production
+readiness or performance parity.
