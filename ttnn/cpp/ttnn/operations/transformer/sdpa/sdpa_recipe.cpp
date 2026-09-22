@@ -4,6 +4,8 @@
 #include "sdpa_recipe.hpp"
 
 #include <algorithm>
+#include <array>
+#include "sdpa_numerics.hpp"
 #include <bit>
 #include <cmath>
 #include <set>
@@ -113,13 +115,39 @@ ProgramDescriptor recipe_compute_program(const PrecisionPolicy& policy, const Co
     return program;
 }
 
-Tensor run_recipe(
+PrecisionPolicy resolve_recipe_policy(
     const Tensor& q,
     const Tensor& k,
-    const Tensor& v,
+    ttnn::transformer::SDPAPrecision precision,
+    bool inputs_prepared,
+    std::optional<float> scale,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<SDPAProgramConfig>& program_config) {
+    TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+    TT_FATAL(!scale || *scale == 1.0f / std::sqrt(128.0f), "SDPA recipes currently require the default D128 scale");
+    const auto selection = select_recipe(precision, k.dtype());
+    TT_FATAL(
+        inputs_prepared == (selection.recipe == Recipe::E),
+        "LOW_PRECISION requires inputs_prepared=True and explicit SDPA preparation; other recipes use ordinary inputs");
+    return *resolve_numerics(
+                q.device()->arch(),
+                selection,
+                compute_kernel_config,
+                program_config ? program_config->exp_approx_mode : std::nullopt)
+                .policy;
+}
+
+static std::vector<Tensor> run_recipe_segments(
+    const std::vector<std::array<Tensor, 3>>& segments,
     const PrecisionPolicy& policy,
     const std::optional<SDPAProgramConfig>& program_config) {
-    for (const Tensor* tensor : {&q, &k, &v}) {
+    const auto& [q, k, v] = segments.front();
+    std::vector<Tensor> io;
+    for (const auto& segment : segments) {
+        io.insert(io.end(), segment.begin(), segment.end());
+    }
+    for (const auto& input : io) {
+        const Tensor* tensor = &input;
         TT_FATAL(tensor->storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
         TT_FATAL(tensor->device() == q.device(), "SDPA recipe inputs must belong to the same device");
         TT_FATAL(tensor->device()->arch() == tt::ARCH::BLACKHOLE, "SDPA recipes currently support Blackhole only");
@@ -131,20 +159,31 @@ Tensor run_recipe(
         TT_FATAL(tensor->tensor_spec().tile() == Tile({32, 32}), "SDPA recipes require standard 32x32 tiles");
     }
     const auto& qs = q.logical_shape();
-    const auto& ks = k.logical_shape();
-    TT_FATAL(qs[0] == 1 && qs[1] > 0 && qs[3] == 128, "SDPA recipes require Q [1,H,Q,128]");
-    TT_FATAL(
-        ks == v.logical_shape() && ks[0] == 1 && ks[1] == qs[1] && ks[3] == 128,
-        "SDPA recipes require matching K/V [1,H,K,128]; GQA is not supported yet");
-    TT_FATAL(
-        qs[2] > 0 && qs[2] % 256 == 0 && ks[2] > 0 && ks[2] % 512 == 0,
-        "SDPA recipes require Q and K lengths divisible by 256 and 512, respectively");
     const DataType kv_type = policy.selection.kv_storage == KVStorage::BF16   ? DataType::BFLOAT16
                              : policy.selection.kv_storage == KVStorage::BFP8 ? DataType::BFLOAT8_B
                                                                               : DataType::BFLOAT4_B;
+    uint32_t q_length = 0, k_length = 0;
+    for (const auto& [sq, sk, sv] : segments) {
+        const auto& qshape = sq.logical_shape();
+        const auto& kshape = sk.logical_shape();
+        TT_FATAL(
+            qshape[0] == 1 && qshape[1] > 0 && qshape[1] == qs[1] && qshape[3] == 128,
+            "SDPA recipe segments require Q [1,H,Q,128] with matching heads");
+        TT_FATAL(
+            kshape == sv.logical_shape() && kshape[0] == 1 && kshape[1] == qs[1] && kshape[3] == 128,
+            "SDPA recipes require matching K/V [1,H,K,128]; GQA is not supported yet");
+        TT_FATAL(
+            qshape[2] > 0 && kshape[2] > 0 && qshape[2] % 32 == 0 && kshape[2] % 32 == 0,
+            "SDPA recipe segments require positive tile-aligned sequence lengths");
+        TT_FATAL(
+            sq.dtype() == DataType::BFLOAT16 && sk.dtype() == kv_type && sv.dtype() == kv_type,
+            "SDPA input types do not match the selected recipe");
+        q_length += qshape[2];
+        k_length += kshape[2];
+    }
     TT_FATAL(
-        q.dtype() == DataType::BFLOAT16 && k.dtype() == kv_type && v.dtype() == kv_type,
-        "SDPA input types do not match the selected recipe");
+        q_length % 256 == 0 && k_length % 512 == 0,
+        "SDPA recipes require total Q and K lengths divisible by 256 and 512, respectively");
     const auto hardware = q.device()->compute_with_storage_grid_size();
     const auto grid_size = program_config ? program_config->compute_with_storage_grid_size : hardware;
     TT_FATAL(
@@ -157,8 +196,8 @@ Tensor run_recipe(
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");
         TT_FATAL(program_config->max_cores_per_head_batch > 0, "SDPA max_cores_per_head_batch must be positive");
     }
-    const uint32_t jobs_per_head = qs[2] / 256;
-    const uint32_t k_chunks = ks[2] / 512;
+    const uint32_t jobs_per_head = q_length / 256;
+    const uint32_t k_chunks = k_length / 512;
     const uint32_t chain = std::min<uint32_t>(
         {jobs_per_head,
          static_cast<uint32_t>(grid_size.x * grid_size.y / qs[1]),
@@ -173,7 +212,11 @@ Tensor run_recipe(
         ranges.emplace(core, core);
     }
     const CoreRangeSet grid(ranges);
-    auto output = create_device_tensor(q.tensor_spec(), q.device());
+    std::vector<Tensor> outputs;
+    for (const auto& segment : segments) {
+        outputs.push_back(create_device_tensor(segment[0].tensor_spec(), q.device()));
+    }
+    const auto& output = outputs.front();
     auto program = recipe_compute_program(policy, grid, k_chunks);
     for (uint32_t i = 0; i < 3; ++i) {
         program.semaphores.push_back({.id = i, .core_ranges = grid, .initial_value = i == 2 ? 1u : 0u});
@@ -184,15 +227,32 @@ Tensor run_recipe(
         .core_ranges = grid,
         .compile_time_args = {8, k_chunks, jobs_per_head},
         .config = ReaderConfigDescriptor{}};
-    for (const Tensor* tensor : {&q, &k, &v}) {
-        TensorAccessorArgs(tensor->buffer()).append_to(reader.compile_time_args);
+    if (segments.size() == 2) {
+        reader.defines.emplace_back("SDPA_JOINT", "1");
+        reader.compile_time_args.insert(
+            reader.compile_time_args.end(),
+            {q.logical_shape()[2] / 32 * 4,
+             segments[1][0].logical_shape()[2] / 32 * 4,
+             k.logical_shape()[2] / 32 * 4,
+             segments[1][1].logical_shape()[2] / 32 * 4});
+    }
+    for (const auto& tensor : io) {
+        TensorAccessorArgs(tensor.buffer()).append_to(reader.compile_time_args);
     }
     KernelDescriptor writer{
         .kernel_source = prefix + "dataflow/writer_recipe.cpp",
         .core_ranges = grid,
         .compile_time_args = {8},
         .config = WriterConfigDescriptor{}};
-    TensorAccessorArgs(output.buffer()).append_to(writer.compile_time_args);
+    if (segments.size() == 2) {
+        writer.defines.emplace_back("SDPA_JOINT", "1");
+        writer.compile_time_args.insert(
+            writer.compile_time_args.end(),
+            {q.logical_shape()[2] / 32 * 4, segments[1][0].logical_shape()[2] / 32 * 4});
+    }
+    for (const auto& tensor : outputs) {
+        TensorAccessorArgs(tensor.buffer()).append_to(writer.compile_time_args);
+    }
     auto compute = std::move(program.kernels.front());
     for (uint32_t i = 0; i < cores; ++i) {
         const auto core = coordinates[i];
@@ -221,10 +281,40 @@ Tensor run_recipe(
                 next_count});
         writer.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), offset, count});
+        if (segments.size() == 2) {
+            for (const auto& tensor : segments[1]) {
+                reader.runtime_args.back().second.push_back(tensor.buffer()->address());
+            }
+            writer.runtime_args.back().second.push_back(outputs[1].buffer()->address());
+        }
         compute.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{count});
     }
     program.kernels = {std::move(reader), std::move(writer), std::move(compute)};
-    return ttnn::generic_op({q, k, v, output}, program);
+    io.insert(io.end(), outputs.begin(), outputs.end());
+    ttnn::generic_op(io, program);
+    return outputs;
+}
+
+Tensor run_recipe(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config) {
+    return run_recipe_segments({{q, k, v}}, policy, program_config).front();
+}
+
+std::tuple<Tensor, Tensor> run_joint_recipe(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    const Tensor& joint_q,
+    const Tensor& joint_k,
+    const Tensor& joint_v,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config) {
+    auto outputs = run_recipe_segments({{q, k, v}, {joint_q, joint_k, joint_v}}, policy, program_config);
+    return {outputs[0], outputs[1]};
 }
 
 }  // namespace ttnn::operations::transformer::sdpa::detail

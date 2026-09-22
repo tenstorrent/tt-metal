@@ -59,18 +59,9 @@ ttnn::Tensor scaled_dot_product_attention(
                 windowed_q_token_offset == 0 && !windowed_q_token_offset_tensor,
             "Named SDPA recipes currently support dense noncausal, unmasked attention only");
         TT_FATAL(!memory_config || *memory_config == DRAM_MEMORY_CONFIG, "SDPA recipes require DRAM output");
-        TT_FATAL(!scale || *scale == 1.0f / std::sqrt(128.0f), "SDPA recipes currently require the default D128 scale");
-        const auto selection = numeric::select_recipe(*precision, input_tensor_k.dtype());
-        TT_FATAL(
-            inputs_prepared == (selection.recipe == numeric::Recipe::E),
-            "LOW_PRECISION requires inputs_prepared=True and explicit SDPA preparation; other recipes use ordinary "
-            "inputs");
-        const auto resolved = numeric::resolve_numerics(
-            input_tensor_q.device()->arch(),
-            selection,
-            compute_kernel_config,
-            program_config ? program_config->exp_approx_mode : std::nullopt);
-        return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, *resolved.policy, program_config);
+        const auto policy = numeric::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, inputs_prepared, scale, compute_kernel_config, program_config);
+        return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, policy, program_config);
     }
     TT_FATAL(!inputs_prepared, "inputs_prepared is meaningful only with an explicit LOW_PRECISION recipe");
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
@@ -222,7 +213,25 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const std::string& joint_strategy,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<SDPAPrecision> precision,
+    bool inputs_prepared) {
+    if (precision) {
+        namespace numeric = operations::transformer::sdpa::detail;
+        TT_FATAL(joint_strategy == "rear", "SDPA recipes require rear joint strategy");
+        const auto policy = numeric::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, inputs_prepared, scale, compute_kernel_config, program_config);
+        return numeric::run_joint_recipe(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            joint_tensor_q,
+            joint_tensor_k,
+            joint_tensor_v,
+            policy,
+            program_config);
+    }
+    TT_FATAL(!inputs_prepared, "inputs_prepared requires an explicit LOW_PRECISION recipe");
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,

@@ -30,6 +30,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp"
+#include "sequence_accessor.hpp"
 
 #ifndef SDPA_READER_BARRIER_TILES
 #define SDPA_READER_BARRIER_TILES 2
@@ -45,12 +46,10 @@ FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint
     // K scatters the tile grid in L1, without transposing individual tiles.
     for (uint32_t p = 0; p < kv_tiles; ++p) {
         const uint32_t dst_tile = transpose ? (p % 4) * SDPA_K_CHUNK_TILES + p / 4 : p;
-        noc.async_read(
-            tensor,
-            CoreLocalMem<uint32_t>(write_ptr + dst_tile * tile_bytes),
-            tile_bytes,
-            {.page_id = first_page + p},
-            {});
+        tensor.visit(first_page + p, [&](const auto& source, uint32_t page) {
+            noc.async_read(
+                source, CoreLocalMem<uint32_t>(write_ptr + dst_tile * tile_bytes), tile_bytes, {.page_id = page}, {});
+        });
 #if SDPA_READER_BARRIER_TILES > 0
         if ((p + 1) % SDPA_READER_BARRIER_TILES == 0) {
             noc.async_read_barrier();
@@ -66,12 +65,32 @@ void kernel_main() {
     constexpr uint32_t queries_per_head = get_compile_time_arg_val(2);
     static_assert(q_tiles > 0 && q_tiles % 2 == 0);
     static_assert(k_chunks > 0 && queries_per_head > 0);
+#ifdef SDPA_JOINT
+    constexpr uint32_t q_primary_pages = get_compile_time_arg_val(3);
+    constexpr uint32_t q_joint_pages = get_compile_time_arg_val(4);
+    constexpr uint32_t kv_primary_pages = get_compile_time_arg_val(5);
+    constexpr uint32_t kv_joint_pages = get_compile_time_arg_val(6);
+    constexpr auto qa = TensorAccessorArgs<7>();
+#else
     constexpr auto qa = TensorAccessorArgs<3>();
+#endif
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
-    const auto q = TensorAccessor(qa, get_arg_val<uint32_t>(0));
-    const auto k = TensorAccessor(ka, get_arg_val<uint32_t>(1));
-    const auto v = TensorAccessor(va, get_arg_val<uint32_t>(2));
+#ifdef SDPA_JOINT
+    constexpr auto jqa = TensorAccessorArgs<va.next_compile_time_args_offset()>();
+    constexpr auto jka = TensorAccessorArgs<jqa.next_compile_time_args_offset()>();
+    constexpr auto jva = TensorAccessorArgs<jka.next_compile_time_args_offset()>();
+    const auto q = sequence_accessor<q_primary_pages, q_joint_pages>(
+        TensorAccessor(qa, get_arg_val<uint32_t>(0)), TensorAccessor(jqa, get_arg_val<uint32_t>(12)));
+    const auto k = sequence_accessor<kv_primary_pages, kv_joint_pages>(
+        TensorAccessor(ka, get_arg_val<uint32_t>(1)), TensorAccessor(jka, get_arg_val<uint32_t>(13)));
+    const auto v = sequence_accessor<kv_primary_pages, kv_joint_pages>(
+        TensorAccessor(va, get_arg_val<uint32_t>(2)), TensorAccessor(jva, get_arg_val<uint32_t>(14)));
+#else
+    const auto q = sequence_accessor(TensorAccessor(qa, get_arg_val<uint32_t>(0)));
+    const auto k = sequence_accessor(TensorAccessor(ka, get_arg_val<uint32_t>(1)));
+    const auto v = sequence_accessor(TensorAccessor(va, get_arg_val<uint32_t>(2)));
+#endif
     const uint32_t first_job = get_arg_val<uint32_t>(3);
     const uint32_t jobs = get_arg_val<uint32_t>(4);
     const uint32_t rank = get_arg_val<uint32_t>(5);
@@ -129,7 +148,9 @@ void kernel_main() {
         qcb.reserve_back(q_tiles * 4);
         const uint32_t qptr = qcb.get_write_ptr();
         for (uint32_t p = 0; p < q_tiles * 4; ++p) {
-            noc.async_read(q, CoreLocalMem<uint32_t>(qptr + p * qbytes), qbytes, {.page_id = qbase + p}, {});
+            q.visit(qbase + p, [&](const auto& source, uint32_t page) {
+                noc.async_read(source, CoreLocalMem<uint32_t>(qptr + p * qbytes), qbytes, {.page_id = page}, {});
+            });
         }
         noc.async_read_barrier();
         qcb.push_back(q_tiles * 4);
