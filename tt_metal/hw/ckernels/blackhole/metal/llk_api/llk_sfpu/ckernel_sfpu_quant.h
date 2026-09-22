@@ -457,8 +457,8 @@ template <
     bool APPROXIMATION_MODE,
     int ITERATIONS = 8,
     bool SIGN_MAGNITUDE_FORMAT = false,
-    bool INT8_INPUT = false,
-    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32,
+    bool INT8_INPUT = false>
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
     // 255]). Operand B is scaling factor (fp32). LREG2 holds the zero-point constant (fp32) loaded by
@@ -503,9 +503,9 @@ inline void calculate_quant_int32_int8_pack(
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);  // operand A (fp32)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);               // MAD + offset-128 pack
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);       // operand A (fp32)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);       // operand B (fp32 scaler)
+        lltt::replay(QUANT_REPLAY_SLOT, quant_replay_len<false, DataFormat::Int8>());  // MAD + offset-128 pack
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);
     }
 }
@@ -519,8 +519,7 @@ inline void calculate_requant_int32_int8_pack(
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
-    constexpr std::uint32_t REPLAY_LEN =
-        INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN;
+    constexpr std::uint32_t REPLAY_LEN = requant_replay_len<false, DataFormat::Int8, INT8_INPUT>();
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

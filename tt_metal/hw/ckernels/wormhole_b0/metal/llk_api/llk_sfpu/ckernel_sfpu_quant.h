@@ -204,8 +204,8 @@ template <
     bool APPROXIMATION_MODE,
     int ITERATIONS = 8,
     bool SIGN_MAGNITUDE_FORMAT = false,
-    bool INT8_INPUT = false,
-    DataFormat OUTPUT_FORMAT = DataFormat::Int32>
+    DataFormat OUTPUT_FORMAT = DataFormat::Int32,
+    bool INT8_INPUT = false>
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte).
     // Operand B is scaling factor (fp32).
@@ -292,7 +292,7 @@ inline void calculate_quant_int32_int8_pack(
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);               // MAD + offset-128 pack
+        lltt::replay(QUANT_REPLAY_SLOT, quant_replay_len<DataFormat::Int8>());    // MAD + offset-128 pack
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, out_off);
     }
 }
@@ -316,7 +316,7 @@ inline void calculate_requant_int32_int8_pack(
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
-        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT);  // CAST + MAD + offset-128 pack
+        lltt::replay(REQUANT_REPLAY_SLOT, requant_replay_len<DataFormat::Int8>());  // CAST + MAD + offset-128 pack
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, out_off);
     }
 }
