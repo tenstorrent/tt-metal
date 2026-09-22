@@ -4,8 +4,9 @@
 """Wan2.2 TI2V-5B pipeline variant for single BH Galaxy (4x8).
 
 Dense 5B + Wan2.2-VAE (48-ch residual decoder, patch_size=2).
-Matmul tables below are first-cut 14B 11x10 blocking remapped to
-dim=3072 / ffn=14336 / TP=4. Sweep before claiming perf.
+The DiT matmul tables are keyed on the shapes and grids the model actually
+requests (see ``_register_5b_matmul_tables``); entries marked PRE-SWEEP are
+placeholders awaiting the block-size sweep.
 """
 
 import ttnn
@@ -17,41 +18,82 @@ _5B_CHECKPOINT = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 
 
 def _register_5b_matmul_tables() -> None:
-    """BH Galaxy 4x8, SP=8, TP=4, matmul grid clamped to 11x10 like 14B.
+    """Wan2.2 TI2V-5B DiT matmul blockings on one BH Galaxy 4x8 (SP=8 on axis 1, TP=4 on axis 0).
 
-    Per-device N: dim/TP=768, ffn/TP=3584, qkv/TP=2304.
-    M is SP-local tokens: 14B 720p/81f is 9472; 5B 720p/121f is ~13952;
-    WAN5B_SMOKE 21f is ~2720. Blocking copied from nearest 14B 11x10 rows —
-    not a sweep.
+    Per device the DiT sees N = dim/TP = 768, qkv = 3*dim/TP = 2304, ffn/TP = 3584 and proj_out
+    = 48*2*2 = 192, at M = the SP-local, tile-padded token count::
+
+        1280x704 / 81f  -> 18480 tokens -> M = 2336 per SP rank
+         832x480 / 81f  ->  8190 tokens -> M = 1024 per SP rank
+        1280x704 / 121f -> 27280 tokens -> M = 3424  (not tabled; takes the rule engines below)
+
+    Which table a call site reads is decided by the op it lands on, not by the model's grid:
+
+    * ColumnParallelLinear on the TP ring -> ``all_gather_minimal_matmul_async``. Every Wan call
+      site leaves ``force_transpose=True``, so ``get_agmm_config`` keys the lookup on
+      ``agmm_worker_grid(12x10, transpose=True)`` = **12x9**, with the *global* K (3072). Shapes
+      absent from that table go to the AGMM v3 rule engine when M > N and to the warned 8x8x8
+      default otherwise -- which is where ff1 at both resolutions and qkv at 480p were landing.
+    * ``RowParallelLinear.forward_fused_addcmul`` (ff2) -> fused MM+RS, keyed by the full 12x10
+      device grid with the *per-device* K (3584); the matmul runs on 12x8 above the reduce-scatter.
+    * Plain ``Linear`` / ``minimal_matmul_split`` (proj_out, cross-attention to_kv) ->
+      ``get_matmul_core_grid``, clamped to **11x10** on a Galaxy.
+
+    The earlier version of this table registered everything under "11x10" at M in (2368, 2720,
+    3488, 9472, 13952), none of which the model requests, so no entry was ever reached.
+
+    Entries marked PRE-SWEEP reproduce exactly what the lookup resolved to before they existed (the
+    rule-engine pick, or the default), so registering them changes keys, not kernels. Replace them
+    with the winners of the eleven 5B shapes in ``sweep_mm_block_sizes.py``::
+
+        pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep -sv --timeout=0 \\
+          -k "bh_4x8_sp1_tp0 and (3072_2304 or 3072_768 or 3072_3584 or 3584_3072 \\
+                                  or 3072_192 or 512_3072_1536)"
+
+    The orchestrator prints each winner as a PASTE line in this file's tuple format.
     """
     dim, ffn = 3072, 14336
     dim_tp = dim // 4
     ffn_tp = ffn // 4
     qkv_tp = (dim * 3) // 4
-    seqs = (2368, 2720, 3488, 9472, 13952)
-    kn = {
-        (dim, 64): (2, 32, 2, (2, 2)),
-        (dim, qkv_tp): (16, 4, 4, (1, 4)),
-        (dim, dim_tp): (16, 8, 4, (1, 4)),
-        (dim, ffn_tp): (16, 8, 4, (1, 4)),
-        (ffn_tp, dim): (16, 3, 4, (1, 4)),
-        (dim, dim): (8, 8, 8, (1, 4)),
-    }
-    entries = {}
-    for m in seqs:
-        for (k, n), cfg in kn.items():
-            m_block, k_block, n_block, sub = cfg
-            if m <= 3488:
-                m_block = min(m_block, 8)
-            entries[(m, k, n)] = (m_block, k_block, n_block, sub)
-    register_matmul_configs({"11x10": entries})
+    proj_out_n = 48 * 2 * 2
+    prompt_seq = 512
+    m_720p, m_480p = 2336, 1024
+
+    register_matmul_configs(
+        {
+            # AGMM (ColumnParallelLinear, TP ring): global K, 12x9 worker grid.
+            "12x9": {
+                # attn1.to_qkv (chunks=3, approx math)
+                (m_480p, dim, qkv_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned 8x8x8 default
+                (m_720p, dim, qkv_tp): (4, 8, 8, (2, 2)),  # PRE-SWEEP: AGMM v3 rule pick
+                # attn1.to_out (+ fused addcmul residual, approx math)
+                (m_480p, dim, dim_tp): (3, 8, 3, (1, 3)),  # PRE-SWEEP: AGMM v3 rule pick
+                (m_720p, dim, dim_tp): (4, 8, 3, (4, 1)),  # PRE-SWEEP: AGMM v3 rule pick
+                # ffn.ff1 (fused gelu_tanh)
+                (m_480p, dim, ffn_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned 8x8x8 default
+                (m_720p, dim, ffn_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned 8x8x8 default
+            },
+            # Plain minimal_matmul / minimal_matmul_split: Galaxy-clamped 11x10 grid.
+            "11x10": {
+                # proj_out: 6 N tiles, so the default's N block was clamped to the 2-wide subblock.
+                (m_480p, dim, proj_out_n): (8, 8, 2, (2, 2)),  # PRE-SWEEP: was the warned default
+                (m_720p, dim, proj_out_n): (8, 8, 2, (2, 2)),  # PRE-SWEEP: was the warned default
+                # attn2.to_kv over the padded prompt (chunks=2, approx math); same at both resolutions.
+                (prompt_seq, dim, 2 * dim_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned default
+            },
+        }
+    )
+    # ffn.ff2: fused matmul + reduce-scatter + addcmul. Keyed by the full device grid; per-device K.
     register_fused_mmrs_configs(
         {
             ttnn.CoreCoord(12, 10): {
-                (9472, ffn_tp, dim): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 3, 8, 2, 2, None, 1, 5),
-                (9472 // 4, ffn_tp, dim): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 3, 8, 2, 2, None, 1, 5),
-                (13952, ffn_tp, dim): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 2, None, 1, 5),
-                (2720, ffn_tp, dim): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1, 5),
+                (m_480p, ffn_tp, dim): FusedMMRSConfig(
+                    ttnn.CoreCoord(12, 8), 2, 4, 6, 2, 2, None, 1
+                ),  # PRE-SWEEP: v2.3 rule pick
+                (m_720p, ffn_tp, dim): FusedMMRSConfig(
+                    ttnn.CoreCoord(12, 8), 6, 4, 6, 2, 2, None, 1
+                ),  # PRE-SWEEP: v2.3 rule pick
             }
         }
     )

@@ -224,6 +224,16 @@ All verified by reading the code; none implemented.
    `force_transpose=True`, which is every Wan call site. Also use M=**2336**, not the registered
    2368. This is the root cause behind `attn1.to_out`, `ffn.ff1`, `attn2.to_kv` and `proj_out`
    all landing on default blockings.
+
+   *Keys fixed (2026-09-21):* `_register_5b_matmul_tables` now registers the eleven shapes the
+   model requests — AGMM under `"12x9"`, proj_out and cross-attn `to_kv` under `"11x10"`, ff2 as
+   fused MMRS — at M=2336 and M=1024. Every entry is a PRE-SWEEP placeholder equal to what the
+   lookup resolved to before (rule pick or default), so the re-key alone changes no kernel; the
+   `get_matmul_config` warnings go away. Still to do: run the eleven-shape sweep (command in
+   the function docstring), paste the `PASTE:` lines the orchestrator prints, then re-gate perf.
+   The pre-change resolution, for reference: qkv@2336 and to_out at both M came from the AGMM v3
+   rules, ff2 from the MMRS v2.3 rules, and ff1 at both M, qkv@1024, proj_out and to_kv were on
+   the warned 8x8x8 default. 720p/121f (M=3424) is not tabled.
 2. **Hoist the per-step modulation.** `combined_step` calls `inner_step` twice with the **same
    timestep**, so the timestep MLP, patch embed and every block's modulation are recomputed
    identically — ~26,400 op launches per generation, half of them exact duplicates.

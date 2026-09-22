@@ -154,8 +154,9 @@ SHAPES = [
     # dim=3072 -> dim/tp=768, qkv 3*dim/tp=2304, ffn 14336/tp=3584, proj_out 48*2*2=192.
     # M is the SP-local padded token count: 1024 at 832x480/81f, 2336 at 1280x704/81f.
     # These are the shapes the model actually requests (confirmed from get_matmul_config
-    # warnings on real runs); the table registered in pipeline_wan_ti2v_5b.py keys on
-    # M values the model never asks for, so none of its entries are reachable.
+    # warnings on real runs) and exactly the keys pipeline_wan_ti2v_5b.py registers; paste
+    # each winner's PASTE line into _register_5b_matmul_tables there. Select all eleven with
+    #   -k "bh_4x8_sp1_tp0 and (3072_2304 or 3072_768 or 3072_3584 or 3584_3072 or 3072_192 or 512_3072_1536)"
     (1024, 3072, 2304, 12, 9, True, "qkv"),  # 5B 480p self-attn qkv
     (2336, 3072, 2304, 12, 9, True, "qkv"),  # 5B 720p self-attn qkv
     (1024, 3072, 768, 12, 9, True, "to_out"),  # 5B 480p self-attn out
@@ -826,6 +827,24 @@ def append_csv_row(csv_path, row):
     with open(csv_path, "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(row)
+
+
+def format_paste_line(M, K, N, cgx, cgy, op_type, use_case, best):
+    """Render a winning combo as the line a model's matmul table takes verbatim.
+
+    Fused MM+RS entries are ``FusedMMRSConfig`` values (keyed by the full device grid, carrying the
+    matmul grid inside); everything else is the ``(M, K, N): (Mb, Kb, Nb, (sb_h, sb_w))`` form that
+    ``register_matmul_configs`` / the ``grid_*_configs`` tables use.
+    """
+    us = best["duration_ns"] / 1000.0
+    blocks = f"{best['M_block']}, {best['K_block']}, {best['N_block']}"
+    sub = f"{best['subblock_h']}, {best['subblock_w']}"
+    if use_case == "mmrs":
+        return (
+            f"({M}, {K}, {N}): FusedMMRSConfig(ttnn.CoreCoord({cgx}, {cgy}), {blocks}, {sub}, None, 1),"
+            f"  # {op_type} {use_case}, {us:.1f} us"
+        )
+    return f"({M}, {K}, {N}): ({blocks}, ({sub})),  # {cgx}x{cgy} {op_type} {use_case}, {us:.1f} us"
 
 
 def parse_ops_log(subdir, expected_ops=None):
@@ -1524,6 +1543,7 @@ def test_mm_sweep(device_config, shape):
         f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns",
         flush=True,
     )
+    print(f"  PASTE: {format_paste_line(M, K, N, cgx, cgy, op_type, use_case, best)}", flush=True)
     print("  Top 5:", flush=True)
     for rank, r in enumerate(all_results[:5], 1):
         print(
@@ -1677,6 +1697,7 @@ def main():
                 f"  BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
                 f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns"
             )
+            print(f"  PASTE: {format_paste_line(M, K, N, cgx, cgy, op_type, use_case, best)}")
             print("  Top 5:")
             for rank, r in enumerate(shape_results[:5], 1):
                 print(
@@ -1705,6 +1726,9 @@ def main():
                 f"{best['duration_ns']:>12.0f}"
             )
         print(f"{'='*110}")
+        print("\nPaste-able table lines:")
+        for (M, K, N, cgx, cgy, op_type, use_case), best in sorted(all_best.items()):
+            print(f"  {format_paste_line(M, K, N, cgx, cgy, op_type, use_case, best)}")
         print(f"\nFull results written to: {args.csv}")
 
 
