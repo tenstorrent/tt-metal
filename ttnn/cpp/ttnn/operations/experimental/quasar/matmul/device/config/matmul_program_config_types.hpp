@@ -96,7 +96,7 @@ struct MatmulUnifiedProgramConfig {
     std::size_t C_slice_M_tiles{};
     std::size_t C_slice_N_tiles{};
     // K tiles accumulated per K chunk (one A slice + one B slice in L1 at a time); must divide K_tiles.
-    // 0 = auto: the largest divisor of K_tiles <= 8 whose rings fit L1.
+    // 0 = auto: the largest divisor of K_tiles <= 8 whose DFBs fit L1.
     std::size_t K_chunk_tiles = 0;
     // Subblock: the C slice's tiles accumulated in DST at once; must divide C_slice_M_tiles / C_slice_N_tiles and
     // hold
