@@ -12,6 +12,7 @@
 #include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/sfpu_binary_bcast.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -325,6 +326,7 @@ void kernel_main() {
     constexpr uint32_t welford_mean_dst = 1;
     constexpr uint32_t welford_var_dst = 2;
     constexpr uint32_t retained_welford_input_dst = 3;
+    constexpr uint32_t retained_welford_tiles = welford_fp32_alias ? 1 : 3;
 
     // Pointer to the reciprocal LUT
 
@@ -353,8 +355,10 @@ void kernel_main() {
     // Pre-add x + y
     // ---------------------------------------------------------------------------
 #ifdef FUSE_PRE_ADD
-    reconfig_data_format_srcb(dfb_in0, dfb_in1);
-    add_init(dfb_in0, dfb_in1);
+    if constexpr (!welford_fp32_alias) {
+        reconfig_data_format_srcb(dfb_in0, dfb_in1);
+        add_init(dfb_in0, dfb_in1);
+    }
     dfb_in.reserve_back(num_tiles_per_block);
     if constexpr (welford_fp32_alias) {
         // Must be done in the compute kernel: on the fused path compute is the producer of the intake
@@ -367,17 +371,37 @@ void kernel_main() {
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_wt; w++) {
-                index = w + index_subblock_w_offset + index_h_offset;
-                add_tiles(dfb_in0, dfb_in1, index, index, w);
+            if constexpr (welford_fp32_alias) {
+                // Add in SFPU: the FPU would truncate both large FP32 inputs to TF32.
+                for (uint32_t w = 0; w < subblock_wt; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(dfb_in0);
+                    copy_init(dfb_in0);
+                    copy_tile(dfb_in0, index, 0);
+                    reconfig_data_format_srca(dfb_in1);
+                    copy_init(dfb_in1);
+                    copy_tile(dfb_in1, index, 1);
+                    add_binary_tile_init();
+                    add_binary_tile(0, 1, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, dfb_in_id);
+                    tile_regs_release();
+                }
+            } else {
+                tile_regs_acquire();
+                for (uint32_t w = 0; w < subblock_wt; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    add_tiles(dfb_in0, dfb_in1, index, index, w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                    pack_tile(sbi, dfb_in_id);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                pack_tile(sbi, dfb_in_id);
-            }
-            tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
         index_h_offset += block_wt;
@@ -402,15 +426,23 @@ void kernel_main() {
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
         tile_regs_acquire();
-        // Retain the first three transposed tiles in otherwise idle DEST slots so the
-        // centred second pass can reuse them without another unpack.
+        if constexpr (welford_fp32_alias) {
+            // The SFPU column broadcast masks unused lanes arithmetically. Keep
+            // statistics padding zero so tile-wide rsqrt cannot create NaNs there.
+            // Do not retain input in these tiles after clearing them.
+            fill_tile_init();
+            fill_tile(welford_mean_dst, 0.0f);
+            fill_tile(welford_var_dst, 0.0f);
+            two_pass_stats_init_shifted();
+        }
+        // Retain input in otherwise idle DEST slots for the centred second pass.
         if (num_full_welford_tiles > 0) {
             transpose_tile(dfb_x_welford_id, index_h_offset, retained_welford_input_dst);
             two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
                 retained_welford_input_dst, 0, tile_width);
         }
         for (uint32_t w = 1; w < num_full_welford_tiles; ++w) {
-            const uint32_t stats_input_dst = w < 3 ? w : welford_input_dst;
+            const uint32_t stats_input_dst = w < retained_welford_tiles ? w : welford_input_dst;
             transpose_tile(dfb_x_welford_id, w + index_h_offset, stats_input_dst);
             two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(stats_input_dst, 0, tile_width);
         }
@@ -420,7 +452,7 @@ void kernel_main() {
         // final core is a pure-padding tile when the width is split across cores.
         if (partial_welford_tile_w > 0) {
             const uint32_t stats_input_dst =
-                num_full_welford_tiles < 3
+                num_full_welford_tiles < retained_welford_tiles
                     ? (num_full_welford_tiles == 0 ? retained_welford_input_dst : num_full_welford_tiles)
                     : welford_input_dst;
             transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, stats_input_dst);
@@ -435,18 +467,19 @@ void kernel_main() {
         two_pass_stats_finish_shifted_mean((*p_reciprocals)[partial_reduce_W - 1]);
 
         for (uint32_t w = 0; w < num_full_welford_tiles; ++w) {
-            const uint32_t stats_input_dst = w < 3 ? (w == 0 ? retained_welford_input_dst : w) : welford_input_dst;
-            if (w >= 3) {
+            const uint32_t stats_input_dst =
+                w < retained_welford_tiles ? (w == 0 ? retained_welford_input_dst : w) : welford_input_dst;
+            if (w >= retained_welford_tiles) {
                 transpose_tile(dfb_x_welford_id, w + index_h_offset, welford_input_dst);
             }
             two_pass_stats_update_rows(stats_input_dst, 0, tile_width);
         }
         if (partial_welford_tile_w > 0) {
             const uint32_t stats_input_dst =
-                num_full_welford_tiles < 3
+                num_full_welford_tiles < retained_welford_tiles
                     ? (num_full_welford_tiles == 0 ? retained_welford_input_dst : num_full_welford_tiles)
                     : welford_input_dst;
-            if (num_full_welford_tiles >= 3) {
+            if (num_full_welford_tiles >= retained_welford_tiles) {
                 transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, welford_input_dst);
             }
             two_pass_stats_update_rows(stats_input_dst, 0, partial_welford_tile_w);
@@ -540,27 +573,51 @@ void kernel_main() {
         reconfig_data_format(dfb_in_id, dfb_transpose_id);
     }
     index_h_offset = 0;
-    sub_bcast_cols_init(dfb_in_id, dfb_transpose_id);
+    if constexpr (!welford_fp32_alias) {
+        sub_bcast_cols_init(dfb_in_id, dfb_transpose_id);
+    }
     dfb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
         const auto mean_idx = 2 * i;
         dfb_transpose.wait_front(static_cast<uint16_t>(mean_idx + 1));
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_wt; w++) {
-                index = w + index_subblock_w_offset;
-                sub_tiles_bcast_cols(dfb_in_id, dfb_transpose_id, index, mean_idx, w);
+            if constexpr (welford_fp32_alias) {
+                for (uint32_t w = 0; w < subblock_wt; w++) {
+                    index = w + index_subblock_w_offset;
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(dfb_x_welford_id);
+                    copy_init(dfb_x_welford_id);
+                    copy_tile(dfb_x_welford_id, index, 0);
+                    reconfig_data_format_srca(dfb_transpose_id);
+                    copy_init(dfb_transpose_id);
+                    copy_tile(dfb_transpose_id, mean_idx, 1);
+                    sfpu_sub_bcast_col_init();
+                    sfpu_sub_bcast_col(0, 1);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, dfb_xmm_id);
+                    tile_regs_release();
+                }
+            } else {
+                tile_regs_acquire();
+                for (uint32_t w = 0; w < subblock_wt; w++) {
+                    index = w + index_subblock_w_offset;
+                    sub_tiles_bcast_cols(dfb_in_id, dfb_transpose_id, index, mean_idx, w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                    pack_tile(sbi, dfb_xmm_id);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                pack_tile(sbi, dfb_xmm_id);
-            }
-            tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
         dfb_in.pop_front(block_wt);
+        if constexpr (welford_fp32_alias) {
+            dfb_x_welford.pop_front(block_wt);
+        }
         // Don't pop transpose buffer until after the mul below
     }
     dfb_xmm.push_back(num_tiles_per_block);
@@ -579,23 +636,44 @@ void kernel_main() {
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(dfb_xmm_id, dfb_transpose_id);
     }
-    mul_bcast_cols_init(dfb_xmm_id, dfb_transpose_id);
+    if constexpr (!welford_fp32_alias) {
+        mul_bcast_cols_init(dfb_xmm_id, dfb_transpose_id);
+    }
     index_h_offset = 0;
     dfb_im.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_wt; w++) {
-                index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles_bcast_cols(dfb_xmm_id, dfb_transpose_id, index, /*1/sqrt(var+eps) idx*/ 1, w);
+            if constexpr (welford_fp32_alias) {
+                for (uint32_t w = 0; w < subblock_wt; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(dfb_xmm_id);
+                    copy_init(dfb_xmm_id);
+                    copy_tile(dfb_xmm_id, index, 0);
+                    reconfig_data_format_srca(dfb_transpose_id);
+                    copy_init(dfb_transpose_id);
+                    copy_tile(dfb_transpose_id, 1, 1);
+                    sfpu_mul_bcast_col_init();
+                    sfpu_mul_bcast_col(0, 1);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, dfb_im_id);
+                    tile_regs_release();
+                }
+            } else {
+                tile_regs_acquire();
+                for (uint32_t w = 0; w < subblock_wt; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    mul_tiles_bcast_cols(dfb_xmm_id, dfb_transpose_id, index, /*1/sqrt(var+eps) idx*/ 1, w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                    pack_tile(sbi, dfb_im_id);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                pack_tile(sbi, dfb_im_id);
-            }
-            tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
         index_h_offset += block_wt;

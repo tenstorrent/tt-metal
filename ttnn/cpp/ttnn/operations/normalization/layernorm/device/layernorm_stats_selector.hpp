@@ -95,16 +95,17 @@ constexpr StatisticsBackend select_interleaved_statistics_backend(
 }
 
 constexpr StatisticsBackend select_sharded_statistics_backend(
-    bool requested_use_welford, tt::ARCH arch, bool fp32_dest_acc_en) {
+    bool requested_use_welford, tt::ARCH arch, bool fp32_dest_acc_en, tt::DataFormat input_format) {
     if (!requested_use_welford || !fp32_dest_acc_en) {
         return StatisticsBackend::TILE_REDUCTION;
     }
     if (arch == tt::ARCH::QUASAR) {
         return StatisticsBackend::TILE_REDUCTION;
     }
-    // Blackhole's centred tile reducer is 1.86-2.23x faster than the former online-Welford route across the
-    // representative sharded matrix and showed no numerical disadvantage. Wormhole retains the two-pass backend.
-    if (arch == tt::ARCH::BLACKHOLE) {
+    // Retain Blackhole's calibrated tile path for lower-precision input. FP32
+    // requires two-pass statistics and SFPU subtraction: TF32 intake loses
+    // small variations around a large shared offset, even with FP32 DEST.
+    if (arch == tt::ARCH::BLACKHOLE && input_format != tt::DataFormat::Float32) {
         return StatisticsBackend::TILE_REDUCTION;
     }
     return StatisticsBackend::SFPU_TWO_PASS;

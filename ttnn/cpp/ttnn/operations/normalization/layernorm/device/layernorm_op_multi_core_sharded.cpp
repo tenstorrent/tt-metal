@@ -128,8 +128,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    const auto statistics_backend =
-        layernorm::select_sharded_statistics_backend(requested_use_welford, device->arch(), fp32_dest_acc_en);
+    const auto statistics_backend = layernorm::select_sharded_statistics_backend(
+        requested_use_welford, device->arch(), fp32_dest_acc_en, in_data_format);
     const bool use_welford = statistics_backend == layernorm::StatisticsBackend::SFPU_TWO_PASS;
 
     assert_subblock_compute_config_compatible(dst_full_sync_en, fp32_dest_acc_en, subblock_wt);
