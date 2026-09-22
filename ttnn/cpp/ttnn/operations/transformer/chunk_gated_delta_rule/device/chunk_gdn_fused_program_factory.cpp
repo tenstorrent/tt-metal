@@ -10,14 +10,18 @@
 // receivers' CBs: the six V-independent tensors as multicasts to the head's 1xNV row rectangle, v_beta
 // as NV per-receiver slice writes — zero DRAM intermediates.
 //
-// Geometry (design D3/D9; mirrors gdnopt/fused_geometry.py::placement, the host-side oracle):
+// Geometry (computed by fused_placement() in chunk_gdn_fused.cpp, which the host-side
+// geometry tests check per grid). Placement 0 (row-major):
 //   receivers  row-major from row 0: head h at row h / HPR, columns (h % HPR)*NV .. +NV-1, with
 //              HPR = grid.x / NV heads per row  =>  feasible iff BH <= HPR * grid.y
 //   producers  the remaining cores enumerated row-major from row 0 (the stranded columns of the
 //              receiver rows first), the first BH*NP of them; producer p serves head p / NP as its
 //              j = p % NP -th producer and owns that head's chunks c = j, j+NP, ...
+// Placement 1 (row-local, the default whenever it fits): each head's NV receivers and NP producers
+// share one row segment, producers east of receivers, so NOC_1's -x-then-y routes of different heads
+// never share a link; heads that do not fit the rows go to the leftover columns as vertical blocks.
 //
-// Handshake (design D5/D6): receiver (h, v) reserves its 7 slots for chunk c, resets its VALID word,
+// Handshake: receiver (h, v) reserves its 7 slots for chunk c, resets its VALID word,
 // then atomically increments credit[h] on the producer that owns chunk c. That producer sends only
 // at credit[h] == NV, resets the word, writes, waits for the write ACKS (a flush proves departure
 // only), then multicasts VALID to the rectangle. The credit words are BH plain L1 words in the last
@@ -137,96 +141,13 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
-    const uint32_t n_cores = grid.x * grid.y;
-    TT_FATAL(NV <= grid.x, "chunk_gdn_fused: nv={} exceeds the grid width {}", NV, grid.x);
-    const uint32_t HPR = grid.x / NV;  // heads per receiver row (placement 0)
-    const uint32_t R = BH * NV;        // receiver cores
-    const uint32_t P = BH * NP;        // producer cores
-    TT_FATAL(R + P <= n_cores, "chunk_gdn_fused: R+P = {}+{} cores needed, grid has {}", R, P, n_cores);
-
-    // ---- Placement (design D9; mode 0 mirrors gdnopt/fused_geometry.py::placement) ----
-    std::vector<CoreCoord> rcv_cores(R);  // index h*NV + v
-    std::vector<CoreCoord> prod_cores;    // index p = h*NP + j
-    prod_cores.reserve(P);
-    if (attrs.placement == 0) {
-        TT_FATAL(
-            BH <= HPR * grid.y,
-            "chunk_gdn_fused: BH={} 1x{} receiver rectangles do not fit a {}x{} grid ({} per row)",
-            BH,
-            NV,
-            grid.x,
-            grid.y,
-            HPR);
-        std::vector<bool> is_rcv(n_cores, false);
-        for (uint32_t h = 0; h < BH; h++) {
-            const uint32_t y0 = h / HPR;
-            const uint32_t x0 = (h % HPR) * NV;
-            for (uint32_t v = 0; v < NV; v++) {
-                rcv_cores[h * NV + v] = CoreCoord{x0 + v, y0};
-                is_rcv[y0 * grid.x + x0 + v] = true;
-            }
-        }
-        for (uint32_t y = 0; y < grid.y && prod_cores.size() < P; y++) {
-            for (uint32_t x = 0; x < grid.x && prod_cores.size() < P; x++) {
-                if (!is_rcv[y * grid.x + x]) {
-                    prod_cores.push_back(CoreCoord{x, y});
-                }
-            }
-        }
-    } else {
-        // Row-local: head h < grid.y owns row h — receivers at columns 0..NV-1, producers at NV..L-1.
-        // NOC_1 routes -x then -y, so every producer's writes travel west inside the head's own row and
-        // never share a link with another head. Heads h >= grid.y live in the leftover columns [L, W)
-        // as vertical blocks: an rw x rh receiver rectangle on top, the producers row-major below it —
-        // their traffic is confined to the block's columns (short -x legs, then -y within the block).
-        const uint32_t L = NV + NP;
-        TT_FATAL(L <= grid.x, "chunk_gdn_fused: row-local placement needs NV+NP={} <= grid.x={}", L, grid.x);
-        // k heads per row, each in its own column segment [i*L, (i+1)*L): the segments' -x legs are
-        // disjoint, so heads sharing a row still share no link.
-        const uint32_t k_per_row = grid.x / L;
-        const uint32_t n_row_heads = std::min<uint32_t>(BH, k_per_row * grid.y);
-        for (uint32_t h = 0; h < n_row_heads; h++) {
-            const uint32_t row = h / k_per_row;
-            const uint32_t xs = (h % k_per_row) * L;
-            for (uint32_t v = 0; v < NV; v++) {
-                rcv_cores[h * NV + v] = CoreCoord{xs + v, row};
-            }
-            for (uint32_t j = 0; j < NP; j++) {
-                prod_cores.push_back(CoreCoord{xs + NV + j, row});
-            }
-        }
-        if (BH > n_row_heads) {
-            const uint32_t rem = BH - n_row_heads;
-            const uint32_t wl = grid.x - k_per_row * L;
-            TT_FATAL(wl >= 1, "chunk_gdn_fused: row-local placement: no leftover columns for {} extra heads", rem);
-            const uint32_t rw = std::min<uint32_t>(NV, wl);
-            TT_FATAL(
-                NV % rw == 0,
-                "chunk_gdn_fused: row-local placement: NV={} not a multiple of the leftover width {}",
-                NV,
-                rw);
-            const uint32_t rh = NV / rw;
-            const uint32_t block_h = rh + (NP + wl - 1) / wl;
-            TT_FATAL(
-                rem * block_h <= grid.y,
-                "chunk_gdn_fused: row-local placement: {} leftover heads need {} rows, grid has {}",
-                rem,
-                rem * block_h,
-                grid.y);
-            for (uint32_t kk = 0; kk < rem; kk++) {
-                const uint32_t h = n_row_heads + kk;
-                const uint32_t y_base = kk * block_h;
-                const uint32_t xl = k_per_row * L;  // first leftover column
-                for (uint32_t v = 0; v < NV; v++) {
-                    rcv_cores[h * NV + v] = CoreCoord{xl + (v % rw), y_base + v / rw};
-                }
-                for (uint32_t j = 0; j < NP; j++) {
-                    prod_cores.push_back(CoreCoord{xl + (j % wl), y_base + rh + j / wl});
-                }
-            }
-        }
-    }
-    TT_FATAL(prod_cores.size() == P, "chunk_gdn_fused: placement produced {} producers, need {}", prod_cores.size(), P);
+    const uint32_t R = BH * NV;  // receiver cores
+    const uint32_t P = BH * NP;  // producer cores
+    // Placement is a pure function of (grid, BH, NV, NP, placement), shared with the
+    // nanobind geometry oracle so the host-side tests assert the core map this factory uses.
+    const FusedPlacement layout = fused_placement(grid.x, grid.y, BH, NV, NP, attrs.placement);
+    const std::vector<CoreCoord>& rcv_cores = layout.receivers;
+    const std::vector<CoreCoord>& prod_cores = layout.producers;
 
     std::set<CoreRange> rcv_crs, prod_crs, union_crs;
     for (const auto& c : rcv_cores) {

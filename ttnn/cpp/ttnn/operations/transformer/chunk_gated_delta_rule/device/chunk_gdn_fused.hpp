@@ -18,6 +18,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -110,9 +111,9 @@ struct ChunkGdnFusedOperation {
 
 // The per-head row-local cost model, calibrated on QB2:
 //   T_fused(NV, NP) = NC * max(w_p / NP, t_step(Vt / NV)) + fill   over (NV | Vt, NP) with a feasible
-//   row-local layout (D9), ties -> fewer cores, then smaller NV; T_phased(BH) from the measured table.
-// The op host uses it for nv / np / placement when the QWEN_GDN_NV / QWEN_GDN_NP / QWEN_GDN_PLACEMENT
-// knobs are unset; gdnopt/fused_geometry.py::choose_geometry is the host-side oracle it mirrors.
+//   row-local layout, ties -> fewer cores, then smaller NV; T_phased(BH) from the measured table.
+// The op host uses it for whichever of num_receivers / num_producers / row_local the fused program
+// config leaves free; test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
 struct FusedGeometryChoice {
     uint32_t nv = 0;  // 0 => no fused geometry fits this grid
     uint32_t np = 0;
@@ -132,6 +133,18 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t Vt,
     uint32_t fixed_nv = 0,
     uint32_t fixed_np = 0);
+
+// Design D9: the fused program's core map, a pure function of its arguments (no device), shared by
+// the program factory and the nanobind geometry oracle. placement 0 = row-major 1xNV receiver
+// rectangles with the producers on the remaining cores row-major; 1 = row-local (a head's receivers
+// and producers in one row segment, leftover heads as column blocks). FATALs when the layout does
+// not fit, exactly as the factory would.
+struct FusedPlacement {
+    std::vector<CoreCoord> receivers;  // index h*NV + v (logical coordinates)
+    std::vector<CoreCoord> producers;  // index h*NP + j
+};
+FusedPlacement fused_placement(
+    uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);
 
 // Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32} — exactly the scan prim's output specs.
 // Needs BH*(NV+NP) cores (NP producers + NV receivers per head; both default to 1 and are explicit

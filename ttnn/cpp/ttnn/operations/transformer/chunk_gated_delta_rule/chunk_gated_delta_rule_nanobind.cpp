@@ -172,6 +172,29 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("BH"),
         nb::arg("NV"),
         nb::arg("NP"));
+    mod.def(
+        "chunk_gdn_fused_placement",
+        [](uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement) {
+            const auto pl = ttnn::prim::fused_placement(grid_x, grid_y, BH, NV, NP, placement);
+            auto to_xy = [](const std::vector<CoreCoord>& cores) {
+                std::vector<std::tuple<uint32_t, uint32_t>> xy;
+                xy.reserve(cores.size());
+                for (const auto& c : cores) {
+                    xy.emplace_back(static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y));
+                }
+                return xy;
+            };
+            return std::make_tuple(to_xy(pl.receivers), to_xy(pl.producers));
+        },
+        nb::arg("grid_x"),
+        nb::arg("grid_y"),
+        nb::arg("BH"),
+        nb::arg("NV"),
+        nb::arg("NP"),
+        nb::arg("placement"),
+        R"doc(The fused program's core map for (grid_x, grid_y, BH, NV, NP, placement), computed by the
+        same function the program factory calls: (receivers, producers), lists of logical (x, y);
+        receivers[h*NV + v], producers[h*NP + j]. Raises when the layout does not fit.)doc");
 
     const auto* doc =
         R"doc(
