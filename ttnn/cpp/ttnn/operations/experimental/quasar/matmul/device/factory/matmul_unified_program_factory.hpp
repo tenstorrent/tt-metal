@@ -44,35 +44,35 @@ struct UnifiedMatmulPlan {
     std::vector<tt::tt_metal::CoreCoord> cores;
     uint32_t max_C_slices_per_core = 0;  // sizes the rings and gates partials aliasing
 
-    // Borrowing: an L1-sharded operand whose shard on every active core is exactly what that core's rings
-    // would hold is bound as the ring itself (DFB borrowed_from), so nothing is copied. A: the shard is the
+    // Borrowing: an L1-sharded operand whose shard on every active core is exactly what that core's DFBs
+    // would hold is bound as the DFB itself (borrowed_from), so nothing is copied. A: the shard is the
     // chunk's rows for all of K (one K chunk, chunks span N). B: the shard is the chunk's columns for all of
     // K (chunks span M; K chunks are contiguous runs of it). C: the finished C slice is packed straight into
     // the shard, which needs subblock-major pack order to equal the shard's row-major tile order, i.e.
     // subblock_N_tiles == C_slice_N_tiles; the writer then only waits. All three need one C slice per core
-    // and batch 1, and a shard grid that lists the active cores in assignment order. Borrowed rings cost
+    // and batch 1, and a shard grid that lists the active cores in assignment order. Borrowed DFBs cost
     // no extra L1.
     bool borrow_A = false;
     bool borrow_B = false;
     bool borrow_C = false;
 
-    // Dataflow-buffer rings. A slot holds one tile; slot sizes are in bytes.
+    // DFB sizing. An entry holds one tile; entry sizes are in bytes.
     bool packer_l1_acc_en = false;
     tt::DataFormat A_format{};
     tt::DataFormat B_format{};
     tt::DataFormat C_format{};
     tt::DataFormat C_partials_format{};
-    uint32_t A_slot_bytes = 0;
-    uint32_t B_slot_bytes = 0;
-    uint32_t C_slot_bytes = 0;
-    uint32_t C_partials_slot_bytes = 0;
-    uint32_t A_slice_ring_slots = 0;
-    uint32_t B_slice_ring_slots = 0;
-    uint32_t C_slice_ring_slots = 0;
-    uint32_t C_partials_ring_slots = 0;
+    uint32_t A_entry_bytes = 0;
+    uint32_t B_entry_bytes = 0;
+    uint32_t C_entry_bytes = 0;
+    uint32_t C_partials_entry_bytes = 0;
+    uint32_t A_slice_entries = 0;
+    uint32_t B_slice_entries = 0;
+    uint32_t C_slice_entries = 0;
+    uint32_t C_partials_entries = 0;
     // C_partials shares C_slice's L1; only safe when partials are never live while C_slice holds unread data.
     bool alias_C_partials_onto_C_slice = false;
-    uint64_t l1_bytes = 0;  // total ring footprint per core
+    uint64_t l1_bytes = 0;  // total DFB footprint per core
 
     // Only valid for a sharded output: the shard layout implied by how the C slices tile C.
     tt::tt_metal::TensorMemoryLayout sharded_output_layout() const;

@@ -4,7 +4,7 @@
 
 // Unified (placement-first) matmul factory (GH#41910): one Metal 2.0 program for every placement.
 // The config names the cores and the C slice per core; this file turns that into a C slice assignment,
-// four DFB rings (A slice, B slice, C slice, C partials), one reader, one compute kernel and one
+// four DFBs (A slice, B slice, C slice, C partials), one reader, one compute kernel and one
 // writer. Nothing here depends on operand memory layout: the kernels address tiles by tile index
 // through the tensor accessor.
 
@@ -66,28 +66,27 @@ uint64_t l1_budget_bytes(tt::tt_metal::IDevice* device) {
     return l1_ceiling - l1_base;
 }
 
-// Fills the ring sizing of `plan` for a given K chunk. Returns the total footprint in bytes.
 struct Borrowable {
     bool A = false;
     bool B = false;
     bool C = false;
 };
 
-// Everything about the rings that follows from one candidate K chunk. Pure: the plan is only read, so the
+// Everything about the DFBs that follows from one candidate K chunk. Pure: the plan is only read, so the
 // K chunk search can size several candidates and the plan is written exactly once with the winner.
-struct RingSizes {
+struct DfbSizes {
     uint32_t K_chunk_tiles = 0;
     uint32_t num_K_chunks = 0;
     bool packer_l1_acc_en = false;
     tt::DataFormat C_partials_format{};
-    uint32_t A_slot_bytes = 0;
-    uint32_t B_slot_bytes = 0;
-    uint32_t C_slot_bytes = 0;
-    uint32_t C_partials_slot_bytes = 0;
-    uint32_t A_slice_ring_slots = 0;
-    uint32_t B_slice_ring_slots = 0;
-    uint32_t C_slice_ring_slots = 0;
-    uint32_t C_partials_ring_slots = 0;
+    uint32_t A_entry_bytes = 0;
+    uint32_t B_entry_bytes = 0;
+    uint32_t C_entry_bytes = 0;
+    uint32_t C_partials_entry_bytes = 0;
+    uint32_t A_slice_entries = 0;
+    uint32_t B_slice_entries = 0;
+    uint32_t C_slice_entries = 0;
+    uint32_t C_partials_entries = 0;
     bool alias_C_partials_onto_C_slice = false;
     bool borrow_A = false;
     bool borrow_B = false;
@@ -95,13 +94,13 @@ struct RingSizes {
     uint64_t l1_bytes = 0;
 
     bool fits(uint64_t l1_budget) const {
-        const uint64_t rings[] = {
-            (uint64_t)A_slice_ring_slots * A_slot_bytes,
-            (uint64_t)B_slice_ring_slots * B_slot_bytes,
-            (uint64_t)C_slice_ring_slots * C_slot_bytes,
-            (uint64_t)C_partials_ring_slots * C_partials_slot_bytes};
-        for (uint64_t ring_bytes : rings) {
-            if (ring_bytes > MAX_DFB_RING_BYTES) {
+        const uint64_t dfb_bytes[] = {
+            (uint64_t)A_slice_entries * A_entry_bytes,
+            (uint64_t)B_slice_entries * B_entry_bytes,
+            (uint64_t)C_slice_entries * C_entry_bytes,
+            (uint64_t)C_partials_entries * C_partials_entry_bytes};
+        for (uint64_t bytes : dfb_bytes) {
+            if (bytes > MAX_DFB_RING_BYTES) {
                 return false;
             }
         }
@@ -109,13 +108,13 @@ struct RingSizes {
     }
 };
 
-RingSizes size_rings(
+DfbSizes size_dfbs(
     const UnifiedMatmulPlan& plan,
     uint32_t K_chunk_tiles,
     bool fp32_dest_acc_en,
     bool packer_l1_acc,
     const Borrowable& borrowable) {
-    RingSizes r;
+    DfbSizes r;
     r.K_chunk_tiles = K_chunk_tiles;
     r.num_K_chunks = plan.K_tiles / K_chunk_tiles;
 
@@ -124,31 +123,31 @@ RingSizes size_rings(
     r.packer_l1_acc_en = packer_l1_acc && r.num_K_chunks > 2;
     r.C_partials_format = r.packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
-    r.C_slot_bytes = tt::tile_size(plan.C_format);
-    r.C_partials_slot_bytes = tt::tile_size(r.C_partials_format);
+    r.C_entry_bytes = tt::tile_size(plan.C_format);
+    r.C_partials_entry_bytes = tt::tile_size(r.C_partials_format);
 
     const uint32_t C_slice_tiles = plan.C_slice_M_tiles * plan.C_slice_N_tiles;
-    r.C_slice_ring_slots = C_slice_tiles;
-    r.C_partials_ring_slots = C_slice_tiles;
+    r.C_slice_entries = C_slice_tiles;
+    r.C_partials_entries = C_slice_tiles;
 
-    // One ring slot per tile for every ring (a 32x32 tile of every format is a multiple of the L1 alignment).
+    // One entry per tile for every DFB (a 32x32 tile of every format is a multiple of the L1 alignment).
     // Copied operands: double-buffer whenever more than one slice passes through. Borrowed operands: the
-    // ring is the resident shard itself, one slot per shard tile.
-    // A can only be borrowed when the single K chunk covers all of K; a shard too large for a TRISC ring
-    // takes the copy path.
+    // DFB is the resident shard itself, one entry per shard tile.
+    // A can only be borrowed when the single K chunk covers all of K; a shard past the TRISC ring-extent
+    // limit takes the copy path.
     const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * r.num_K_chunks > 1;
-    const uint32_t slice_ring_depth = more_than_one_slice ? 2 : 1;
+    const uint32_t slice_buffering_factor = more_than_one_slice ? 2 : 1;
     r.borrow_A = borrowable.A && r.num_K_chunks == 1 &&
                  (uint64_t)plan.C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_RING_BYTES;
     r.borrow_B = borrowable.B &&
                  (uint64_t)plan.K_tiles * plan.C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_RING_BYTES;
     r.borrow_C = borrowable.C;
-    r.A_slot_bytes = tt::tile_size(plan.A_format);
-    r.B_slot_bytes = tt::tile_size(plan.B_format);
-    r.A_slice_ring_slots =
-        r.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles : plan.C_slice_M_tiles * K_chunk_tiles * slice_ring_depth;
-    r.B_slice_ring_slots =
-        r.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles : K_chunk_tiles * plan.C_slice_N_tiles * slice_ring_depth;
+    r.A_entry_bytes = tt::tile_size(plan.A_format);
+    r.B_entry_bytes = tt::tile_size(plan.B_format);
+    r.A_slice_entries = r.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles
+                                   : plan.C_slice_M_tiles * K_chunk_tiles * slice_buffering_factor;
+    r.B_slice_entries = r.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles
+                                   : K_chunk_tiles * plan.C_slice_N_tiles * slice_buffering_factor;
 
     // Aliasing C_partials onto C_slice when a core produces more than one C slice (counting batches) is a
     // race: the writer may still be draining C slice i from C_slice while the compute packs C slice i+1's first
@@ -159,11 +158,11 @@ RingSizes size_rings(
     r.alias_C_partials_onto_C_slice =
         (r.C_partials_format == plan.C_format) && (!partials_ever_written || one_C_slice_per_core);
 
-    // Borrowed rings are the tensors' own memory and cost nothing here.
-    r.l1_bytes = (r.borrow_A ? 0 : (uint64_t)r.A_slice_ring_slots * r.A_slot_bytes) +
-                 (r.borrow_B ? 0 : (uint64_t)r.B_slice_ring_slots * r.B_slot_bytes) +
-                 (r.borrow_C ? 0 : (uint64_t)r.C_slice_ring_slots * r.C_slot_bytes) +
-                 (r.alias_C_partials_onto_C_slice ? 0 : (uint64_t)r.C_partials_ring_slots * r.C_partials_slot_bytes);
+    // Borrowed DFBs are the tensors' own memory and cost nothing here.
+    r.l1_bytes = (r.borrow_A ? 0 : (uint64_t)r.A_slice_entries * r.A_entry_bytes) +
+                 (r.borrow_B ? 0 : (uint64_t)r.B_slice_entries * r.B_entry_bytes) +
+                 (r.borrow_C ? 0 : (uint64_t)r.C_slice_entries * r.C_entry_bytes) +
+                 (r.alias_C_partials_onto_C_slice ? 0 : (uint64_t)r.C_partials_entries * r.C_partials_entry_bytes);
     return r;
 }
 
@@ -335,12 +334,12 @@ UnifiedMatmulPlan plan_unified_matmul(
     plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
     const uint64_t l1_budget = l1_budget_bytes(A.device());
-    std::optional<RingSizes> chosen;
+    std::optional<DfbSizes> chosen;
     if (config.K_chunk_tiles == 0) {
         // A resident A shard is only borrowable with a single K chunk, so try that first (main pins
         // in0_block_w == K for height-sharded in0 for the same reason).
         if (borrowable.A) {
-            const RingSizes candidate = size_rings(plan, plan.K_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
+            const DfbSizes candidate = size_dfbs(plan, plan.K_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
             if (candidate.borrow_A && candidate.fits(l1_budget)) {
                 chosen = candidate;
             }
@@ -352,7 +351,7 @@ UnifiedMatmulPlan plan_unified_matmul(
             if (plan.K_tiles % K_chunk_tiles != 0) {
                 continue;
             }
-            const RingSizes candidate = size_rings(plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
+            const DfbSizes candidate = size_dfbs(plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
             if (candidate.fits(l1_budget)) {
                 chosen = candidate;
             }
@@ -371,7 +370,7 @@ UnifiedMatmulPlan plan_unified_matmul(
             "K_chunk_tiles ({}) must divide K_tiles ({})",
             config.K_chunk_tiles,
             plan.K_tiles);
-        chosen = size_rings(plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
+        chosen = size_dfbs(plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
         TT_FATAL(
             chosen->fits(l1_budget),
             "MatmulUnifiedProgramConfig: rings for a {}x{}-tile C slice with K_chunk_tiles={} do not fit "
@@ -382,24 +381,24 @@ UnifiedMatmulPlan plan_unified_matmul(
             chosen->l1_bytes,
             l1_budget,
             MAX_DFB_RING_BYTES,
-            (uint64_t)chosen->A_slice_ring_slots * chosen->A_slot_bytes,
-            (uint64_t)chosen->B_slice_ring_slots * chosen->B_slot_bytes,
-            (uint64_t)chosen->C_slice_ring_slots * chosen->C_slot_bytes,
-            (uint64_t)chosen->C_partials_ring_slots * chosen->C_partials_slot_bytes);
+            (uint64_t)chosen->A_slice_entries * chosen->A_entry_bytes,
+            (uint64_t)chosen->B_slice_entries * chosen->B_entry_bytes,
+            (uint64_t)chosen->C_slice_entries * chosen->C_entry_bytes,
+            (uint64_t)chosen->C_partials_entries * chosen->C_partials_entry_bytes);
     }
     // The plan takes the winning candidate exactly once; nothing downstream adjusts it.
     plan.K_chunk_tiles = chosen->K_chunk_tiles;
     plan.num_K_chunks = chosen->num_K_chunks;
     plan.packer_l1_acc_en = chosen->packer_l1_acc_en;
     plan.C_partials_format = chosen->C_partials_format;
-    plan.A_slot_bytes = chosen->A_slot_bytes;
-    plan.B_slot_bytes = chosen->B_slot_bytes;
-    plan.C_slot_bytes = chosen->C_slot_bytes;
-    plan.C_partials_slot_bytes = chosen->C_partials_slot_bytes;
-    plan.A_slice_ring_slots = chosen->A_slice_ring_slots;
-    plan.B_slice_ring_slots = chosen->B_slice_ring_slots;
-    plan.C_slice_ring_slots = chosen->C_slice_ring_slots;
-    plan.C_partials_ring_slots = chosen->C_partials_ring_slots;
+    plan.A_entry_bytes = chosen->A_entry_bytes;
+    plan.B_entry_bytes = chosen->B_entry_bytes;
+    plan.C_entry_bytes = chosen->C_entry_bytes;
+    plan.C_partials_entry_bytes = chosen->C_partials_entry_bytes;
+    plan.A_slice_entries = chosen->A_slice_entries;
+    plan.B_slice_entries = chosen->B_slice_entries;
+    plan.C_slice_entries = chosen->C_slice_entries;
+    plan.C_partials_entries = chosen->C_partials_entries;
     plan.alias_C_partials_onto_C_slice = chosen->alias_C_partials_onto_C_slice;
     plan.borrow_A = chosen->borrow_A;
     plan.borrow_B = chosen->borrow_B;
@@ -495,8 +494,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     {
         DataflowBufferSpec A_slice_dfb{
             .unique_id = A_SLICE_DFB,
-            .entry_size = plan.A_slot_bytes,
-            .num_entries = plan.A_slice_ring_slots,
+            .entry_size = plan.A_entry_bytes,
+            .num_entries = plan.A_slice_entries,
             .data_format_metadata = plan.A_format,
             .tile_format_metadata = A.tensor_spec().tile(),
         };
@@ -505,8 +504,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         }
         DataflowBufferSpec B_slice_dfb{
             .unique_id = B_SLICE_DFB,
-            .entry_size = plan.B_slot_bytes,
-            .num_entries = plan.B_slice_ring_slots,
+            .entry_size = plan.B_entry_bytes,
+            .num_entries = plan.B_slice_entries,
             .data_format_metadata = plan.B_format,
             .tile_format_metadata = B.tensor_spec().tile(),
         };
@@ -515,8 +514,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         }
         DataflowBufferSpec C_slice_dfb{
             .unique_id = C_SLICE_DFB,
-            .entry_size = plan.C_slot_bytes,
-            .num_entries = plan.C_slice_ring_slots,
+            .entry_size = plan.C_entry_bytes,
+            .num_entries = plan.C_slice_entries,
             .data_format_metadata = plan.C_format,
             .tile_format_metadata = C_tile,
         };
@@ -525,8 +524,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         }
         DataflowBufferSpec C_partials_dfb{
             .unique_id = C_PARTIALS_DFB,
-            .entry_size = plan.C_partials_slot_bytes,
-            .num_entries = plan.C_partials_ring_slots,
+            .entry_size = plan.C_partials_entry_bytes,
+            .num_entries = plan.C_partials_entries,
             .data_format_metadata = plan.C_partials_format,
             .tile_format_metadata = C_tile,
         };

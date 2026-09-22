@@ -34,14 +34,14 @@ void kernel_main() {
     DataflowBuffer C_slice(dfb::C_slice);
     if constexpr (C_borrowed) {
         // The C_slice IS this core's C shard: the compute packs the finished tiles in place, so there is
-        // nothing to move. Wait for the whole C slice so the ring's credits balance. (Borrowing needs one C slice
+        // nothing to move. Wait for the whole C slice so the DFB's credits balance. (Borrowing needs one C slice
         // per core and batch 1, so this is the entire output.)
         C_slice.wait_front(C_slice_M_tiles * C_slice_N_tiles);
         return;
     }
     const auto C = TensorAccessor(tensor::C);
     Noc noc;
-    // One ring slot per tile; a subblock sits in the ring row-major in tiles, as the compute packs it.
+    // One DFB entry per tile; a subblock sits in the DFB row-major in tiles, as the compute packs it.
     const uint32_t C_tile_bytes = get_tile_size(dfb::C_slice);
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
@@ -58,7 +58,7 @@ void kernel_main() {
                 const uint32_t C_m_tile = C_slice_first_M_tile + m_tile;  // subblock's first row in C, in tiles
                 for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles; n_tile += subblock_N_tiles) {
                     const uint32_t C_n_tile = C_slice_first_N_tile + n_tile;  // subblock's first column in C
-                    // Every subblock is waited for and popped, clipped or not, so the ring's credits balance;
+                    // Every subblock is waited for and popped, clipped or not, so the DFB's credits balance;
                     // only the tiles inside C are written.
                     C_slice.wait_front(subblock_tiles);
                     for (uint32_t subblock_m_tile = 0;
