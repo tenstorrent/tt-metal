@@ -375,7 +375,7 @@ def export_convolution(slab: ttnn.Tensor, convolution: ttnn.Tensor, batch: int, 
     rows = convolution_to_slab_rows(convolution, geometry)
     _, seg, width = rows.shape
     ttnn.experimental.slice_write(rows, slab, [batch, 0, 0], [batch + 1, seg, width], [1, 1, 1])
-    ttnn.deallocate(rows)
+    _free_unless_shared(rows, convolution)
 
 
 def import_recurrent(slab: ttnn.Tensor, batch: int, destination: ttnn.Tensor) -> None:
@@ -383,7 +383,8 @@ def import_recurrent(slab: ttnn.Tensor, batch: int, destination: ttnn.Tensor) ->
     _, heads, rows, columns = slab.shape
     view = ttnn.slice(slab, [batch, 0, 0, 0], [batch + 1, heads, rows, columns], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.copy(view, destination)
-    ttnn.deallocate(view)
+    # A whole-tensor slice (one layer, one slot) can hand back the slab itself; never free that.
+    _free_unless_shared(view, slab)
 
 
 def import_convolution(slab: ttnn.Tensor, batch: int, destination: ttnn.Tensor, geometry: KdaContractGeometry) -> None:
@@ -392,8 +393,9 @@ def import_convolution(slab: ttnn.Tensor, batch: int, destination: ttnn.Tensor, 
     rows = ttnn.slice(slab, [batch, 0, 0], [batch + 1, seg, width], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     convolution = slab_rows_to_convolution(rows, geometry)
     ttnn.copy(convolution, destination)
-    _free_unless_shared(rows, convolution)
-    ttnn.deallocate(convolution)
+    # A whole-tensor slice (one layer, one slot) can hand back the slab itself; never free that.
+    _free_unless_shared(rows, slab, convolution)
+    _free_unless_shared(convolution, slab)
 
 
 @dataclass
