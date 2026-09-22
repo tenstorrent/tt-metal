@@ -289,7 +289,8 @@ def _cache_plan(table, migrated_layers) -> list:
     plan = []
     for cfg_id in range(table.num_configs()):
         cfg = table.config() if cfg_id == 0 else table.config(cfg_id)
-        is_index = cfg_id == 1 and n_model_configs > 1
+        kind = adapter.cache_kind(cfg_id) if cfg_id < n_model_configs else "other"
+        is_index = kind == "index"
         n_rows = int(cfg.num_layers)
         rows, why = None, ""
         if rows_hook is not None:
@@ -323,7 +324,7 @@ def _cache_plan(table, migrated_layers) -> list:
                 "config_id": cfg_id,
                 "rows": rows,
                 "head_dim": None if head_dim is None else int(head_dim),
-                "kind": "index" if is_index else ("kvpe" if cfg_id == 0 else "other"),
+                "kind": kind,
                 "unaddressed": unaddressed,
                 "why": why,
             }
