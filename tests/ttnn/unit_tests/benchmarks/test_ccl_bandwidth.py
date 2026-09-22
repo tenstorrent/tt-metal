@@ -29,6 +29,38 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tracy import signpost
 
+# ------------------------------------------------------------------- tables
+#
+# Machine facts the settings below are derived from. None of them read the
+# environment.
+
+TILE = 32
+ELEMS_PER_TILE = TILE * TILE
+DTYPES = {
+    # name: (ttnn dtype, bytes per 32x32 tile, pcc threshold)
+    "bfloat16": (ttnn.bfloat16, 2048, 0.999),
+    "bfloat8_b": (ttnn.bfloat8_b, 1088, 0.99),
+    "float32": (ttnn.float32, 4096, 0.9999),
+}
+
+TOPOLOGIES = {
+    "ring": ttnn.FabricConfig.FABRIC_1D_RING,
+    "line": ttnn.FabricConfig.FABRIC_1D,
+}
+
+# Per link per direction, GB/s
+LINE_RATE_GBPS = {"wormhole_b0": 12.5, "blackhole": 50.0}
+
+# Largest fabric packet payload each architecture accepts. Over it, the conftest
+# skips the whole run.
+MAX_PACKET_PAYLOAD = {"wormhole_b0": 7616, "blackhole": 15232}
+
+try:
+    ARCH = ttnn.get_arch_name()
+except Exception:
+    ARCH = None
+
+
 # ----------------------------------------------------------------- settings
 #
 # Each setting takes its value from the matching environment variable, or the
@@ -47,11 +79,6 @@ def _shape(raw):
     return tuple(int(x) for x in raw.lower().split("x"))
 
 
-TOPOLOGIES = {
-    "ring": ttnn.FabricConfig.FABRIC_1D_RING,
-    "line": ttnn.FabricConfig.FABRIC_1D,
-}
-
 MESH_SHAPE = _env("CCL_MESH", (1, 8), _shape)                 # mesh to open
 TOPOLOGY_NAME = _env("CCL_TOPOLOGY", "ring")                  # ring | line
 TOPOLOGY = TOPOLOGIES[TOPOLOGY_NAME]                          # fabric config
@@ -61,7 +88,14 @@ SUBMESH_SHAPES = _env("CCL_SUBMESHES", [(1, 2), (1, 4), (1, 8)],
 
 MEMORY = _env("CCL_MEMORY", "dram")                           # dram | l1
 DTYPE = _env("CCL_DTYPE", "bfloat16")                         # bfloat16 | bfloat8_b | float32
-PACKET_PAYLOAD = _env("CCL_PACKET", 8192, int)                # fabric max packet payload, bytes
+TT_DTYPE, TILE_BYTES, PCC = DTYPES[DTYPE]
+
+# The most whole pages that fit one hardware packet, capped at the four segments
+# a scatter write carries.
+PACKET_PAYLOAD = _env("CCL_PACKET",
+                      min(MAX_PACKET_PAYLOAD.get(ARCH, 4352) // TILE_BYTES, 4) * TILE_BYTES, int)
+LINE_RATE = _env("CCL_LINE_RATE", LINE_RATE_GBPS.get(ARCH), float)
+
 OPS = _env("CCL_OPS", ["all_gather", "all_reduce", "reduce_scatter", "all_to_all"],
            lambda r: r.split(","))
 
@@ -71,20 +105,6 @@ ITERS_LARGE = _env("CCL_ITERS_LARGE", 5, int)
 LARGE_BYTES = 1 << 30                             # fewer iterations above this
 CHECK_MAX_BYTES = 1 << 30                         # correctness runs below this only
 
-# Per link per direction, GB/s. There is no runtime query for this: the values
-# live in a file-static table in ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp
-# (lookup_fabric_link_bw), which is not reachable from Python, so they are
-# mirrored here. Keep the two in sync. Note that file currently uses 25.0 for
-# Blackhole, describing it as half of the 400 Gbps hardware rate; this table
-# uses the hardware rate.
-LINE_RATE_GBPS = {"wormhole_b0": 12.5, "blackhole": 50.0}
-
-try:
-    ARCH = ttnn.get_arch_name()
-except Exception:
-    ARCH = None
-LINE_RATE = _env("CCL_LINE_RATE", LINE_RATE_GBPS.get(ARCH), float)
-
 # Generated files all live in the report's data directory, which is gitignored.
 CONFIG_LOG = (Path(os.environ.get("TT_METAL_HOME", "."))
               / "tech_reports" / "CCLs" / "data" / "ccl_bench_configs.jsonl")
@@ -93,18 +113,6 @@ pytestmark = pytest.mark.skipif(
     os.environ.get(BENCHMARK_ENV) != "1",
     reason=f"CCL bandwidth benchmark is gated on {BENCHMARK_ENV}=1",
 )
-
-# --------------------------------------------------------------- dtype table
-
-TILE = 32
-ELEMS_PER_TILE = TILE * TILE
-DTYPES = {
-    # name: (ttnn dtype, bytes per 32x32 tile, pcc threshold)
-    "bfloat16": (ttnn.bfloat16, 2048, 0.999),
-    "bfloat8_b": (ttnn.bfloat8_b, 1088, 0.99),
-    "float32": (ttnn.float32, 4096, 0.9999),
-}
-TT_DTYPE, TILE_BYTES, PCC = DTYPES[DTYPE]
 
 _MEM = ttnn.MemoryConfig(
     ttnn.TensorMemoryLayout.INTERLEAVED,

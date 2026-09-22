@@ -270,10 +270,22 @@ def main():
             links, wraps, topo = discover(seg[ATTRS_COL].iloc[0], cfg["cluster_axis"])
         cfg.update(us=dur / 1000.0, links=links, wraps=wraps, topo=topo,
                    roofline=(ideal / dur * 100.0) if ideal else None)
-        found.setdefault((cfg["op"], cfg["n"]), (links, topo))
         rows[(cfg["op"], cfg["n"], cfg["target_bytes"])] = cfg
 
-    print("\ndiscovered from profiler ATTRIBUTES (used for linkbw):")
+    # One link count covers the run: it depends on the machine and the axis, not
+    # on the collective. Ops disagree only by using fewer than they discovered.
+    reported = sorted({r["links"] for r in rows.values() if r["links"]})
+    shared = reported[0] if len(reported) == 1 else None
+    if len(reported) > 1:
+        print(f"\nops disagree on link count {reported}; linkbw left blank")
+    missing = sorted({r["op"] for r in rows.values() if not r["links"]})
+    for r in rows.values():
+        r["links"] = r["links"] or shared
+        found.setdefault((r["op"], r["n"]), (r["links"], r["topo"]))
+
+    print(f"\nlink count {shared or '?'}, shared across the run")
+    if missing:
+        print(f"  not reported by: {', '.join(missing)}")
     for (op, n), (links, topo) in found.items():
         print(f"  {op:>15} n={n:<2} links={links if links else '?':<3} topology={topo or '?'}")
 
@@ -296,9 +308,10 @@ def main():
         "`% line rate` is linkbw against the per-link line rate recorded above.",
         "",
         "`linkbw` is per link per direction. It divides the bottleneck traffic by the",
-        "links carrying it, doubled on a wrapping axis. Link count and resolved topology",
-        "come from the op's own profiler attributes, so they are what ran, not what was",
-        "requested. Blank when they could not be read. all_to_all uses a different",
+        "links carrying it, doubled on a wrapping axis. Topology comes from each op's own",
+        "profiler attributes. The link count is shared across the run, and it is the count",
+        "discovered rather than the count used: a program may clamp below it to fit its",
+        "worker cores. Blank when neither could be read. all_to_all uses a different",
         "factor from busbw, because on a ring its chunks relay through intermediate",
         "chips instead of arriving in one hop.",
         "",

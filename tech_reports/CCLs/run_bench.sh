@@ -75,6 +75,14 @@ for run in ${RUNS}; do
         continue
     fi
 
+    # A run where every cell skipped leaves nothing to parse, and an all-skipped
+    # summary says neither "failed" nor "error".
+    if [ ! -s "${CONFIGS}" ]; then
+        printf -- '\nno measurements recorded. Last 40 lines of %s:\n\n' "${log}"
+        tail -40 "${log}"
+        continue
+    fi
+
     # Parse before the next run: the parser reads the newest profiler report.
     python "${REPORT_DIR}/parse_results.py" || printf -- '    parse failed\n'
 done
