@@ -34,10 +34,11 @@ class FusedMLP:
     valid only until the next invocation, matching the decoder workspace rule.
     """
 
-    def __init__(self, layers):
+    def __init__(self, layers, *, reuse_scratch=False):
         if not layers or len(layers) > 32:
             raise ValueError("Provide one to 32 decoder layers")
         self.layers = tuple(layers)
+        self.reuse_scratch = reuse_scratch
         self.mesh = layers[0].mesh_device
         if self.mesh.arch() != ttnn.device.Arch.BLACKHOLE or self.mesh.dram_grid_size().x != 8:
             raise ValueError("Fused MLP requires Blackhole with eight DRAM banks")
@@ -100,6 +101,31 @@ class FusedMLP:
         self.packed = empty(7168, _width_memory(self.projection_cores, 7168))
         self.product = empty(3584, layers[0].decode_inputs["down"])
         self.output = empty(4096, layers[0].residual_memcfg)
+        self.scratch_storage = []
+        self.scratch_by_cb = {}
+        if reuse_scratch:
+            # Separate CB views can have different page counts/formats while
+            # sharing a backing allocation. A single multi-format CB would
+            # force one total size, breaking the 224/112-page block wrap rules.
+            for indices, per_core_bytes in (((0, 4), 16 * 2048), ((1, 3), 224 * 576), ((24, 25), 28 * 2048)):
+                width = ((per_core_bytes + 4095) // 4096) * 32 * len(self.projection_cores)
+                storage = ttnn.empty(
+                    (1, 1, 32, width),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh,
+                    memory_config=_width_memory(self.projection_cores, width),
+                )
+                self.scratch_storage.append(storage)
+                for index in indices:
+                    self.scratch_by_cb[index] = storage
+            # A single weight block keeps persistent storage small enough for
+            # the native prefill RMSNorm buffers. This sacrifices double-buffer
+            # overlap and must be measured separately from the default body.
+            # The down reader waits for phase 3. That release follows all
+            # gate/up packs and every SFPU read, so the previous input, weight
+            # and partial CB contents have no remaining consumers.
+
         # Each 128-byte row is an independently addressable DRAM page. The
         # reserved fields are zero, not uninitialized kernel arguments.
         addresses = torch.zeros((len(layers), 32), dtype=torch.int64)
@@ -189,18 +215,22 @@ class FusedMLP:
 
         def cb(index, tiles, dtype, grid):
             page = ttnn.Tile([32, 32]).get_tile_size(dtype)
-            cbs.append(
-                ttnn.CBDescriptor(
+            formats = [ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)]
+            if index in self.scratch_by_cb and grid == self.projection_grid:
+                descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    index,
+                    self.scratch_by_cb[index],
                     total_size=tiles * page,
-                    core_ranges=grid,
-                    format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)],
                 )
-            )
+                descriptor.format_descriptors = formats
+            else:
+                descriptor = ttnn.CBDescriptor(total_size=tiles * page, core_ranges=grid, format_descriptors=formats)
+            cbs.append(descriptor)
 
         for index, tiles, dtype in (
             (0, 16, ttnn.bfloat16),
-            (1, 448, ttnn.bfloat4_b),
-            (3, 224, ttnn.bfloat8_b),
+            (1, 224 if self.reuse_scratch else 448, ttnn.bfloat4_b),
+            (3, 112 if self.reuse_scratch else 224, ttnn.bfloat8_b),
             (4, 14, ttnn.bfloat16),
             (17, 16, ttnn.bfloat16),
             (24, 28, ttnn.bfloat16),
@@ -223,7 +253,7 @@ class FusedMLP:
         descriptor = self.descriptor(normalized, layer_index)
         # Keep every table-referenced weight resident; the returned scratch is
         # consumed by reduce-scatter before the next decoder invokes this body.
-        io = [normalized, self.address_table, self.packed, self.product]
+        io = [normalized, self.address_table, self.packed, self.product, *self.scratch_storage]
         io.extend(w for layer in self.layers for w in (layer.decode_weights["gate_up"], layer.decode_weights["down"]))
         ttnn.generic_op([*io, self.output], descriptor)
         return self.output

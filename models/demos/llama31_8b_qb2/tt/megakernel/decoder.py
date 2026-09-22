@@ -36,7 +36,7 @@ class ExperimentalDecoder(LlamaDecoder):
         return ttnn.typecast(result, self.residual_dtype) if result.dtype != self.residual_dtype else result
 
 
-def experimental_layers(layers, *, mode="mlp"):
+def experimental_layers(layers, *, mode="mlp", reuse_scratch=False):
     """Share original weights, KV ownership and workspace, with explicit opt-in.
 
     Construct before warming or capturing any trace. The caller owns the
@@ -47,7 +47,7 @@ def experimental_layers(layers, *, mode="mlp"):
         raise ValueError("mode must be swiglu or mlp")
     if not layers or any(layer.decode_workspace.batch != 1 for layer in layers):
         raise ValueError("Experimental decode supports only prepared batch-one layers")
-    body = FusedMLP(layers) if mode == "mlp" else None
+    body = FusedMLP(layers, reuse_scratch=reuse_scratch) if mode == "mlp" else None
     result = []
     for index, layer in enumerate(layers):
         adapted = copy(layer)
@@ -59,7 +59,7 @@ def experimental_layers(layers, *, mode="mlp"):
     return result
 
 
-def enable_experimental_decode(model, *, mode="mlp"):
+def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False):
     """Install the same body across all 32 layers before generator trace setup.
 
     The embedding, final norm, head and sampler remain the existing traced
@@ -68,5 +68,5 @@ def enable_experimental_decode(model, *, mode="mlp"):
     """
     if model.max_batch_size != 1 or set(model.decode_families) != {1}:
         raise ValueError("Only a batch-one model without additional families is supported")
-    model.layers = experimental_layers(model.layers, mode=mode)
+    model.layers = experimental_layers(model.layers, mode=mode, reuse_scratch=reuse_scratch)
     model.decode_families[1] = model.layers

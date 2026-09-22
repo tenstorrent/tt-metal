@@ -1,9 +1,13 @@
 # Experimental QB2 decode fusion
 
-This is an **unvalidated partial prototype**, not a complete decode megakernel.
-Its Blackhole kernels compile with current main. At initial bringup, the owned
-QB2 failed topology mapping and an isolated mesh failed ERISC initialization;
-numerical and performance tests require recovered, verified hardware.
+This is a **hardware-validated local MLP prototype**, not a complete decode
+megakernel. On Blackhole QB2, real-checkpoint gate/up, SwiGLU and down stages,
+complete-layer paged replay/remapping, and a batch-one context-128 full-model
+comparison pass. All 32 teacher-forced logit rows and all-layer KV caches are
+bitwise identical to the native traced baseline; all 32 greedy tokens agree.
+Initial warmed host decode is slower: 9.246 versus 8.786 ms/token (31 decode
+steps, median of three runs). These are host generation timings, not device
+profiler or serving measurements. See `PROGRESS.md` and run artifacts for limits.
 
 `FusedMLP` combines local gate/up projection, SwiGLU, and down projection into
 one generic program per chip. Eight projection cores and sixteen SFPU cores
@@ -15,7 +19,7 @@ The initial geometry is batch one, hidden width 4096, TP-local intermediate
 width 3584, eight Blackhole DRAM banks, BFP4 gate/up weights, BFP8 down weights,
 and BF16 activations. It retains the baseline's LoFi projections, BF16 partials
 with packer L1 accumulation, and BF16 rounding between SiLU and multiplication.
-Exact numerical agreement still needs measurement. The separate `swiglu` mode
+Exact numerical agreement was measured with real layer-0 and layer-31 weights. The separate `swiglu` mode
 replaces only layout/slicing/activation work and retains native projections.
 
 `enable_experimental_decode(model, mode="mlp")` installs the body across the 32
@@ -78,9 +82,22 @@ input/position refreshes are outside. `MLP-*` device zones separate projection,
 SFPU, output write, and barrier phases. Profiler overhead prevents using these
 runs as the generation latency result.
 
-The next implementation stage is measured local-body bringup, followed by
+The next implementation stage is device profiling and optimization, then
 folding normalization and fabric reductions into the body, then attention/KV
 and device layer-loop coordination. Current DRAM-sharded matmul uses Metal 2.0
 ProgramArtifacts; the legacy Python sequential fuser cannot directly consume
 it. Blackhole has 64 CB indices; this prototype's highest index is 31, so CB
 index exhaustion is not its current constraint.
+
+`reuse_scratch=True` shares input/weight/partial backing storage between the
+sequential projections. Its weight buffer holds one block to fit alongside
+native prefill allocations; the default uses separate double-buffered weights.
+Both configurations pass stage and complete-layer tests. Only the default has
+full-model evidence so far. A larger shared allocation was rejected by current
+runtime prefill L1 collision validation; do not restore it without rechecking.
+
+The BF16 HF reference is a separate accuracy diagnostic: the original selected
+BFP4/BFP8 baseline has aggregate logit PCC 0.97753 on this prompt, despite 100%
+teacher top-1 agreement. The prototype reproduces it exactly. The saved result
+explicitly records `hf_pcc_099_passed=false`; this is not a 0.99 HF accuracy pass.
+Use `--require-hf-pcc` to make an HF threshold mandatory after saving evidence.

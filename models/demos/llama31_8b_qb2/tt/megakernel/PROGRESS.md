@@ -1,9 +1,9 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 12:58 UTC. **Incomplete and not hardware-validated.**
+Updated 2026-09-22 13:27 UTC. **Verified partial MLP prototype; full megakernel incomplete.**
 
 - Base: `b8915544692d8f9feb2c890afbc2f22791560cd2` (origin/main at setup).
-- Implementation HEAD: `1222558c5f1d52491dce2b23f4819727068445be`; subsequent
+- Earlier implementation HEAD: `4214810a674a018b256f4dd0f776974ba919bec1`; subsequent
   checkpoint commits include this note. Exact transfer HEAD is recorded in
   the run artifact `PARENT_CHECKPOINT.md` and obtainable with `git rev-parse HEAD`.
 - Branch: `codex/llama31-qb2-megakernel`. Mark authorized commits/pushes to this
@@ -50,25 +50,35 @@ changed device C++ must compile and execute on hardware before qualification.
   14,768 bytes of kernel text. See `compile-mock-reuse.log` and `footprint.json`.
 - Python syntax/help pass; six real-model pytest cases collect, including
   focused MLP intermediate outputs and distinct layer-0/layer-31 weight rows.
-  **Hardware assertions have not run.**
+  Hardware assertions now pass as detailed below.
 - A CPU-only HF BF16 real-checkpoint reference completed at context 128 with
   32 predictions. Logits [32,128256] and every layer's K/V [1,8,159,128] are
   finite; cache lengths grow 128→159. Artifacts: `hf-reference-128/reference.pt`
   and `.json`; preparation took 139.33 s. This is not TT correctness/performance.
   Benchmark `--hf-reference` enforces the same teacher stream and adds HF
   logit/cache comparisons while retaining the selected TT baseline precision.
-- Current-build full connectivity fails: chip 2↔3 has one internal link instead
-  of two, missing chip 2 `(0,8)` / chip 3 `(0,3)`. Four-chip ring mesh fails.
-- Isolating chips 0/1 lets topology map but ERISC firmware init times out.
-  Runtime exits status 1 after 33.36 seconds; no process killed. Inspector and
-  focused ARC/Ethernet/version triage are saved in `isolated-mesh-triage`.
-- **Reset approval remains pending. No reset/reboot/firmware change performed.**
-  `RECOVERY_REQUIRED` prevents device execution. Prepared
-  `commands/recovery-one-reset.sh` requires explicit authorization and checks
-  node/allocation/owners, performs at most one reset, then checks connectivity
-  and mesh. Do not run it until approval arrives.
-- No device latency, correctness, profiler, measured DRAM/synchronization,
-  serving result, or performance improvement exists yet. See artifact REPORT.md.
+- Earlier missing chip 2↔3 link and isolated ERISC initialization failures are
+  preserved in artifacts. Mark explicitly authorized repeated device resets
+  during the owned allocation; this supersedes earlier approval restrictions.
+- Bounded serialized reset at 13:11 UTC restored all four devices and both
+  internal links. Current-runtime full-connectivity tests pass, and the
+  four-chip FABRIC_1D_RING mesh opens and closes successfully. Evidence:
+  `reset-once.log`, `system-health-after-reset.log`, `mesh-after-reset.log`.
+- Original real-weight layer HF PCC 0.997647 passes. Fused MLP stages are
+  bitwise identical for real layers 0/31, two token embeddings and five replays.
+- SwiGLU, MLP, and reduced shared-scratch MLP complete-layer tests pass 12
+  position/remapping checks each, including 127→128 and 255→256 boundaries,
+  exact full-cache equality and repeated trace replay. The larger shared
+  allocation collided with prefill RMSNorm L1; one-block shared weights fix it.
+- All-32-layer B1/context128/32-output-token default MLP: teacher logits and all
+  64 K/V tensors bitwise equal to matched traced baseline; greedy agreement100%.
+  Selected precision and sampling unchanged. Three warmed host-generation runs:
+  baseline median8.7855 ms/token; MLP9.2462 ms/token, a5.24% regression.
+- BF16 HF diagnostic: baseline and prototype logit PCC0.977533, relativeL2
+  0.208836, teacher top1 agreement100%; 0.99 HF target is explicitly false.
+  Do not conflate matched TT correctness with BF16 HF accuracy qualification.
+- Device profiler/memory capture is starting. No measured device latency,
+  DRAM/synchronization or serving result yet. No speedup claim.
 
 ## Implemented scope and next actions
 
@@ -79,11 +89,11 @@ fusion only**: prefill, normalization, attention/KV, collectives and terminal
 embedding/head/sampling remain native TTNN; no complete decoder/device layer
 loop or vLLM qualification. B1 only. Current Blackhole supports 64 CB indices.
 
-1. Continue independent review while reset approval is pending; the context-128
-   CPU reference is now prepared. Preserve this scope; compiler success does not qualify the body.
-2. After approved recovery and passing health/mesh, run the serial bounded
-   `commands/validate-after-recovery.sh`: existing HF layer comparison, both
-   fused-layer modes, then full-model baseline/prototype at context 128.
+1. Hardware recovered; context-128 CPU reference is prepared. Compiler success
+   does not qualify the body.
+2. Initial bounded hardware layer/model checks completed. Preserve evidence
+   in `numerical`, `numerical-shared-single`, `model-baseline-128-complete`,
+   and `model-mlp-128` artifacts. Collect matched separate device profiles next.
 3. Fix failures and extend context to 2048. Check page writes, remapping within
    captured traces, repeated replay, position growth and final token/logit/KV.
 4. Collect separate matched device-profiler runs, phase/synchronization and

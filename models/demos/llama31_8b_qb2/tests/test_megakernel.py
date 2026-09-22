@@ -52,8 +52,10 @@ def copy_to(value, target, mesh):
     ttnn.copy_host_to_device_tensor(host, target)
 
 
-@pytest.mark.parametrize("mode", ["swiglu", "mlp"])
-def test_fused_layer_real_weights(qb2_mesh, mode):
+@pytest.mark.parametrize(
+    "mode,reuse_scratch", [("swiglu", False), ("mlp", False), ("mlp", True)], ids=["swiglu", "mlp", "mlp_shared"]
+)
+def test_fused_layer_real_weights(qb2_mesh, mode, reuse_scratch):
     torch.set_num_threads(8)
     mesh = qb2_mesh
     folder = checkpoint_path()
@@ -69,12 +71,13 @@ def test_fused_layer_real_weights(qb2_mesh, mode):
         ccl=TT_CCL(mesh),
     )
     baseline.prepare_decode(1)
-    prototype = experimental_layers([baseline], mode=mode)[0]
+    prototype = experimental_layers([baseline], mode=mode, reuse_scratch=reuse_scratch)[0]
     embedding = checkpoint.load(["model.embed_tokens.weight"])["model.embed_tokens.weight"]
     ids = torch.randint(0, config.vocab_size, (1, 259), generator=torch.Generator().manual_seed(35))
     hidden = embedding[ids]
     results = {
         "mode": mode,
+        "reuse_scratch": reuse_scratch,
         "batch": 1,
         "checkpoint": str(folder),
         "precision": baseline.precision_policy,
@@ -170,4 +173,4 @@ def test_fused_layer_real_weights(qb2_mesh, mode):
     if destination := os.environ.get("QB2_MEGAKERNEL_ARTIFACT_DIR"):
         path = Path(destination)
         path.mkdir(parents=True, exist_ok=True)
-        (path / f"layer-{mode}.json").write_text(json.dumps(results, indent=2))
+        (path / f"layer-{mode}{'_shared' if reuse_scratch else ''}.json").write_text(json.dumps(results, indent=2))
