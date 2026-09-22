@@ -506,6 +506,7 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 #define DeviceZoneScopedN(name)    \
     TT_ZONE_DEFINE_ID(hash, name); \
@@ -596,5 +597,8 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define StartPerfCounters()
 #define StopPerfCounters()
 #define RecordPerfCounters()
+
+#define SYNC_WAIT(name, key) (void(sizeof(key)))
+#define SYNC_SIGNAL(name, key) (void(sizeof(key)))
 
 #endif

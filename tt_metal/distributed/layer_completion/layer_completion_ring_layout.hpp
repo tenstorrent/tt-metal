@@ -46,7 +46,7 @@ struct LayerCompletionRingHeader {
 };
 
 // Cells start on the first LayerCompletionCell-aligned offset past the header.
-inline constexpr std::size_t layer_completion_cells_offset() {
+constexpr std::size_t layer_completion_cells_offset() {
     return ((sizeof(LayerCompletionRingHeader) + alignof(LayerCompletionCell) - 1) / alignof(LayerCompletionCell)) *
            alignof(LayerCompletionCell);
 }

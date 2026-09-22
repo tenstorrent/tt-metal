@@ -569,22 +569,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
-
-// remove_msb_values on PACK: verbatim reproduction of the Metal wrapper
-// llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values, which Compute API invokes through
-// PACK(...). Zeros the bf16 value half of the fused Dest words in place: [0 | index].
-template <std::uint32_t K>
-inline void pack_remove_msb_values(std::uint32_t dst_index)
-{
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH | p_stall::PACK);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-    // The SFPU drain on the way in and the pack drain on the way out both live
-    // inside `_topk_xl_remove_msb_values_`. The LLK static_asserts SyncFull.
-    ckernel::sfpu::_topk_xl_remove_msb_values_<K, dest_sync>();
-}
+#include "topk_xl_test_helpers.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -599,7 +584,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_dst_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 
-    if constexpr (INDEX_OP_REMOVE_MSB)
+    if constexpr (INDEX_OP_REMOVE_MSB && !ckernel::sfpu::topk_xl_blaze_compat)
     {
         ckernel::sfpu::_topk_xl_remove_msb_values_init_();
     }
@@ -616,7 +601,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Zero the value half on PACK, then pack the fused region as [0|index].
             // Includes the trailing SFPU drain before the pack below.
-            pack_remove_msb_values<TOPK_XL_K>(SLOT0);
+            ckernel::test::topk_xl_pack_remove_msb_values<TOPK_XL_K, dest_sync>(SLOT0);
         }
 
         std::uint32_t res = r * RESULT_TILES_PER_ROW;

@@ -92,4 +92,14 @@ def _golden_function(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function)
 
 
+def _golden_function_complex_tensor(real, imag, *args, **kwargs):
+    import torch
+
+    # The op returns a ComplexTensor wrapping (real, imag); the golden is the equivalent complex-valued tensor.
+    return torch.complex(real, imag)
+
+
+ttnn.attach_golden_function(ttnn.complex_tensor, golden_function=_golden_function_complex_tensor)
+
+
 __all__ = []
