@@ -6,6 +6,8 @@
 
 #include "cross_node_dfb_test_utils.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "hostdev/remote_dfb_config_layout.h"
 
 namespace tt::tt_metal::prefetcher_pipe_test {
 
@@ -43,6 +45,28 @@ inline bool verify_receiver_ring(
         data_pattern, entry_size, num_entries, receiver_idx, num_receivers, counter_base);
     const auto received = read_receiver_ring_bytes(device, pipe, receiver_core, static_cast<uint32_t>(expected.size()));
     return received == expected;
+}
+
+// Lane-0 (sent, acked) of `core`'s slot, read from TL1. SENT and ACKED live in separate blocks
+// (remote_dfb_config_layout.h); the core's config page words give its slot in each.
+inline std::pair<uint32_t, uint32_t> read_pipe_credits(
+    distributed::MeshDevice& device, const experimental::PrefetcherPipe& pipe, const CoreCoord& core) {
+    const auto& page = pipe.impl().config_page(core);
+    const auto read_word = [&](uint32_t page_offset) {
+        std::vector<uint8_t> bytes(sizeof(uint32_t), 0);
+        slow_dispatch::ReadFromL1(
+            device,
+            core,
+            pipe.config_address() + page_offset,
+            std::span<uint8_t>(bytes.data(), bytes.size()),
+            CoreType::WORKER);
+        uint32_t word = 0;
+        std::memcpy(&word, bytes.data(), sizeof(uint32_t));
+        return word;
+    };
+    return {
+        read_word(page[PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET]),
+        read_word(page[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET])};
 }
 
 inline uint32_t sender_l1_staging_address(const experimental::PrefetcherPipe& pipe) {

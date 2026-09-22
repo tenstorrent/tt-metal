@@ -321,17 +321,33 @@ def test_production_shapes_are_correct(mesh_device, C, K, stride, T_pad):
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", SINGLE_DEVICE_PARAMS, indirect=True)
 def test_unknown_shape_probes_and_is_correct(mesh_device, quiet_warnings):
-    """A channel count no table has (96) goes through the trial chain and still comes out right."""
-    plan = _run_and_check(mesh_device, 96, 7, 1, 166, cache={})
-    assert plan[0] in applicable_formulations(96) + ["mac"]
+    """A channel count no table has goes through the trial chain and still comes out right.
+
+    Pick the width against the live table rather than hardcoding one: a sweep that tables a width
+    (the LTX vocoder rows tabled 96 for the BH 12x10 grid) must not turn this into a table-hit test.
+    """
+    rows = tfc._FORMULATIONS.get(tap_device_key(mesh_device), {})
+    C = next(c for c in (96, 40, 56, 72, 104, 120, 136) if (c, 7, 1) not in rows)
+    plan = _run_and_check(mesh_device, C, 7, 1, 166, cache={})
+    assert plan[0] in applicable_formulations(C) + ["mac"]
     assert any("no table row" in w for w in quiet_warnings)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", SINGLE_DEVICE_PARAMS, indirect=True)
-def test_stale_row_falls_back_on_device(mesh_device, quiet_warnings):
-    """Force a row that cannot fit (full C=512 at K=7: the C*K activation block never fits L1) and check the chain
-    recovers to a working formulation with one warning and a correct result."""
+def test_stale_row_falls_back_on_device(mesh_device, quiet_warnings, monkeypatch):
+    """Table a row whose formulation fails on this device and check the chain recovers to a working chunked
+    formulation with one warning and a correct result. Whether the full-C conv1d at C=512, K=7 fits is
+    arch/grid dependent (it fits on an 8x8 Wormhole grid, not on Blackhole), so the stale-row failure is
+    injected: only the tabled full-C attempt raises, the chunked attempts run the real op."""
+    real_conv1d = audio_ops._depthwise_tap_conv1d
+
+    def failing_full_c(x_BTC, weight, *, C, **kwargs):
+        if C == 512:
+            raise RuntimeError("forced stale row: full-C conv1d does not fit")
+        return real_conv1d(x_BTC, weight, C=C, **kwargs)
+
+    monkeypatch.setattr(audio_ops, "_depthwise_tap_conv1d", failing_full_c)
     key = tap_device_key(mesh_device)
     saved_f = dict(tfc._FORMULATIONS.get(key, {}))
     saved_s = dict(tfc._SLICES.get(key, {}))
@@ -339,8 +355,8 @@ def test_stale_row_falls_back_on_device(mesh_device, quiet_warnings):
         tfc.clear_tap_configs(key)
         register_tap_configs(key, formulations={(512, 7, 1): "direct"})
         plan = _run_and_check(mesh_device, 512, 7, 1, 166, cache={})
-        assert plan[0] != "direct"
-        assert any("failed" in w for w in quiet_warnings)
+        assert plan[0] == 128, f"expected the widest chunked fallback, got {plan[0]!r}"
+        assert sum("failed" in w for w in quiet_warnings) == 1
     finally:
         tfc.clear_tap_configs(key)
         register_tap_configs(key, formulations=saved_f or None, slices=saved_s or None)

@@ -187,9 +187,9 @@ inline void _calculate_reciprocal_fast_24b_5c_(const int iterations) {
     // 3 |      |                        |                         |         |
     // 4 | [z]  | [t2] = swap(t2, 1.0)   |                         |         |
     // 0 |      |                        |                         |         |
-    // 1 |      |                        | [z] L16 = mad(t2, z, z) |         |
+    // 1 |      |                        | [z] = mad(t2, z, z)     |         |
     // 2 |      |                        |                         |         |
-    // 3 |      |                        |                         | [z] L16 |
+    // 3 |      |                        |                         | [z]     |
 
     lltt::replay(0, 4);
     TTI_SFPLOAD(7, 0, ADDR_MOD_6, 0);
@@ -332,10 +332,15 @@ inline void _init_reciprocal_fast_24b_5c_() {
 
     // Macro 3: [z]
     {
+        // Keep the corrected result in z. Macro 0 still needs L16 for its delayed
+        // store of the next vector's approximate reciprocal. Even with instruction-
+        // counted delays, an issued MAD completes during scalar stalls (e.g. gcov),
+        // so writing its result to L16 can clobber that value before macro 0 stores it.
+        // The next load of z follows this macro's store, so z has no such overlap.
         constexpr std::uint32_t simple_bits = 0;
-        constexpr std::uint32_t mad_bits = 0x80 | 0x40 | (1 << 3) | (4 + 2);
+        constexpr std::uint32_t mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 2);
         constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
+        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);

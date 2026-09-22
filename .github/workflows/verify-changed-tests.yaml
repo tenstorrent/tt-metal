@@ -60,6 +60,8 @@ env:
   #                                  cmd as an artifact-name component.
   #   llk_ttsim_weekly.yaml          its impl appends --architecture, derived per leg
   #                                  from ttsim_lib, so no static cmd is complete.
+  #   llk_ttnop_tests.yaml           runs only through its specialized manual/weekly
+  #                                  workflow, which supplies TTNOP setup and recovery.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-
@@ -67,6 +69,7 @@ env:
     ttnn_sweep_tests.yaml
     single_card_profiler_tests.yaml
     llk_ttsim_weekly.yaml
+    llk_ttnop_tests.yaml
 
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
@@ -84,11 +87,18 @@ env:
   # hits runtime_unit_tests.yaml and fabric_perf_tests.yaml. Everything else is
   # derived from the leg itself -- sim_* SKUs run under ttsim, and a pytest cmd
   # needs the wheel.
+  #
+  # blackhole_e2e_tests.yaml is on the list despite not being named *_profiler_tests:
+  # its LoudBox perf legs call run_device_perf, which shells out to `python3 -m tracy`.
+  # Without a profiler build the gate dispatches them and they fail on "Tracy tools
+  # not found" -- a gate artefact, not a test failure. blackhole-e2e-tests.yaml itself
+  # builds with `tracy: true` for the same reason.
   TRACY_BUILD_YAMLS: >-
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
     runtime_perf_profiler_tests.yaml
+    blackhole_e2e_tests.yaml
 
 jobs:
   scope:
@@ -113,6 +123,7 @@ jobs:
         with:
           # Full history: the gate diffs against the merge base with main.
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -132,7 +143,6 @@ jobs:
             --base "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}" \
             --repo "${{ github.repository }}" \
             --pr "${{ github.event.pull_request.number }}" \
-            --head-sha "${{ github.event.pull_request.head.sha }}" \
             --output scope.json
 
       - name: Summarise
@@ -161,7 +171,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: false
 
   build-profiler:
@@ -174,7 +184,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
 
   fetch-ttsim:
@@ -214,10 +224,16 @@ jobs:
     # fetch-ttsim is a prerequisite even for hardware legs: every fetch the run needs
     # completes before any test starts.
     needs: [scope, build-default, build-profiler, fetch-ttsim]
+    # An empty matrix vector is a workflow-level error in Actions, not a skipped
+    # job: the run is marked failed with nothing red inside it. scope returns an
+    # empty matrix on every no_op PR -- i.e. most of them -- so guard it here the
+    # same way fetch-ttsim guards sim-libs above.
     if: >-
       ${{ !cancelled()
           && !contains(needs.*.result, 'failure')
-          && github.event_name == 'pull_request'}}
+          && github.event_name == 'pull_request'
+          && needs.scope.outputs.matrix != '[]'
+          && needs.scope.outputs.matrix != ''}}
     strategy:
       fail-fast: false
       matrix:
@@ -261,10 +277,12 @@ jobs:
         DONT_USE_VIRTUAL_ENVIRONMENT: ${{ matrix.leg.gate_profile == 'profiler' && '1' || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        # GitHub-hosted runners have no hugepages or weights cache; derived from runs_on
+        # so a new hosted SKU is covered automatically. Same exclusion as smoke.yaml.
+        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_hugepages' || '/dev/hugepages-1G:/dev/hugepages-1G' }}
         # Weights cache, selected by the SKU's weights-cache-mode exactly as the
         # owning pipeline selects it.
-        - ${{ matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro' || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
       options: >-
          ${{ (startsWith(matrix.leg.sku, 'sim_') && '--label runner-mode=sim')
              || (matrix.leg.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent')
@@ -416,8 +434,7 @@ jobs:
           fi
 
           # A skipped stage is never treated as a pass. Every branch below states
-          # positively what had to succeed. The scope job also fails outright when a
-          # blocked leg lacks its owner approval, so that case never reaches here.
+          # positively what had to succeed.
           [[ '${{ needs.scope.result }}' == 'success' ]] \
             || fail "the scope stage did not succeed (${{ needs.scope.result }})."
 
@@ -437,10 +454,9 @@ jobs:
               || fail "${{ needs.scope.outputs.leg-count }} leg(s) did not all pass (run-tests: ${{ needs.run-tests.result }})."
           fi
 
-          # The scope step reports the review verdict rather than failing on it, so
-          # the runnable legs still get dispatched and proven. Enforce it here.
+          # Reported, not failed on: CODEOWNERS and the branch ruleset already block the merge.
           if [[ '${{ needs.scope.outputs.review-met }}' == 'false' ]]; then
-            fail "${{ needs.scope.outputs.review-leg-count }} leg(s) on highly contended SKUs need an approving review from a code owner. See the scope job for which files and owners."
+            echo "::notice::${{ needs.scope.outputs.review-leg-count }} leg(s) on highly contended SKUs still need an approving review from a code owner; the branch ruleset holds the merge until then. See the scope job for which files and owners."
           fi
 
           case '${{ needs.scope.outputs.status }}' in
@@ -448,7 +464,7 @@ jobs:
               echo "No behaviour-affecting test-entry changes. Nothing to prove."
               ;;
             blocked)
-              echo "${{ needs.scope.outputs.leg-count }} leg(s) ran; ${{ needs.scope.outputs.review-leg-count }} on highly contended SKUs carry a code owner's approval instead."
+              echo "${{ needs.scope.outputs.leg-count }} leg(s) ran; ${{ needs.scope.outputs.review-leg-count }} on highly contended SKUs are left to code owner review."
               ;;
             run)
               echo "All ${{ needs.scope.outputs.leg-count }} leg(s) passed."

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mpi_distributed_context.hpp"
+#include "dtype_size.hpp"
 #include <mpi.h>
 #include <mpi-ext.h>
 
@@ -136,26 +137,6 @@ constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
         case DType::COMPLEX_DOUBLE: return MPI_C_DOUBLE_COMPLEX;
     }
     return MPI_DATATYPE_NULL;
-}
-
-constexpr int mpi_dtype_size(DType dt) noexcept {
-    switch (dt) {
-        case DType::INT8:
-        case DType::UINT8:
-        case DType::BOOL:
-        case DType::BYTE: return 1;
-        case DType::INT16:
-        case DType::UINT16: return 2;
-        case DType::INT32:
-        case DType::UINT32:
-        case DType::FLOAT32: return 4;
-        case DType::INT64:
-        case DType::UINT64:
-        case DType::FLOAT64:
-        case DType::COMPLEX_FLOAT: return 8;
-        case DType::COMPLEX_DOUBLE: return 16;
-    }
-    return 0;
 }
 
 inline void check_size_fits_int(std::size_t n) {
@@ -434,7 +415,7 @@ void MPIContext::all_reduce(
         send_buf.size(),
         recv_buf.size());
 
-    const int elem_size = mpi_dtype_size(dtype);  // e.g. 4 for FLOAT32
+    const int elem_size = static_cast<int>(dtype_size(dtype));  // e.g. 4 for FLOAT32
     TT_FATAL(
         send_buf.size() % elem_size == 0,
         "all_reduce: buffer size {} is not a multiple of element size {}",
@@ -451,7 +432,7 @@ void MPIContext::all_reduce(
 
 void MPIContext::reduce(
     ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const {
-    const int elem_sz = mpi_dtype_size(dtype);
+    const int elem_sz = static_cast<int>(dtype_size(dtype));
     TT_FATAL(
         send_buf.size() % elem_sz == 0,
         "reduce: send size {} not multiple of element size {}",
@@ -545,7 +526,7 @@ void MPIContext::all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte
 void MPIContext::reduce_scatter(
     ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     const int world = *size();
-    const int elem_sz = mpi_dtype_size(dtype);
+    const int elem_sz = static_cast<int>(dtype_size(dtype));
 
     TT_FATAL(
         send_buf.size() % elem_sz == 0,
@@ -587,7 +568,7 @@ void MPIContext::scan(
     TT_FATAL(
         send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 
-    const int elem_sz = mpi_dtype_size(dtype);
+    const int elem_sz = static_cast<int>(dtype_size(dtype));
     TT_FATAL(
         send_buf.size() % elem_sz == 0,
         "scan: buffer size {} not multiple of element size {}",

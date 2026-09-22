@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+
 #include <cstdint>
 
 #include "api/compute/common.h"
@@ -117,6 +119,8 @@ void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& send, uint32_
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::stage_a);
+
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
     DataflowBuffer initial_a(dfb::initial_a);
@@ -129,7 +133,14 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer remote_b(dfb::remote_b);
     DataflowBuffer scratch(dfb::scratch);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::stage_a);
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
+    }
+    if (group >= topology.head_groups(G)) {
+        return;
+    }
     initial_a.wait_front(a_tiles);
     initial_b.wait_front(b_tiles);
     copy(initial_a, stage_a, send_a, a_tiles);

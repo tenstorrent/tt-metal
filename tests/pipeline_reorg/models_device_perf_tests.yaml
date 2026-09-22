@@ -93,6 +93,17 @@
   team: shield
   budget_type: device_perf
 
+- name: Stable Diffusion XL op device-perf tests
+  cmd: |
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -m models_device_performance_bare_metal
+  model: sdxl
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+  budget_type: device_perf
+
 - name: ResNet-50 device perf tests
   cmd: |
     pytest --timeout {pytest_timeout} models/demos/vision/classification/resnet50/{arch_dir}/tests/test_perf_device_resnet50.py -m models_device_performance_bare_metal

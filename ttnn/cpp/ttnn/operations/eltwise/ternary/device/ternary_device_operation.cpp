@@ -609,17 +609,26 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         return std::pair<uint32_t, uint32_t>{s.rank() >= 2 ? s[-2] : 1u, s[-1]};
     };
 
+    // Same logical H/W can still differ in alignment or tile.
+    const auto alignment = [](const Tensor& t) { return t.tensor_spec().tensor_layout().get_alignment(); };
+
     return tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
         args,
         input_a.dtype(),
         input_a.memory_config(),
         hw(input_a),
+        alignment(input_a),
+        input_a.tensor_spec().tile(),
         input_b.has_value() ? std::optional<DataType>{input_b->dtype()} : std::nullopt,
         input_b.has_value() ? std::optional<MemoryConfig>{input_b->memory_config()} : std::nullopt,
         input_b.has_value() ? std::optional{hw(*input_b)} : std::nullopt,
+        input_b.has_value() ? std::optional{alignment(*input_b)} : std::nullopt,
+        input_b.has_value() ? std::optional{input_b->tensor_spec().tile()} : std::nullopt,
         input_c.has_value() ? std::optional<DataType>{input_c->dtype()} : std::nullopt,
         input_c.has_value() ? std::optional<MemoryConfig>{input_c->memory_config()} : std::nullopt,
         input_c.has_value() ? std::optional{hw(*input_c)} : std::nullopt,
+        input_c.has_value() ? std::optional{alignment(*input_c)} : std::nullopt,
+        input_c.has_value() ? std::optional{input_c->tensor_spec().tile()} : std::nullopt,
         shard_volumes,
         sharded_tensor_shape_in_pages(input_a),
         input_b.has_value() ? sharded_tensor_shape_in_pages(*input_b) : std::nullopt,

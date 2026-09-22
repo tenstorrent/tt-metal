@@ -107,8 +107,9 @@ def get_valid_dest_acc_unary_broadcast(formats):
     if formats.input_format.is_32_bit():
         return [DestAccumulation.Yes]
     return [
-        DestAccumulation.No
-    ]  # 32bit dest is not supported for the unpack_to_dest=False case, ISSUE: #47560
+        DestAccumulation.No,
+        DestAccumulation.Yes,
+    ]
 
 
 @pytest.mark.quasar
