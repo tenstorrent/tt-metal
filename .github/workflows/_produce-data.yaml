@@ -210,7 +210,10 @@ jobs:
           username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
       - name: Upload workflow run data, even on failure
-        if: ${{ !cancelled() }}
+        # has-data is 'false' only when the analysis positively found nothing to upload. When an
+        # earlier step fails, check-pipeline-json never runs and the output is empty -- that is the
+        # case this step exists for, so compare against 'false' rather than 'true'.
+        if: ${{ !cancelled() && steps.check-pipeline-json.outputs.has-data != 'false' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
