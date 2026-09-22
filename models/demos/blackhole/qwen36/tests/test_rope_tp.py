@@ -38,8 +38,10 @@ from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
     apply_partial_rope_prefill,
     rot_mats_decode,
     rot_mats_prefill,
+    shard_rope_tables_decode,
 )
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.tt_transformers.tt.model_config import num_to_corerange
 
 
 def _cos_sin(positions, rope_dim, theta):
@@ -115,9 +117,21 @@ def test_partial_rope_decode(mesh_device, reset_seeds, ensure_gc, request):
     k = torch.randn(1, B, NKV, HD, dtype=torch.bfloat16)
 
     # ---- TTNN (demo path) ----
+    # Decode RoPE consumes the one-user-per-core height shard nlp_create_qkv_heads_decode emits,
+    # so reproduce that layout (and the matching cos/sin shard) here.
+    head_mc = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, HD),
+        core_grid=ttnn.CoreRangeSet({num_to_corerange(B, grid_x=mesh_device.compute_with_storage_grid_size().x)}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
     cos_tt, sin_tt = rot_mats_decode(mesh_device, rope_dim, 256, theta, positions)
-    q_tt = apply_partial_rope_decode(replicate_to_device(mesh_device, q), cos_tt, sin_tt, NH, B, rope_dim)
-    k_tt = apply_partial_rope_decode(replicate_to_device(mesh_device, k), cos_tt, sin_tt, NKV, B, rope_dim)
+    cos_s, sin_s = shard_rope_tables_decode(cos_tt, sin_tt, head_mc)
+    q_sh = ttnn.to_memory_config(replicate_to_device(mesh_device, q), head_mc)
+    k_sh = ttnn.to_memory_config(replicate_to_device(mesh_device, k), head_mc)
+    q_tt = apply_partial_rope_decode(q_sh, cos_s, sin_s, NH, B, rope_dim)
+    k_tt = apply_partial_rope_decode(k_sh, cos_s, sin_s, NKV, B, rope_dim)
     q_out, k_out = _read0(mesh_device, q_tt), _read0(mesh_device, k_tt)
 
     # ---- torch reference (per-user positions, heads in dim 2 -> unsqueeze_dim=2) ----

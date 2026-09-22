@@ -354,6 +354,28 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
+# Sequence length up to which the 1D (mcast_in0, splits N) kernel beats the 2D prefill kernel.
+# The 2D kernel sets per_core_M = ceil(S/TILE/grid_y), so a short sequence lights only S/TILE rows:
+# at S=64 that is 2 rows = 16 of 64 cores. The 1D kernel splits N instead, so its core count does
+# not depend on S -- but it also gives every core the whole M, which stops paying once S grows.
+# Measured on N150x4 (2D -> best 1D, us):
+#   attn qkv (K=2048,N=2560)   S=64: 69.8 -> 38.8   S=128: 75.7 -> 65.2   S=256: 85.5 -> 119.1
+#   attn wo  (K=1024,N=2048)   S=64: 34.7 -> 23.1   S=128: 38.3 -> 38.9   S=256: 46.0 ->  68.3
+# Production's smallest prefill bucket is 128 (model._PREFILL_MASK_BUCKETS), so this covers it and
+# everything shorter; 256 and up keep the 2D kernel.
+PREFILL_MM_1D_MAX_SEQ = 128
+
+
+def short_prefill_1d_progcfg(seq, k, n, num_cores, grid_w=8):
+    """1D (mcast_in0) progcfg for a SHORT prefill matmul, or None when the 2D kernel should be used.
+
+    `None` lets a call site keep its existing 2D config with a single `or`. num_cores is the tuned
+    core budget for this shape (see PREFILL_MM_1D_MAX_SEQ for the measurements)."""
+    if seq > PREFILL_MM_1D_MAX_SEQ:
+        return None
+    return create_matmul_1d_decode_progcfg(seq, k, n, num_cores=num_cores, grid_w=grid_w)
+
+
 def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
@@ -450,6 +472,39 @@ def agmm_grid(mesh_device, cluster_axis=1):
     num_links = ccl_num_links(mesh_device, cluster_axis)
     grid = (8, gy - 1)
     return grid, num_links, math.ceil(grid[0] / num_links)
+
+
+# Sequence length at/above which the FUSED all-gather+matmul beats a separate all-gather plus a
+# tuned 2D matmul, for the attention in-projection on N150x4 (measured, S -> AGMM vs unfused us):
+#   64: 169/120   256: 218/188   512: 344/308   768: 459/429   1024: 621/563   1536: 844/878   2048: 1118/1492
+# The fusion hides the gather behind the matmul, which only pays once the matmul is long enough to
+# hide it; below that its fixed setup (a 57-core program with an 8-buffer fabric channel) dominates.
+# Production prefill chunks at 2048 and keeps the fused path; short prompts and the tail chunk of a
+# long one fall below this and take the unfused path.
+AGMM_MIN_SEQ = 1536
+
+
+def all_gather_prefill(x, tt_ccl, topology, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """All-gather a K-sharded prefill activation [.,S,K/tp] back to full K, on dim 3.
+
+    The unfused counterpart to `all_gather_matmul_prefill`, for sequences below `AGMM_MIN_SEQ`.
+    Uses the same link/worker budget as the fused op so the two paths cost the same on the wire."""
+    S, K_local = x.shape[-2], x.shape[-1]
+    _, num_links, _ = agmm_grid(tt_ccl.mesh_device, cluster_axis)
+    return ttnn.experimental.all_gather_async(
+        ttnn.reshape(x, (1, 1, S, K_local)),
+        persistent_output_buffer=None,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+        num_links=num_links,
+        topology=topology,
+        cluster_axis=cluster_axis,
+        memory_config=memory_config,
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )
 
 
 def all_gather_matmul_prefill(
@@ -752,6 +807,23 @@ def replicate(torch_tensor, mesh, cache_path, dtype=ttnn.bfloat16):
         device=mesh,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_path,
+    )
+
+
+def replicate_rmsnorm_weight(torch_tensor, mesh, cache_path, dtype=ttnn.bfloat16):
+    """Norm gain -> replicated in the layout ``ttnn.rms_norm(weight=...)`` wants.
+
+    The fused kernel reads gamma as ROW_MAJOR [1, 1, dim/TILE, TILE] (see models/common/rmsnorm.py),
+    which lets the norm and its per-channel scale run as ONE op instead of rms_norm + multiply."""
+    w = torch_tensor.reshape(-1)
+    return ttnn.as_tensor(
+        w.reshape(1, 1, w.shape[0] // TILE_SIZE, TILE_SIZE).to(torch.bfloat16),
+        dtype=dtype,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=cache_path,
     )
