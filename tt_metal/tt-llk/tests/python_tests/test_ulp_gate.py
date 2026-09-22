@@ -579,12 +579,17 @@ def test_a_budget_on_an_integer_format_raises(fmt):
 
 
 @contextmanager
-def _ulp_report_enabled():
-    """``--ulp-report`` as the plugin sets it, restored afterwards."""
+def _ulp_report_enabled(value=True):
+    """``--ulp-report`` as the plugin sets it, restored afterwards.
+
+    Takes a value so a test can pin reporting *off*: the suite may itself be run with
+    ``--ulp-report``, and a baseline that just assumes the default would then be
+    measuring the flag it is the control for.
+    """
     from helpers import utils
 
     previous = utils._ULP_REPORT
-    utils._ULP_REPORT = True
+    utils._ULP_REPORT = value
     try:
         yield
     finally:
@@ -598,7 +603,8 @@ def test_the_report_measures_an_op_that_carries_no_budget():
     golden = _tile(1.0, fmt)
     result = _step(golden, 6)  # inside atol=0.05, invisible to the default gate
 
-    quiet = _logs_for(lambda: passed_test(golden, result, fmt))
+    with _ulp_report_enabled(False):
+        quiet = _logs_for(lambda: passed_test(golden, result, fmt))
     assert not any("ULP" in record for record in quiet)
 
     with _ulp_report_enabled():

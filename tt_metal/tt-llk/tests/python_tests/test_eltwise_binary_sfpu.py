@@ -20,8 +20,16 @@ from helpers.golden_generators import (
     get_golden_generator,
     quantize_input_to_unpack_format,
 )
+from helpers.llk_params import (
+    ApproximationMode,
+)
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -590,6 +598,10 @@ def sfpu_binary(
         mathop,
         output_format=formats.output_format,
         input_format=formats.input_format,
+        # Fixed, because this driver compiles APPROX_MODE() -- whose default is No. Left
+        # unset, a row keyed `approx: "No"` would not match and would silently fall back
+        # to the default tolerance.
+        approx_mode=ApproximationMode.No,
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )
@@ -1583,8 +1595,21 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
+    # Enrolment is a table edit, not a driver edit -- so this driver resolves the same
+    # contract the shared one does. Without it a row for SfpuAddTopRow would be inert.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        approx_mode=ApproximationMode.No,  # this driver compiles APPROX_MODE()
+        dest_acc=dest_acc,
+        arch=get_chip_architecture(),
+    )
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        **contract.passed_test_kwargs(),
     ), "Assert against golden failed"
 
 
@@ -1756,6 +1781,19 @@ def test_eltwise_binary_sfpu_bcast(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
+    # Same contract lookup as the shared driver. approx_mode is left unset on purpose:
+    # this kernel compiles no APPROX_MODE, so naming one would claim a measurement that
+    # was taken for a mode this path does not select.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        dest_acc=dest_acc,
+        arch=get_chip_architecture(),
+    )
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        **contract.passed_test_kwargs(),
     ), "Assert against golden failed"

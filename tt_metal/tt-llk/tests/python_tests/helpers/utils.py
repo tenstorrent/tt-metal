@@ -919,6 +919,11 @@ def passed_test(
             logger.opt(lazy=True).debug("ULP within budget — {}", _ulp_summary)
         elif print_errors and not _RECORD_TEST_ORDER:
             logger.error("ULP budget exceeded — {}", _ulp_summary())
+        elif _ULP_REPORT:
+            # Silenced for the error log, but --ulp-report asks for every comparison.
+            # Dropping the failures is how a reporting sweep ends up deriving a budget
+            # from the lanes that passed.
+            logger.info("ULP budget exceeded — {}", _ulp_summary())
         else:
             # A caller that asked for silence still gets the line, but not at a level that
             # appends to the persistent test_errors.log that CI uploads.

@@ -165,6 +165,10 @@ def _run_sfpu_ternary(
         mathop,
         output_format=formats.output_format,
         input_format=formats.input_format,
+        # Fixed, because this driver compiles APPROX_MODE(ApproximationMode.No). Left
+        # unset, a row keyed `approx: "No"` would not match and would silently fall back
+        # to the default tolerance.
+        approx_mode=ApproximationMode.No,
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )
