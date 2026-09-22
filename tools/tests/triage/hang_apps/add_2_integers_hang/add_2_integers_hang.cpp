@@ -8,13 +8,43 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
+
+namespace {
+
+const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
+const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
+const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+const experimental::TensorParamName IN0_T{"in0_tensor"};
+const experimental::TensorParamName IN1_T{"in1_tensor"};
+const experimental::TensorParamName OUT_T{"out_tensor"};
+const experimental::KernelSpecName READER{"reader"};
+const experimental::KernelSpecName WRITER{"writer"};
+const experimental::KernelSpecName COMPUTE{"compute"};
+
+// A single BFloat16 tile in interleaved DRAM. HostTensor::from_vector / to_vector take and
+// return row-major data and handle the tilization against this spec, so the host code below
+// works with plain row-major vectors.
+TensorSpec single_tile_dram_spec() {
+    return TensorSpec(
+        Shape{tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+}
+
+}  // namespace
+
 int main() {
     // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
     // single object, maintaining uniform memory and runtime state across all physical devices. A UnitMesh is a 1x1
@@ -26,92 +56,132 @@ int main() {
     // A MeshCommandQueue is a software concept that allows developers to submit operations to a MeshDevice.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
-    // A MeshWorkload is a collection of programs that are executed on a MeshDevice.
-    // The specific physical devices that the workload is executed on are determined by the MeshCoordinateRange.
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
-    // same kernel at a given time. Metalium allows you to run different kernels on different cores
-    // simultaneously.
-    Program program = CreateProgram();
-    // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
-    // cores we can specify the core coordinates as (0, 0).
-    constexpr CoreCoord core = {0, 0};
+    // We will only be using one Tensix node for this particular example. As Tenstorrent processors are a 2D grid of
+    // nodes we can specify the node coordinates as (0, 0).
+    constexpr experimental::NodeCoord node = {0, 0};
 
     // Most data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
     // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
     constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
 
-    // MeshBuffer Creation:
-    // To create a MeshBuffer, we need to specify the page size, the buffer type, and the size of the buffer.
-    // For this example, we will be using a DRAM buffer.
-    // A DeviceLocalBufferConfig is a configuration object that specifies the properties of a buffer that is allocated
-    // on a single device. A ReplicatedBufferConfig is a configuration object that specifies the properties of a buffer
-    // that is replicated across all devices in the Mesh.
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size,  // Number of bytes when round-robin between banks. Usually this is the same
-                                        // as the tile size for efficiency.
-        .buffer_type = tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
-    distributed::ReplicatedBufferConfig distributed_buffer_config{
-        .size = single_tile_size  // Size of the buffer in bytes
-    };
-    // Create 3 buffers in DRAM to hold the 2 input tiles and 1 output tile.
-    auto src0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+    // Tensor Creation:
+    // Create 3 tensors in DRAM to hold the 2 input tiles and 1 output tile. A MeshTensor is a
+    // user-managed device memory resource; the kernels reach it through the TensorAccessor bound
+    // to the matching TensorParameter below.
+    const TensorSpec tile_spec = single_tile_dram_spec();
+    auto src0_tensor = MeshTensor::allocate_on_device(*mesh_device, tile_spec);
+    auto src1_tensor = MeshTensor::allocate_on_device(*mesh_device, tile_spec);
+    auto dst_tensor = MeshTensor::allocate_on_device(*mesh_device, tile_spec);
 
-    // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are
-    // used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute
-    // kernel to the writer kernel. Each circular buffer is made up of 2 tiles. Thus when one tile is pushed and being
-    // used by the receiving end, the sending end can get the next piece of data ready to be pushed. Overlapping the
-    // operations. Leading to better performance. However there is a trade off, The more tiles in a circular buffer, the
-    // more memory is used. And Circular buffers are backed by L1(SRAM) memory and L1 is a precious resource. The
-    // hardware supports up to 32 circular buffers and they all act the same.
+    // Create 3 dataflow buffers. Think of them like pipes moving data from one kernel to another. in0 and in1 are
+    // used to move data from the reader kernel to the compute kernel. out is used to move data from the compute
+    // kernel to the writer kernel. Each one is made up of 1 tile here. A larger number of entries lets the sending
+    // end get the next piece of data ready while the receiving end is still using the current one, overlapping the
+    // operations and leading to better performance. However there is a trade off: the more entries, the more memory
+    // is used, and dataflow buffers are backed by L1 (SRAM) memory, which is a precious resource.
     constexpr uint32_t num_tiles = 1;
-    auto make_cb_config = [&](CBIndex cb_index) {
-        return CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, DataFormat::Float16_b}})
-            .set_page_size(cb_index, single_tile_size);
+    auto make_dfb_spec = [&](const experimental::DFBSpecName& name) {
+        return experimental::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = single_tile_size,
+            .num_entries = num_tiles,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        };
     };
 
-    tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_0));
-    tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_1));
-    tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_16));
+    // The kernels below carry both a Gen1 and a Gen2 hardware config so that the same program runs on Wormhole /
+    // Blackhole and on Quasar; the runtime selects the one matching the active architecture. Quasar has no
+    // per-processor data movement kernel assignment (it has 8 data movement cores per cluster, allocated by the
+    // implementation), which is why the Gen2 config carries no processor / NOC selection.
+    const bool is_quasar = mesh_device->arch() == ARCH::QUASAR;
+    experimental::DataMovementHardwareConfig reader_dm_config;
+    experimental::DataMovementHardwareConfig writer_dm_config;
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (is_quasar) {
+        reader_dm_config = experimental::DataMovementGen2Config{};
+        writer_dm_config = experimental::DataMovementGen2Config{};
+        compute_hw_config = experimental::ComputeGen2Config{.fpu_math_fidelity = MathFidelity::HiFi4};
+    } else {
+        // The conventional Gen1 placement: reader on RISCV_1, writer on RISCV_0.
+        reader_dm_config = experimental::CreateReaderGen1DataMovementConfig();
+        writer_dm_config = experimental::CreateWriterGen1DataMovementConfig();
+        compute_hw_config = experimental::ComputeGen1Config{.fpu_math_fidelity = MathFidelity::HiFi4};
+    }
 
-    // Create the reader, writer and compute kernels. The kernels do the following:
-    // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
-    // * Compute: Waits for data to be available in the circular buffer, pops it, adds the two inputs together and
-    // pushes the result
-    //   into the output circular buffer.
-    // * Writer: Waits for data to be available in the output circular buffer, pops it and writes it back into DRAM.
-    // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them
-    // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
-    // writer kernel writes the result back to DRAM.
-    std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
-    KernelHandle binary_reader_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/reader_binary_1_tile.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
+    // Describe the reader, writer and compute kernels. The sibling ttnn_add_integers_hang app runs
+    // these same three kernel sources through its own TTNN program factory.
+    //
+    // The kernels do the following:
+    // * Reader: Reads data from the input tensors and pushes it into the input dataflow buffers.
+    // * Compute: Waits for data to be available in the input dataflow buffers, pops it, adds the two inputs together
+    //   and pushes the result into the output dataflow buffer.
+    // * Writer: Waits for data to be available in the output dataflow buffer, pops it and writes it back to DRAM.
+    // These kernels work together to form a pipeline. The reader reads data from DRAM and makes it available to the
+    // compute kernel. The compute kernel does math and pushes the result to the writer kernel. The writer kernel
+    // writes the result back to DRAM.
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/reader_binary_1_tile.cpp",
+        .dfb_bindings = {experimental::ProducerOf(IN0_DFB, "in0"), experimental::ProducerOf(IN1_DFB, "in1")},
+        .tensor_bindings =
+            {{.tensor_parameter_name = IN0_T, .accessor_name = "in0"},
+             {.tensor_parameter_name = IN1_T, .accessor_name = "in1"}},
+        .hw_config = reader_dm_config,
+    };
 
-    std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
-    KernelHandle unary_writer_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/writer_1_tile.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/writer_1_tile.cpp",
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "out")},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
+        .hw_config = writer_dm_config,
+    };
 
     // This kernel performs the actual addition of the two input tiles
-    KernelHandle eltwise_binary_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/compute/add_2_tiles_hang.cpp",
-        core,
-        ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/compute/add_2_tiles_hang.cpp",
+        // Metal 2.0's type-agnostic default opt level is O2; a compute kernel used to get O3, so
+        // state it explicitly to keep the generated code the same as before.
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {experimental::ConsumerOf(IN0_DFB, "in0"),
+             experimental::ConsumerOf(IN1_DFB, "in1"),
+             experimental::ProducerOf(OUT_DFB, "out")},
+        .hw_config = compute_hw_config,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "add_2_integers_hang",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {make_dfb_spec(IN0_DFB), make_dfb_spec(IN1_DFB), make_dfb_spec(OUT_DFB)},
+        .tensor_parameters =
+            {{.unique_id = IN0_T, .spec = tile_spec},
+             {.unique_id = IN1_T, .spec = tile_spec},
+             {.unique_id = OUT_T, .spec = tile_spec}},
+        .work_units = {{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
+    };
+
+    // A MeshWorkload is a collection of programs that are executed on a MeshDevice. Building it from the ProgramSpec
+    // compiles the kernels; the specific physical devices the workload runs on are determined by the mesh shape.
+    distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    Program& program = workload.get_programs().begin()->second;
+
+    // Bind the tensors the kernels operate on. None of the three kernels declares runtime args of its own: the
+    // reader and writer get their addresses from these tensor arguments, and the compute kernel needs none.
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = WRITER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {
+        {IN0_T, experimental::TensorArgument{src0_tensor}},
+        {IN1_T, experimental::TensorArgument{src1_tensor}},
+        {OUT_T, experimental::TensorArgument{dst_tensor}},
+    };
+    experimental::SetProgramRunArgs(program, params);
 
     // Create the data that will be used as input to the kernels.
     // src0 is a vector of bfloat16 values initialized to random values between 0.0f and 14.0f.
@@ -126,28 +196,14 @@ int main() {
         src1_vec[i] = bfloat16(dist2(rng));
     }
 
-    // Upload the data from host to the device. The last argument indicates if the operation is blocking or not.
-    // Setting it to false allows the function to immediately return after queuing the operation, enabling
-    // overlapping of data transfers with other operations. At the cost of user responsibility to ensure the data
-    // is not released before the operation is complete.
-    // In this case, we will wait for the program to finish eventually in the same scope, so we can set it
-    // to false safely.
-    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+    // Upload the data from host to the device.
+    cq.enqueue_write_tensor(HostTensor::from_vector(src0_vec, tile_spec), src0_tensor);
+    cq.enqueue_write_tensor(HostTensor::from_vector(src1_vec, tile_spec), src1_tensor);
 
-    // Setup arguments for the kernels in the program.
-    // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
-    SetRuntimeArgs(
-        program,
-        binary_reader_kernel_id,
-        core,
-        {(uint32_t)src0_dram_buffer->address(), (uint32_t)src1_dram_buffer->address()});
-    SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_buffer->address()});
-
-    // Add the program to the workload and execute it.
+    // Execute the workload. The compute kernel hangs on purpose, so on a device with a dispatch timeout configured
+    // this throws rather than returning; on the RTL simulator in slow dispatch the wait is unbounded and the process
+    // stays blocked here, which is what lets an external debug tool inspect the hung device.
     try {
-        workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
     } catch (std::runtime_error& e) {
@@ -160,11 +216,8 @@ int main() {
         }
     }
 
-    // Data can be read from a MeshBuffer using the ReadShard function. This function is used to read data from a
-    // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
-    // operation is blocking or not.
-    std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    // Data can be read back from a MeshTensor through the command queue.
+    std::vector<bfloat16> result_vec = cq.enqueue_read_tensor(dst_tensor).to_vector<bfloat16>();
 
     // compare the results with the expected values.
     bool success = true;
