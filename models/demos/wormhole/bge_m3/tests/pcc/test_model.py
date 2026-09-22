@@ -101,4 +101,6 @@ def test_model_full_end_to_end(device, model_artifacts, seq_len, reset_seeds):
     `test_model_full_end_to_end_multibatch`. Gated at PCC_THRESHOLD=0.94.
     Filter combos with -k, e.g. `-k "S512"`.
     """
+    if seq_len == 4096 and not ttnn_is_blackhole(device):
+        pytest.skip("S4096 PCC fails on Wormhole N150 due to SDPA bf8 accumulation error, refs #50031")
     _run_full_end_to_end(device, model_artifacts, batch_size=1, seq_len=seq_len)
