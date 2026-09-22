@@ -15,7 +15,7 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory {
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value,
-        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::prim
