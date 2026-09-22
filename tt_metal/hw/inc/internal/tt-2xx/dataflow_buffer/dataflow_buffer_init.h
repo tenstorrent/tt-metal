@@ -259,8 +259,32 @@ FORCE_INLINE uint8_t dfb_init_timing_trisc_slot_index() {
 }
 #endif
 
-inline uint32_t rdcycle() {
+// In-loop timers vs whole-function endpoints.
+//
+// Every in-loop rdcycle() is an `asm volatile` the compiler cannot move, so with them enabled the
+// measured region is peppered with ~150 scheduling barriers. They do not just add their own cost:
+// they pin loads and stores in place and hide exactly the overlap that a cache-warming or
+// instruction-count change is trying to create, which is how a change can read as a win (or a
+// loss) that is really the barriers moving. Set DFB_INNER_TIMERS to 0 for any A/B on end-to-end
+// cycles; set it to 1 only when the per-phase breakdown is what is wanted.
+#ifndef DFB_INNER_TIMERS
+#define DFB_INNER_TIMERS 0
+#endif
+
+// Whole-function start/end. Always a real read when timing is compiled in, regardless of
+// DFB_INNER_TIMERS — this is the number A/B comparisons are made on.
+inline uint32_t rdcycle_e2e() {
 #ifdef DFB_INIT_TIMING_ENABLED
+    uint32_t c;
+    asm volatile("rdcycle %0" : "=r"(c));
+    return c;
+#else
+    return 0;
+#endif
+}
+
+inline uint32_t rdcycle() {
+#if defined(DFB_INIT_TIMING_ENABLED) && DFB_INNER_TIMERS
     uint32_t c;
     asm volatile("rdcycle %0" : "=r"(c));
     return c;
@@ -350,6 +374,25 @@ FORCE_INLINE void dfb_publish_producer_ready(
     WAYPOINT("PPR");
 }
 
+// Same publish, but the host has already folded logical_dfb_id * MAX_PRODUCERS_PER_DFB + bit into
+// the byte, so this is a sentinel test and an indexed store: no reload of logical_dfb_id, no
+// multiply, and logical_dfb_id no longer has to stay live to the end of the entry body (which is
+// one of the three values this function otherwise spills).
+// The folded index maxes at (NUM_DFBS-1) * MAX_PRODUCERS_PER_DFB + (MAX_PRODUCERS_PER_DFB-1)
+// = 31*6+5 = 191, so 0xFF remains a free sentinel.
+FORCE_INLINE void dfb_publish_producer_ready_slot(
+    volatile uint8_t* dfb_signal_base, uint8_t producer_signal_slot) {
+    if (producer_signal_slot == 0xFFu) {
+        return;
+    }
+    asm volatile("" ::: "memory");  // compiler barrier only; no hardware fence needed
+    dfb_signal_base[producer_signal_slot] = 1u;
+    WAYPOINT("PPR");
+}
+static_assert((static_cast<uint32_t>(::dfb::NUM_DFBS) - 1u) * ::dfb::MAX_PRODUCERS_PER_DFB +
+                      (::dfb::MAX_PRODUCERS_PER_DFB - 1u) < 0xFFu,
+              "folded dfb_signal slot index must stay below the 0xFF consumer sentinel");
+
 #ifndef COMPILE_FOR_TRISC
 
 FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
@@ -360,7 +403,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         return;
     }
 
-    uint32_t start_time = rdcycle();
+    uint32_t start_time = rdcycle_e2e();
 
     const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
     const uint8_t has_dm0_isr = *dfb_l1_uncached_byte_ptr(config_cached + offsetof(dfb_global_header_t, has_dm0_isr));
@@ -370,7 +413,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         // that only gate on has_dm0_isr (they will not wait on ready).
         *dfb_l1_uncached_byte_ptr(config_cached + offsetof(dfb_global_header_t, dm0_isr_ready)) = 1u;
         asm volatile("fence w, w" ::: "memory");
-        const uint32_t end_time = rdcycle();
+        const uint32_t end_time = rdcycle_e2e();
         dfb_init_timing_write_slot(
             0,
             dfb::DFB_INIT_TIMING_ROLE_DM0_ISR,
@@ -484,7 +527,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         disable_dfb_tile_isr();
         hw_reg_write_cycles += rdcycle() - t_isr_start;
     }
-    const uint32_t end_isr_enable_time = rdcycle();
+    const uint32_t end_isr_enable_time = rdcycle_e2e();
 
     *dfb_l1_uncached_byte_ptr(
         reinterpret_cast<uintptr_t>(dfb_config_base) + offsetof(dfb_global_header_t, dm0_isr_ready)) = 1u;
@@ -492,7 +535,7 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
 
     WAYPOINT("ISD");
 
-    const uint32_t end_time = rdcycle();
+    const uint32_t end_time = rdcycle_e2e();
 
     const uint32_t pre_loop_sw = t_before_desc_copy - start_time;
     const uint32_t subpassB_desc = t_after_desc_copy - t_before_desc_copy;
@@ -525,7 +568,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
         return;
     }
 
-    const uint32_t start_time = rdcycle();
+    const uint32_t start_time = rdcycle_e2e();
 
     const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
 
@@ -605,7 +648,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     }
 
     WAYPOINT("RSD");
-    const uint32_t end_time = rdcycle();
+    const uint32_t end_time = rdcycle_e2e();
 
     dfb_init_timing_write_slot(
         1,
@@ -679,7 +722,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         return packer_rmp;
     }
 
-    const uint32_t start_time = rdcycle();
+    const uint32_t start_time = rdcycle_e2e();
 
 #ifdef COMPILE_FOR_TRISC
     const uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
@@ -750,6 +793,14 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             config_cached + dfb_read_hart_blob_end(config_cached, hart_u8, dfb_signal_region_off);
         invalidate_l2_cache_range(blob_start, blob_end - blob_start);
     }
+#endif
+
+#if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
+    // Loop-invariant remapper constants, hoisted (see the spin below). Guard matches the spin's own
+    // guard: the pack TRISC reaches it too.
+    const volatile uint32_t* const clientL_cfg_base =
+        reinterpret_cast<const volatile uint32_t*>(static_cast<uintptr_t>(REMAP_CLIENT_L_CONFIG_REG_ADDR32(0)));
+    constexpr uint32_t kClientLStrideWords = REMAP_REG_PAIR_STRIDE / 4u;
 #endif
 
     for (uint32_t i = 0; i < num_init; i++) {
@@ -829,15 +880,24 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         const uint32_t ptc_w1 = (num_tcs > 4u) ? *dfb_l1_uncached_u32_ptr(ptc_base_addr + 4u) : 0u;
 #else
         const dfb_blob_tc_pair_t* pairs = reinterpret_cast<const dfb_blob_tc_pair_t*>(tc_base_addr);
-        const uint32_t ptc_w0 = (num_tcs > 0u) ? *reinterpret_cast<const uint32_t*>(ptc_base_addr) : 0u;
+        const uint32_t ptc_w0 = __builtin_expect(num_tcs > 0u, 1) ? *reinterpret_cast<const uint32_t*>(ptc_base_addr) : 0u;
         const uint32_t ptc_w1 = (num_tcs > 4u) ? *reinterpret_cast<const uint32_t*>(ptc_base_addr + 4u) : 0u;
+        const uint8_t* const ptc_bytes = reinterpret_cast<const uint8_t*>(ptc_base_addr);
 #endif
         const uint32_t t_slots_start = rdcycle();
         for (uint32_t t = 0; t < num_tcs; t++, pairs++) {
             // Host pre-shifts TRISC TC addresses to tile units at serialization; DM blobs keep byte addresses.
             const uint32_t base      = pairs->base_addr;
             const uint32_t limit     = pairs->limit;
+#ifdef COMPILE_FOR_TRISC
+            // TRISC reads the blob uncached (~40 cycles a word), so the 1-2 word preload beats N
+            // byte reads and the in-loop extract is worth its 5 instructions.
             const uint8_t  ptc       = static_cast<uint8_t>((t < 4u ? ptc_w0 : ptc_w1) >> ((t & 3u) * 8u));
+#else
+            // DM reads it cached, so a byte load is 1 instruction against the 5 the select-and-shift
+            // costs (bltu / mv / andi / slliw / srlw), and the two word preloads go away with it.
+            const uint8_t  ptc       = ptc_bytes[t];
+#endif
             iface.tc_slots[t].packed_tile_counter = ptc;
 
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
@@ -894,13 +954,31 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
                 const uint32_t spin_start = rdcycle();
                 const uint32_t pair_idx = eh.remapper_pair_index;
                 WAYPOINT("RMSW");
-                while (overlay::RemapperAPI::get_clientL_valid_hw(pair_idx) == 0u) {
+                // The ClientL register base and the valid-bit mask are loop-invariant, but they sit
+                // under two nested conditionals so GCC rematerializes both every producer entry
+                // (lui/addiw for 0x1842004, lui/addi for 0xF00). Hoisted to the prologue here.
+                //
+                // NOTE: this also changes the out-of-range failure mode. get_clientL_valid_hw()
+                // returns 0 for pair_idx >= REMAP_NUM_PAIRS, and the caller spins on 0, so today an
+                // out-of-range index hangs forever. Here it skips the wait instead.
+                if (pair_idx < REMAP_NUM_PAIRS) {
+                    const volatile uint32_t* const cfg = clientL_cfg_base + pair_idx * kClientLStrideWords;
+                    while ((*cfg & 0xF00u) == 0u) {
+                    }
                 }
                 WAYPOINT("RMSD");
                 total_remapper_spin += rdcycle() - spin_start;
             }
 
             const uint32_t tc_hw_start = rdcycle();
+            // One pass per tile counter: load and unpack the packed counter once, reset it, then
+            // set its capacity. The two-loop form walked tc_slots[] twice, re-loading and
+            // re-unpacking packed_tile_counter for every counter on the second pass.
+            //
+            // The reset -> capacity fence is preserved, it just moves inside the loop: each
+            // counter's reset is still fenced before its own capacity write. What the fused form
+            // gives up is the global ordering between all resets and all capacities, which nothing
+            // depends on -- the counters are independent of each other.
             for (uint32_t t = 0; t < num_tcs; t++) {
                 const uint8_t packed_ptc = iface.tc_slots[t].packed_tile_counter;
                 const uint8_t tc_id = dfb::get_counter_id(packed_ptc);
@@ -909,31 +987,19 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
                 const uint32_t t_reset = rdcycle();
                 overlay::fast_llk_intf_reset(tensix_id, tc_id);
                 total_tc_reset_hw += rdcycle() - t_reset;
-                total_hw_reg_writes++;
+                asm volatile("fence w, w" ::: "memory");
+                const uint32_t t_cap = rdcycle();
+                overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, eh.capacity);
+                total_tc_capacity_hw += rdcycle() - t_cap;
+                total_hw_reg_writes += 2;
 #elif defined(UCK_CHLKC_PACK)
                 const uint32_t t_reset = rdcycle();
                 ckernel::trisc::tile_counters[tc_id].f.reset = 1;
                 total_tc_reset_hw += rdcycle() - t_reset;
-                total_hw_reg_writes++;
-#endif
-            }
-#ifndef COMPILE_FOR_TRISC
-            asm volatile("fence w, w" ::: "memory");
-#endif
-            for (uint32_t t = 0; t < num_tcs; t++) {
-                const uint8_t packed_ptc = iface.tc_slots[t].packed_tile_counter;
-                const uint8_t tc_id = dfb::get_counter_id(packed_ptc);
-#ifndef COMPILE_FOR_TRISC
-                const uint8_t tensix_id = dfb::get_tensix_id(packed_ptc);
-                const uint32_t t_cap = rdcycle();
-                overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, eh.capacity);
-                total_tc_capacity_hw += rdcycle() - t_cap;
-                total_hw_reg_writes++;
-#elif defined(UCK_CHLKC_PACK)
                 const uint32_t t_cap = rdcycle();
                 ckernel::trisc::tile_counters[tc_id].f.buf_capacity = eh.capacity;
                 total_tc_capacity_hw += rdcycle() - t_cap;
-                total_hw_reg_writes++;
+                total_hw_reg_writes += 2;
 #endif
             }
 #ifndef COMPILE_FOR_TRISC
@@ -942,7 +1008,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             total_tc_hw += rdcycle() - tc_hw_start;
 
             const uint32_t t_sig_start = rdcycle();
-            dfb_publish_producer_ready(dfb_signal_base, eh.logical_dfb_id, eh.producer_signal_bit);
+            dfb_publish_producer_ready_slot(dfb_signal_base, eh.producer_signal_bit);
             total_sig_write += rdcycle() - t_sig_start;
         }
 #endif  // !COMPILE_FOR_TRISC || UCK_CHLKC_PACK
@@ -953,7 +1019,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     const uint32_t t_after_merged_loop = rdcycle();
 
     WAYPOINT("L12");
-    const uint32_t end_time = rdcycle();
+    const uint32_t end_time = rdcycle_e2e();
 
 #ifdef COMPILE_FOR_TRISC
     const uint8_t timing_slot = dfb_init_timing_trisc_slot_index();

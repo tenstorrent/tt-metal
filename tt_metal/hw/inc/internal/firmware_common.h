@@ -49,7 +49,12 @@ extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 extern uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];
 extern uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)];
 
-void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, L1WordCount len);
+// NOTE: spelled with the literal attribute, not the tt_l1_ptr macro. The definition lives in
+// the PREBUILT tt-qsr*-substitutes.o (hw/toolchain/substitutes.cpp:44), which hardcodes
+// __attribute__((rvtt_l1_ptr)). The attribute is part of the mangled name, so dropping it
+// here breaks the link. Keeping it costs nothing for this experiment: the function is
+// out-of-line in a prebuilt object, so its scheduling is fixed either way.
+void l1_to_local_mem_copy(uint32_t* dst, uint32_t __attribute__((rvtt_l1_ptr))* src, L1WordCount len);
 
 inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     // Clear bss.

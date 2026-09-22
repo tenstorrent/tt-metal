@@ -16,7 +16,7 @@ union tt_uint64_t {
     };
 };
 
-#define tt_l1_ptr __attribute__((rvtt_l1_ptr))
+#define tt_l1_ptr  /* EXPERIMENT: rvtt_l1_ptr removed */
 #define tt_reg_ptr __attribute__((rvtt_reg_ptr))
 
 // Distinguishes a count of 32-bit words from a byte count at the type level, so a byte count can't be

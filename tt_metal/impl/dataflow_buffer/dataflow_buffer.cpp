@@ -703,7 +703,18 @@ size_t serialize_dfb_config_for_core(
                     entry.txn_ids[t] = txn.txn_ids[t];
                 }
             }
-            entry.producer_signal_bit = producer_signal_bit[di][h];
+            // Fold the dfb_signal[] slot index here rather than on the device: the device's
+            // publish then needs no logical_dfb_id reload and no multiply. 0xFF (consumer) passes
+            // through as the sentinel; the folded value maxes at 31*6+5 = 191.
+            {
+                const uint8_t sig_bit = producer_signal_bit[di][h];
+                entry.producer_signal_bit =
+                    (sig_bit == 0xFFu)
+                        ? 0xFFu
+                        : static_cast<uint8_t>(
+                              entry.logical_dfb_id * static_cast<uint8_t>(::dfb::MAX_PRODUCERS_PER_DFB) +
+                              sig_bit);
+            }
             entry.remapper_pair_index = (dfb->use_remapper && rc.is_producer)
                 ? rc.config.remapper_pair_index
                 : 0xFFu;
@@ -724,7 +735,11 @@ size_t serialize_dfb_config_for_core(
                 dfb_write_dm_scalar_pack_to_blob(
                     out.data() + offset,
                     num_tcs,
-                    producer_signal_bit[di][h],
+                    // NOT producer_signal_bit[di][h]: this is the second serialization path (the DM
+                    // packed scalar layout at byte 13, read back as w3>>8). It must carry the same
+                    // folded slot index as entry.producer_signal_bit above, or the DM producer
+                    // publishes to the wrong dfb_signal[] byte and every consumer spins forever.
+                    entry.producer_signal_bit,
                     entry.txn_ids,
                     entry.threshold,
                     entry.num_entries_per_txn_id,
