@@ -60,6 +60,8 @@ def parse_args():
             "decoder",
             "decoder_loop",
             "decoder_loop_embedding",
+            "decoder_loop_head",
+            "decode_token",
         ),
         required=True,
     )
@@ -120,7 +122,8 @@ def run(args):
         "sampling": {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},
         "limitations": (
             "B1; mode-dependent experimental composition. decoder_loop places all32 layers in one program; "
-            "the embedding variant adds lookup; final norm, head and sampling remain traced TTNN. See per-mode qualification in PROGRESS.md."
+            "decode_token adds embedding/final gather/norm/head; sampling stays native. "
+            "Active batch-one positions only; no serving qualification. See PROGRESS.md."
         ),
     }
     evidence = {"context": args.context, "tokens": args.tokens}

@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Native final RMSNorm arithmetic and selected HiFi2/BFP8 vocabulary projection."""
+
+from pathlib import Path
+import ttnn
+from .mlp import _grid
+from .norm import FusedNorm
+
+
+class FusedHead:
+    def __init__(self, model, *, cores=None, norm_cores=None, norm_output=None):
+        self.mesh = model.mesh_device
+        if model.max_batch_size != 1 or model.padded_vocab_size != 131072:
+            raise ValueError("Fused head requires the batch-one Llama3.1 vocabulary")
+        policy = model.precision_policy
+        if (
+            policy["compute_fidelities"]["decode"]["lm_head"] != "HiFi2"
+            or policy["accumulation"]["matmul_fp32"]
+            or policy["accumulation"]["math_approx_mode"]
+            or policy["logits_dtype"] != "bfloat16"
+        ):
+            raise ValueError("Fused head requires the original HiFi2/BF16 accumulation policy")
+        model.lm_head.load_device_weights()
+        if len(model.lm_head.output_weights) != 1:
+            raise ValueError("Fused head requires one native weight split")
+        self.weight = model.lm_head.output_weights[0]
+        memory = self.weight.memory_config()
+        if (
+            tuple(self.weight.shape) != (4096, 32768)
+            or self.weight.dtype != ttnn.bfloat8_b
+            or memory.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            or memory.buffer_type != ttnn.BufferType.DRAM
+            or memory.shard_spec.shape != [4096, 4096]
+        ):
+            raise ValueError("Expected the original eight-bank BFP8 head weight")
+        self.cores = list(cores) if cores is not None else [ttnn.CoreCoord(x, y) for y in (2, 3) for x in range(8)]
+        if len(self.cores) != 16:
+            raise ValueError("The native head partition requires sixteen workers")
+        self.grid = _grid(self.cores)
+        self.norm = FusedNorm(
+            self.mesh, model.lm_head.config.input_memcfg, model.layers[0].eps, cores=norm_cores, output=norm_output
+        )
+        self.output = ttnn.empty(
+            (1, 1, 1, 32768),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def append(self, program, gathered, *, wait_for_gather=False):
+        rt = ttnn.RuntimeArgs()
+        physical = [self.mesh.worker_core_from_logical_core(c) for c in self.cores]
+        coords = [v for c in physical for v in (c.x, c.y)]
+        for index, core in enumerate(self.cores):
+            rt[core.x][core.y] = [
+                index,
+                self.norm.output.buffer_address(),
+                self.weight.buffer_address(),
+                self.output.buffer_address(),
+                *coords,
+            ]
+        ct = [
+            v
+            for t in (self.norm.output, self.weight, self.output)
+            for v in ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        ]
+        source = str(Path(__file__).with_name("kernels") / "head.cpp")
+        kernels = []
+        for role, config in (
+            ("READER", ttnn.ReaderConfigDescriptor()),
+            ("WRITER", ttnn.WriterConfigDescriptor()),
+            (
+                "COMPUTE",
+                ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+                ),
+            ),
+        ):
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=source,
+                    core_ranges=self.grid,
+                    compile_time_args=ct,
+                    runtime_args=rt,
+                    defines=[(role, "1")],
+                    config=config,
+                )
+            )
+        cbs = []
+        for index, count, dtype in (
+            (0, 8, ttnn.bfloat16),
+            (1, 512, ttnn.bfloat8_b),
+            (16, 64, ttnn.bfloat16),
+            (24, 64, ttnn.bfloat16),
+        ):
+            page = ttnn.Tile([32, 32]).get_tile_size(dtype)
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=count * page,
+                    core_ranges=self.grid,
+                    format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)],
+                )
+            )
+        program.kernels = [*program.kernels, *kernels]
+        program.cbs = [*program.cbs, *cbs]
+        program.semaphores = [
+            *program.semaphores,
+            *[
+                ttnn.SemaphoreDescriptor(id=i, core_ranges=_grid(self.cores + self.norm.cores), initial_value=0)
+                for i in range(13 if wait_for_gather else 10)
+            ],
+        ]
+        return self.norm.append(program, gathered, self.cores, wait_for_gather=wait_for_gather)
+
+    def tensors(self):
+        return [self.norm.output, self.weight, self.output]
+
+    def __call__(self, gathered):
+        return ttnn.generic_op([gathered, *self.tensors()], self.append(ttnn.ProgramDescriptor(), gathered))

@@ -100,6 +100,8 @@ void kernel_main() {
 #ifdef FUSE_EMBEDDING
         rt[EMBED_RT_OFFSET + 2] = layer == 0;
 #endif
+#elif LOOP_PATCH == 6 && defined(TAIL_RT_OFFSET)
+        rt[TAIL_RT_OFFSET + 20] = layer + 1 == count;
 #endif
         loop_layer_main();
         unified_kernels::sync_riscs_enter<>(end_sync);

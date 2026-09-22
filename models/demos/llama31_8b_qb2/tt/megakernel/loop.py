@@ -8,10 +8,11 @@ from .mlp import _grid
 
 
 class DecoderLoop:
-    def __init__(self, body, caches, *, first_layer=0, num_layers=None, embedding_weight=None):
+    def __init__(self, body, caches, *, first_layer=0, num_layers=None, embedding_weight=None, head=None):
         if body.preparation is None:
             raise ValueError("Layer loop requires the complete decoder body")
         self.body = body
+        self.head = head
         self.embedding_weight = embedding_weight
         if embedding_weight is not None and (
             embedding_weight.dtype != ttnn.bfloat16
@@ -73,6 +74,13 @@ class DecoderLoop:
             ttnn.create_global_semaphore(body.mesh, self.grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(3)
         ]
         self.barrier_addresses = [ttnn.get_global_semaphore_address(s) for s in self.barriers]
+        self.head_ready = (
+            ttnn.create_global_semaphore(body.mesh, body.reduction.grid, 0, ttnn.BufferType.L1_SMALL)
+            if head is not None
+            else None
+        )
+        if head is not None and any(c in self.cores for c in (*head.cores, *head.norm.cores)):
+            raise ValueError("Terminal head and norm workers must be disjoint from the layer loop")
         ttnn.synchronize_device(body.mesh)
 
     def append(self, program, tokens=None):
@@ -114,6 +122,37 @@ class DecoderLoop:
                     ],
                 ),
             ]
+        if self.head is not None:
+            kernels = list(program.kernels)
+            coordinator = self.body.mesh.worker_core_from_logical_core(self.body.communication_cores[0])
+            physical = [self.body.mesh.worker_core_from_logical_core(c) for c in self.head.norm.cores]
+            for kernel in kernels:
+                if Path(kernel.kernel_source).name != "reduce_writer.cpp":
+                    continue
+                rt = kernel.runtime_args
+                offsets = set()
+                for c in self.body.communication_cores:
+                    args = list(rt[c.x][c.y])
+                    offsets.add(len(args))
+                    rt[c.x][c.y] = [
+                        *args,
+                        self.body.gather_output.buffer_address(),
+                        ttnn.get_global_semaphore_address(self.head_ready),
+                        coordinator.x,
+                        coordinator.y,
+                        *[v for xy in physical for v in (xy.x, xy.y)],
+                        0,
+                        self.count,
+                    ]
+                if len(offsets) != 1:
+                    raise ValueError("Unexpected terminal gather runtime layout")
+                kernel.runtime_args = rt
+                kernel.defines = [
+                    *kernel.defines,
+                    ("TAIL_RT_OFFSET", str(offsets.pop())),
+                    ("FUSED_SUFFIX_HEADER", '"models/demos/llama31_8b_qb2/tt/megakernel/kernels/all_gather_tail.hpp"'),
+                ]
+            program.kernels = kernels
         masks = {(c.x, c.y): [0, 0, 0] for c in self.cores}
         for cb in program.cbs:
             for c in ttnn.corerange_to_cores(cb.core_ranges, row_wise=True):
@@ -136,6 +175,7 @@ class DecoderLoop:
                 "cache_dataflow.cpp": 3,
                 "attention_reader.cpp": 4,
                 "reduce_reader.cpp": 5,
+                "reduce_writer.cpp": 6,
             }.get(name, 0)
             defines = dict(kernel.defines)
             rt = kernel.runtime_args
@@ -181,11 +221,15 @@ class DecoderLoop:
             ]
             kernel.kernel_source = str(Path(__file__).with_name("kernels") / "layer_loop.cpp")
         program.kernels = kernels
+        if self.head is not None:
+            program = self.head.append(program, self.body.gather_output, wait_for_gather=True)
         return program
 
     def tensors(self):
-        return [self.state, *[tensor for pair in self.caches for tensor in pair]] + (
-            [self.embedding_weight] if self.embedding_weight is not None else []
+        return (
+            [self.state, *[tensor for pair in self.caches for tensor in pair]]
+            + ([self.embedding_weight] if self.embedding_weight is not None else [])
+            + (self.head.tensors() if self.head is not None else [])
         )
 
     def __call__(self, residual, position, page_table, rotary_position=None, tokens=None):

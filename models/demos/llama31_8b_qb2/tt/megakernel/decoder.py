@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Explicit integration of the experimental MLP phase into real decoder layers."""
+"""Opt-in partial-layer, device-layer-loop and token-to-logits prototypes."""
 
 from copy import copy
 
@@ -132,7 +132,7 @@ def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8
 
     Construct before warming or capturing any trace. The caller owns the
     resulting layers and must retain them until all referencing traces release.
-    Prefill is inherited unchanged. This does not fuse the complete decoder.
+    Prefill is inherited unchanged. Only mode="decoder" composes the complete layer.
     """
     if mode not in (
         "swiglu",
@@ -216,9 +216,14 @@ class ExperimentalModel(LlamaModel):
             rotary_pos,
             tokens=tokens if self.fused_decode_loop.embedding_weight is not None else None,
         )
-        x = layer._norm_input(x, decode=True, site="attn")
-        x = ttnn.to_memory_config(x, self.lm_head.config.input_memcfg)
-        logits = self.lm_head(x)
+        if self.fused_decode_loop.head is not None:
+            logits = x
+        elif self.fused_head is not None:
+            logits = self.fused_head(layer._ag(x, decode=True, site="attn"))
+        else:
+            x = layer._norm_input(x, decode=True, site="attn")
+            x = ttnn.to_memory_config(x, self.lm_head.config.input_memcfg)
+            logits = self.lm_head(x)
         shape = ttnn.Shape((1, 1, 32, self.padded_vocab_size // 4))
         return ttnn.reshape(logits, shape, shape, skip_padding_fill=True)
 
@@ -226,13 +231,13 @@ class ExperimentalModel(LlamaModel):
 def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_workers=8, kv_cache=None):
     """Install the same body across all 32 layers before generator trace setup.
 
-    The embedding, final norm, head and sampler remain the existing traced
-    boundary, so end-to-end tests exercise actual token feedback and positions.
+    Mode "decode_token" composes embedding, all layers and terminal logits in
+    one program. Native sampling still owns token feedback and position updates.
     Callers must release all prior traces before switching implementations.
     """
     if model.max_batch_size != 1 or set(model.decode_families) != {1}:
         raise ValueError("Only a batch-one model without additional families is supported")
-    is_loop = mode in ("decoder_loop", "decoder_loop_embedding")
+    is_loop = mode in ("decoder_loop", "decoder_loop_embedding", "decoder_loop_head", "decode_token")
     if is_loop and kv_cache is None:
         raise ValueError("The loop must bind all KV allocations before warmup and capture")
     model.layers = experimental_layers(
@@ -243,11 +248,40 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
     )
     if is_loop:
         from .loop import DecoderLoop
+        from .head import FusedHead
 
+        body = model.layers[0].fused_body
+        integrated_head = None
+        if mode == "decode_token":
+            occupied = {
+                (c.x, c.y)
+                for c in (
+                    body.projection_cores
+                    + body.sfpu_cores
+                    + body.communication_cores
+                    + body.norm_cores
+                    + body.attention_stage.cores
+                    + body.preparation.cores
+                )
+            }
+            grid = model.mesh_device.compute_with_storage_grid_size()
+            free = [
+                ttnn.CoreCoord(x, y)
+                for y in range(min(10, grid.y))
+                for x in range(min(11, grid.x))
+                if (x, y) not in occupied
+            ]
+            if len(free) < 24:
+                raise ValueError("The integrated terminal boundary requires24 free workers on the QB2 grid")
+            integrated_head = FusedHead(
+                model, cores=free[:16], norm_cores=free[16:24], norm_output=body.normalizer.output
+            )
         model.fused_decode_loop = DecoderLoop(
-            model.layers[0].fused_body,
+            body,
             kv_cache,
-            embedding_weight=model.embedding_weight if mode == "decoder_loop_embedding" else None,
+            embedding_weight=model.embedding_weight if mode != "decoder_loop" else None,
+            head=integrated_head,
         )
+        model.fused_head = FusedHead(model) if mode == "decoder_loop_head" else None
         model.__class__ = ExperimentalModel
     model.decode_families[1] = model.layers

@@ -269,6 +269,11 @@ void kernel_main() {
             tiles_done += tiles_in_chunk;
         }
     }
+    // Optional terminal gather borrows the completed local output tiles
+    // before closing the connections. It does not change reduction counters.
+#ifdef FUSED_SUFFIX_HEADER
+#include FUSED_SUFFIX_HEADER
+#endif
     noc_semaphore_set(gen_ptr, invocation + 1);
 
     fabric_connection.close_start();

@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 15:06 UTC. **Verified partial prototype; full decode megakernel incomplete.**
+Updated 2026-09-22 16:10 UTC. **Verified partial prototype; full decode megakernel incomplete.**
 
 Base origin/main: `b8915544692d8f9feb2c890afbc2f22791560cd2`.
 Branch: `codex/llama31-qb2-megakernel`. Last hardware-qualified checkpoint:
@@ -21,7 +21,7 @@ to have its owner release the hardware. Do not kill/reset underneath it.
 Our blocked mesh-opening process was terminated only after preserving evidence.
 `artifacts/OWNERSHIP_BLOCKED` guards the serialized runner and reset script.
 Check `/proc/*/status` NSpid when interpreting a container PID; fuser without
-root cannot enumerate all another user's FDs. Latest check15:00 still live.
+root cannot enumerate all another user's FDs. Latest check16:04 still live.
 
 Mark permits unlimited device resets during this allocation; no further reset
 approval is needed after ownership is clear. Last reset13:44 passed all4-device
@@ -170,3 +170,34 @@ new paths remain numerically unqualified because the unrelated device owner is
 still live.** Next hardware order: gather tail, postattention, attention tail,
 complete layer, loop1/2, full32model; preserve triage on any hang. The fullmodel
 benchmark accepts both loop variants and verifies against saved baseline.
+
+## 16:10 token-to-logits compiler checkpoint
+
+Added a standalone native-math final RMSNorm/HiFi2 head and a composed
+`decode_token` mode: BF16 embedding lookup, all32 decoder layers, final
+all-gather, final RMSNorm and BFP8 vocabulary projection in one mesh program.
+Native sampling remains outside the program and owns token/position feedback.
+`decoder_loop_head` is an intermediate debugging mode with a separate final
+all-gather and norm/head program. Head output shape is the existing per-chip
+BF16 padded vocabulary tensor; final RMSNorm affine stays folded in the weight.
+
+The complete body uses86 layer workers plus16 head and8 terminal norm workers.
+The final gather runs only after the last layer's second reduction, borrows
+its completed sixteen-tile output CB, and reuses open fabric connections without
+changing reduction generations. Terminal norm reuses the layer norm output.
+This requires active B1 positions; negative/inactive rows and serving remain
+unsupported. KV allocations bind before warmup; no mid-trace allocation rebinding.
+
+Real SFPI mock-UMD compilation and model.decode entry/cache-reuse smoke passed,
+with32 distinct KV pairs and no cache misses on four further calls. Max program
+code/config remains54,208B; descriptor-derived max local CB845,824B/core,
+head835,584B/core, loop state4096B on each of86 cores. These exclude firmware,
+other tensor allocations and profiler overhead; they are not physical L1 or
+execution measurements. Actual Blackhole grid is11x10; mock compilation used
+its available13x10 grid while reserving terminal workers inside11x10.
+New real-checkpoint traced norm/head comparison exercises3 inputs and8 replays;
+all13 decoder/loop/head tests collect, but the head test has NOT run on hardware.
+Current host TTNN/health/Tracy build and tt_pybinds install pass. Logs and JSONs:
+`compile-mock-head.log`, `compile-mock-token-final.log`,
+`token-descriptor-footprint.json`, `collect-token.log`, `build-token-checkpoint.log`.
+No newer hardware accuracy or speed claim replaces the0414386d results.

@@ -23,6 +23,8 @@ head. Prefill stays in the original implementation. Batch one only.
 | `decoder` | complete single decoder layer, including QKV/RoPE/paged KV | Compiler only |
 | `decoder_loop` | one device program loops over the layer weight/KV table | Compiler only |
 | `decoder_loop_embedding` | token embedding and the device layer loop | Compiler only |
+| `decoder_loop_head` | embedding/layer loop, then native AG and fused final norm/head | Compiler only |
+| `decode_token` | embedding,32-layer loop, final AG/norm/head in one program | Compiler only |
 
 Qualified modes produce bitwise-identical teacher logits and all64 KV tensors,
 32/32 matching greedy outputs and stable repeated generations at B1/context128.
@@ -48,9 +50,13 @@ Attention retains its native32-core grouping on separate cores and uses CB32.
 The whole-layer layout requires Blackhole's real11x10 grid and GU8 workers.
 
 The embedding variant reads BF16 row-major checkpoint rows directly into the
-first residual buffer. Final normalization, LM head and sampling remain the
-native traced boundary. No persistent multi-token loop or vLLM integration is
-implemented. Cache allocations cannot change while a loop/trace references
+first residual buffer. `decode_token` additionally places sixteen HiFi2 head
+workers and eight final norm workers on the remaining24 cores. A terminal
+all-gather borrows the last reduction's completed output and open connections;
+it preserves that reduction's counters. The final norm reuses the layer norm
+scratch. Sampling remains the native traced boundary. The earlier modes retain
+their native terminal operators. No persistent multi-token loop or vLLM
+integration is implemented. Negative/inactive positions are not supported. Cache allocations cannot change while a loop/trace references
 their address table; page-table contents and positions remain device inputs.
 
 After health/ownership verification, run these **serially with bounded commands**:
@@ -59,6 +65,7 @@ After health/ownership verification, run these **serially with bounded commands*
 pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel_mlp.py
 pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel.py
 pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel_loop.py
+pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel_head.py
 python -m models.demos.llama31_8b_qb2.tests.benchmark_megakernel \
     --mode baseline --context 128 --output /outside/repo/baseline
 python -m models.demos.llama31_8b_qb2.tests.benchmark_megakernel \

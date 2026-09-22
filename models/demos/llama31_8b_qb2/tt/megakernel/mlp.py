@@ -414,4 +414,6 @@ class FusedMLP:
         if self.reduction is None:
             ttnn.generic_op([*io, self.output], descriptor)
             return self.output
+        if layer_loop is not None and layer_loop.head is not None:
+            return ttnn.generic_op([*io, self.output, self.reduction.output, layer_loop.head.output], descriptor)
         return ttnn.generic_op([*io, self.output, self.reduction.output], descriptor)
