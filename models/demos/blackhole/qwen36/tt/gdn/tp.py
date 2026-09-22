@@ -413,7 +413,8 @@ class TPGatedDeltaNet:
         # pieces are concatenated. 1 (TP=4/8: Nv <= 12) is the unchanged single call.
         self._concat_heads_groups = 1
         if self._tp1:
-            if tpc.tp1_prefill_opt_enabled():
+            # The knob as resolved once at model init (args.prefill_tuning["shape_overrides"], tp_common.prefill_tuning).
+            if tpc.tp1_prefill_opt(args):
                 # TP=1 prefill (lane A): keep the fused scan's head-major [Nv,T,Dv] fp32 output, per-head rms_norm on it
                 # and relayout with nlp_concat_heads in 2 groups of 24 heads. The former token-major route (op-internal
                 # untilize + permute, tilize that pads Nv 48->64, rms_norm on the padded tensor and a 5.7 ms

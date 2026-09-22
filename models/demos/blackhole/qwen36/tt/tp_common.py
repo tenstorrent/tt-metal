@@ -83,15 +83,30 @@ TILE_BYTES_BFP4 = 576
 
 
 def prefill_tuning(num_devices):
-    """Prefill matmul tuning for this TP; unknown TP falls back to the frozen TP=4 values."""
-    return _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
+    """Prefill matmul tuning for this TP; unknown TP falls back to the frozen TP=4 values.
+
+    TP=1 returns a COPY of its entry carrying `shape_overrides` = tp1_prefill_opt_enabled(), i.e. the
+    QWEN36_TP1_PREFILL_OPT knob resolved ONCE here (model init: model_config._init_tp_config); the matmul config
+    builder and the GDN layer both read that field, never the environment (tp1_prefill_opt)."""
+    tuning = _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
+    if num_devices == 1:
+        tuning = dict(tuning, shape_overrides=tp1_prefill_opt_enabled())
+    return tuning
 
 
 def tp1_prefill_opt_enabled():
-    """QWEN36_TP1_PREFILL_OPT (default on): the TP=1 prefill device-time optimizations (lane A, 2026-09-22):
-    head-major GDN output relayout, per-shape 2D/1D matmul configs, SDPA chunking. =0 restores the pre-tuning
-    TP=1 path byte-for-byte (rollback / A-B switch). TP>1 never reads it."""
+    """QWEN36_TP1_PREFILL_OPT (default on): the TP=1 prefill device-time optimizations (lane A, 2026-09-22): the
+    head-major GDN output relayout (gdn/tp.py `_concat_heads_groups`) and the three per-shape 1D matmul configs
+    (`_TP1_PREFILL_PROGCFG_2048`). =0 restores the pre-tuning TP=1 path byte-for-byte (rollback / A-B switch).
+    Resolved once per model by prefill_tuning(1); TP>1 never reads it. (QWEN36_SDPA_Q_CHUNK is a separate,
+    TP-independent knob.)"""
     return os.environ.get("QWEN36_TP1_PREFILL_OPT", "1") == "1"
+
+
+def tp1_prefill_opt(args):
+    """The knob as resolved at model init (args.prefill_tuning["shape_overrides"]); False when args has no TP=1 tuning."""
+    tuning = getattr(args, "prefill_tuning", None)
+    return bool(tuning and tuning.get("shape_overrides"))
 
 
 def _prefill_2d_cb_bytes(out_block_h, per_core_N, in0_block_w, weight_tile_bytes):
@@ -355,48 +370,37 @@ def _best_prefill_cols(n, max_cols):
 # tests/test_prefill_matmul_sweep_tp1_scratch.py (lane A, 2026-09-22; profiles/p1d1_opt/laneA_RESULTS.md). Every entry
 # keeps the generic config's in0_block_w (4) on the HiFi2 bf8 matmuls -- a different K block changes the bf16 result
 # (measured max-abs 0.0078) -- and was verified bit-identical to the generic config on random data; the LoFi MLP
-# matmuls (packer_l1_acc) are bit-identical for any in0_block_w. Key: (M, K, N).
-#   "2d": MatmulMultiCoreReuseMultiCastProgramConfig (grid cols x rows, out block h x w, subblock h x w)
-#   "1d": MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0 (every core reads its own N slice of the weight instead of
-#         one sender per grid column: the weight-heavy wide-N in-projections were bound by the column senders).
-# Measured S=2048 device us, generic -> this:
-#   attn qkv   5120x14336 bf8 HiFi2: 3190 -> 2060 (1D, 103 cores, per-core N 5 tiles, out block 16x5, bw 4)
-#   gdn qkvzab 5120x16480 bf8 HiFi2: 3030 -> 2168 (1D, 103 cores, per-core N 5 tiles, out block 16x5, bw 4)
-#   mlp gate/up 5120x17408 bf4 LoFi: 3534 -> 2183 (2D 11x8, per-core 8x50, out block 2x50, subblock 2x2, bw 2)
+# matmuls (packer_l1_acc) are bit-identical for any in0_block_w. Key: (M, K, N). Every entry is a
+# MatmulMultiCoreReuseMultiCast1DProgramConfig with mcast_in0 (every core streams its own N slice of the weight instead
+# of one in1 sender per grid column: the weight-heavy wide-N in-projections were bound by the column senders); `grid` is
+# the (cols, rows) the 1D factory may use = ceil(N tiles / per_core_N) cores, and the entry is skipped (generic config)
+# on a device whose worker grid is smaller (`_tp1_override_progcfg`).
+# Measured S=2048 device us, generic -> this (sweep wall us in parentheses; in-model device us in laneA_RESULTS.md 3c):
+#   attn qkv    5120x14336 bf8 HiFi2: 3190 -> 1977 (sweep 3331 -> 2060): 90 cores, per-core N 5 tiles, out block 16x5, bw 4
+#   gdn qkvzab  5120x16480 bf8 HiFi2: 3030 -> 2042 (sweep 3177 -> 2168): 103 cores, per-core N 5, out block 16x5, bw 4
+#   mlp gate/up 5120x17408 bf4 LoFi:  3534 -> 1340 (sweep 3777 -> 1475): 91 cores, per-core N 6, out block 16x6, bw 8,
+#               subblock 1x3. (Best 2D alternative, not shipped: 11x8 grid, per-core 8x50, out block 2x50, sub 2x2,
+#               bw 2: sweep 2183 us.)
 _TP1_PREFILL_PROGCFG_2048 = {
     # attention fused [q|k|v|gate] in-projection
-    (2048, 5120, 14336): dict(kind="1d", grid=(11, 9), per_core_N=5, in0_block_w=4, out_block_h=16, sub=(1, 1)),
+    (2048, 5120, 14336): dict(grid=(11, 9), per_core_N=5, in0_block_w=4, out_block_h=16, sub=(1, 1)),
     # GDN fused [qkv|z|a|b] in-projection
-    (2048, 5120, 16480): dict(kind="1d", grid=(11, 10), per_core_N=5, in0_block_w=4, out_block_h=16, sub=(1, 1)),
+    (2048, 5120, 16480): dict(grid=(11, 10), per_core_N=5, in0_block_w=4, out_block_h=16, sub=(1, 1)),
     # MLP gate / up (bf4, LoFi, packer_l1_acc)
-    (2048, 5120, 17408): dict(kind="1d", grid=(11, 9), per_core_N=6, in0_block_w=8, out_block_h=16, sub=(1, 3)),
+    (2048, 5120, 17408): dict(grid=(11, 9), per_core_N=6, in0_block_w=8, out_block_h=16, sub=(1, 3)),
 }
 
 
-def _tp1_override_progcfg(m, k, n, fused_activation):
-    """The measured TP=1 config for (m, k, n) or None (generic path)."""
+def _tp1_override_progcfg(m, k, n, fused_activation, max_cols, max_rows):
+    """The measured TP=1 1D config for (m, k, n), or None (generic path) when there is no entry or the entry's grid does
+    not fit the device (cols > max_cols or rows > max_rows: a differently harvested die / smaller worker grid). The knob
+    itself is checked by the caller (tuning["shape_overrides"])."""
     spec = _TP1_PREFILL_PROGCFG_2048.get((m, k, n))
-    if spec is None or not tp1_prefill_opt_enabled():
+    if spec is None:
         return None
-    if spec["kind"] == "2d":
-        cols, rows = spec["grid"]
-        per_core_M = math.ceil(m / TILE_SIZE / rows)
-        per_core_N = math.ceil(n / TILE_SIZE / cols)
-        obh, obw = spec.get("out_block", (per_core_M, per_core_N))
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(cols, rows),
-            in0_block_w=spec["in0_block_w"],
-            out_subblock_h=spec["sub"][0],
-            out_subblock_w=spec["sub"][1],
-            per_core_M=per_core_M,
-            per_core_N=per_core_N,
-            transpose_mcast=False,
-            fused_activation=fused_activation,
-            fuse_batch=False,
-            out_block_h=obh,
-            out_block_w=obw,
-        )
     cols, rows = spec["grid"]
+    if cols > max_cols or rows > max_rows:
+        return None
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(cols, rows),
         in0_block_w=spec["in0_block_w"],
@@ -428,9 +432,12 @@ def create_prefill_mlp_matmul_program_config(
     TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
-    if tuning is _PREFILL_TUNING[1]:
-        # TP=1: measured per-shape config for the serving chunk (see _TP1_PREFILL_PROGCFG_2048); other shapes generic.
-        _ov = _tp1_override_progcfg(m, k, n, fused_activation)
+    if tuning.get("shape_overrides"):
+        # TP=1 with the opt knob on (prefill_tuning(1)): measured per-shape config for the serving chunk, clamped to the
+        # device grid (max_cols = the caller's worker-grid width, rows = the default prefill grid's); other shapes generic.
+        _ov = _tp1_override_progcfg(
+            m, k, n, fused_activation, max_cols=max_cols or PREFILL_MAX_COLS_PORTABLE, max_rows=grid[1]
+        )
         if _ov is not None:
             return _ov
     limit = max_cols or grid[0]
