@@ -13,6 +13,9 @@ from unittest.mock import patch
 import pytest
 
 import ttnn
+from models.common.weight_cache import weight_cache_is_complete
+from models.demos.gemma4_d_p.tt.common import weight_cache_identity
+from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
 from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
 from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     PREPARED_GPU_TRACE_LAYOUT,
@@ -29,15 +32,46 @@ def migration_environment(request, tmp_path):
     gate = request.param
     if gate == "loopback" and os.getenv("GEMMA4_TEST_LOOPBACK") != "1":
         pytest.skip("Start the migration endpoint and set GEMMA4_TEST_LOOPBACK=1")
-    trace_dir = Path(os.getenv("PREFILL_TRACE_DIR", Gemma4PrefillAdapter().prefill_trace_default))
-    if not (trace_dir / "metadata.json").is_file():
-        pytest.skip(f"GPU trace not found: {trace_dir}")
+    adapter = Gemma4PrefillAdapter()
+    trace_dir = Path(os.getenv("PREFILL_TRACE_DIR", adapter.prefill_trace_default))
     metadata = json.loads((trace_dir / "metadata.json").read_text())
-    assert metadata["model_id"] == Gemma4PrefillAdapter().hf_model_id
+    assert metadata["model_id"] == adapter.hf_model_id
     assert metadata["layout"] in ("chunked_group_a_v1", PREPARED_GPU_TRACE_LAYOUT)
     assert metadata["n_layers"] == Gemma4ServiceConfig.NUM_LAYERS
     assert len(metadata["token_ids"]) >= Gemma4ServiceConfig.MAX_SEQ_LEN
-    directory = tmp_path
+    for layer in range(Gemma4ServiceConfig.NUM_LAYERS):
+        if metadata["layout"] == PREPARED_GPU_TRACE_LAYOUT:
+            files = [trace_dir / "kv_cache" / f"layer_{layer}.safetensors"]
+        else:
+            files = sorted(
+                (trace_dir / "kv_cache" / f"layer_{layer}").glob("rows_*.safetensors"),
+                key=lambda path: int(path.stem.split("_")[1]),
+            )
+            position = 0
+            for shard in files:
+                start, end = map(int, shard.stem.split("_")[1:])
+                assert start == position and end > start, f"Noncontiguous GPU capture: {shard}"
+                position = end
+            assert position >= Gemma4ServiceConfig.MAX_SEQ_LEN, f"Incomplete GPU capture for layer {layer}: {trace_dir}"
+        for file in files:
+            with file.open("rb") as tensor_file:
+                assert len(tensor_file.read(8)) == 8, f"Empty or truncated GPU capture: {file}"
+
+    adapter.load_hf_config()
+    cache = adapter.weight_cache_path(Gemma4ServiceConfig.MESH_SHAPE)
+    identity = weight_cache_identity(
+        adapter.hf_model_id,
+        Gemma4ServiceConfig.NUM_LAYERS,
+        Gemma4ServiceConfig.MESH_SHAPE,
+        Gemma4Precision.load(adapter.hf_model_id),
+    )
+    assert weight_cache_is_complete(cache, **identity), f"Missing or incompatible TT weight cache: {cache}"
+
+    output_dir = tmp_path
+    if summaries := os.getenv("PREFILL_SUMMARIES"):
+        output_dir = Path(summaries) / "gemma4_mock256k" / request.node.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Migration test results: {output_dir}", flush=True)
     env = {key: value for key, value in os.environ.items() if not key.startswith("PREFILL_")}
     env.setdefault("OMP_NUM_THREADS", "16")
     env.update(
@@ -64,8 +98,8 @@ def migration_environment(request, tmp_path):
         PREFILL_NUM_USERS=str(Gemma4ServiceConfig.MAX_USER_SLOTS),
         PREFILL_LAYER_ACK_D2H="1",
         PREFILL_H2D_SERVICE_ID=f"gemma4_migration_{gate}_{os.getpid()}",
-        PREFILL_MIGRATION_TABLE_PATH=str(directory / "table.pb"),
-        PREFILL_MIGRATION_DEVICE_MAP_PATH=str(directory / "device_map.json"),
+        PREFILL_MIGRATION_TABLE_PATH=str(tmp_path / "table.pb"),
+        PREFILL_MIGRATION_DEVICE_MAP_PATH=str(output_dir / "device_map.json"),
         PREFILL_MOCK_MIGRATION="1" if gate == "mock" else "0",
         PREFILL_ENABLE_MIGRATION="1" if gate == "loopback" else "0",
         PREFILL_MIGRATION_EXPORT_TO_FILE="0",
@@ -76,15 +110,15 @@ def migration_environment(request, tmp_path):
         PREFILL_MIGRATION_RESP_QUEUE=env.get("PREFILL_MIGRATION_RESP_QUEUE", "/mig_ep1_resp"),
         PREFILL_TRACE_DIR=str(trace_dir),
     )
-    return gate, env
+    return gate, env, output_dir
 
 
 @pytest.mark.timeout(14400)
 @pytest.mark.parametrize("context_len", [8192, 16384, 131072, 262144], ids=["8k", "16k", "128k", "256k"])
-def test_prefill_migration(migration_environment, context_len, tmp_path):
-    gate, env = migration_environment
-    env["PREFILL_PCC_SUMMARY_DIR"] = str(tmp_path)
-    with (tmp_path / "runner.log").open("w") as log:
+def test_prefill_migration(migration_environment, context_len):
+    gate, env, output_dir = migration_environment
+    env["PREFILL_PCC_SUMMARY_DIR"] = str(output_dir)
+    with (output_dir / "runner.log").open("w") as log:
         result = subprocess.run(
             [
                 sys.executable,
@@ -92,15 +126,15 @@ def test_prefill_migration(migration_environment, context_len, tmp_path):
                 "models.demos.gemma4_d_p.tests.test_prefill_migration",
                 gate,
                 str(context_len),
-                str(tmp_path),
+                str(output_dir),
             ],
             env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
             timeout=10800,
         )
-    assert result.returncode == 0, (tmp_path / "runner.log").read_text()
-    report = json.loads((tmp_path / "gemma4_slot0.json").read_text())
+    assert result.returncode == 0, (output_dir / "runner.log").read_text()
+    report = json.loads((output_dir / "gemma4_slot0.json").read_text())
     assert report["slot"] == 0 and report["tokens"] == context_len
     assert len(report["measurements"]) == 1640
     assert min(report["minima"].values()) >= GPU_PCC_THRESHOLD
@@ -111,11 +145,11 @@ def test_prefill_migration(migration_environment, context_len, tmp_path):
     overall = metrics["overall"]
     print(f"{'Overall':>7} {overall['pcc']:>12.6f} {overall['relative_rmse']:>16.6f} {overall['rmse']:>12.6f}")
     if gate == "loopback":
-        assert "[migration] WORKER_READY:" in (tmp_path / "runner.log").read_text()
-        assert "verify bytes PASSED" in (tmp_path / "producer.log").read_text()
+        assert "[migration] WORKER_READY:" in (output_dir / "runner.log").read_text()
+        assert "verify bytes PASSED" in (output_dir / "producer.log").read_text()
 
 
-def run_migration_case(gate, context_len, tmp_path):
+def run_migration_case(gate, context_len, output_dir):
     env = dict(os.environ)
     from models.demos.common.prefill.runners import prefill_producer, prefill_runner
 
@@ -131,7 +165,7 @@ def run_migration_case(gate, context_len, tmp_path):
         PREFILL_MIGRATION_DEST_ENDPOINT_ID="1",
         PREFILL_MIGRATION_SRC_ENDPOINT_ID="1",
         PREFILL_MIGRATION_PAIRS=f"0:{Gemma4ServiceConfig.MAX_USER_SLOTS - 1}",
-        MIGRATION_DONE_FILE=str(tmp_path / "migration_done"),
+        MIGRATION_DONE_FILE=str(output_dir / "migration_done"),
     )
     module = "prefill_producer" if gate == "mock" else "migration_driver"
     command = [sys.executable, "-m", f"models.demos.common.prefill.runners.{module}"]
@@ -141,11 +175,11 @@ def run_migration_case(gate, context_len, tmp_path):
     failures = []
 
     def checked_loop(runtime, kv_cache, *args, **kwargs):
-        with (tmp_path / "producer.log").open("w") as log:
+        with (output_dir / "producer.log").open("w") as log:
             producer = subprocess.Popen(command, env=client_env, stdout=log, stderr=subprocess.STDOUT)
             try:
                 original_loop(runtime, kv_cache, *args, **kwargs)
-                assert producer.wait(timeout=120) == 0, (tmp_path / "producer.log").read_text()
+                assert producer.wait(timeout=120) == 0, (output_dir / "producer.log").read_text()
                 assert runtime.slot_ends == [context_len] + [0] * (Gemma4ServiceConfig.MAX_USER_SLOTS - 1)
                 table = ttnn.experimental.disaggregation.import_from_protobuf_file(env["PREFILL_MIGRATION_TABLE_PATH"])
                 device_map = prefill_producer._read_device_map(timeout_s=10)

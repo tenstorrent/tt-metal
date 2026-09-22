@@ -1023,6 +1023,7 @@
   artifact_subdir: gemma4_mock256k
   cmd: |
     export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export HF_MODEL=google/gemma-4-31B-it
@@ -1030,7 +1031,9 @@
     export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
     mpirun --bind-to none --pernode --tag-output \
-      bash models/demos/gemma4_d_p/tests/ci/run_mock_256k.sh
+      python3 -m pytest \
+        'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-256k]' \
+        -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
   test_type: gemma4_prefill_kv_pcc
   test_tags: [gemma4_d_p, runner, kv_cache]
   test_group: disagg_prefill
