@@ -372,4 +372,105 @@ TEST(QuasarAttAddressAether, WorkerMulticastSpansTheRow) {
     static_assert(mcast.end_node_xy == 0x41);
 }
 
+
+// ---------------------------------------------------------------------------
+// Operand diagnostics (the inverse of encode): what a complete operand
+// reaches, as the watcher's NoC sanitizer and its host report classify it.
+// ---------------------------------------------------------------------------
+
+using noc_att::classify_operand;
+using Kind = noc_att::OperandTarget::Kind;
+
+TEST(QuasarAttOperandQsr1, WorkerOperandsClassifyToTheirEndpointRow) {
+    // Worker (2,2) is logical (0,0): selector 0 of the worker window, live word 0x104 = (4,4).
+    constexpr auto t = classify_operand(QSR1, *Address::worker(2, 2, 0x1234).encode<QSR1>());
+    static_assert(t.kind == Kind::Worker);
+    static_assert(t.window == WindowClass::Worker);
+    static_assert(t.selector == 0);
+    static_assert(t.local_address == 0x1234);
+    static_assert(t.endpoint_known && t.endpoint_word == 0x104);
+    // Worker (9,5) is logical (7,3): selector 31, live word 0x1cb = (11,7).
+    constexpr auto corner = classify_operand(QSR1, *Address::worker(9, 5, 0).encode<QSR1>());
+    static_assert(corner.kind == Kind::Worker && corner.selector == 31 && corner.endpoint_word == 0x1cb);
+    // A worker-window selector past the 32 programmed rows reaches nothing.
+    constexpr auto unlisted = classify_operand(QSR1, noc_att::map_window(QSR1, WindowClass::Worker).make_address(33, 0));
+    static_assert(unlisted.kind == Kind::Invalid);
+    static_assert(unlisted.window == WindowClass::Worker && unlisted.selector == 33);
+}
+
+TEST(QuasarAttOperandQsr1, DramOperandsClassifyToTheirBank) {
+    constexpr auto bank1 = classify_operand(QSR1, *Address::dram(1, 0x4000).encode<QSR1>());
+    static_assert(bank1.kind == Kind::Dram);
+    static_assert(bank1.window == WindowClass::Dram);
+    static_assert(bank1.selector == 1 && bank1.bank == 1);
+    static_assert(bank1.local_address == 0x4000);
+    static_assert(bank1.endpoint_known && bank1.endpoint_word == 0x24a);
+    // Lane B rows (selectors 16..19) are programmed DRAM ingress nodes with no bound bank.
+    constexpr auto laneB = classify_operand(QSR1, noc_att::map_window(QSR1, WindowClass::Dram).make_address(16, 0x10));
+    static_assert(laneB.kind == Kind::Dram && laneB.bank == noc_att::DRAM_BANK_UNKNOWN);
+    static_assert(laneB.endpoint_known && laneB.endpoint_word == 0x247);
+    // An unprogrammed DRAM row reaches nothing.
+    constexpr auto unprogrammed =
+        classify_operand(QSR1, noc_att::map_window(QSR1, WindowClass::Dram).make_address(5, 0x10));
+    static_assert(unprogrammed.kind == Kind::Invalid && unprogrammed.window == WindowClass::Dram);
+}
+
+TEST(QuasarAttOperandQsr1, SelfAndFullTileOperands) {
+    // The local window is the full-tile window at the boot-patched selector 0.
+    constexpr auto self = classify_operand(QSR1, *Address::local(0x300000).encode<QSR1>());
+    static_assert(self.kind == Kind::Self && self.local_address == 0x300000);
+    // The scratch aperture is pass-through: the operand is the absolute L1 address.
+    constexpr auto scratch = classify_operand(QSR1, *Address::loopback_scratch(0x150000).encode<QSR1>());
+    static_assert(scratch.kind == Kind::Self);
+    static_assert(scratch.window == WindowClass::LoopbackScratch && scratch.local_address == 0x150000);
+    // A dispatch engine tile reaches its L1 through the full-tile window: (10,6) is selector 56, word 0x20c.
+    constexpr auto de = classify_operand(QSR1, *Address::dispatch(10, 6, 0x1000).encode<QSR1>());
+    static_assert(de.kind == Kind::FullTile && de.selector == 56 && de.local_address == 0x1000);
+    static_assert(de.endpoint_known && de.endpoint_word == 0x20c);
+    // Nothing above the top window.
+    constexpr auto garbage = classify_operand(QSR1, 0x5555000000000000ull);
+    static_assert(garbage.kind == Kind::Invalid && garbage.window == WindowClass::Invalid);
+}
+
+TEST(QuasarAttOperandAether, OneSharedWindowIsToldApartBySelector) {
+    // Workers: selectors 0 and 1 of the shared remote window.
+    constexpr auto w0 = classify_operand(AETHER, *Address::worker(0, 1, 0x80).encode<AETHER>());
+    static_assert(w0.kind == Kind::Worker && w0.selector == 0 && w0.endpoint_word == 0x40);
+    static_assert(w0.local_address == 0x80);
+    constexpr auto w1 = classify_operand(AETHER, *Address::worker(1, 1, 0x80).encode<AETHER>());
+    static_assert(w1.kind == Kind::Worker && w1.selector == 1 && w1.endpoint_word == 0x41);
+    // DRAM banks: selectors 2 and 3; their tiles live in the full-tile table on this map.
+    constexpr auto d0 = classify_operand(AETHER, *Address::dram(0, 0x2000).encode<AETHER>());
+    static_assert(d0.kind == Kind::Dram && d0.selector == 2 && d0.bank == 0 && d0.local_address == 0x2000);
+    static_assert(d0.endpoint_known && d0.endpoint_word == 0x00);
+    constexpr auto d1 = classify_operand(AETHER, *Address::dram(1, 0).encode<AETHER>());
+    static_assert(d1.kind == Kind::Dram && d1.bank == 1 && d1.endpoint_known && d1.endpoint_word == 0x01);
+    // The dispatch tile (0,2) is full-tile selector 4.
+    constexpr auto dispatch = classify_operand(AETHER, *Address::dispatch(0, 2, 0x40).encode<AETHER>());
+    static_assert(dispatch.kind == Kind::FullTile && dispatch.selector == 4 && dispatch.endpoint_word == 0x80);
+    // Selector 6 is past the six programmed rows.
+    constexpr auto unlisted =
+        classify_operand(AETHER, noc_att::map_window(AETHER, WindowClass::Worker).make_address(6, 0));
+    static_assert(unlisted.kind == Kind::Invalid && unlisted.window == WindowClass::Worker && unlisted.selector == 6);
+}
+
+TEST(QuasarAttOperandAether, LocalWindowIsSelfOnlyAtSelectorZero) {
+    constexpr auto self = classify_operand(AETHER, *Address::local(0x1000).encode<AETHER>());
+    static_assert(self.kind == Kind::Self && self.window == WindowClass::Local && self.local_address == 0x1000);
+    // Other selectors of the local window are not an identity kernels can name.
+    constexpr auto other = classify_operand(AETHER, noc_att::map_window(AETHER, WindowClass::Local).make_address(1, 0));
+    static_assert(other.kind == Kind::Invalid && other.window == WindowClass::Local);
+}
+
+TEST(QuasarAttOperand, MulticastDescriptorRoundTrips) {
+    constexpr auto rect =
+        noc_att::decode_multicast_descriptor(noc_att::make_multicast_descriptor(0, 1, 1, 1, 0x80));
+    static_assert(rect.valid);
+    static_assert(rect.start_x == 0 && rect.start_y == 1 && rect.end_x == 1 && rect.end_y == 1);
+    static_assert(rect.local_address == 0x80);
+    static_assert(!noc_att::decode_multicast_descriptor(noc_att::INVALID_MULTICAST_DESCRIPTOR).valid);
+    // The container is not self-identifying: a unicast operand decodes as some rectangle too, which is
+    // why the sanitizer is told explicitly whether an operand is a multicast.
+    static_assert(noc_att::decode_multicast_descriptor(*Address::worker(2, 2, 0).encode<QSR1>()).valid);
+}
 }  // namespace

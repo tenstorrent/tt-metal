@@ -492,17 +492,156 @@ constexpr NocAddress make_multicast_descriptor(
            (std::uint64_t{end_x} << DESCRIPTOR_LOCAL_BITS) | local_address;
 }
 
-template <const MapData& Map>
-constexpr NocMulticastAddress resolve_worker_multicast(NocAddress descriptor, std::uint64_t size = 1) {
+/// @brief The fields of a software multicast descriptor. valid is false when the
+/// value is not a descriptor (INVALID_MULTICAST_DESCRIPTOR, or any bit above
+/// DESCRIPTOR_BITS set); the fields are then zero.
+struct MulticastDescriptorFields {
+    std::uint32_t start_x;
+    std::uint32_t start_y;
+    std::uint32_t end_x;
+    std::uint32_t end_y;
+    std::uint64_t local_address;
+    bool valid;
+};
+
+constexpr MulticastDescriptorFields decode_multicast_descriptor(NocAddress descriptor) {
     if ((descriptor >> DESCRIPTOR_BITS) != 0) {
         return {};
     }
-    const std::uint32_t end_x = (descriptor >> DESCRIPTOR_LOCAL_BITS) & 0x3f;
-    const std::uint32_t end_y = (descriptor >> (DESCRIPTOR_LOCAL_BITS + DESCRIPTOR_NODE_BITS)) & 0x3f;
-    const std::uint32_t start_x = (descriptor >> (DESCRIPTOR_LOCAL_BITS + 2 * DESCRIPTOR_NODE_BITS)) & 0x3f;
-    const std::uint32_t start_y = (descriptor >> (DESCRIPTOR_LOCAL_BITS + 3 * DESCRIPTOR_NODE_BITS)) & 0x3f;
-    const std::uint64_t local_address = descriptor & (DESCRIPTOR_LOCAL_LIMIT - 1);
-    return make_worker_multicast<Map>(start_x, start_y, end_x, end_y, local_address, size);
+    constexpr std::uint32_t node_mask = DESCRIPTOR_NODE_LIMIT - 1;
+    return {
+        static_cast<std::uint32_t>(descriptor >> (DESCRIPTOR_LOCAL_BITS + 2 * DESCRIPTOR_NODE_BITS)) & node_mask,
+        static_cast<std::uint32_t>(descriptor >> (DESCRIPTOR_LOCAL_BITS + 3 * DESCRIPTOR_NODE_BITS)) & node_mask,
+        static_cast<std::uint32_t>(descriptor >> DESCRIPTOR_LOCAL_BITS) & node_mask,
+        static_cast<std::uint32_t>(descriptor >> (DESCRIPTOR_LOCAL_BITS + DESCRIPTOR_NODE_BITS)) & node_mask,
+        descriptor & (DESCRIPTOR_LOCAL_LIMIT - 1),
+        true};
 }
 
+template <const MapData& Map>
+constexpr NocMulticastAddress resolve_worker_multicast(NocAddress descriptor, std::uint64_t size = 1) {
+    const MulticastDescriptorFields rect = decode_multicast_descriptor(descriptor);
+    if (!rect.valid) {
+        return {};
+    }
+    return make_worker_multicast<Map>(rect.start_x, rect.start_y, rect.end_x, rect.end_y, rect.local_address, size);
+}
+
+
+// ---------------------------------------------------------------------------
+// Operand diagnostics: the inverse of encode(). Given a complete operand and
+// the map alone, say what it reaches. Used by the watcher's NoC sanitizer on
+// the device and by the watcher's report on the host; never on an issue path.
+// ---------------------------------------------------------------------------
+
+/// @brief Dram target whose selector no logical bank is bound to.
+inline constexpr std::uint32_t DRAM_BANK_UNKNOWN = ~std::uint32_t{0};
+
+/// @brief Where a complete operand lands.
+struct OperandTarget {
+    enum class Kind : std::uint8_t {
+        Invalid,   ///< matches no window, or names a selector the map does not list
+        Self,      ///< this initiator's own L1: the local window at selector 0, or the pass-through scratch aperture
+        Worker,    ///< a worker tile's L1 through the worker window
+        FullTile,  ///< a tile's address space through the full-tile window (workers, dispatch tiles, perimeter)
+        Dram,      ///< a DRAM channel through the DRAM window
+    };
+    Kind kind;
+    /// The window the operand matched; Invalid when none did.
+    WindowClass window;
+    /// The selector field of that window (0 when the window is selector-free).
+    std::uint32_t selector;
+    /// The byte address the target sees: the window's local field, or the whole
+    /// operand through a selector-free pass-through aperture.
+    std::uint64_t local_address;
+    /// Whether endpoint_word names the target tile.
+    bool endpoint_known;
+    /// The target tile as (y << 6) | x in the NOC_NODE_ID frame, when known.
+    std::uint32_t endpoint_word;
+    /// Dram only: the logical bank bound to the selector, else DRAM_BANK_UNKNOWN.
+    std::uint32_t bank;
+};
+
+constexpr bool same_window(const Window& a, const Window& b) {
+    return a.compare == b.compare && a.mask_bits == b.mask_bits && a.endpoint_shift == b.endpoint_shift &&
+           a.endpoint_size == b.endpoint_size && a.endpoint_table_offset == b.endpoint_table_offset;
+}
+
+/// @brief Classify a complete unicast operand. Multicast descriptors are a
+/// different container (decode_multicast_descriptor). The checks run in the
+/// order the endpoint tables overlap: Self first (on a map whose local window
+/// is a shared window, selector 0 is the boot-patched self row), then Dram
+/// (on a map with one shared remote window only the selector tells DRAM from
+/// tiles, and DRAM selectors also appear in the full-tile table), then Worker,
+/// then FullTile.
+constexpr OperandTarget classify_operand(const MapData& map, NocAddress address) {
+    using Kind = OperandTarget::Kind;
+    const auto in_window = [address](const Window& window) {
+        return !is_no_window(window) && window.matches(address);
+    };
+    const Window& local = map_window(map, map.local_window_class);
+    if (in_window(local) && local.selector(address) == 0) {
+        return {Kind::Self, map.local_window_class, 0, local.local_address(address), false, 0, DRAM_BANK_UNKNOWN};
+    }
+    const Window& scratch = map_window(map, WindowClass::LoopbackScratch);
+    if (in_window(scratch)) {
+        // Selector-free and pass-through: the operand itself is the absolute L1 address.
+        const std::uint64_t seen = scratch.translate_address ? scratch.local_address(address) : address;
+        return {Kind::Self, WindowClass::LoopbackScratch, 0, seen, false, 0, DRAM_BANK_UNKNOWN};
+    }
+    const Window& dram = map_window(map, WindowClass::Dram);
+    const Window& tile = map_window(map, WindowClass::FullTile);
+    if (in_window(dram)) {
+        const std::uint32_t selector = dram.selector(address);
+        std::uint32_t bank = DRAM_BANK_UNKNOWN;
+        for (std::uint32_t b = 0; b < map.dram_selectors.size(); ++b) {
+            if (map.dram_selectors[b] == selector) {
+                bank = b;
+                break;
+            }
+        }
+        // The DRAM tile's word: its own table (0 = row not programmed), or the
+        // full-tile table when the map's DRAM tiles live there behind a shared window.
+        bool known = selector < map.dram_endpoint_words.size() && map.dram_endpoint_words[selector] != 0;
+        std::uint32_t word = known ? map.dram_endpoint_words[selector] : 0;
+        if (!known && bank != DRAM_BANK_UNKNOWN && !is_no_window(tile) && same_window(dram, tile) &&
+            selector < map.full_tile_endpoint_words.size()) {
+            known = true;
+            word = map.full_tile_endpoint_words[selector];
+        }
+        if (bank != DRAM_BANK_UNKNOWN || known) {
+            return {Kind::Dram, WindowClass::Dram, selector, dram.local_address(address), known, word, bank};
+        }
+    }
+    const Window& worker = map_window(map, WindowClass::Worker);
+    if (in_window(worker)) {
+        const std::uint32_t selector = worker.selector(address);
+        if (selector < map.worker_endpoint_words.size()) {
+            return {
+                Kind::Worker,
+                WindowClass::Worker,
+                selector,
+                worker.local_address(address),
+                true,
+                map.worker_endpoint_words[selector],
+                DRAM_BANK_UNKNOWN};
+        }
+    }
+    if (in_window(tile)) {
+        const std::uint32_t selector = tile.selector(address);
+        if (selector < map.full_tile_endpoint_words.size()) {
+            return {
+                Kind::FullTile,
+                WindowClass::FullTile,
+                selector,
+                tile.local_address(address),
+                true,
+                map.full_tile_endpoint_words[selector],
+                DRAM_BANK_UNKNOWN};
+        }
+    }
+    const WindowClass matched = matching_window_class(map, address);
+    const std::uint32_t selector = matched == WindowClass::Invalid ? 0 : map_window(map, matched).selector(address);
+    return {Kind::Invalid, matched, selector, 0, false, 0, DRAM_BANK_UNKNOWN};
+}
 }  // namespace noc_att

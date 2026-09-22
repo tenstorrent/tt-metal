@@ -357,14 +357,9 @@ public:
             }
             defines.push_back(std::string(map_info->config_define));
             // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
-            // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
-            // decodes XY operands and cannot run under ATT currently; the rest of the
-            // watcher never decodes an address, so allow it when the sanitizer
-            // is explicitly disabled.
-            TT_FATAL(
-                !params.rtoptions.get_watcher_enabled() || params.rtoptions.watcher_noc_sanitize_disabled(),
-                "TT_METAL_NOC_ATT supports the watcher only with the NoC sanitizer disabled "
-                "(TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1)");
+            // reject non-DRAM-backed CQs at compile time). The watcher, including its
+            // NoC sanitizer, runs under ATT: the sanitizer classifies operands through
+            // the map (debug/sanitize.h) instead of decoding XY fields.
             defines.push_back("NOC_ATT_ENABLED");
             defines.push_back("NOC_API_V3");
             static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
