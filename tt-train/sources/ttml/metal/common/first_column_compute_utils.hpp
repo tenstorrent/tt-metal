@@ -29,6 +29,9 @@ namespace ckernel::sfpu {
 // template arguments sqrt_tile passes (calculate_sqrt defaults legacy_compat to false, so
 // sqrt_tile takes the _internal_ path). The lanes this touches therefore get results
 // identical to sqrt_tile.
+//
+// Lives in ckernel::sfpu only because SFPU_UNARY_CALL resolves its functor there, so treat it
+// as a tt-train stand-in for an LLK body and delete it once tt-metal ships its own.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool FAST_APPROX>
 inline void calculate_sqrt_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
