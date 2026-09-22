@@ -4,8 +4,9 @@
 
 // Unified matmul reader: per batch, C slice and K chunk it pushes one A slice
 // ([C_slice_M_tiles][K_chunk_tiles] tiles) and one B slice ([K_chunk_tiles][C_slice_N_tiles]), both
-// row-major, matching the compute kernel's loop order and indexing. Edge tiles past M/N are never
-// read (their stale entries only reach C tiles the writer drops); A's K-padding columns are zeroed.
+// row-major, matching the compute kernel's loop order and indexing. Slices are sized to the
+// subblock-padded C slice dims; tiles past the true slice or past M/N are never read (their stale
+// entries only reach C tiles the writer drops). A's K-padding columns are zeroed.
 
 #include <stdint.h>
 
@@ -27,6 +28,8 @@ void kernel_main() {
     constexpr uint32_t N_tiles = get_arg(args::N_tiles);
     constexpr uint32_t C_slice_M_tiles = get_arg(args::C_slice_M_tiles);
     constexpr uint32_t C_slice_N_tiles = get_arg(args::C_slice_N_tiles);
+    constexpr uint32_t C_slice_M_padded_tiles = get_arg(args::C_slice_M_padded_tiles);
+    constexpr uint32_t C_slice_N_padded_tiles = get_arg(args::C_slice_N_padded_tiles);
     constexpr uint32_t K_chunk_tiles = get_arg(args::K_chunk_tiles);
     constexpr uint32_t num_K_chunks = get_arg(args::num_K_chunks);
     // Valid element columns in A's last K tile; 0 when K is a multiple of the tile dim.
@@ -36,8 +39,8 @@ void kernel_main() {
     constexpr bool A_borrowed = get_arg(args::A_borrowed) != 0;
     constexpr bool B_borrowed = get_arg(args::B_borrowed) != 0;
 
-    constexpr uint32_t A_slice_tiles = C_slice_M_tiles * K_chunk_tiles;
-    constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_tiles;
+    constexpr uint32_t A_slice_tiles = C_slice_M_padded_tiles * K_chunk_tiles;
+    constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
     constexpr uint32_t A_batch_stride_tiles = M_tiles * K_tiles;
     // 0 when B is a single [K x N] that every batch of A multiplies, else K_tiles * N_tiles.
     constexpr uint32_t B_batch_stride_tiles = get_arg(args::B_batch_stride_tiles);
@@ -112,7 +115,7 @@ void kernel_main() {
                     for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
                         const uint32_t B_row_first_tile =
                             B_batch_first_tile + (K_chunk_first_K_tile + k_tile) * N_tiles + C_slice_first_N_tile;
-                        const uint32_t B_row_offset_bytes = k_tile * C_slice_N_tiles * B_tile_bytes;
+                        const uint32_t B_row_offset_bytes = k_tile * C_slice_N_padded_tiles * B_tile_bytes;
                         for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles && C_slice_first_N_tile + n_tile < N_tiles;
                              ++n_tile) {
                             noc.async_read(

@@ -161,6 +161,9 @@ def test_repr_and_fields():
         (2 * TILE, 100, 3 * TILE, 2, 3, 0, (1, 3)),  # K=100: last K tile is 4 columns wide, must be zeroed
         (4 * TILE, 6 * TILE, 6 * TILE, 4, 6, 1, (4, 1)),  # K_chunk_tiles=1: six K steps, spill/reload every step
         (3 * TILE, 4 * TILE, 3 * TILE, 3, 3, 4, (3, 1)),  # single K step: no partials at all
+        (7 * TILE, 2 * TILE, 5 * TILE, 7, 5, 0, (2, 4)),  # subblock does not divide the 7x5 C slice: padded to 8x8
+        (4 * TILE, 3 * TILE, 9 * TILE, 4, 3, 0, (2, 2)),  # interior slices' padded-N overshoot overlaps the neighbour
+        (3 * TILE, 4 * TILE, 3 * TILE, 3, 3, 2, (2, 2)),  # non-dividing subblock with K spill/reload through partials
     ],
 )
 def test_edges_and_blocking(device, M, K, N, C_slice_M_tiles, C_slice_N_tiles, K_chunk_tiles, subblock):

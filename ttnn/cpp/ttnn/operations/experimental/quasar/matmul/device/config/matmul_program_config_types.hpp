@@ -98,9 +98,9 @@ struct MatmulUnifiedProgramConfig {
     // K tiles accumulated per K chunk (one A slice + one B slice in L1 at a time); must divide K_tiles.
     // 0 = auto: the largest divisor of K_tiles <= 8 whose DFBs fit L1.
     std::size_t K_chunk_tiles = 0;
-    // Subblock: the C slice's tiles accumulated in DST at once; must divide C_slice_M_tiles / C_slice_N_tiles and
-    // hold
-    // <= 8 tiles (4 with fp32 accumulation). 0 for both = auto.
+    // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
+    // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the
+    // overshoot is clipped on write. 0 for both = auto (max-volume subblock).
     std::size_t subblock_M_tiles = 0;
     std::size_t subblock_N_tiles = 0;
     bool row_major_cores = true;

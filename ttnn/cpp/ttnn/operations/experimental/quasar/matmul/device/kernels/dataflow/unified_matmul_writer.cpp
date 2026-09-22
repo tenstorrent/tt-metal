@@ -5,7 +5,8 @@
 // Unified matmul writer. The compute kernel packs a C slice one subblock at a time, subblocks
 // row-major over the C slice and tiles row-major within a subblock; this writer mirrors that order,
 // maps every tile back to its position in C and writes it by tile index through the tensor accessor.
-// Tiles past M_tiles / N_tiles (edge C slices) are popped but not written.
+// Tiles past the true C slice (subblock padding) or past M_tiles / N_tiles are popped but not
+// written; padding overshoot may overlap a neighbouring core's C slice, so both clips are needed.
 
 #include <stdint.h>
 
@@ -24,6 +25,8 @@ void kernel_main() {
     constexpr uint32_t N_tiles = get_arg(args::N_tiles);
     constexpr uint32_t C_slice_M_tiles = get_arg(args::C_slice_M_tiles);
     constexpr uint32_t C_slice_N_tiles = get_arg(args::C_slice_N_tiles);
+    constexpr uint32_t C_slice_M_padded_tiles = get_arg(args::C_slice_M_padded_tiles);
+    constexpr uint32_t C_slice_N_padded_tiles = get_arg(args::C_slice_N_padded_tiles);
     constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
     constexpr bool C_borrowed = get_arg(args::C_borrowed) != 0;  // C's shard is the C_slice
@@ -34,7 +37,7 @@ void kernel_main() {
     DataflowBuffer C_slice(dfb::C_slice);
     if constexpr (C_borrowed) {
         // The C_slice IS this core's C shard: compute packs in place; just balance the DFB's credits.
-        C_slice.wait_front(C_slice_M_tiles * C_slice_N_tiles);
+        C_slice.wait_front(C_slice_M_padded_tiles * C_slice_N_padded_tiles);
         return;
     }
     const auto C = TensorAccessor(tensor::C);
@@ -52,21 +55,23 @@ void kernel_main() {
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
             // Same subblock walk as the compute kernel: (m_tile, n_tile) is the subblock's first tile within
             // the C slice.
-            for (uint32_t m_tile = 0; m_tile < C_slice_M_tiles; m_tile += subblock_M_tiles) {
+            for (uint32_t m_tile = 0; m_tile < C_slice_M_padded_tiles; m_tile += subblock_M_tiles) {
                 const uint32_t C_m_tile = C_slice_first_M_tile + m_tile;  // subblock's first row in C, in tiles
-                for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles; n_tile += subblock_N_tiles) {
+                for (uint32_t n_tile = 0; n_tile < C_slice_N_padded_tiles; n_tile += subblock_N_tiles) {
                     const uint32_t C_n_tile = C_slice_first_N_tile + n_tile;  // subblock's first column in C
                     // Every subblock is waited for and popped, clipped or not, so the DFB's credits balance;
                     // only the tiles inside C are written.
                     C_slice.wait_front(subblock_tiles);
                     for (uint32_t subblock_m_tile = 0;
-                         subblock_m_tile < subblock_M_tiles && C_m_tile + subblock_m_tile < M_tiles;
+                         subblock_m_tile < subblock_M_tiles && m_tile + subblock_m_tile < C_slice_M_tiles &&
+                         C_m_tile + subblock_m_tile < M_tiles;
                          ++subblock_m_tile) {
                         const uint32_t C_row_first_tile =
                             C_batch_first_tile + (C_m_tile + subblock_m_tile) * N_tiles + C_n_tile;
                         const uint32_t row_offset_bytes = subblock_m_tile * subblock_N_tiles * C_tile_bytes;
                         for (uint32_t subblock_n_tile = 0;
-                             subblock_n_tile < subblock_N_tiles && C_n_tile + subblock_n_tile < N_tiles;
+                             subblock_n_tile < subblock_N_tiles && n_tile + subblock_n_tile < C_slice_N_tiles &&
+                             C_n_tile + subblock_n_tile < N_tiles;
                              ++subblock_n_tile) {
                             noc.async_write(
                                 C_slice,
