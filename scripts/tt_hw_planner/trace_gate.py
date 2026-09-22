@@ -388,6 +388,16 @@ def reclaim_mesh():
     try:
         import subprocess
 
+        # Same precondition device_recovery applies everywhere else: a chip reporting a plausible
+        # die temperature has a running ARC, and resetting it is pure risk. This path reset with no
+        # device list at all -- every board on the host -- and never asked.
+        try:
+            from models.experimental.perf_automation.agent.device_recovery import board_needs_reset
+
+            if not board_needs_reset():
+                return True
+        except Exception:  # noqa: BLE001 -- cannot tell is not a reason to stop resetting
+            pass
         subprocess.run(["tt-smi", "-r"], capture_output=True, text=True, timeout=420)
         return True
     except Exception:

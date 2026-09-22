@@ -26,6 +26,7 @@ Only ONE thing legitimately differs per caller: how the reset is ISSUED (run.py'
 a callable and owns everything else -- target order, verification, durable counters, escalation.
 Adding a fifth caller means passing a reset function, not re-deciding any of the above.
 """
+
 from __future__ import annotations
 
 import json
@@ -362,7 +363,7 @@ def _live_temps() -> list:
     C), which is a successful read of a value that is not a temperature, so the VALUE is the only
     thing that separates a reading from silence."""
     try:
-        from agent.probes import board_telemetry
+        from .probes import board_telemetry
 
         return list(board_telemetry()[0] or [])
     except Exception:  # noqa: BLE001 -- no telemetry available is itself the wedge signal
@@ -387,12 +388,25 @@ def _board_needs_reset() -> bool:
     moment the board is least able to answer an expensive question about itself.
     """
     try:
-        from agent.probes import board_telemetry
+        from .probes import board_telemetry
 
         live, dead = board_telemetry()
         return bool(dead) or not live
     except Exception:  # noqa: BLE001 -- cannot tell: fall back to the old unconditional behaviour
         return True
+
+
+def board_needs_reset() -> bool:
+    """Public name for the reset precondition, so every executor can ask it.
+
+    THE GUARD WAS UNREACHABLE FROM THE PATHS THAT NEEDED IT. `_board_needs_reset` was private and
+    called only from `recover()`, while cli and trace_gate ran `tt-smi -r` directly -- so the rule
+    written after the 2026-08-17 incident ("a board that is alive and healthy no longer gets reset
+    at all") protected one of three reset paths. On 2026-09-22 the same failure repeated through
+    cli's path: a single-chip run, a four-chip reset issued while every chip was answering 61-77C,
+    and the last two chips in the list did not come back.
+    """
+    return _board_needs_reset()
 
 
 def reap_device_holders() -> list:

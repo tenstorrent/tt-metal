@@ -7613,6 +7613,18 @@ def _device_recovery():
         return _DR_MOD
     except NameError:
         pass
+    # THE PACKAGE IMPORT FIRST. Loading this module by path gives it no package, so its own
+    # `from .state_dir import ...` raises ImportError and the whole primitive is unreachable --
+    # every caller then falls into its except branch and behaves as if the module did not exist.
+    # That is how the reset guard stayed inert on this path. The by-path load is kept as the
+    # fallback it was always meant to be, for a planner run with perf_automation off sys.path.
+    try:
+        from models.experimental.perf_automation.agent import device_recovery as _pkg_dr
+
+        globals()["_DR_MOD"] = _pkg_dr
+        return _pkg_dr
+    except Exception:  # noqa: BLE001 -- fall through to the by-path load below
+        pass
     import importlib.util as _ilu
 
     _p = (
@@ -7679,6 +7691,21 @@ def _run_tt_smi_reset(
     import subprocess as _sp
 
     _dr = _device_recovery()
+    # A RESET IS FOR A WEDGE, AND FOR NOTHING ELSE -- device_recovery's rule, now asked on this path
+    # too. It reads each chip's die temperature from sysfs (a file read, 0.3 ms, answers even while
+    # the board is saturated) and is False only when every chip reports a plausible one: nothing is
+    # wedged, so there is nothing for a reset to restore. It can only ever CANCEL a reset, and it
+    # fails safe -- unreadable telemetry resets exactly as before.
+    try:
+        if not _dr.board_needs_reset():
+            print(
+                f"  device-reset skipped{f' [{context}]' if context else ''}: every chip reports a live "
+                f"die temperature, so there is no wedge to clear",
+                file=sys.stderr,
+            )
+            return True
+    except Exception:  # noqa: BLE001 -- cannot tell is not a reason to stop resetting
+        pass
     _dead = _dr.dead_chip_from_error(error_text)
     if _dead is not None:
         devices = _dr.expand_to_boards([_dead]) or devices
