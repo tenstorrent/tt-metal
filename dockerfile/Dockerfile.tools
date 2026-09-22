@@ -511,10 +511,12 @@ RUN dnf install -y \
     gmp-devel \
     hwloc-devel \
     libibverbs-devel \
+    librdmacm-devel \
     libevent-devel \
     libmpc-devel \
     numactl-devel \
     rdma-core-devel \
+
     mpfr-devel \
     libtool \
     make \
