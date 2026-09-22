@@ -230,6 +230,7 @@ class HostResult:
 class Target:
     def __init__(self, events):
         self.events = events
+        self.hf_config = SimpleNamespace(layer_types=["sliding_attention", "full_attention"])
         self.layers = [
             SimpleNamespace(
                 self_attn=SimpleNamespace(

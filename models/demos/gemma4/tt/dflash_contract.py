@@ -23,6 +23,7 @@ class ContractRequest:
     slot: int
     tokens: list[int]
     live: bool = True
+    bounded_ring_key: int | None = None
 
 
 @dataclass(eq=False)
@@ -290,16 +291,20 @@ class DFlashContractMixin:
             yield storage
 
     def warmup_model_prefill(self, *args, **kwargs):
-        self._ct_warmup_depth += 1
-        try:
+        with self._contract_warmup():
             return super().warmup_model_prefill(*args, **kwargs)
-        finally:
-            self._ct_warmup_depth -= 1
 
     def warmup_model_decode(self, *args, **kwargs):
+        with self._contract_warmup():
+            return super().warmup_model_decode(*args, **kwargs)
+
+    @contextmanager
+    def _contract_warmup(self):
         self._ct_warmup_depth += 1
         try:
-            return super().warmup_model_decode(*args, **kwargs)
+            with ExitStack() as stack:
+                _save_attributes(stack, self, ("_bounded_ring_slot_map",))
+                yield
         finally:
             self._ct_warmup_depth -= 1
 
@@ -343,6 +348,30 @@ class DFlashContractMixin:
 
         return sanitize(page_table, 0), [sanitize(table, index) for index, table in enumerate(per_layer)]
 
+    def _bounded_ring_slots(self, pt, max_slots, authoritative):
+        """Keep every assigned ring until its request generation is released."""
+        slot_map = dict(getattr(self, "_bounded_ring_slot_map", None) or {})
+        used = set(slot_map.values())
+        slots = []
+        for row in pt:
+            key = self._bounded_row_key(row)
+            if key is None:
+                slots.append(None)
+                continue
+            if key not in slot_map:
+                slot = next((candidate for candidate in range(max_slots) if candidate not in used), None)
+                if slot is None:
+                    raise RuntimeError("Gemma4 dFlash bounded rings are full; release a request before admission")
+                slot_map[key] = slot
+                used.add(slot)
+            slots.append(slot_map[key])
+        # A partial speculative refresh does not establish which other requests live.
+        self._bounded_ring_slot_map = slot_map
+        return slots
+
+    def _contract_has_ordinary_completion(self, owners):
+        return any(not step.consumed and any(owner in owners for owner in step.owners) for step in self._ct_ordinary)
+
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs.get("tokens", args[0] if args else None)
         lengths = kwargs.get("prompt_lens", [tokens.shape[1]] * tokens.shape[0])
@@ -362,16 +391,53 @@ class DFlashContractMixin:
             kwargs["page_table"], page_tables_per_layer = self._contract_prefill_tables(
                 kwargs.get("page_table"), page_tables_per_layer, lengths, kwargs.get("kv_cache")
             )
+        tables = kwargs.get("page_table")
+        bounded = (
+            getattr(self, "_bounded_sliding_kv_cache", False)
+            and not self._ct_warmup_depth
+            and not kwargs.get("warmup_prefill")
+            and tables is not None
+        )
+        ring_keys = None
+        if bounded:
+            reference = self._bounded_ring_reference(page_tables_per_layer)
+            if reference is not None:
+                ring_keys = [self._bounded_row_key(reference[row]) for row in range(tokens.shape[0])]
+                live_keys = [key for key in ring_keys if key is not None]
+                if len(live_keys) != len(set(live_keys)):
+                    raise ValueError("Gemma4 dFlash prefill requests cannot share a bounded ring")
+                for row, key in enumerate(ring_keys):
+                    identity = self._spec_pt_identity(tables[row : row + 1])
+                    for owner in self._ct_requests.values():
+                        if owner.bounded_ring_key is None:
+                            continue
+                        if (owner.identity == identity) != (owner.bounded_ring_key == key):
+                            raise ValueError("Gemma4 dFlash prefill changes a live request's bounded ring ownership")
+            rings_before = dict(getattr(self, "_bounded_ring_slot_map", None) or {})
+            previous_owners = {
+                self._ct_requests.get(self._spec_pt_identity(tables[row : row + 1])) for row in range(tokens.shape[0])
+            } - {None}
+            previous_owners = {owner for owner in previous_owners if owner.bounded_ring_key in rings_before}
+            if self._contract_has_ordinary_completion(previous_owners):
+                # Superseding prefill must not race writes from its old generation.
+                self._contract_synchronize()
         self._contract_disarm()
-        with ExitStack() as stack:
-            if continuation:
-                _save_attributes(stack, self, ("_ct_eager_prefill",))
-                self._ct_eager_prefill = True
-            out = self._contract_target_prefill(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        try:
+            with ExitStack() as stack:
+                if self._ct_warmup_depth or kwargs.get("warmup_prefill"):
+                    _save_attributes(stack, self, ("_bounded_ring_slot_map",))
+                if continuation:
+                    _save_attributes(stack, self, ("_ct_eager_prefill",))
+                    self._ct_eager_prefill = True
+                out = self._contract_target_prefill(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        except Exception:
+            if bounded and getattr(self, "_bounded_ring_slot_map", {}) != rings_before:
+                self._contract_synchronize()
+                self._bounded_ring_slot_map = rings_before
+            raise
         if self._ct_warmup_depth or kwargs.get("warmup_prefill"):
             return out
         slots = kwargs.get("empty_slots", range(tokens.shape[0]))
-        tables = kwargs.get("page_table")
         if tables is None:
             return out
         for row, (length, slot) in enumerate(zip(lengths, slots)):
@@ -381,7 +447,12 @@ class DFlashContractMixin:
                 old.live = False
             # A resumed prefill supplies the complete prefix and supersedes any
             # completion captured before the preemption.
-            self._ct_requests[identity] = ContractRequest(identity, int(slot), tokens[row, : int(length)].tolist())
+            self._ct_requests[identity] = ContractRequest(
+                identity,
+                int(slot),
+                tokens[row, : int(length)].tolist(),
+                bounded_ring_key=ring_keys[row] if ring_keys is not None else None,
+            )
             if self._ct_proposal is not None and self._ct_proposal.owner is old:
                 self._ct_proposal = None
         return out
@@ -401,11 +472,18 @@ class DFlashContractMixin:
             self._spec_owner_slot = self._ct_decoder_owner.slot
 
     def release_request(self, row):
-        for identity, owner in list(self._ct_requests.items()):
-            if row is not None and owner.slot != int(row):
-                continue
+        released = {owner for owner in self._ct_requests.values() if row is None or owner.slot == int(row)}
+        rings = getattr(self, "_bounded_ring_slot_map", {})
+        ring_owners = {owner for owner in released if owner.bounded_ring_key in rings}
+        if self._contract_has_ordinary_completion(ring_owners):
+            # Native work can outlive release; finish its writes before ring reuse.
+            self._contract_synchronize()
+        for owner in released:
+            identity = owner.identity
             owner.live = False
             del self._ct_requests[identity]
+            if owner.bounded_ring_key is not None:
+                getattr(self, "_bounded_ring_slot_map", {}).pop(owner.bounded_ring_key, None)
             if self._ct_proposal is not None and self._ct_proposal.owner is owner:
                 self._ct_proposal = None
             if self._ct_decoder_owner is owner:

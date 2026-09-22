@@ -1818,15 +1818,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # the key; a full-attention row keeps every block for the request's
         # lifetime. Under hybrid-groups-off both rows are the same table, so
         # this only matters if hybrid groups are turned on later.
-        ref = None
-        for i, pt in enumerate(page_tables_per_layer):
-            if not isinstance(pt, torch.Tensor) or i >= len(layer_types):
-                continue
-            if layer_types[i] != "sliding_attention":
-                ref = pt
-                break
-            if ref is None:
-                ref = pt
+        ref = self._bounded_ring_reference(page_tables_per_layer)
         slots_by_row = (
             self._bounded_ring_slots(ref, max_slots or int(ref.shape[0]), authoritative) if ref is not None else None
         )
@@ -1874,6 +1866,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 remapped[u] = torch.arange(slot * target_cols, (slot + 1) * target_cols, dtype=torch.int32)
             out.append(remapped)
         return out
+
+    def _bounded_ring_reference(self, page_tables_per_layer):
+        layer_types = getattr(self._text_config(), "layer_types", ()) or ()
+        ref = None
+        for index, table in enumerate(page_tables_per_layer):
+            if not isinstance(table, torch.Tensor) or index >= len(layer_types):
+                continue
+            if layer_types[index] != "sliding_attention":
+                return table
+            if ref is None:
+                ref = table
+        return ref
 
     @staticmethod
     def _bounded_row_key(row):
