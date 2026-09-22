@@ -11,6 +11,7 @@ All HF reference configs and layers are created from the real checkpoint.
 import json
 import os
 from functools import lru_cache
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -246,6 +247,23 @@ def _assistant_repo_id():
     return f"{model_path}-assistant"
 
 
+def _assistant_dir_has_weights(path):
+    """True if ``path`` has assistant weights, not just a config stub."""
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return False
+    if any(name.endswith(".safetensors") for name in names):
+        return True
+    return os.path.isfile(os.path.join(path, "model.safetensors.index.json"))
+
+
+def _assistant_dir_ready(path):
+    return bool(path) and os.path.isfile(os.path.join(path, "config.json")) and _assistant_dir_has_weights(path)
+
+
 def _assistant_hub_snapshot(repo_id):
     hf_home = os.environ.get("HF_HOME", "/mnt/MLPerf/huggingface")
     hub_cache = os.environ.get("HF_HUB_CACHE", os.path.join(hf_home, "hub"))
@@ -254,20 +272,22 @@ def _assistant_hub_snapshot(repo_id):
         return None
     for name in sorted(os.listdir(snapshots_root)):
         snap = os.path.join(snapshots_root, name)
-        if os.path.isfile(os.path.join(snap, "config.json")):
+        if _assistant_dir_ready(snap):
             return snap
     return None
 
 
 def resolve_assistant_model_path(*, allow_download=None):
-    """Resolve ``GEMMA4_ASSISTANT_MODEL`` to a local directory with ``config.json``.
+    """Resolve ``GEMMA4_ASSISTANT_MODEL`` to a local dir with config + weights.
 
     Search order: existing local dir → HF hub snapshot → ``GEMMA4_ASSISTANT_CACHE`` /
     ``/tmp/<repo>``. When ``allow_download`` is true (default in CI only), fetch
-    the assistant snapshot from the Hub into the cache dir.
+    the assistant snapshot from the Hub into the cache dir. Config-only dirs
+    are rejected so ``create_assistant_model(..., dummy_weights=False)`` does
+    not fall through to a hub fetch mid-test.
     """
     existing = os.environ.get("GEMMA4_ASSISTANT_MODEL")
-    if existing and os.path.isfile(os.path.join(existing, "config.json")):
+    if _assistant_dir_ready(existing):
         return existing
 
     repo_id = _assistant_repo_id()
@@ -281,7 +301,7 @@ def resolve_assistant_model_path(*, allow_download=None):
 
     repo_tail = repo_id.split("/")[-1]
     cache_dir = os.environ.get("GEMMA4_ASSISTANT_CACHE", f"/tmp/{repo_tail}")
-    if os.path.isfile(os.path.join(cache_dir, "config.json")):
+    if _assistant_dir_ready(cache_dir):
         os.environ["GEMMA4_ASSISTANT_MODEL"] = cache_dir
         return cache_dir
 
@@ -302,12 +322,18 @@ def resolve_assistant_model_path(*, allow_download=None):
         else:
             os.environ["HF_HUB_OFFLINE"] = prev_offline
 
+    if not _assistant_dir_ready(cache_dir):
+        return None
     os.environ["GEMMA4_ASSISTANT_MODEL"] = cache_dir
     return cache_dir
 
 
 def configure_spec_decode_smoke_env():
-    """CI hook: real target weights + assistant drafter for spec-decode smoke tests."""
+    """CI hook: real target + assistant for the dedicated spec-decode smoke pytest.
+
+    Remaps the current config stub to that variant's hub id (not a hardcoded
+    31B path) and truncates to the first full-attention layer.
+    """
     if os.environ.get("GEMMA4_SPEC_DECODE_ENV_READY") == "1":
         return os.environ.get("GEMMA4_ASSISTANT_MODEL")
 
@@ -315,12 +341,20 @@ def configure_spec_decode_smoke_env():
         os.environ.setdefault("HF_HOME", "/mnt/MLPerf/huggingface")
         os.environ.setdefault("HF_HUB_CACHE", os.path.join(os.environ["HF_HOME"], "hub"))
         if uses_ci_config_only_checkpoint():
-            os.environ["HF_MODEL"] = "google/gemma-4-31B-it"
-        os.environ.setdefault("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it")
-        # Need both layer types in the truncated target: 31B is 5×sliding then
-        # full, so the first full is index 5. The it-assistant is SSSF and does
-        # ``shared_kv[lt]`` for each type; NUM_LAYERS=4 left only sliding and
-        # KeyError'd on ``full_attention`` in test_spec_decode_matches_greedy.
+            stub = os.path.abspath(_get_model_path())
+            basename = os.path.basename(stub.rstrip("/"))
+            cfg_path = os.path.join(stub, "config.json")
+            if os.path.isfile(cfg_path) and "GEMMA4_NUM_LAYERS" not in os.environ:
+                with open(cfg_path) as f:
+                    raw = json.load(f)
+                tc = raw.get("text_config", raw)
+                lts = tc.get("layer_types") or []
+                if lts:
+                    os.environ["GEMMA4_NUM_LAYERS"] = str(
+                        num_layers_for_full_attention_group(SimpleNamespace(layer_types=lts))
+                    )
+            os.environ["HF_MODEL"] = f"google/{basename}"
+            os.environ.setdefault("TT_CACHE_PATH", f"/mnt/MLPerf/huggingface/tt_cache/google--{basename}")
         os.environ.setdefault("GEMMA4_NUM_LAYERS", "6")
 
     path = resolve_assistant_model_path()

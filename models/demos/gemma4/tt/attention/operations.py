@@ -536,6 +536,13 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     return out
 
 
+def _decode_concat_grid_x(batch, max_x, grid_y):
+    """Largest core-grid X that tiles ``batch`` into a rectangle of height ``grid_y``."""
+    gx = min(batch, max_x)
+    cands = [x for x in range(gx, 0, -1) if batch % x == 0 and batch // x <= grid_y]
+    return max(cands) if cands else None
+
+
 def concat_heads(
     tensor,
     is_decode_mode: bool,
@@ -561,37 +568,30 @@ def concat_heads(
     if is_decode_mode:
         if num_heads is None or head_dim is None:
             raise ValueError("decode concat_heads requires num_heads and head_dim")
-        batch = tensor.shape[1]
-        # One core per user (batch), arranged as a contiguous rectangle. A plain
-        # num_cores_to_corerangeset spills into a non-rectangular set once
-        # batch > grid width, which the height-sharded mem config rejects
-        # ("bad optional access"); num_to_corerange forces a grid-width-aligned
-        # rectangle (e.g. batch=8→8x1, 16→8x2, 32→8x4 on an 8-wide grid) that
-        # the kernel accepts.
+        batch = int(tensor.shape[1])
+        # Factor as an 8-wide rectangle (8x1 / 8x2 / 8x4). Unfactorable packed
+        # batches (11/13/17) pad to TILE and slice; do not use a BH-wide 11x1
+        # row or transpose+nlp_concat_heads on a mesh-replicated activation.
         from models.tt_transformers.tt.model_config import num_to_corerange
 
         compute_grid = mesh_device.compute_with_storage_grid_size() if mesh_device is not None else None
         physical_grid_x = compute_grid.x if compute_grid is not None else 8
         grid_y = compute_grid.y if compute_grid is not None else 8
-        grid_x = min(batch, physical_grid_x)
-        if batch >= grid_x and batch % grid_x != 0:
-            # num_to_corerange needs a rectangle of EXACTLY ``batch`` cores, and
-            # some batches do not factor that way (a prime > 8 on an 8x8 grid).
-            # Plain decode never hits it; packed verify runs at batch = B*(K+1),
-            # so K=10/12/16 used to die with "max() arg is an empty sequence".
-            # Fall back to transpose + nlp_concat_heads, which has no rectangle
-            # constraint -- single-core and slower, but those K are past the
-            # measured throughput optimum anyway.
-            candidates = [x for x in range(grid_x, 0, -1) if batch % x == 0 and batch // x <= grid_y]
-            if not candidates:
+        factor_x = min(batch, 8, physical_grid_x)
+        grid_x = _decode_concat_grid_x(batch, factor_x, grid_y)
+        work, work_batch = tensor, batch
+        if grid_x is None:
+            work_batch = int(ttnn.TILE_SIZE)
+            grid_x = _decode_concat_grid_x(work_batch, min(8, physical_grid_x), grid_y)
+            if grid_x is None:
                 transposed = ttnn.transpose(tensor, 1, 2)  # [1, heads, batch, head_dim]
                 out = ttnn.experimental.nlp_concat_heads(
                     transposed, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG
                 )
                 transposed.deallocate(True)
                 return out
-            grid_x = max(candidates)
-        core_grid = ttnn.CoreRangeSet({num_to_corerange(batch, grid_x=grid_x, grid_y=grid_y)})
+            work = ttnn.pad(tensor, [(0, 0), (0, work_batch - batch), (0, 0), (0, 0)], value=0.0)
+        core_grid = ttnn.CoreRangeSet({num_to_corerange(work_batch, grid_x=grid_x, grid_y=grid_y)})
         shard_cfg = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, head_dim),
             core_grid=core_grid,
@@ -599,7 +599,9 @@ def concat_heads(
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
+        tensor_sh = ttnn.to_memory_config(work, shard_cfg)
+        if work is not tensor:
+            work.deallocate(True)
         # Output is [1, 1, B(padded to 32), num_heads*head_dim] width-sharded.
         out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
         tensor_sh.deallocate(True)

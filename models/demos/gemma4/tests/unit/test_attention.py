@@ -822,9 +822,9 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
 def test_concat_heads_decode_unfactorable_batch(batch, mesh_device, reset_seeds, request):
     """Regression: packed-verify batch sizes that do not factor on an 8-wide grid.
 
-    K=10/12/16 verify runs at batch=B*(K+1), e.g. 11/13/17 for B=1. Those batches
-    used to crash in concat_heads with "max() arg is an empty sequence"; the decode
-    path now falls back to transpose + nlp_concat_heads.
+    K=10/12/16 verify runs at batch=B*(K+1), e.g. 11/13/17 for B=1. concat_heads
+    pads those to TILE and uses nlp_concat_heads_decode (same rectangle as B=32).
+    Input is replicated: concat_heads runs on already-TP-split local heads.
     """
     from models.demos.gemma4.tt.attention.operations import concat_heads
 

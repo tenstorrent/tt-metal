@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from .test_factory import configure_spec_decode_smoke_env, skip_if_config_only_checkpoint
+from .test_factory import configure_spec_decode_smoke_env, resolve_assistant_model_path, skip_if_config_only_checkpoint
 
 _SPEC_DECODE_SMOKE_TESTS = frozenset(
     {
@@ -56,11 +56,19 @@ def pytest_sessionstart(session):
     configure_spec_decode_smoke_env()
 
 
+def _item_base_name(item):
+    """Unparametrized test name. ``item.name`` is ``foo[blackhole-1x4]``."""
+    return getattr(item, "originalname", None) or item.name.split("[", 1)[0]
+
+
 def pytest_runtest_setup(item):
     """Skip PR integration tests when CI uses config-only HF_MODEL (no weights/tokenizer)."""
-    if item.name in _SPEC_DECODE_SMOKE_TESTS:
-        if not configure_spec_decode_smoke_env():
-            pytest.skip("assistant weights not available (set GEMMA4_ASSISTANT_MODEL locally)")
+    if _item_base_name(item) in _SPEC_DECODE_SMOKE_TESTS:
+        # Resolve assistant only. configure_spec_decode_smoke_env() rewrites
+        # HF_MODEL and is sessionstart-only (dedicated spec-decode pytest).
+        if os.environ.get("GEMMA4_SPEC_DECODE_ENV_READY") != "1":
+            if not resolve_assistant_model_path(allow_download=False):
+                pytest.skip("assistant weights not available (set GEMMA4_ASSISTANT_MODEL locally)")
 
     if _MARKERS_REQUIRING_REAL_CHECKPOINT.intersection(m.name for m in item.iter_markers()):
         skip_if_config_only_checkpoint()
