@@ -149,6 +149,16 @@ inline void calculate_erf() {
         _calculate_erf_bf16_fast_();
         return;
     }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: erf_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG11-14 over the state this path relies on: sfpu_reciprocal_init's vConstFloatPrgm0 = 2.0f (read by
+        // sfpu_reciprocal<false> inside piecewise_rational_eval) and the architectural -1.0f in LREG11 that
+        // sfpi-compiled code assumes (SFPCONFIG imm mode writes the default, as in _init_sfpu_config_reg).
+        sfpu_reciprocal_init<APPROXIMATION_MODE>();
+        TTI_SFPCONFIG(0, 11, 1);
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)

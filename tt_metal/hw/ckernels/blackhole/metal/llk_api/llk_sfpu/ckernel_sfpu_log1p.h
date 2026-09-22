@@ -47,6 +47,11 @@
 namespace ckernel {
 namespace sfpu {
 
+// Production constant setup (defined with the init below); declared early so the ITERATIONS != 8
+// fallback re-seed inside the calculate function can name it.
+template <bool is_fp32_dest_acc_en>
+inline void _init_log1p_body_constants_();
+
 // For inputs with u = 1 + a > 0, write u = 2^k * t with t chosen in [0.75, 1.5),
 // so m = t - 1 lies in [-0.25, 0.5). Then
 //   log1p(a) = log(u) = k * log(2) + log1p(m).
@@ -317,6 +322,16 @@ inline void calculate_log1p() {
     if constexpr (!APPROXIMATION_MODE && !FAST_APPROX && !is_fp32_dest_acc_en && ITERATIONS == 8) {
         _calculate_log1p_bf16_fast_();
         return;
+    }
+    if constexpr (
+        !APPROXIMATION_MODE && !FAST_APPROX && !is_fp32_dest_acc_en &&
+        !(!APPROXIMATION_MODE && !FAST_APPROX && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8 (tt-llk tests): log1p_init cannot see ITERATIONS and has programmed the fast kernel's
+        // C0 / C1 / P0 into LREG12..14 (vConstFloatPrgm0..2) on top of the constants calculate_log1p_fp32 reads;
+        // re-seed them before falling back. The rest of the fast state is inert here: LREG11 was written with its
+        // default -1.0f, LREG5..7 are sfpi-allocated scratch, the SFPLOADMACRO templates/sequences are unused by
+        // the sfpi body, and ADDR_MOD_6 (dest incr 2) is never referenced by sfpi dst_reg code (ADDR_MOD_7).
+        _init_log1p_body_constants_<is_fp32_dest_acc_en>();
     }
 #endif
 #pragma GCC unroll 8

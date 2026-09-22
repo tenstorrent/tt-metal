@@ -43,6 +43,11 @@
 namespace ckernel {
 namespace sfpu {
 
+// Production constant setup (defined with the init below); declared early so the ITERATIONS != 8
+// fallback re-seed inside the calculate function can name it.
+template <bool is_fp32_dest_acc_en>
+inline void _init_log_body_constants_();
+
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
     sfpi::vFloat three_quarters = 0.75f;
@@ -230,6 +235,15 @@ inline void calculate_log(uint log_base_scale_factor) {
         ITERATIONS == 8) {
         _calculate_log_bf16_fast_();
         return;
+    }
+    if constexpr (
+        !APPROXIMATION_MODE && !FAST_APPROX && !HAS_BASE_SCALING && !IS_BASE_TWO && !is_fp32_dest_acc_en &&
+        !(!APPROXIMATION_MODE && !FAST_APPROX && !HAS_BASE_SCALING && !IS_BASE_TWO && !is_fp32_dest_acc_en &&
+          ITERATIONS == 8)) {
+        // ITERATIONS != 8 (tt-llk tests): log_init cannot see ITERATIONS and has programmed the fast kernel's
+        // K1 / K2' / NEGBIG into vConstFloatPrgm0..2 on top of the constants calculate_log_body reads; re-seed
+        // them before falling back.
+        _init_log_body_constants_<is_fp32_dest_acc_en>();
     }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

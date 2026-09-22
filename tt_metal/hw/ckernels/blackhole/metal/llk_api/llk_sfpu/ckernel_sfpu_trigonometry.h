@@ -231,11 +231,29 @@ inline void _calculate_tangent_bf16_fast_() {
     }
 }
 
+// P2/P3 of the four-stage Cody-Waite reduction by PI/2 plus 2/PI, read by calculate_tangent's generic body from
+// vConstFloatPrgm0..2. tangent_init programs these except on the fast bf16 gate (same LREGs); the ITERATIONS != 8
+// fallback in calculate_tangent re-seeds them.
+inline void _init_tangent_body_constants_() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_2_PI;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tangent() {
     if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
         _calculate_tangent_bf16_fast_();
         return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: tangent_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG12-14 over the Cody-Waite constants this path reads from vConstFloatPrgm0..2; re-seed them.
+        _init_tangent_body_constants_();
     }
 
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
@@ -401,12 +419,33 @@ inline void _calculate_sine_bf16_fast_() {
 }
 #endif  // DISABLE_SFPLOADMACRO
 
+// P2/P3 of the four-stage Cody-Waite reduction by PI plus 1/PI, read by calculate_sine's generic body from
+// vConstFloatPrgm0..2. sine_init programs these except on the fast bf16 gate (same LREGs); the ITERATIONS != 8
+// fallback in calculate_sine re-seeds them.
+inline void _init_sine_body_constants_() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sine() {
 #ifndef DISABLE_SFPLOADMACRO
     if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
         _calculate_sine_bf16_fast_();
         return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: sine_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG11-14 over the Cody-Waite constants this path reads from vConstFloatPrgm0..2 and over the
+        // architectural -1.0f in LREG11 that sfpi-compiled code assumes; re-seed both (SFPCONFIG imm mode
+        // writes the default, as in _init_sfpu_config_reg).
+        _init_sine_body_constants_();
+        TTI_SFPCONFIG(0, 11, 1);
     }
 #endif
 
@@ -648,11 +687,31 @@ inline void _calculate_cosine_bf16_fast_() {
 
 #undef COSINE_FAST_CORE
 
+// P2/P3 of the four-stage Cody-Waite reduction by PI/2 plus 1/PI, read by calculate_cosine's generic body from
+// vConstFloatPrgm0..2. cosine_init programs these except on the fast bf16 gate (same LREGs); the ITERATIONS != 8
+// fallback in calculate_cosine re-seeds them.
+inline void _init_cosine_body_constants_() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosine() {
     if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
         _calculate_cosine_bf16_fast_();
         return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: cosine_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG12-14 over the Cody-Waite constants this path reads from vConstFloatPrgm0..2; re-seed them. (Its
+        // L4-L7 loop constants and LREG11 = -1.0f need nothing: sfpi allocates L0-L7 itself and the fast init
+        // leaves LREG11 alone.)
+        _init_cosine_body_constants_();
     }
 
     // 1. Build an odd quadrant index j for PI/2-based reduction.
@@ -886,11 +945,33 @@ inline void _calculate_atan_bf16_fast_() {
     }
 }
 
+// Constants read by calculate_atan's generic body: the fp32 path's polynomial tail in vConstFloatPrgm1/2, the
+// bf16 path's sfpu_reciprocal<false> Newton constant (vConstFloatPrgm0 = 2.0f). atan_init programs these except
+// on the fast bf16 gate (same LREGs); the ITERATIONS != 8 fallback in calculate_atan re-seeds them.
+template <bool is_fp32_dest_acc_en>
+inline void _init_atan_body_constants_() {
+    if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
+        sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
+    } else {
+        // sfpu_atan_bf16 uses sfpu_reciprocal<false>.
+        sfpu_reciprocal_init<false>();
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
     if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
         _calculate_atan_bf16_fast_();
         return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: atan_init<false, false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG12-14 over sfpu_reciprocal_init's vConstFloatPrgm0 = 2.0f that sfpu_reciprocal<false> (inside
+        // sfpu_atan_bf16) reads; re-seed it.
+        _init_atan_body_constants_<is_fp32_dest_acc_en>();
     }
 
     for (int d = 0; d < ITERATIONS; d++) {
@@ -1287,11 +1368,7 @@ void sine_init() {
         return;
     }
 #endif
-    // P2 and P3 of four-part Cody-Waite reduction by PI.
-    sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
-
-    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+    _init_sine_body_constants_();
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -1303,11 +1380,7 @@ void cosine_init() {
         _init_cosine_bf16_fast_();
         return;
     }
-    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
-    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
-
-    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+    _init_cosine_body_constants_();
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -1319,11 +1392,7 @@ void tangent_init() {
         _init_tangent_bf16_fast_();
         return;
     }
-    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
-    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
-
-    sfpi::vConstFloatPrgm2 = FRAC_2_PI;
+    _init_tangent_body_constants_();
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -1361,13 +1430,7 @@ void atan_init() {
         _init_atan_bf16_fast_();
         return;
     }
-    if constexpr (is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
-        sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
-    } else {
-        // sfpu_atan_bf16 uses sfpu_reciprocal<false>.
-        sfpu_reciprocal_init<false>();
-    }
+    _init_atan_body_constants_<is_fp32_dest_acc_en>();
 }
 
 template <bool APPROXIMATION_MODE>

@@ -201,6 +201,15 @@ inline void calculate_erfc() {
         _calculate_erfc_bf16_fast_();
         return;
     }
+    if constexpr (!is_fp32_dest_acc_en && !(!is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: erfc_init<.., false> cannot see ITERATIONS and has programmed the fast kernel's
+        // LREG11 (-9.25f) over the architectural -1.0f that sfpi-compiled code assumes; restore it (SFPCONFIG
+        // imm mode writes the default, as in _init_sfpu_config_reg). Its LREG12-14 values are harmless here:
+        // sfpu_reciprocal_init<true>() programs nothing and sfpu_reciprocal<true> (inside
+        // piecewise_rational_eval) reads no programmable constant.
+        sfpu_reciprocal_init<true>();
+        TTI_SFPCONFIG(0, 11, 1);
+    }
 #endif
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];

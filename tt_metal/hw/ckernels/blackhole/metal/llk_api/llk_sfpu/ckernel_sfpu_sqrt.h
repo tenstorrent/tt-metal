@@ -18,6 +18,11 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// Production constant setup (defined with the init below); declared early so the ITERATIONS != 8
+// fallback re-seed inside the calculate function can name it.
+template <bool APPROXIMATION_MODE>
+inline void _init_sqrt_body_constants_();
+
 // See: Kokosiński, Z., Gepner, P., Moroz, L. et al.
 // Fast and accurate approximation algorithms for computing floating point square root. Numerical Algorithms (2024).
 // https://doi.org/10.1007/s11075-024-01932-7
@@ -211,6 +216,14 @@ inline void calculate_sqrt() {
     if constexpr (!APPROXIMATION_MODE && !legacy_compat && !fp32_dest_acc_en && ITERATIONS == 8) {
         _calculate_sqrt_bf16_fast_();
         return;
+    }
+    if constexpr (
+        !legacy_compat && !APPROXIMATION_MODE && !fp32_dest_acc_en &&
+        !(!APPROXIMATION_MODE && !legacy_compat && !fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8 (tt-llk tests): sqrt_init<false, false> cannot see ITERATIONS and has programmed the
+        // fast kernel's vConstIntPrgm0 / vConstFloatPrgm1 (and left vConstFloatPrgm2 unset) on top of the
+        // SQRT_23-bits constants _calculate_sqrt_body_ reads; re-seed them before falling back.
+        _init_sqrt_body_constants_<APPROXIMATION_MODE>();
     }
     if constexpr (legacy_compat) {
         _calculate_sqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(ITERATIONS);

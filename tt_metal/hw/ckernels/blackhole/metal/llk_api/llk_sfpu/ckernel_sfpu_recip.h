@@ -497,6 +497,15 @@ inline void calculate_reciprocal() {
         _calculate_reciprocal_bf16_fast_();
         return;
     }
+    if constexpr (
+        !legacy_compat && !APPROXIMATION_MODE && !is_fp32_dest_acc_en &&
+        !(!legacy_compat && !APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8 (tt-llk tests): recip_init<false, false> cannot see ITERATIONS and has programmed the
+        // fast kernel's SFPLOADMACRO InstructionTemplate[0..3] / Sequence[0..3] / Misc in place of the 8b_3c macro
+        // state _calculate_reciprocal_fast_8b_3c_ depends on; re-program it before falling back. The fast init
+        // leaves vConstFloatPrgm0 = 2.0f (sfpu_reciprocal_init) untouched and 8b_3c does not read vConstFloatPrgm1.
+        _init_reciprocal_fast_8b_3c_();
+    }
 #endif
     if constexpr (legacy_compat) {
         _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);

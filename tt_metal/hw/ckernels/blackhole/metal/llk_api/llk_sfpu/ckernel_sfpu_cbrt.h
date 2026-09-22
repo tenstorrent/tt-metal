@@ -124,12 +124,28 @@ inline void _calculate_cbrt_bf16_fast_() {
 
 #undef CBRT_FAST_PAIR
 
+// Refinement constants read by calculate_cube_root's generic (sfpi) body from vConstFloatPrgm0..2. cube_root_init
+// programs these, then -- on the fast bf16 gate -- the fast kernel's constants on top (same LREGs); the
+// ITERATIONS != 8 fallback in calculate_cube_root re-seeds them.
+inline void _init_cbrt_body_constants_() {
+    sfpi::vConstFloatPrgm0 = 0x1.c09806p0f;
+    sfpi::vConstFloatPrgm1 = -0x1.403e6cp0f;
+    sfpi::vConstFloatPrgm2 = 0x1.04cdb2p-1f;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cube_root() {
 #ifndef DISABLE_SFPLOADMACRO
     if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8) {
         _calculate_cbrt_bf16_fast_();
         return;
+    }
+    if constexpr (
+        (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) &&
+        !(!APPROXIMATION_MODE && !is_fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8: cube_root_init<false, false> cannot see ITERATIONS and has programmed the fast
+        // kernel's LREG12-14 over the refinement constants this path reads from vConstFloatPrgm0..2; re-seed.
+        _init_cbrt_body_constants_();
     }
 #endif
     sfpi::vFloat negative_third_256 = -0x1.555556p-10f;
@@ -188,9 +204,7 @@ inline void calculate_cube_root() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void cube_root_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpi::vConstFloatPrgm0 = 0x1.c09806p0f;
-    sfpi::vConstFloatPrgm1 = -0x1.403e6cp0f;
-    sfpi::vConstFloatPrgm2 = 0x1.04cdb2p-1f;
+    _init_cbrt_body_constants_();
 #ifndef DISABLE_SFPLOADMACRO
     // Fast bf16 path: re-programs LREG12-14 (overriding the three values above) and the SFPLOADMACRO
     // state (see _init_cbrt_bf16_fast_). The common prologue (SFPU config reg + ADDR_MOD_7) is run by the

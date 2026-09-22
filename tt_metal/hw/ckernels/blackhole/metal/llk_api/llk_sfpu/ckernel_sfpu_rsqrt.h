@@ -120,6 +120,14 @@ inline void calculate_rsqrt() {
         _calculate_rsqrt_bf16_fast_();
         return;
     }
+    if constexpr (
+        !legacy_compat && !APPROXIMATION_MODE && !fp32_dest_acc_en &&
+        !(!APPROXIMATION_MODE && !legacy_compat && !fp32_dest_acc_en && ITERATIONS == 8)) {
+        // ITERATIONS != 8 (tt-llk tests): rsqrt_init<false, false, false> cannot see ITERATIONS and has programmed
+        // the fast kernel's vConstIntPrgm0 / vConstFloatPrgm1 / vConstFloatPrgm2 on top of the SQRT_23-bits
+        // constants _calculate_sqrt_body_ reads (via _calculate_sqrt_internal_); re-seed them before delegating.
+        _init_sqrt_body_constants_<APPROXIMATION_MODE>();
+    }
     if constexpr (legacy_compat) {
         _calculate_rsqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(ITERATIONS);
     } else {
