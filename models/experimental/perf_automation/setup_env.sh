@@ -112,14 +112,29 @@ PYEOF
         echo "  [${yellow}warn${reset}] no ANTHROPIC_API_KEY and no claude login detected — run 'claude' to log in, or export ANTHROPIC_API_KEY" >&2
     fi
 
-    # 5d. tt-smi on PATH or in ~/.tenstorrent-venv (the tool's env-check + device reset need it)
+    # 5d. tt-smi on PATH or in ~/.tenstorrent-venv (the tool's env-check + device reset need it).
+    #     Finding the file is NOT enough: a venv whose interpreter symlink dangles (it pointed at
+    #     an old checkout's python_env) still leaves an executable that dies with "bad
+    #     interpreter" — which used to pass this check and only surfaced at reset time. Run it.
+    local smi=""
     if command -v tt-smi >/dev/null 2>&1; then
-        echo "  [$ok] tt-smi: $(command -v tt-smi)"
+        smi="$(command -v tt-smi)"
     elif [[ -x "$HOME/.tenstorrent-venv/bin/tt-smi" ]]; then
-        echo "  [$ok] tt-smi: $HOME/.tenstorrent-venv/bin/tt-smi (tool auto-discovers this)"
-    else
+        smi="$HOME/.tenstorrent-venv/bin/tt-smi"
+    fi
+    if [[ -z "$smi" ]]; then
         echo "  [$fail] 'tt-smi' not found — install it in its OWN venv: python3 -m venv ~/.tenstorrent-venv && ~/.tenstorrent-venv/bin/pip install tt-smi (NOT the tt-metal venv)" >&2
         status=1
+    else
+        local smi_out smi_rc smi_v
+        if smi_out="$("$smi" --version 2>&1)"; then smi_rc=0; else smi_rc=$?; fi
+        smi_v="$(printf '%s\n' "$smi_out" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        if [[ "$smi_rc" -eq 0 && -n "$smi_v" ]]; then
+            echo "  [$ok] tt-smi $smi_v: $smi"
+        else
+            echo "  [$fail] tt-smi at $smi does NOT run (rc=$smi_rc): ${smi_out:-no output} — usually a dangling venv interpreter; repoint ~/.tenstorrent-venv/bin/python3 at a real python3.10 and fix 'home =' in its pyvenv.cfg, or rebuild that venv" >&2
+            status=1
+        fi
     fi
 
     # 5e. transformers must match tt-metal's pin. Read the pin from requirements-dev.txt (NOT
