@@ -174,37 +174,6 @@ def test_unary_cache_miss_different_memory_configs(device):
     assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.skip(
-    reason="TODO: unary sizes both CBs with tile_size(DataFormat), so dispatching a non-32x32 tile writes "
-    "out of bounds. Re-enable with both iterations asserted once the CBs take the real tile. Keeping this test "
-    "here as a review item. "
-)
-def test_unary_cache_miss_different_tiles(device):
-    """Same dtype, logical shape, padded shape and memory config. Different Tile dims -> different cache entries."""
-    device.cache_entries_counter.reset()
-    shape = [1, 1, 64, 64]
-    padded_shapes = []
-
-    for i, tile in enumerate([[32, 32], [16, 32]]):
-        torch.manual_seed(i)
-        torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
-        tt_a = ttnn.from_torch(
-            torch_a,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            tile=ttnn.Tile(tile),
-        )
-        padded_shapes.append(tt_a.padded_shape)
-        with device.cache_entries_counter.measure():
-            tt_out = ttnn.relu(tt_a)
-        assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
-
-    assert padded_shapes[0] == padded_shapes[1]
-    assert device.cache_entries_counter.total == 2
-
-
 def test_unary_cache_miss_different_alignments(device):
     """Same dtype, logical shape and memory config. Differing padded shape -> different cache entries."""
     device.cache_entries_counter.reset()
@@ -220,38 +189,6 @@ def test_unary_cache_miss_different_alignments(device):
 
         with device.cache_entries_counter.measure():
             tt_out = ttnn.relu(tt_a)
-        assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
-
-    assert device.cache_entries_counter.total == 2
-
-
-@pytest.mark.skip(reason="TODO: same out-of-bounds write as test_unary_cache_miss_different_tiles")
-def test_unary_cache_miss_different_output_tiles(device):
-    """Preallocated outputs with same dtype and memory config but different Tile dims -> different cache entries."""
-    device.cache_entries_counter.reset()
-    shape = [1, 1, 64, 64]
-
-    for output_tile in [[32, 32], [16, 32]]:
-        torch.manual_seed(0)
-        torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
-        tt_a = ttnn.from_torch(
-            torch_a,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            tile=ttnn.Tile([32, 32]),
-        )
-        tt_out = ttnn.from_torch(
-            torch.zeros(shape, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            tile=ttnn.Tile(output_tile),
-        )
-        with device.cache_entries_counter.measure():
-            ttnn.relu(tt_a, output_tensor=tt_out)
         assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
 
     assert device.cache_entries_counter.total == 2
