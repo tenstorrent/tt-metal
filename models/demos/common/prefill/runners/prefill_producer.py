@@ -574,6 +574,12 @@ def _num_model_configs(table) -> int:
     return sum(1 for name in _config_names(table) if name.isdigit())
 
 
+def _has_index_config(table) -> bool:
+    """Whether config 1 is a DSA indexer key cache. Asked of the adapter, not inferred from the count:
+    Kimi-K3 publishes three decimal configs (kvpe + two KDA state configs) and none is an index."""
+    return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
+
+
 def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode):
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
@@ -984,7 +990,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
 
     mins = {"kvpe": min_pcc}
-    if _num_model_configs(table) > 1:
+    if _has_index_config(table):
         if not index_golden_present(trace_dir):
             logger.warning(
                 f"[producer] slot {slot_id}: table has an index config but {trace_dir} carries no "
