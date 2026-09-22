@@ -66,10 +66,7 @@ FORCE_INLINE bool is_local(uint64_t address, uint8_t noc) {
     return x == my_x[noc] && y == my_y[noc];
 }
 
-// Whether a kernel-visible coordinate names this core. On XY backends the
-// kernel frame IS the NOC_NODE_ID frame, so this is the plain compare the call
-// sites used to spell inline (kept expression-identical: object code must not
-// change on Wormhole/Blackhole).
+// Whether a kernel-visible coordinate names this core.
 FORCE_INLINE bool is_local_coordinate(uint32_t x, uint32_t y, uint8_t noc) {
     return x == my_x[noc] && y == my_y[noc];
 }

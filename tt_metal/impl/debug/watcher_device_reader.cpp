@@ -719,7 +719,7 @@ void WatcherDeviceReader::Core::Dump() const {
 void WatcherDeviceReader::Core::DumpL1Status() const {
     const auto& hal = reader_.env.get_hal();
     // The L1[0] canary guards the reset jump that generate_risc_startup_addr writes at L1[0]. The
-    // Quasar simulator boots the DM from the tile-reset shadow register instead, so L1[0] is not the
+    // qsr.s1 simulator boots the DM from the tile-reset shadow register instead, so L1[0] is not the
     // live reset vector there and DM firmware data may overwrite it; skip the canary on that target.
     if (hal.get_arch() == tt::ARCH::QUASAR && reader_.env.get_rtoptions().get_simulator_enabled()) {
         return;
@@ -846,7 +846,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
-    // On the Quasar simulator the DM firmware's assert record travels through the cached L1 alias and
+    // On the qsr.s1 simulator the DM firmware's assert record travels through the cached L1 alias and
     // can arrive partially written. There the record is reported and polling continues (a hart that
     // really asserted stays at its waypoint, which the regular dump shows); elsewhere the record is
     // authoritative and stops the run.

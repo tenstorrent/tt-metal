@@ -30,11 +30,10 @@ struct DevicePrintBuffer {
                         // that processor.
 #elif defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
         // The lock is taken with an amoswap through the cached L1 alias while the rest of the header is
-        // written uncached (device) or over the NoC (host); a dirty line write-back would clobber its
-        // neighbours, so the lock gets a 64-byte line of its own. The host mirrors this 128-byte header
-        // (dprint_server.cpp).
+        // written uncached or over the NoC; a dirty line write-back would clobber its neighbours, so
+        // the lock gets a 64-byte line of its own.
         uint8_t pad_before_lock[64 - 2 * sizeof(uint32_t) - ProcessorCount];
-        std::atomic<uint32_t> lock;  // Lock for synchronizing access to the buffer. 0 means free, 1 means locked.
+        std::atomic<uint32_t> lock;
         uint8_t pad_after_lock[64 - sizeof(uint32_t)];
 #else
         std::atomic<uint32_t> lock;  // Lock for synchronizing access to the buffer. 0 means free, 1 means locked.

@@ -115,8 +115,6 @@ inline constexpr noc_att::MapData MAP{
     .worker_grid_x = ATT_WORKER_GRID_X,
     .worker_grid_y = ATT_WORKER_GRID_Y,
     .worker_selectors = {ATT_WORKER_SELECTORS},
-    // The emulator's NOC_NODE_ID frame is the descriptor frame: worker (0,1)
-    // reads NOC_NODE_ID (0,1) = word 0x40 = selector 0. No offset.
     .node_id_offset_x = 0,
     .node_id_offset_y = 0,
     .worker_endpoint_words = {ATT_WORKER_ENDPOINT_WORDS},

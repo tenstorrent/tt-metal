@@ -1446,8 +1446,7 @@ void release_lock();
 
 #if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
 // Whether this hart's begin_message_write took the shared buffer lock. A core the print server has not
-// enabled skips the lock entirely: every TRISC and DM of a tile shares one lock, so otherwise the firmware's
-// boot prints on every tile serialize through it whenever any tile is enabled for printing.
+// enabled skips the lock entirely.
 inline thread_local bool lock_held = false;
 #endif
 
@@ -1572,9 +1571,7 @@ void release_lock() {
 #else
     auto& lock_atomic = get_lock_atomic();
 #if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
-    // Release with an AMO, not a plain store: the acquire is an amoswap through the cached alias, and a
-    // plain cached store can sit in the releasing hart's data cache while the other harts' amoswaps keep
-    // observing the lock as taken.
+    // Release with an AMO, not a non-atomic store
     lock_atomic.exchange(0);
 #else
     lock_atomic = 0;
@@ -1591,7 +1588,8 @@ void initialize_lock() {
 #else
     auto& lock_atomic = get_lock_atomic();
 #if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
-    lock_atomic.exchange(0);  // see release_lock()
+    // Release with an AMO, not a non-atomic store
+    lock_atomic.exchange(0);
 #else
     lock_atomic = 0;
 #endif
@@ -1813,8 +1811,7 @@ __attribute__((noinline)) uint32_t
 begin_message_write(structures::DevicePrintHeader header, std::uintptr_t string_info_address) {
     volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
 #if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
-    // Not enabled on this core: do not touch the shared lock. The message is still serialized at offset 0
-    // of the disabled buffer (as before) and end_message_write leaves the pointers alone.
+    // Not enabled on this core: do not touch the shared lock.
     if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
         locking::lock_held = false;
         return 0;
@@ -1862,7 +1859,7 @@ __attribute__((noinline)) void end_message_write() {
     volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
 #if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
     if (!locking::lock_held) {
-        return;  // begin_message_write found the core disabled and took no lock
+        return;
     }
 #endif
     auto write_position = device_print_buffer->aux.wpos;

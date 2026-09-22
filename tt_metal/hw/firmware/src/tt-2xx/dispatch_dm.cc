@@ -119,7 +119,7 @@ extern "C" uint32_t _start1() {
     }
     WAYPOINT("I");
     if (hartid == 0) {
-        // As in dm.cc: reset the shared print lock and announce from DM0 only.
+        // Reset the shared print lock and announce from DM0 only.
         DEVICE_PRINT_INITIALIZE_LOCK();
         DPRINT("DISPATCH DM0-FW: initialized\n");
     }

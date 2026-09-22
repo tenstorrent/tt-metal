@@ -16,9 +16,7 @@
  * When ATT is enabled it is used for ALL addressing - no mixing. An identity
  * the active map cannot resolve (an out-of-map coordinate, an unbound bank or
  * dispatch key, a local address the window cannot carry) traps unconditionally
- * instead of issuing an operand: ASSERT is a no-op outside checked builds, and
- * an operand built from a failed resolution reaches SOME tile - on the
- * emulator that is a silent hang. System memory has no ATT window on any map
+ * instead of issuing an operand. System memory has no ATT window on any map
  * and is rejected at compile time.
  */
 
@@ -31,7 +29,7 @@
 namespace noc_address_backend_att {
 
 /// Unwrap a resolution result. ASSERT names the failure under the watcher;
-/// the trap makes it fatal in every build (one instruction on the hot path).
+/// the trap makes it fatal in every build.
 FORCE_INLINE uint64_t resolved_or_trap(const std::optional<noc_att::NocAddress>& result) {
     ASSERT(result.has_value());
     if (!result.has_value()) {
@@ -66,12 +64,11 @@ FORCE_INLINE uint64_t self_address(uint32_t local_address, uint8_t noc) {
 }
 
 FORCE_INLINE uint64_t packed_worker_address(uint32_t packed_xy, uint32_t local_address) {
-    // Host-generated words (l1_bank_to_noc_xy, go-message and CQ coordinates)
-    // pack (y << NOC_ADDR_NODE_ID_BITS) | x in the descriptor frame; the inverse
-    // tables are in the NOC_NODE_ID frame, so resolve_host_coordinate applies the
-    // map's frame offset first. DRAM banks take the typed bank_address<true>
-    // path instead: a direct selector lookup, no inverse search, no dependence
-    // on the host's dram_bank_to_noc_xy table.
+    // The packed word is a host coordinate ((y << NOC_ADDR_NODE_ID_BITS) | x, as
+    // in the L1 bank table, go messages and CQ state). resolve_host_coordinate
+    // adds the map's frame offset before looking it up in the endpoint tables.
+    // DRAM banks do not come through here: bank_address<true> maps a logical
+    // bank straight to its selector.
     const uint32_t x = packed_xy & ((1u << NOC_ADDR_NODE_ID_BITS) - 1);
     const uint32_t y = (packed_xy >> NOC_ADDR_NODE_ID_BITS) & ((1u << NOC_ADDR_NODE_ID_BITS) - 1);
     const noc_att::ResolvedTile tile = noc_att::resolve_host_coordinate(ACTIVE_ATT_MAP, x, y);

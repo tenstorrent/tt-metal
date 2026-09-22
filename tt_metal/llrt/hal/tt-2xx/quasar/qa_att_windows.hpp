@@ -6,16 +6,11 @@
 
 /**
  * @file
- * @brief Host-side registry of the Quasar ATT maps tt-metal can build against.
- *
- * One row per map: the TT_METAL_NOC_ATT name, the NOC_ATT_CONFIG_* define the
- * JIT build selects it with, and the transcribed map data itself, so the host
- * can answer questions about a map's windows (today: how much DRAM local
- * address the map can express) without re-deriving anything from the device
- * headers. Only the constexpr configuration headers are included - never
- * att_config.h, which selects a map by preprocessor macro and is for device
- * builds. The registry reads MAP.windows only, so it is unaffected by fields
- * the maps grow for other consumers.
+ * @brief The host's list of the Quasar ATT maps: one row per map with its
+ * TT_METAL_NOC_ATT name, the define that selects it in device builds, and the
+ * map data itself. Host code looks maps up here instead of hard-coding names
+ * or map facts. The device-side selector header (att_config.h) is not included:
+ * it picks one map by macro, while the host needs all of them.
  */
 
 #include <cstdint>
@@ -51,16 +46,14 @@ constexpr const MapInfo* find_map(std::string_view name) {
     return nullptr;
 }
 
-/// @brief One past the largest DRAM local address a map's DRAM window can
-/// carry: the ceiling on any per-bank DRAM address device code can compose
-/// under that map. The allocator clamps the DRAM bank size to it.
+/// @brief How many bytes of DRAM a bank can address under this map: the size
+/// of the DRAM window's offset field. The allocator caps the DRAM bank size at
+/// this so top-down allocations (kernel binaries) stay reachable.
 ///
-/// - quasar_aether_2x3: 64 MiB (a single 2^33 remote window with the endpoint
-///   selector at bit 26), smaller than the descriptor's DRAM view, so the
-///   clamp is what keeps top-down allocations addressable.
-/// - grendel_qsr1: 8 GiB (selector at bit 33). Bit 32 of that local field is
-///   the D2D link select onto the same GDDR, so the descriptor's 1 GiB view,
-///   not the window, is the real bound there - min() leaves it unclamped.
+/// - quasar_aether_2x3: 64 MiB, smaller than the DRAM the descriptor
+///   advertises, so the cap matters there.
+/// - grendel_qsr1: 8 GiB, larger than the descriptor's DRAM view, so the cap
+///   changes nothing there.
 constexpr std::uint64_t dram_window_local_address_limit(const MapInfo& info) {
     return noc_att::map_window(info.map, noc_att::WindowClass::Dram).local_address_limit();
 }

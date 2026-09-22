@@ -213,7 +213,7 @@ public:
         auto make_buffer = [quasar_layout](
                                uint64_t address, uint16_t size, uint16_t processor_count, uint16_t processor_offset) {
             const uint16_t risc_state_bytes = ((processor_count + 3) / 4) * 4;
-            // Quasar isolates the lock on its own 64-byte line: the header is 128 bytes (device_print_common.h).
+            // Quasar isolates the lock on its own 64-byte line.
             const uint16_t buffer_offset =
                 quasar_layout ? 128u : static_cast<uint16_t>(8u + risc_state_bytes + sizeof(uint32_t));
             const uint16_t buffer_size = size - buffer_offset;
@@ -593,8 +593,7 @@ bool DPrintServer::Impl::poll_print_buffer(
         wpos = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG;
 
         // Both pointers are word offsets into the data ring; skip anything else instead of issuing a
-        // wrapped or sub-word read, and back off so a permanently corrupt header (seen on the Quasar
-        // simulator) does not starve the device link.
+        // wrapped or sub-word read.
         if (wpos > print_buffer_size || rpos > print_buffer_size || ((wpos | rpos) & 3) != 0) {
             log_warning(
                 tt::LogMetal,

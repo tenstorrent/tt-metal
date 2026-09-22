@@ -150,12 +150,12 @@ FORCE_INLINE uint64_t cq_mcast_noc_addr(uint32_t packed_rect, uint64_t offset) {
 }
 
 #if defined(NOC_ATT_ENABLED)
-// Bank-typed CQ read helpers. They live here rather than in noc_nonblocking_api_v3.h
-// because bank_address needs the noc_address_backend alias, which firmware translation
-// units only have after dataflow_api_addrgen.h. Under ATT a bank operand is composed by
-// the typed backend (a DRAM bank resolves directly to its selector, with no inverse
-// search and no dependence on the host's dram_bank_to_noc_xy words); on the XY backend
-// it is the same packed composition as before.
+// Stateful CQ reads whose source is a bank id. The address backend turns the bank id
+// into the operand's base (under ATT a DRAM bank maps straight to its selector, with no
+// table search). So the command-queue kernels can name DRAM and L1 banks by bank number
+// and let the address backend produce the address, instead of naming them by coordinates
+// and converting. These sit here, not in the V3 API header, because the backend and the
+// bank tables are only available once the dataflow address layer has been included.
 template <bool is_dram>
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_bank_base(uint32_t bank, uint8_t noc) {
     return noc_address_backend::bank_address<is_dram>(bank, 0, noc);
