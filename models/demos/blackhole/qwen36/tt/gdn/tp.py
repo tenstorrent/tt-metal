@@ -38,15 +38,6 @@ def _silu_mul(x, z, memory_config, dtype=None):
     return ttnn.multiply(x, s, memory_config=memory_config, dtype=dtype)
 
 
-def gdn_out_colpar_prefill_enabled(args):
-    """PREFILL out-proj as COLUMN-parallel all-gather + matmul (all_gather_minimal_matmul_async) instead
-    of the row-parallel matmul + fp32 reduce-scatter. TP only. QWEN36_GDN_OUT_COLPAR=0 falls back to
-    the fused matmul_reduce_scatter arm (A/B switch; see forward_prefill)."""
-    if getattr(args, "num_devices", 1) <= 1:
-        return False
-    return os.environ.get("QWEN36_GDN_OUT_COLPAR", "1") != "0"
-
-
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     """Shard one GDN layer's linear_attn.* weights across the mesh."""
     tp = args.num_devices
@@ -152,7 +143,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         cache_path=c("out.dramshard" if _out_sharded else "out"),
         dtype=ttnn.bfloat8_b,
     )
-    if gdn_out_colpar_prefill_enabled(args):
+    if getattr(args, "num_devices", 1) > 1:
         # COLUMN-parallel copy of the out-proj for prefill: full K=value_dim rows, N=dim/tp columns per
         # device ([6144,1280] bfp8 at TP=4, +8.4 MB DRAM/layer). all_gather_minimal_matmul_async gathers
         # the K-sharded gated activation (device d holds heads d*Nv_tp.. -> K rows d*value_dim_tp..,
@@ -242,7 +233,7 @@ class TPGatedDeltaNet:
         # PREFILL out-proj as column-parallel AG+matmul (takes precedence over the MMRS arm when the
         # col-sharded weight was loaded). AG moves 3/4 x [S,1536] bf16 in per device instead of the RS
         # moving 3/4 x [S,5120] fp32 out + summing; output is bf16 [S, dim/tp] directly (no clone).
-        self._out_colpar_prefill = gdn_out_colpar_prefill_enabled(args) and "out_colpar" in tw
+        self._out_colpar_prefill = "out_colpar" in tw
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
