@@ -131,6 +131,9 @@ jobs:
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
           TT_LLK_DISABLE_ASSERTS: "1"
+          # Hardcoded: this branch exists only to publish a baseline.
+          # Read by helpers.perf.core._pipeline.
+          PIPELINE: "baseline"
         run: |
           ${{ matrix.test-group.cmd }}
 

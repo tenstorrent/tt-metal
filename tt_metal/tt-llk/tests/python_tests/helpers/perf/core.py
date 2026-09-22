@@ -437,6 +437,18 @@ def _run_id() -> str:
     return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
+def _pipeline(event: str) -> str:
+    """Which pipeline produced this run: ``pr``, ``nightly`` or ``baseline``.
+
+    Read from PIPELINE when the workflow says so; otherwise inferred from
+    the GitHub event, which can only tell a PR from everything else.
+    """
+    explicit = os.environ.get("PIPELINE", "").strip()
+    if explicit:
+        return explicit
+    return "pr" if event == "pull_request" else "nightly"
+
+
 def _ci_provenance() -> dict:
     """Run-context provenance for a published Parquet batch, read from the CI
     environment (best-effort defaults when run off-CI)."""
@@ -447,7 +459,7 @@ def _ci_provenance() -> dict:
         "run_id": _run_id(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         # Lowercase, as the warehouse's RUNS.PIPELINE stores them.
-        "pipeline": "pr" if event == "pull_request" else "nightly",
+        "pipeline": _pipeline(event),
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
 
