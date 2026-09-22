@@ -60,15 +60,17 @@ ALWI void state_unpack_mop(uint32_t faces) {
 //   reserved write origin. This helper neither publishes nor consumes CBs.
 // With an identity correction, correction_cb is not accessed at all. Four
 // numerator tiles then fit in a half DST; nonidentity uses at most three.
-template <int pairs, bool first_column = false, bool identity_correction = false>
+template <int pairs, bool first_column = false>
 ALWI void rescale_and_accumulate(
     uint32_t old_cb,
     uint32_t new_cb,
     uint32_t correction_cb,
     uint32_t old_index,
     uint32_t new_write_index,
-    uint32_t correction_index) {
-    static_assert(pairs >= 1 && pairs <= (identity_correction ? 4 : 3));
+    uint32_t correction_index,
+    bool identity_correction = false) {
+    // Four tiles are valid only for the identity path (no correction tile).
+    static_assert(pairs >= 1 && pairs <= 4);
     static_assert(!first_column || pairs == 1);
     tile_regs_acquire();
     reconfig_data_format_skip_int8(old_cb, old_cb);
@@ -86,7 +88,7 @@ ALWI void rescale_and_accumulate(
         unary_bcast<BroadcastType::NONE>(old_cb, old_index, 0);
     }
     unary_bcast_uninit<BroadcastType::NONE>(old_cb);
-    if constexpr (!identity_correction) {
+    if (!identity_correction) {
         reconfig_data_format_skip_int8(correction_cb, correction_cb);
         unary_bcast_init<BroadcastType::COL>(correction_cb);
         unary_bcast<BroadcastType::COL>(correction_cb, correction_index, pairs);
@@ -94,7 +96,7 @@ ALWI void rescale_and_accumulate(
     }
     tile_regs_commit();
     tile_regs_wait();
-    if constexpr (!identity_correction) {
+    if (!identity_correction) {
         if constexpr (first_column) {
             PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
                 DST_SYNC_MODE, DST_ACCUM_MODE, sdpa_state_rescale_first_column, 0, VectorMode::C)));
@@ -113,7 +115,7 @@ ALWI void rescale_and_accumulate(
 // scratch_cb must be a one-tile FP32 CB with unpack-to-destination enabled.
 // Zero/nonfinite denominators retain the frozen reciprocal behavior; no new
 // epsilon, clamp, or fully-masked-row convention is introduced here.
-template <uint32_t head_dim_tiles>
+template <uint32_t head_dim_tiles, uint32_t identity_cb = 32>
 ALWI void normalize_rows(
     uint32_t sum_cb,
     uint32_t numerator_cb,
@@ -126,6 +128,9 @@ ALWI void normalize_rows(
     for (uint32_t row = 0; row < rows; ++row) {
         pack.invalidate();
         CircularBuffer(sum_cb).wait_front(1);
+        if constexpr (identity_cb != 32) {
+            CircularBuffer(identity_cb).wait_front(1);
+        }
         CircularBuffer(scratch_cb).reserve_back(1);
         reconfig_data_format_skip_int8(sum_cb, sum_cb);
         tile_regs_acquire();

@@ -48,8 +48,8 @@ void kernel_main() {
                 copy(width + 1 + p, 16, p);
             }
             PACK((llk_pack_reconfig_l1_acc(1)));
-            sdpa::streaming::rescale_and_accumulate<width, first_column, identity>(
-                0, 16, identity ? 32 : 0, 0, 0, width);
+            sdpa::streaming::rescale_and_accumulate<width, first_column>(
+                0, 16, identity ? 32 : 0, 0, 0, width, identity);
             PACK((llk_pack_reconfig_l1_acc(0)));
             CircularBuffer(16).push_back(width);
         }
