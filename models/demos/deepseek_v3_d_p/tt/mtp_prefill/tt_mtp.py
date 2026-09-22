@@ -192,8 +192,7 @@ class TtFusedMTP(LightweightModule):
     def forward(self, embed: ttnn.Tensor, hidden: ttnn.Tensor) -> ttnn.Tensor:
         """Project the shifted embedding and the previous level's hidden into this level's input.
 
-        Both inputs are ``[1, 1, seq_local, H/tp]`` and TP-sharded. The caller must zero the rows at
-        absolute position 0 first; under SP the row index is not the absolute position.
+        Both inputs are ``[1, 1, seq_local, H/tp]`` and TP-sharded.
         """
         e = self.enorm(embed)
         h = self.hnorm(hidden)
@@ -409,8 +408,8 @@ class TtMTPPredictor(LightweightModule):
     ) -> MTPPredictorOutput:
         """Run every level, chaining each level's normed output into the next.
 
-        ``get_embed(k, hidden)`` supplies level k's embedding lazily, with the rows at absolute position
-        0 already zeroed. Each embedding is deallocated once its level has run.
+        ``get_embed(k, hidden)`` supplies level k's embedding lazily. Each embedding is deallocated
+        once its level has run.
         """
         for name in _RESERVED_FWD_KWARGS:
             if name in fwd_kwargs:

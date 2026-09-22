@@ -107,15 +107,10 @@ def _from_device(t: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
 
 def _mtp_inputs(seq_len: int, hidden: int, seed: int = 7):
-    """``(embed, hidden)`` for one MTP level, with position 0's embedding already zeroed.
-
-    The zeroing is the caller's job on device (only the caller knows absolute positions under SP), so
-    the test does it host-side before uploading and the reference sees the identical tensor.
-    """
+    """``(embed, hidden)`` for one MTP level."""
     g = torch.Generator().manual_seed(seed)
     embed = torch.randn(1, seq_len, hidden, generator=g, dtype=torch.float32).to(torch.bfloat16)
     hid = torch.randn(1, seq_len, hidden, generator=g, dtype=torch.float32).to(torch.bfloat16)
-    embed[:, 0, :] = 0  # absolute position 0: nothing preceded it. Mirrors vLLM deepseek_mtp.py.
     return embed, hid
 
 
@@ -148,7 +143,7 @@ def _mtp_level_inputs(num_levels: int, seq_len: int, hidden: int, seed: int = 7)
     """``(embeds, h0)`` for a K-level predictor: K shifted-token embeddings and the trunk hidden.
 
     Distinct seeds per level, so a loop that reused one embedding or chained the wrong tensor cannot
-    pass by symmetry. Position 0 is zeroed on every level's embedding.
+    pass by symmetry.
     """
     embeds = [_mtp_inputs(seq_len, hidden, seed=seed + k)[0] for k in range(num_levels)]
     _, h0 = _mtp_inputs(seq_len, hidden, seed=seed)

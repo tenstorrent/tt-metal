@@ -88,45 +88,6 @@ def _upload_ids(rows: torch.Tensor, mesh_device: ttnn.MeshDevice, mesh_shape: tu
     )
 
 
-def build_position_zero_mask(
-    mesh_device: ttnn.MeshDevice,
-    sp_factor: int,
-    chunk_size: int,
-    is_balanced: bool,
-    mesh_shape: tuple,
-    sp_axis: int,
-    *,
-    emb_dim_per_chip: int,
-    dtype: ttnn.DataType = ttnn.bfloat16,
-) -> ttnn.Tensor:
-    """Multiplicative mask that zeroes the embedding at ABSOLUTE position 0, for every MTP level.
-
-    It cannot be done from the token side (zeroing an id gives ``embed(0)``, not ``0``) nor inside the
-    module, since under SP only the caller knows which row is position 0. First chunk only.
-    """
-    # Right padding only: row 0 is absolute position 0 exactly when the chunk's real tokens start at
-    # row 0, which TtPrefillTransformer asserts before MTP runs.
-    assert chunk_size % sp_factor == 0, f"chunk {chunk_size} not divisible by sp_factor {sp_factor}"
-    isl_per_chip = chunk_size // sp_factor
-    keep = torch.ones(chunk_size, dtype=torch.float32)
-    keep[0] = 0.0
-    if is_balanced:
-        t = keep.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-        t = reorder_tensor_chunks(t, create_balanced_chunk_order(sp_factor), seq_dim=2)
-        sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
-    else:
-        sharded = keep.reshape(sp_factor, 1, isl_per_chip)
-    mask = sharded.unsqueeze(-1).expand(sp_factor, 1, isl_per_chip, int(emb_dim_per_chip)).contiguous()
-    return ttnn.from_torch(
-        mask,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(sp_axis, None)),
-    )
-
-
 def mtp_generation_union_rows(
     sp_factor: int,
     chunk_size: int,

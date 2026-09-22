@@ -47,7 +47,7 @@ class MTPUnionEmbedding:
         """Gather the union from the two id tensors the H2D row was cut into. Neither is consumed.
 
         Two gathers rather than one over a rejoined id row: the trunk gather's result is this chunk's
-        model input anyway. ``embed_fn`` returns unmasked rows; position-0 masking is the caller's.
+        model input anyway.
         """
         window_len = int(chunk_ids.shape[-1])
         return cls(
@@ -198,12 +198,10 @@ class MTPDeviceEmbedSource:
     def __init__(
         self,
         union: MTPUnionEmbedding,
-        mask_fn=None,
         generation: "Optional[MTPDeviceGeneration]" = None,
         provided_levels: int = 0,
     ):
         self.union = union
-        self.mask_fn = mask_fn
         self.generation = generation
         self.num_levels = union.num_levels
         self.provided_levels = int(provided_levels)
@@ -236,5 +234,4 @@ class MTPDeviceEmbedSource:
             gathered = self.generation.embed_fn(prev_normed)
             self.union.add_patch(self.generation.selects[k], gathered)
             ttnn.deallocate(gathered)
-        window = self.union.window(k + 1)
-        return self.mask_fn(window) if self.mask_fn is not None else window
+        return self.union.window(k + 1)

@@ -35,7 +35,6 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPDevice
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     build_mtp_generation_keep_mask,
     build_mtp_generation_select,
-    build_position_zero_mask,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
@@ -373,7 +372,7 @@ class TtPrefillTransformer(LightweightModule):
         self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
 
         # Sharding parameters, kept because MTP builds its per-chip masks and row selects from the
-        # same SP geometry the trunk input was sharded with (see _mtp_position_zero_mask).
+        # same SP geometry the trunk input was sharded with (see _mtp_build_generation).
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
         self.mesh_shape = tuple(mesh_device.shape)
@@ -389,19 +388,16 @@ class TtPrefillTransformer(LightweightModule):
         # table, model.norm and the LM head.
         self.mtp_predictor = mtp_predictor
         self.num_mtp_levels = num_mtp_levels
-        self._mtp_pos0_mask = None
         if mtp_predictor is not None:
             assert is_last_rank and not kv_only_last_layer, (
                 "MTP is seeded by h^0 = model.norm(trunk output) and needs the LM head for the last "
                 "chunk's generated tokens; both live only on a last rank that builds the tail"
             )
             assert padding_side == "right", (
-                f"MTP assumes right padding, got padding_side={padding_side!r}. Two things break "
-                "under left padding, both silently: the last chunk's generated ids are written at "
-                "positions actual_end + k, which land in the middle of the padding instead of after "
-                "the last real token; and the position-0 mask zeroes "
-                "chunk-local row 0, which is absolute position 0 only when the real tokens start "
-                "there. Neither raises -- they just produce the wrong embedding window."
+                f"MTP assumes right padding, got padding_side={padding_side!r}. Under left padding "
+                "the last chunk's generated ids are written at positions actual_end + k, which land "
+                "in the middle of the padding instead of after the last real token. It does not "
+                "raise -- it just produces the wrong embedding window."
             )
             assert mtp_predictor.first_cache_slot == num_layers, (
                 f"MTP writes KV slots [first_cache_slot, first_cache_slot + K); it must start where "
@@ -663,9 +659,8 @@ class TtPrefillTransformer(LightweightModule):
         # `h` is h^0, the post-norm trunk hidden, and is still live: nothing above frees it.
         if mtp_union is not None:
             assert actual_start is not None, (
-                "MTP needs actual_start on the host to know whether this chunk contains absolute "
-                "position 0, where vLLM zeroes the embedding on every level; the on-device metadata "
-                "path keeps actual_start on device and cannot answer that here"
+                "MTP needs actual_start on the host to place the rows it generates; the on-device "
+                "metadata path keeps actual_start on device and cannot answer that here"
             )
             # The ack and layer-tap kwargs are deliberately not forwarded: the layer-ack protocol
             # counts trunk layers, and MTP's product is the KV it writes, not an ack.
@@ -674,7 +669,6 @@ class TtPrefillTransformer(LightweightModule):
                 kvpe_cache,
                 rope_tensors,
                 actual_isl,
-                zero_position_0=(actual_start == 0),
                 union=mtp_union,
                 provided_levels=provided_levels,
                 cache_user_id=cache_user_id,
@@ -692,36 +686,11 @@ class TtPrefillTransformer(LightweightModule):
         # main's callers, which expect the bare dict, arrive with the merge.
         return intermediates
 
-    def _mtp_position_zero_mask(self) -> ttnn.Tensor:
-        """Cached per-chip ``[1, 1, L, H/tp]`` mask zeroing ABSOLUTE position 0. Built once, reused."""
-        if self._mtp_pos0_mask is None:
-            self._mtp_pos0_mask = build_position_zero_mask(
-                self.mesh_device,
-                self.sp_factor,
-                self.seq_len,
-                self.is_balanced,
-                self.mesh_shape,
-                self.sp_axis,
-                emb_dim_per_chip=self.emb_dim_per_chip,
-            )
-        return self._mtp_pos0_mask
-
     def mtp_embed_ids(self, tt_ids: ttnn.Tensor) -> ttnn.Tensor:
         """Gather ``[sp, 1, N]`` uint32 ids into ``[1, 1, N, H/tp]`` bf16 TILE. Does not consume
-        ``tt_ids`` and does not mask position 0 -- masking is per window, so the caller applies it.
-        Public because the runner needs the same gather ``forward``'s first-rank embed performs."""
+        ``tt_ids``. Public because the runner needs the same gather ``forward``'s first-rank embed
+        performs."""
         return ttnn.unsqueeze_to_4D(self.embed(tt_ids))
-
-    def _mtp_mask_position_zero(self, emb: ttnn.Tensor, zero_position_0: bool) -> ttnn.Tensor:
-        """Zero the row at ABSOLUTE position 0, on a ``[1, 1, L, H/tp]`` window. Consumes ``emb``.
-
-        Applied to every level, per vLLM. No-op unless this chunk contains position 0.
-        """
-        if not zero_position_0:
-            return emb
-        masked = ttnn.multiply(emb, self._mtp_position_zero_mask())
-        ttnn.deallocate(emb)
-        return masked
 
     def mtp_generate_embedding(self, h_normed: ttnn.Tensor, actual_isl: int) -> ttnn.Tensor:
         """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at the last real row, embedded and
@@ -796,7 +765,6 @@ class TtPrefillTransformer(LightweightModule):
         rope_tensors: dict,
         actual_isl: int,
         *,
-        zero_position_0: bool,
         union,
         provided_levels: int = 0,
         **fwd_kwargs,
@@ -822,7 +790,6 @@ class TtPrefillTransformer(LightweightModule):
             )
         source = MTPDeviceEmbedSource(
             union,
-            mask_fn=lambda emb: self._mtp_mask_position_zero(emb, zero_position_0),
             generation=generation,
             provided_levels=provided_levels,
         )

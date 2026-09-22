@@ -312,7 +312,7 @@ def test_mtp_transformer_chunks(
     """3 x 5120 tokens of GLM-5.2 MTP4 end to end: every window, every level, exact ids.
 
     Four claims, most-local first: the stream the socket delivers, every level's output against the
-    teacher-forced reference, the position-0 mask, and the last chunk's generated tokens.
+    teacher-forced reference, row 0 of every window, and the last chunk's generated tokens.
     """
     torch.manual_seed(42)
     # Drop the one combination that buys least: at full depth `provided-all` means the final chunk
@@ -719,9 +719,6 @@ def test_mtp_transformer_chunks(
             index_share=predictor.index_share,
             hiddens=[h.squeeze(0) for h in ref_hiddens],
             mla_refs=ref_mla,
-            # Row j of this chunk is absolute position start + j. Without it the reference defaults
-            # to arange(C) and zeroes every chunk's row 0, which the device does only on chunk 0.
-            positions=torch.arange(start, start + CHUNK),
             actual_start=start,
             actual_end=start + real_len,
         )
@@ -740,10 +737,9 @@ def test_mtp_transformer_chunks(
             # Two claims the whole-tensor PCC cannot resolve: each turns on at most K rows out of C,
             # below the gate and below the run-to-run noise. On their own rows they are decisive.
             if chunk_idx == 0:
-                # (3) the position-0 mask: the reference zeroes row 0 and the host window does not,
-                # so this row agrees only if the device masked it too.
+                # (3) row 0 holds Emb(t_{level+1}), the first row the window slice keeps.
                 _, msg = assert_with_pcc(ref_xs[level].unsqueeze(0)[:, :, :1], dev_x[level][:, :, :1], FUSED_MTP_PCC)
-                logger.info(f"[mtp chunks] chunk {chunk_idx} L{level}: position-0 mask PCC {msg}")
+                logger.info(f"[mtp chunks] chunk {chunk_idx} L{level}: row 0 PCC {msg}")
             if generated and level >= provided:
                 # (4) the generation seam: the last level+1 rows carry ids only the LM head can
                 # produce, and the reference got them from _expected_window, not from the device.
