@@ -229,3 +229,43 @@ saturated conversion leaves a denormal with a garbage mantissa that the output
 matmul turns into inf while the sum's reduction flushes it. Also from the audit:
 a cache fence before the lazy verdict's raw L1 reads and the rounding reset
 moved after the DST release.
+
+## The relay reader's order (2026-09-22)
+
+A per-stage profile of the 20/10 shape on one chip (`build_Profile`,
+`TT_METAL_DEVICE_PROFILER=1`, `CyclicSdpaFwProfileTest`) put the steady
+timestep at 13.6 us: scores 1.8, block maxima 2.4, the fused
+probabilities-sum-update 6.9, and 1.7 us of the unpack thread waiting for
+the next packet's Q although the predecessor sends Q a whole timestep early.
+The reader pushed the next Q only after forwarding this timestep's state
+(64 KB of O^T, m and l, 4.3 to 5.3 us) and granting the credit. Two changes
+to the reader, none to the protocol:
+
+- The next Q is received and pushed as soon as this timestep's outputs are
+  seen, before the state forward; the compute kernel's scores and maxima
+  then cover the relay's latency.
+- At d <= 64 a forwarded row's state is handed over one query tile at a
+  time as each tile's l and O^T are final, and each tile's write is issued
+  as it arrives, so only the last tile and the completion follow the
+  timestep. At d = 128 the state stays whole: the next timestep's scores
+  and maxima already cover the forward there, and the early writes only
+  compete with the unpackers for L1 (measured +7.5% on the ring's d = 128
+  forward step). The rule is `kStatePerTile = (qWt <= 2)` in both kernels.
+
+Steady timestep 13.6 -> 12.1 us with no wait left; every stage is compute.
+
+| | before | after |
+|---|---|---|
+| one chip, 20/10 heads, 5632, d 64 | 3.85 ms | 3.49 ms (-9%) |
+| one chip, 4/4 heads, 4096, d 64 | 0.77 | 0.68 (-12%) |
+| one chip, 32/8 heads, 5632, d 128 | 8.06 | 7.79 (-3%) |
+| one chip, fast variant, 20/10, Bt 8 | 2.51 | 2.31 (-8%) |
+| ring of eight, forward step, 4/4 x 4096 | 12.1 | 11.1 (-8%) |
+| ring of eight, forward step, 20/10 x 5632 | 41.5 | 41.1 |
+| ring of eight, forward step, 32/8 x 5632 x 128 | 90.2 | 90.2 |
+
+The fused stage is now balanced between the math thread (7.2 us of matmuls
+and reductions) and the pack thread (7.4 us of exponential and packs), so
+removing math work alone does not shorten it: the probability sums folded
+into the output block matmul as a ones row of V^T (no reduce pass) measured
+neutral to worse and moved the lse error from 3e-4 to 5e-4; reverted.

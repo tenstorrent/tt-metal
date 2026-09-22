@@ -411,33 +411,42 @@ void kernel_main() {
         const bool spilled = !forwarded && sched.has_later_active(i, t);
         {
             DeviceZoneScopedN("SEND-STATE");
-            const uint32_t out_tile_bytes = qWt * fp32_bytes;
-            for (uint32_t a = 0; a < Bt; ++a) {
+            // Per query tile when the compute kernel hands the state over that
+            // way (d <= 64, see the compute kernel's kStatePerTile), else the
+            // whole state in one round.
+            constexpr bool per_tile = (qWt <= 2u);
+            constexpr uint32_t rounds = per_tile ? Bt : 1u;
+            constexpr uint32_t tiles_per_round = per_tile ? 1u : Bt;
+            const uint32_t out_round_bytes = tiles_per_round * qWt * fp32_bytes;
+            const uint32_t stat_round_bytes = tiles_per_round * fp32_bytes;
+            for (uint32_t r = 0; r < rounds; ++r) {
                 {
                     DeviceZoneScopedN("WAIT-COMPUTE");
-                    cb_wait_front(cb_out_out, (a + 1u) * qWt);
-                    cb_wait_front(cb_max_out, a + 1u);
-                    cb_wait_front(cb_sum_out, a + 1u);
+                    cb_wait_front(cb_out_out, (r + 1u) * tiles_per_round * qWt);
+                    cb_wait_front(cb_max_out, (r + 1u) * tiles_per_round);
+                    cb_wait_front(cb_sum_out, (r + 1u) * tiles_per_round);
                 }
-                const uint32_t o_off = a * out_tile_bytes;
-                const uint32_t s_off = a * fp32_bytes;
+                const uint32_t o_off = r * out_round_bytes;
+                const uint32_t s_off = r * stat_round_bytes;
                 if (receiver == my_core) {
-                    noc_async_write(os + o_off, get_noc_addr(dst_out + o_off), out_tile_bytes);
-                    noc_async_write(ms + s_off, get_noc_addr(dst_max + s_off), fp32_bytes);
-                    noc_async_write(ls + s_off, get_noc_addr(dst_sum + s_off), fp32_bytes);
+                    noc_async_write(os + o_off, get_noc_addr(dst_out + o_off), out_round_bytes);
+                    noc_async_write(ms + s_off, get_noc_addr(dst_max + s_off), stat_round_bytes);
+                    noc_async_write(ls + s_off, get_noc_addr(dst_sum + s_off), stat_round_bytes);
                 } else if (forwarded) {
-                    noc_async_write(os + o_off, get_noc_addr(receiver_x, receiver_y, dst_out + o_off), out_tile_bytes);
-                    noc_async_write(ms + s_off, get_noc_addr(receiver_x, receiver_y, dst_max + s_off), fp32_bytes);
-                    noc_async_write(ls + s_off, get_noc_addr(receiver_x, receiver_y, dst_sum + s_off), fp32_bytes);
+                    noc_async_write(os + o_off, get_noc_addr(receiver_x, receiver_y, dst_out + o_off), out_round_bytes);
+                    noc_async_write(ms + s_off, get_noc_addr(receiver_x, receiver_y, dst_max + s_off), stat_round_bytes);
+                    noc_async_write(ls + s_off, get_noc_addr(receiver_x, receiver_y, dst_sum + s_off), stat_round_bytes);
                 } else if (spilled) {
                     // Streak end with a later streak: spill the state, then
                     // (below) complete the write and certify it for the later
                     // streak's reload.
-                    for (uint32_t k = 0; k < qWt; ++k) {
-                        noc_async_write_page(acc_page(i, a * qWt + k), state_acc, os + o_off + k * fp32_bytes);
+                    for (uint32_t k = 0; k < tiles_per_round * qWt; ++k) {
+                        noc_async_write_page(acc_page(i, r * tiles_per_round * qWt + k), state_acc, os + o_off + k * fp32_bytes);
                     }
-                    noc_async_write_page(stat_page(i, a, 0u), state_stats, ms + s_off);
-                    noc_async_write_page(stat_page(i, a, 1u), state_stats, ls + s_off);
+                    for (uint32_t a = 0; a < tiles_per_round; ++a) {
+                        noc_async_write_page(stat_page(i, r * tiles_per_round + a, 0u), state_stats, ms + s_off + a * fp32_bytes);
+                        noc_async_write_page(stat_page(i, r * tiles_per_round + a, 1u), state_stats, ls + s_off + a * fp32_bytes);
+                    }
                 }
                 // Else the row's last visit: the compute kernel finished it and
                 // the write kernel stores it.
