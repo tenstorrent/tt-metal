@@ -453,6 +453,7 @@ def main():
         # Galaxy
         "blaze-models-prefill-tests.yaml",
         "galaxy-tests.yaml",
+        "galaxy-sanity.yaml",
         "galaxy-profiler-tests.yaml",
         "galaxy-stress-tests.yaml",
         # Blackhole

@@ -3,15 +3,10 @@ name: "Galaxy tests"
 on:
   workflow_dispatch:
     inputs:
-      # These 5 inputs shape a dispatch only. A scheduled run ignores them and
+      # These 4 inputs shape a dispatch only. A scheduled run ignores them and
       # covers every suite. run-e2e-tests and run-multi-user-isolation-tests default
-      # to false: those 2 suites are 266 of the 330 machine-minutes of a full run,
+      # to false: those 2 suites are 266 of the 306 machine-minutes of a full run,
       # and "(Galaxy) unit tests" alone took 143 dispatches in 90 days.
-      run-health-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run the Galaxy health tests"
       run-unit-tests:
         required: false
         type: boolean
@@ -108,15 +103,13 @@ on:
 run-name: >-
   Galaxy tests
   Tests[${{ github.event_name == 'schedule' && 'All'
-  || format('{0}{1}{2}{3}{4}{5}{6}{7}{8}',
-     inputs.run-health-tests && 'health' || '',
-     inputs.run-health-tests && inputs.run-unit-tests && ',' || '',
+  || format('{0}{1}{2}{3}{4}{5}{6}',
      inputs.run-unit-tests && 'unit' || '',
-     (inputs.run-health-tests || inputs.run-unit-tests) && inputs.run-integration-tests && ',' || '',
+     inputs.run-unit-tests && inputs.run-integration-tests && ',' || '',
      inputs.run-integration-tests && 'integration' || '',
-     (inputs.run-health-tests || inputs.run-unit-tests || inputs.run-integration-tests) && inputs.run-e2e-tests && ',' || '',
+     (inputs.run-unit-tests || inputs.run-integration-tests) && inputs.run-e2e-tests && ',' || '',
      inputs.run-e2e-tests && 'e2e' || '',
-     (inputs.run-health-tests || inputs.run-unit-tests || inputs.run-integration-tests || inputs.run-e2e-tests) && inputs.run-multi-user-isolation-tests && ',' || '',
+     (inputs.run-unit-tests || inputs.run-integration-tests || inputs.run-e2e-tests) && inputs.run-multi-user-isolation-tests && ',' || '',
      inputs.run-multi-user-isolation-tests && 'multi-user' || '') }}]
 
 permissions:
@@ -131,12 +124,11 @@ jobs:
     steps:
       - name: Make sure at least one suite is selected
         run: |
-          if [[ "${{ inputs.run-health-tests }}" != "true" \
-             && "${{ inputs.run-unit-tests }}" != "true" \
+          if [[ "${{ inputs.run-unit-tests }}" != "true" \
              && "${{ inputs.run-integration-tests }}" != "true" \
              && "${{ inputs.run-e2e-tests }}" != "true" \
              && "${{ inputs.run-multi-user-isolation-tests }}" != "true" ]]; then
-            echo "::error::No suite selected. Enable at least one of run-health-tests, run-unit-tests, run-integration-tests, run-e2e-tests or run-multi-user-isolation-tests."
+            echo "::error::No suite selected. Enable at least one of run-unit-tests, run-integration-tests, run-e2e-tests or run-multi-user-isolation-tests."
             exit 1
           fi
 
@@ -175,34 +167,6 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-
-  galaxy-health-test:
-    needs: [check-harbor, build-artifact]
-    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-health-tests) && needs.build-artifact.result == 'success' }}
-    secrets: inherit
-    uses: ./.github/workflows/galaxy-health-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: >-
-        ${{
-          github.event_name == 'schedule'
-            && 'wh_galaxy,bh_galaxy'
-            || (
-              inputs.wormhole && inputs.blackhole
-                && 'wh_galaxy,bh_galaxy'
-                || (
-                  inputs.wormhole
-                    && 'wh_galaxy'
-                    || (
-                      inputs.blackhole
-                        && 'bh_galaxy'
-                        || ''
-                    )
-                )
-            )
-        }}
 
   galaxy-unit-tests:
     needs: [check-harbor, build-artifact]

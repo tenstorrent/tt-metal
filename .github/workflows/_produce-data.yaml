@@ -70,6 +70,7 @@ on:
       - "(Galaxy) demo tests"
       - "(Galaxy) perf tests"
       - "(Galaxy) Stress"
+      - "(Galaxy) Sanity"
       - "(Galaxy) DeepSeek tests"
       - "DeepSeek V3 Multi-Host Tests"
       - "(Release) Model Status for Console Deployment"

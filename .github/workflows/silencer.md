@@ -130,6 +130,7 @@ safe-outputs:
       - blackhole-e2e-tests
       - galaxy-profiler-tests
       - galaxy-tests
+      - galaxy-sanity
       - models-t1-device-perf-tests
       - galaxy-stress-tests
       - t3000-tests
