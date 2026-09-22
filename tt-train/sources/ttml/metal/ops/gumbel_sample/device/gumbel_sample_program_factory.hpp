@@ -30,15 +30,10 @@ struct GumbelSampleSharedVariables {
     tt::tt_metal::KernelHandle compute_kernel_group_1_id{};
     tt::tt_metal::KernelHandle compute_kernel_group_2_id{};
     bool has_compute_group_2{};
-    // Everything the cache-hit patch needs per core, derived ONCE at build time. All of it is
-    // invariant across hits of one cached program: the work split is a function of hashed
-    // quantities only (padded dims, device grid), and the RNG stream id folds the device index
-    // and the core's start tile -- both split properties. This op dispatches once per generated
-    // token, so re-deriving the split on every hit (device grid query, split_work_to_cores,
-    // per-core CoreRangeSet scans) would be paid thousands of times per rollout on the host
-    // dispatch path; caching also single-sources the stream-id derivation, whose divergence
-    // between build and patch would manifest only on cache hits -- which single-shape unit tests
-    // never exercise.
+    // Everything the cache-hit patch needs per core, derived once at build: the work split is a
+    // function of hashed quantities only, and this op dispatches once per generated token, so
+    // re-deriving it per hit would be paid thousands of times per rollout. Caching also
+    // single-sources the stream-id derivation, whose divergence would only show on cache hits.
     struct CoreRuntimeInfo {
         tt::tt_metal::CoreCoord core;
         uint32_t rand_stream_id{};
@@ -47,11 +42,9 @@ struct GumbelSampleSharedVariables {
     std::vector<CoreRuntimeInfo> core_info;
 };
 
-// NOTE: this factory builds a MESH WORKLOAD (one program per mesh coordinate) rather than a single
-// program, because the RNG seed has to differ per device on data-parallel axes. The plain
-// `create()` factories used by the other tt-train ops emit one program broadcast to every device,
-// which would make every data-parallel replica draw identical noise and emit identical samples.
-// See RingSDPAFwProgramFactory for the same pattern.
+// Builds a MESH WORKLOAD (one program per mesh coordinate) rather than a single broadcast program:
+// the RNG seed must differ per device on data-parallel axes. Same pattern as
+// RingSDPAFwProgramFactory.
 struct GumbelSampleProgramFactory {
     using shared_variables_t = GumbelSampleSharedVariables;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

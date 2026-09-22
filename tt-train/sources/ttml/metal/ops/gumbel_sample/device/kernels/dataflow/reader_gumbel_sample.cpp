@@ -16,26 +16,15 @@ void kernel_main() {
     const uint32_t mask_address = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t num_tiles = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t start_tile = get_arg_val<uint32_t>(rt_idx++);
-    // Ht is a RUNTIME arg, in BOTH modes, and that is a performance decision rather than a stylistic
-    // one. Baked as a compile-time arg it put the token dimension into the program-cache key, so
-    // every distinct prompt length in a rollout was a fresh cache miss -- and each miss is a fresh
-    // JIT build of this kernel, measured at ~6 s against ~3 ms for the dispatch itself. It is read
-    // unconditionally so the runtime-arg layout is identical in both modes: the host patches this
-    // slot on every dispatch, and in non-position mode the slot would otherwise not exist.
+    // Ht, positions address, logical token count and mask stride are RUNTIME args so one cached
+    // program serves every prompt length and both mask shapes (a compile-time token dimension made
+    // every distinct prompt length a fresh ~6 s JIT build). All are read unconditionally so the
+    // runtime-arg layout is identical in every mode and the host can patch the slots on every
+    // dispatch.
     const uint32_t Ht = get_arg_val<uint32_t>(rt_idx++);
-    // Base address of the positions tensor, 0 when absent. Emitted in BOTH modes for the same reason
-    // Ht is: the host patches this slot unconditionally on every dispatch.
-    const uint32_t positions_address = get_arg_val<uint32_t>(rt_idx++);
-    // Logical token count, for range-clamping positions below. A RUNTIME arg for the same reason Ht
-    // is: it derives from the token dimension, which the program hash normalizes away in position
-    // mode -- baking it in would make every prompt length a fresh JIT build. Read unconditionally
-    // so the runtime-arg layout is identical in both modes.
+    const uint32_t positions_address = get_arg_val<uint32_t>(rt_idx++);  // 0 when absent
     const uint32_t logical_tokens = get_arg_val<uint32_t>(rt_idx++);
-    // Per-entry stride into the mask pages: 0 for a [1, 1, 1, V] mask shared by every batch entry,
-    // Wt for a [B, 1, 1, V] per-row mask where entry b owns its own tile row of Wt pages. RUNTIME,
-    // deliberately: both mask shapes then share one program and one kernel binary, and the host
-    // re-derives the stride from the mask's shape on every dispatch. Read unconditionally so the
-    // runtime-arg layout is identical in every mode.
+    // 0 for a shared [1, 1, 1, V] mask, Wt for a per-entry [B, 1, 1, V] mask.
     const uint32_t mask_entry_stride = get_arg_val<uint32_t>(rt_idx++);
 
     constexpr uint32_t cb_logits_idx = tt::CBIndex::c_0;
@@ -48,9 +37,8 @@ void kernel_main() {
     constexpr auto logits_args = TensorAccessorArgs<2>();
     constexpr auto mask_args = TensorAccessorArgs<logits_args.next_compile_time_args_offset()>();
     constexpr auto positions_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
-    // Mode flags ride at the END of the compile-time args, past the accessor chain, so the
-    // hand-numbered offsets above never move when a flag is added or removed -- the index here is
-    // chained, not hard-coded, and the host appends in this same order after its accessor appends.
+    // Mode flags ride past the accessor chain (chained offsets, matching the host's append order),
+    // so the hand-numbered offsets above never move when a flag is added or removed.
     constexpr bool do_logits_mask = get_compile_time_arg_val(positions_args.next_compile_time_args_offset()) != 0;
     constexpr bool do_positions = get_compile_time_arg_val(positions_args.next_compile_time_args_offset() + 1) != 0;
     const auto logits_address_generator = TensorAccessor(logits_args, logits_address);
@@ -58,33 +46,23 @@ void kernel_main() {
 
     const uint32_t logits_tile_bytes = get_tile_size(cb_logits_idx);
 
-    // Stage the entry WINDOW this core's tile run touches -- and only that window; every entry
-    // this kernel dereferences is start_tile / Wt ..= (start_tile + num_tiles - 1) / Wt by
-    // construction of source_page below. It cannot be deferred: the very first logits page address
-    // depends on it. The staging, the slot addressing and the position clamp are single-sourced in
-    // PositionWindow (position_window.hpp); the writer stages the identical window and consumes the
-    // complementary bit field of the same clamped value.
+    // Stage the entry window this core's run touches (see position_window.hpp; the writer stages
+    // the identical window). Cannot be deferred: the first logits page address depends on it.
     PositionWindow positions{};
     if constexpr (do_positions) {
         const auto positions_address_generator = TensorAccessor(positions_args, positions_address);
         positions = stage_position_window(cb_positions_idx, positions_address_generator, start_tile, num_tiles, Wt);
     }
 
-    // With positions supplied, the indices this loop walks are VIRTUAL: one tile row per batch
-    // entry rather than Ht of them. Virtual tile vt covers entry vt / Wt at column vt % Wt, and the
-    // real page is found by jumping to the tile row holding that entry's position. Consecutive
-    // virtual tiles stay contiguous inside an entry but jump at entry boundaries, so the pages are
-    // issued one at a time instead of as a run.
+    // With positions supplied the loop indices are VIRTUAL -- one tile row per batch entry (entry
+    // vt / Wt, column vt % Wt) -- and this maps them to the real page holding the entry's position.
     auto source_page = [&](uint32_t virtual_tile) -> uint32_t {
         if constexpr (do_positions) {
             const uint32_t entry = virtual_tile / Wt;
             const uint32_t column = virtual_tile - entry * Wt;
-            // Clamped BEFORE the split into bit fields: this kernel takes clamped >> 5, the writer
-            // takes clamped & 31 of the SAME value -- see PositionWindow::clamped_position for the
-            // full rationale (the clamp, the padding band, the out-of-bounds case).
-            //
-            // No separate Ht clamp is needed: validation pins the padded token dim to
-            // round_up(logical_tokens, 32), so clamped >> 5 <= Ht - 1 by construction.
+            // Clamped BEFORE the >> 5 / & 31 bit-field split shared with the writer (see
+            // PositionWindow::clamped_position). No separate Ht clamp is needed: validation pins
+            // the padded token dim to round_up(logical_tokens, 32).
             const uint32_t tile_row = positions.clamped_position(entry, logical_tokens) >> 5U;
             return (entry * Ht + tile_row) * Wt + column;
         } else {
@@ -92,13 +70,13 @@ void kernel_main() {
         }
     };
 
-    // A core's tile run is arbitrary in length, so the last block may be partial. All three kernels
-    // derive `current` the same way from (num_tiles, block_size) and stay in lockstep.
+    // Reader, compute and writer derive `current` identically and stay in lockstep.
     for (uint32_t t = 0U; t < num_tiles; t += block_size) {
         const uint32_t remaining = num_tiles - t;
         const uint32_t current = (remaining < block_size) ? remaining : block_size;
 
         if constexpr (do_positions) {
+            // Virtual tiles jump at entry boundaries, so pages are issued one at a time.
             cb_reserve_back(cb_logits_idx, current);
             uint32_t l1_addr = get_write_ptr(cb_logits_idx);
             for (uint32_t k = 0U; k < current; ++k) {
@@ -113,17 +91,16 @@ void kernel_main() {
         }
 
         if constexpr (do_logits_mask) {
-            // Mask page: entry * stride + column. With stride 0 (a [1, 1, 1, V] mask) every entry
-            // shares one tile row and the page is the COLUMN alone -- the original behavior. With
-            // stride Wt (a [B, 1, 1, V] per-row mask) each batch entry has its own tile row. Either
-            // way the mask's token dim is 1, so the compute kernel's ROW broadcast is unchanged.
+            // Mask page = entry * stride + column: stride 0 shares one tile row across entries,
+            // stride Wt gives each entry its own row. Token dim is 1 either way, so the compute
+            // kernel's row broadcast is unchanged.
             cb_reserve_back(cb_mask_idx, current);
             uint32_t l1_addr = get_write_ptr(cb_mask_idx);
             for (uint32_t k = 0U; k < current; ++k) {
                 const uint32_t global_tile = start_tile + t + k;
                 const uint32_t column = global_tile % Wt;
-                // Which batch entry this tile belongs to: in position mode the tile space is one
-                // virtual row per entry; otherwise each entry owns Ht consecutive tile rows.
+                // In position mode the tile space is one virtual row per entry; otherwise each
+                // entry owns Ht consecutive tile rows.
                 const uint32_t entry = do_positions ? (global_tile / Wt) : (global_tile / (Ht * Wt));
                 noc_async_read_page(entry * mask_entry_stride + column, mask_address_generator, l1_addr);
                 l1_addr += logits_tile_bytes;

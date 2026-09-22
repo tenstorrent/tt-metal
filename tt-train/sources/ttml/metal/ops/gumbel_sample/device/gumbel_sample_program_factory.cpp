@@ -31,8 +31,8 @@ constexpr uint32_t kReaderLogitsBufferIdx = 0U;
 constexpr uint32_t kReaderMaskBufferIdx = 1U;
 // writer runtime arg slots
 constexpr uint32_t kWriterOutputBufferIdx = 0U;
-// compute runtime arg slots. Slots 1 and 2 (skipped below) hold the rand from/scale bits --
-// process constants set once at build and never re-patched on cache hits, so no index names them.
+// compute runtime arg slots. Slots 1 and 2 hold the rand from/scale bits -- process constants set
+// once at build and never re-patched on cache hits, so no index names them.
 constexpr uint32_t kComputeSeedIdx = 0U;
 constexpr uint32_t kComputeInvTemperatureIdx = 3U;
 constexpr uint32_t kComputeRandStreamIdx = 4U;
@@ -43,71 +43,47 @@ constexpr auto kScoresCbIndex = tt::CBIndex::c_2;
 constexpr auto kOutputStagingCbIndex = tt::CBIndex::c_3;
 constexpr auto kRecordsCbIndex = tt::CBIndex::c_4;
 
-// Boundary-row partials exchanged between cores: [valid, row, 32 maxima, 32 indices]
-// padded to 288 bytes; valid and row are watcher/debug breadcrumbs the merge never reads. Each
-// split row is merged by the core holding its FIRST tile, so a core sends at most one record (its
-// first row's shard) and receives at most the row's shard fan-in -- see writer_gumbel_sample.cpp.
+// Boundary-row partials exchanged between cores: [valid, row, 32 maxima, 32 indices], padded to
+// 288 bytes -- see writer_gumbel_sample.cpp.
 constexpr uint32_t kRecordBytes = 72U * sizeof(uint32_t);
 
-// The reader carries Ht as a runtime arg at slot 4 (see reader_gumbel_sample.cpp), the writer does
-// not, so the positions BUFFER ADDRESS lands at a different slot in each kernel. These two MUST
-// stay independent -- equalizing them would make one kernel read a neighbouring arg as the
-// positions address.
+// The reader carries Ht at slot 4 and the writer does not, so the positions address lands at a
+// different slot in each kernel; the static_asserts below pin the layouts. Everything that derives
+// from the token dimension (Ht, logical tokens) or the mask shape (stride) is a RUNTIME arg so one
+// cached program serves every prompt length and both mask shapes.
 constexpr uint32_t kReaderHtIdx = 4U;
 constexpr uint32_t kReaderPositionsBufferIdx = 5U;
 constexpr uint32_t kWriterPositionsBufferIdx = 3U;
 static_assert(kReaderPositionsBufferIdx == kReaderHtIdx + 1U);
-// The writer's merge routing (owner x/y, send slot, expected shards) occupies the four slots after
-// the positions address.
+// The writer's merge routing (owner x/y, send slot, expected shards) follows its positions address.
 constexpr uint32_t kWriterMergeRoutingArgs = 4U;
-// Logical token count, appended LAST in both kernels so every earlier slot keeps its index. It
-// bounds the position clamp in both kernels (they consume disjoint bit fields of the SAME clamped
-// value, so both need it). A RUNTIME arg for the same reason Ht is: it derives from the token
-// dimension, which the program hash normalizes away in position mode -- as a compile-time arg it
-// would put every prompt length back on the JIT-miss path.
 constexpr uint32_t kReaderLogicalTokensIdx = 6U;
-// Per-entry mask-page stride: 0 for [1, 1, 1, V], Wt for a [B, 1, 1, V] per-row mask. Runtime so
-// both shapes share one program; re-derived from the mask's shape on every dispatch.
 constexpr uint32_t kReaderMaskStrideIdx = 7U;
 constexpr uint32_t kWriterLogicalTokensIdx = 8U;
 static_assert(kReaderLogicalTokensIdx == kReaderPositionsBufferIdx + 1U);
 static_assert(kReaderMaskStrideIdx == kReaderLogicalTokensIdx + 1U);
 static_assert(kWriterLogicalTokensIdx == kWriterPositionsBufferIdx + kWriterMergeRoutingArgs + 1U);
 
-// Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages
-// into L1, once at kernel start, only the entry WINDOW its contiguous tile run touches (see
-// PositionWindow in the op's kernels/dataflow/position_window.hpp; the CB sizing note below
-// derives the window bound).
+// Per-entry token positions live in a small device tensor; each kernel stages the entry window its
+// tile run touches into these CBs (see position_window.hpp).
 constexpr auto kReaderPositionsCbIndex = tt::CBIndex::c_5;
 constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 
-// Uniform draw bounds for the Gumbel transform g = -log(-log(U)).
-//
-// Lower bound 2^-32 caps the noise at g <= -log(-log(2^-32)) ~ -3.1 on the low side.
-//
-// The UPPER bound : `rand_tile` produces values on a CLOSED interval [from, from + scale],
-// so U == 1.0 is attainable, and then log(1) = 0, -log(0) = +inf, g = +inf, which pins the
-// argmax onto that token with certainty. It is a ~2^-32-per-element event, but it is a real one,
-// so here the top of the range is the largest float32 strictly below 1.0 and g stays FINITE --
-// that finiteness is the point of the bound. The ceiling itself is ~16.6 with an exact log; the
-// approximate log in gumbel_sfpu.h caps it lower, near 13.81.
-//
-// gumbel_sfpu.h's approximate log drops its zero guard on the strength of exactly these bounds --
-// change them only together with that header.
+// Uniform draw bounds for g = -log(-log(U)). The lower bound caps the noise at ~-3.1. The upper
+// bound must stay strictly below 1.0: rand_tile's interval is CLOSED, and U == 1.0 would make
+// g = +inf and pin the argmax onto that token. gumbel_sfpu.h's approximate log drops its zero
+// guard on the strength of exactly these bounds -- change them only together with that header.
 constexpr float kGumbelUniformLowerBound = 0x1p-32F;
 const float kGumbelUniformUpperBound = ttnn::operations::uniform::largest_supported_float32_below(1.0F);
 
-// Derived once per process, consumed by the cache-miss build. Deliberately NOT re-derived (or even
-// re-patched) on cache hits: the bounds are process constants, and a second derivation site is a
-// divergence trap -- a drift between the two would manifest only on cache hits, which single-shape
-// unit tests never exercise.
+// Derived once per process and consumed at build only; deliberately not re-derived on cache hits
+// (a second derivation site could silently drift, and only cache hits would see it).
 const uint32_t kRandFromBits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
 const uint32_t kRandScaleBits = ttml::metal::ops::gumbel_sample::device::compute_rand_scale_bits(
     kGumbelUniformLowerBound, kGumbelUniformUpperBound);
 
-// Linear index of this device among the SEEDED (data-parallel) mesh axes only. Devices that differ
-// solely on a replicated axis get the same index -- and therefore the same RNG stream -- which is
-// what keeps a tensor-parallel replica group in sync.
+// Linear index of this device among the SEEDED (data-parallel) mesh axes only: devices differing
+// solely on a replicated axis share an index, and therefore an RNG stream.
 uint32_t seeded_linear_index(
     const ttnn::MeshCoordinate& coord,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
@@ -148,7 +124,7 @@ struct GumbelSampleLayout {
     tt::tt_metal::CoreRangeSet all_cores;
     tt::tt_metal::CoreRangeSet core_group_1;
     tt::tt_metal::CoreRangeSet core_group_2;
-    uint32_t total_tiles{};  // the unit work is actually split over -- see below
+    uint32_t total_tiles{};  // the unit work is split over -- see compute_layout
     uint32_t tiles_per_core_group_1{};
     uint32_t tiles_per_core_group_2{};
     bool position_aware{};   // sample one row per batch entry instead of every row
@@ -176,16 +152,10 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits, bool position_awar
     const auto grid = device->compute_with_storage_grid_size();
     layout.num_cores_y = grid.y;
 
-    // Split over TILES, not tile rows. A row-based split yields only NC*Ht units, and in decode
-    // (tokens == 1 => Ht == 1) that is just the local batch: a few dozen units on an ~80 core grid,
-    // leaving most of it idle while each active core carried a whole vocabulary.
-    //
-    // When positions were supplied the tile space shrinks further, to one tile ROW per batch entry
-    // instead of Ht of them: a "virtual" tile vt maps to entry vt / Wt, column vt % Wt, and the
-    // reader turns that into the real page using the entry's position. Prefill hands this op the
-    // logits for every token position but only ever consumes one row per sequence, so this is an
-    // Ht-fold cut in tiles read, reduced and DRAM-touched -- at tokens = 448 that is 14x, and it
-    // brings prefill sampling down to decode cost regardless of context length.
+    // Split over TILES, not tile rows: in decode a row-based split leaves most of the grid idle.
+    // With positions the tile space shrinks to one VIRTUAL tile row per batch entry (entry vt / Wt,
+    // column vt % Wt; the reader maps to the real page via the entry's position) -- an Ht-fold cut
+    // that brings prefill sampling down to decode cost regardless of context length.
     layout.total_tiles = position_aware ? (NC * layout.Wt) : (layout.total_rows * layout.Wt);
 
     auto [num_cores, all_cores, group_1, group_2, tiles_1, tiles_2] =
@@ -238,10 +208,8 @@ void for_each_core_with_work(
     }
 }
 
-// Per-core work assignment, MATERIALIZED (unlike most ops' walk-and-set) because the merge
-// routing below searches backward through earlier cores for a split row's owner. Single-sourced
-// from the walk so the cache-miss build and the cache-hit patch derive identical
-// (core, tiles, start) triples -- and therefore identical RNG streams.
+// Materialized (unlike most ops' walk-and-set) because the merge routing searches backward through
+// earlier cores for a split row's owner.
 std::vector<GumbelCoreWork> core_layout(const GumbelSampleLayout& layout) {
     std::vector<GumbelCoreWork> work;
     work.reserve(layout.num_cores);
@@ -256,14 +224,14 @@ std::vector<GumbelCoreWork> core_layout(const GumbelSampleLayout& layout) {
     return work;
 }
 
-// Domain-separate the RNG per (device, core). rand_tile_init folds stream_id into the seed, so
-// distinct stream ids give disjoint deterministic streams; devices that share a stream id (replicas
-// on a non-seeded axis) intentionally draw identical noise.
+// Domain-separates the RNG per (device, core); replicas on non-seeded axes intentionally share a
+// stream.
 uint32_t rand_stream_id(const GumbelSampleLayout& layout, uint32_t device_index, uint32_t start_tile) {
     return device_index * layout.total_tiles + start_tile;
 }
 
-// Runtime-arg values the cache-miss build and the cache-hit patch must derive IDENTICALLY
+// Runtime-arg values the cache-miss build and the cache-hit patch must derive IDENTICALLY -- one
+// derivation site, deliberately layout-free so the cache-hit path never recomputes the split.
 struct DerivedRuntimeArgs {
     uint32_t inv_temperature_bits{};
     uint32_t positions_address{};
@@ -272,19 +240,12 @@ struct DerivedRuntimeArgs {
 
 DerivedRuntimeArgs derive_runtime_args(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     DerivedRuntimeArgs derived{};
-    // Guard the reciprocal: only computed when the noisy kernel will read it. uses_gumbel_noise
-    // guarantees the reciprocal is FINITE here (that is the predicate's whole point) and matches
-    // the program hash, so a cached program is never patched with the other variant's args; greedy
-    // gets a zero because an inf sitting in a runtime arg is a trap for anyone who later makes it
-    // read it.
+    // uses_gumbel_noise guarantees the reciprocal is finite; greedy gets 0, not inf.
     derived.inv_temperature_bits =
         uses_gumbel_noise(args.temperature) ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
-    // Zero when absent: the slot exists in BOTH modes so the cache-hit patch can write it
-    // unconditionally, exactly as it does for Ht.
+    // Zero when absent: the slot exists in both modes so the cache-hit patch is unconditional.
     derived.positions_address = tensor_args.positions.has_value() ? tensor_args.positions->buffer()->address() : 0U;
-    // Wt read straight off the logits shape (== layout.Wt) rather than from the layout, per the
-    // no-layout rule above. Re-derived per dispatch because one cached program serves both mask
-    // shapes (shared [1,1,1,V] <-> per-row [B,1,1,V]).
+    // 0 for a shared [1,1,1,V] mask, Wt for per-row [B,1,1,V]; one cached program serves both.
     derived.mask_entry_stride =
         (tensor_args.logits_mask.has_value() && tensor_args.logits_mask->logical_shape()[0] > 1U)
             ? (tensor_args.logits.padded_shape()[-1] / tt::constants::TILE_WIDTH)
@@ -308,14 +269,9 @@ tt::tt_metal::Program build_program(
     const uint32_t logits_tile_bytes = tt::tile_size(logits_format);
     const uint32_t score_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
 
-    // -------------------------------------------------------------------------
-    // Split-row merge routing. The owner of a row is the core holding its FIRST tile; the split
-    // hands each core one contiguous tile range, so a core can hold a foreign shard only of its
-    // first row (=> at most one record to send) and can own a split row only as its last (=> one
-    // wait). Senders to a given owner are enumerated in core order, which hands each one a
-    // collision-free slot in the owner's records CB. Derived from the same core_layout as the
-    // work-split runtime args, so the two can never disagree.
-    // -------------------------------------------------------------------------
+    // Split-row merge routing. A row's owner is the core holding its FIRST tile; the contiguous
+    // split means a core sends at most one record and runs at most one merge. Senders to an owner
+    // are enumerated in core order, giving each a collision-free slot in the owner's records CB.
     const auto work = core_layout(layout);
     std::vector<uint32_t> expected_shards(layout.num_cores, 0U);
     std::vector<std::array<uint32_t, 3U>> send_routing(layout.num_cores, {0U, 0U, 0U});  // x, y, slot
@@ -334,10 +290,8 @@ tt::tt_metal::Program build_program(
         ++expected_shards[owner];
     }
     const uint32_t max_foreign_shards = *std::max_element(expected_shards.begin(), expected_shards.end());
-    // Every sender's run BEGINS strictly inside the owned row's Wt tiles, and consecutive starts
-    // are at least the smaller group's tile count apart, which bounds the fan-in by the split
-    // rather than the core count. The CB is sized from the exact fan-in above; this guards the
-    // derivation against a work-split change.
+    // The fan-in is bounded by the split, not the core count; this guards the derivation against a
+    // work-split change (the records CB is sized from the exact fan-in above).
     const uint32_t min_tiles_per_core =
         layout.core_group_2.ranges().empty()
             ? layout.tiles_per_core_group_1
@@ -349,10 +303,7 @@ tt::tt_metal::Program build_program(
         layout.Wt,
         min_tiles_per_core);
 
-    // -------------------------------------------------------------------------
-    // Circular buffers. Peak L1 is a handful of tiles regardless of V: this is the whole point of
-    // the fusion -- avoiding materializing several full [B, 1, tokens, V] tensors in DRAM.
-    // -------------------------------------------------------------------------
+    // Circular buffers. Peak L1 is a handful of tiles regardless of V -- the point of the fusion.
     const uint32_t streamed_tiles = 2U * layout.block_size;  // double-buffered
 
     create_circular_buffer(program, layout.all_cores, kLogitsCbIndex, logits_format, logits_tile_bytes, streamed_tiles);
@@ -360,14 +311,10 @@ tt::tt_metal::Program build_program(
         create_circular_buffer(
             program, layout.all_cores, kMaskCbIndex, logits_format, logits_tile_bytes, streamed_tiles);
     }
-    // Scores stay FP32: the Gumbel noise is generated in FP32 and a bf16 round trip here would
-    // quantize the very comparisons the argmax is about to make.
+    // Scores stay FP32: a bf16 round trip would quantize the very comparisons the argmax makes.
     create_circular_buffer(
         program, layout.all_cores, kScoresCbIndex, tt::DataFormat::Float32, score_tile_bytes, streamed_tiles);
-    // Staging for the writer's output ring: 32 token ids, each in its own NOC-aligned slot (see
-    // kOutputSlotBytes in the writer kernel). The writer rotates through the slots and barriers
-    // only when recycling one (and once at kernel end), so up to 32 page writes ride behind each
-    // flush regardless of how the rows that produced them were grouped.
+    // The writer's output ring: 32 token ids, each in its own NOC-aligned slot.
     constexpr uint32_t kOutputSlotBytes = 32U;
     create_circular_buffer_bytes(
         program,
@@ -376,9 +323,7 @@ tt::tt_metal::Program build_program(
         tt::DataFormat::UInt32,
         tt::constants::TILE_HEIGHT * kOutputSlotBytes);
 
-    // Boundary-row partials: `max_foreign_shards` receive slots for the one row this core may own,
-    // plus one staging slot for the record it may send. Sized by the actual split fan-in (a few
-    // records), never by the core count.
+    // Boundary-row partials: receive slots plus one staging slot for the outgoing record.
     create_circular_buffer_bytes(
         program,
         layout.all_cores,
@@ -386,18 +331,10 @@ tt::tt_metal::Program build_program(
         tt::DataFormat::UInt32,
         (max_foreign_shards + 1U) * kRecordBytes);
 
-    // Positions staging. One ALIGNED page per entry, not four packed bytes: a DRAM read moves a
-    // whole aligned page, and the NOC requires the L1 destination to match the DRAM alignment
-    // (64 B on Blackhole) rather than L1's own -- see the alignment_mask logic in
-    // hw/inc/internal/debug/sanitize.h.
-    //
-    // Each core stages only the entry WINDOW its contiguous tile run touches (see PositionWindow
-    // in the op's kernels/dataflow/position_window.hpp): a run of n tiles spans at most
-    // (n - 1) / Wt + 2 entries. Sized by
-    // the LARGER core group so one CB config serves both; cores with smaller windows leave the
-    // tail unused. Sizing by num_entries instead would make the positions footprint -- L1 bytes
-    // AND per-core staging page reads, in BOTH kernels -- scale with the global batch rather than
-    // a core's share of it.
+    // Positions staging: one ALIGNED page per entry (the NOC requires the L1 destination to match
+    // the DRAM alignment), sized for the larger core group's entry window -- a run of n tiles
+    // spans at most (n - 1) / Wt + 2 entries. Sizing by num_entries instead would scale the L1 and
+    // read footprint with the global batch rather than a core's share of it.
     if (layout.position_aware) {
         const uint32_t slot_bytes = static_cast<uint32_t>(tensor_args.positions->buffer()->aligned_page_size());
         const uint32_t max_local_entries =
@@ -408,32 +345,21 @@ tt::tt_metal::Program build_program(
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Kernels
-    // -------------------------------------------------------------------------
+    // Kernels.
     auto* logits_buffer = logits.buffer();
     auto* mask_buffer = has_mask ? tensor_args.logits_mask->buffer() : nullptr;
     auto* output_buffer = output.buffer();
 
-    // Greedy vs noisy is decided by uses_gumbel_noise, NOT a bare `temperature > 0`: a positive
-    // temperature whose reciprocal overflows float32 (below ~2.9e-39) must build the greedy kernel,
-    // or the +inf scale factor collapses every positive logit to one bit pattern and the argmax
-    // degenerates to "first positive column". The hash uses the same predicate.
+    // Greedy vs noisy is decided by uses_gumbel_noise, NOT `temperature > 0`: a positive
+    // temperature whose reciprocal overflows float32 must build the greedy kernel. The program
+    // hash uses the same predicate.
     const bool do_gumbel_noise = uses_gumbel_noise(args.temperature);
 
-    // Mode flags (mask / noise / positions) travel as compile-time args rather than -D defines.
-    // The two are equivalent to the JIT -- both are -D macros on the compile line, both hashed
-    // into the kernel-binary identity -- so this is purely about keeping every compile-time input
-    // in one channel. Each kernel reads its flags PAST its accessor chain, at
-    // next_compile_time_args_offset(), so the hand-numbered accessor offsets never move when a
-    // flag is added; the appends below must match each kernel's read order.
-
-    // Ht is NOT here: it is a runtime arg, so that one program serves every prompt length. Keep this
-    // count in step with TensorAccessorArgs<N> in reader_gumbel_sample.cpp -- the accessor offset is
-    // hard-coded there and the mask accessor chains off it, so a mismatch misdecodes the accessor
-    // words (page size read as the config flags) instead of failing to compile. Anything derived
-    // from the token dimension must never land in a compile-time arg here; that is what the
-    // normalized program hash depends on.
+    // Compile-time args. Keep the leading count in step with TensorAccessorArgs<N> in each kernel:
+    // the accessor offsets are hard-coded there and further accessors chain off them, so a
+    // mismatch misdecodes the accessor words rather than failing to compile. Mode flags are
+    // appended past the accessor chain, matching each kernel's read order. Nothing derived from
+    // the token dimension may be a compile-time arg -- the normalized program hash depends on it.
     std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt};
     tt::tt_metal::TensorAccessorArgs(logits_buffer).append_to(reader_ct_args);
     if (has_mask) {
@@ -441,8 +367,7 @@ tt::tt_metal::Program build_program(
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(reader_ct_args);
     }
-    // The null append is mandatory in the non-position case: without it the accessor chain's length
-    // becomes mode-dependent and the next accessor misdecodes its page size as the config flags.
+    // The null appends keep the accessor chain's length mode-independent.
     if (layout.position_aware) {
         tt::tt_metal::TensorAccessorArgs(tensor_args.positions->buffer()).append_to(reader_ct_args);
     } else {
@@ -453,30 +378,15 @@ tt::tt_metal::Program build_program(
     shared_vars.reader_kernel_id =
         create_reader_kernel(program, layout.all_cores, reader_ct_args, {}, kReaderKernelPath);
 
-    // Each split row's owner counts its senders on its own copy of this semaphore; cores that own
-    // nothing never wait on it.
+    // Each split row's owner counts its senders on its own copy of this semaphore.
     const uint32_t reduction_sem_id = tt::tt_metal::CreateSemaphore(program, layout.all_cores, 0);
 
-    // Keep this count in step with TensorAccessorArgs<5> in writer_gumbel_sample.cpp -- the
-    // accessor offset is hard-coded there and the positions accessor chains off it, so a mismatch
-    // misdecodes the accessor words (page size read as the config flags) instead of failing to
-    // compile.
     std::vector<uint32_t> writer_ct_args{
         layout.Wt,
         layout.logical_vocab,
-        // logical_tokens is NOT here: it rides as a runtime arg in both modes (see
-        // kWriterLogicalTokensIdx) -- in position mode it must stay out of the program-cache key,
-        // and in non-position mode its uses are multiplies and compares that gain nothing from
-        // being constexpr. Ht cannot follow it: the writer divides by Ht, which folds to
-        // shift/multiply only for a compile-time constant.
-        //
-        // Ht is dead in position mode -- its only uses sit past unconditional returns -- but a
-        // compile-time arg is hashed into the kernel binary whether it is read or not, so it is
-        // pinned to keep the build independent of the token dimension. ONE, never zero: the dead
-        // fallback divides by Ht in code that is still compiled, and the JIT builds with
-        // -Wall -Werror, so a zero here is a -Werror=div-by-zero build failure. At 1 the dead path
-        // degenerates to exactly what the position path does, which keeps it harmless if the guard
-        // is ever refactored away.
+        // Ht is dead in position mode but still hashed into the binary, so it is pinned to keep
+        // the build token-independent. ONE, never zero: the dead fallback divides by Ht in code
+        // that is still compiled, and a zero is a -Werror=div-by-zero build failure.
         layout.position_aware ? 1U : layout.Ht,
         reduction_sem_id,
         max_foreign_shards};
@@ -490,15 +400,12 @@ tt::tt_metal::Program build_program(
     shared_vars.writer_kernel_id =
         create_writer_kernel(program, layout.all_cores, writer_ct_args, {}, kWriterKernelPath);
 
-    // FLOAT32 logits (and the mask, which validation pins to the same dtype) unpack STRAIGHT INTO
-    // DST rather than through the 19-bit SrcA registers, which would round them to TF32 (10
-    // mantissa bits) and decide greedy argmax near-ties differently from ttnn::argmax. This is
-    // host-side only: with the mode set, the generated unpack formats make the kernel's copy_tile
-    // take the unpack-to-dest path (should_unpack_to_dest in cunpack_common.h gates on exactly
-    // this). BFLOAT16 fits losslessly in TF32, so it stays on the default SrcA path. The mode
-    // follows the logits dtype, which is already in the program hash, so cached programs stay
-    // consistent. This is why the compute kernels are built with a bespoke ComputeConfig rather
-    // than through create_compute_kernel, which does not expose unpack_to_dest_mode.
+    // FLOAT32 logits (and the mask, validated to the same dtype) unpack straight into DST instead
+    // of through the 19-bit SrcA registers, which would round them to TF32 and decide greedy
+    // argmax near-ties differently from ttnn::argmax. Host-side only: the mode flips the generated
+    // unpack formats that copy_tile's unpack-to-dest path gates on. bf16 fits losslessly in TF32
+    // and stays on the default path. Built with a bespoke ComputeConfig because
+    // create_compute_kernel does not expose unpack_to_dest_mode.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (logits.dtype() == tt::tt_metal::DataType::FLOAT32) {
@@ -525,9 +432,7 @@ tt::tt_metal::Program build_program(
             create_gumbel_compute_kernel(layout.core_group_2, layout.tiles_per_core_group_2);
     }
 
-    // -------------------------------------------------------------------------
-    // Runtime args
-    // -------------------------------------------------------------------------
+    // Runtime args.
     const auto [inv_temperature_bits, positions_address, mask_entry_stride] = derive_runtime_args(args, tensor_args);
 
     shared_vars.core_info.reserve(layout.num_cores);
@@ -616,14 +521,11 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const auto& logits = tensor_args.logits;
     const bool has_mask = tensor_args.logits_mask.has_value();
 
-    // Deliberately NO compute_layout / core_layout here: the work split and everything derived
-    // from it (per-core tile runs, merge routing, RNG stream ids, core-group membership) is a
-    // function of hashed quantities only, so it was derived once at build time and cached in the
-    // shared variables. This op dispatches once per generated token; re-deriving the split would
-    // pay a device grid query, split_work_to_cores and per-core CoreRangeSet scans on every one of
-    // those dispatches. The only layout values that CAN differ under the same program hash are the
-    // token-dimension pair below (position mode normalizes the token dim away), and they are plain
-    // shape reads.
+    // Deliberately NO compute_layout / core_layout here: the work split is a function of hashed
+    // quantities only and was cached in the shared variables at build; this op dispatches once per
+    // generated token, so re-deriving it would be paid on every dispatch. The only layout values
+    // that can differ under the same program hash are the token-dimension pair below (position
+    // mode normalizes the token dim away), and both are plain shape reads.
     const uint32_t Ht = logits.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t logical_tokens = logits.logical_shape()[-2];
 
@@ -631,13 +533,10 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const uint32_t mask_address = has_mask ? tensor_args.logits_mask->buffer()->address() : 0U;
     const uint32_t output_address = tensor_return_value.buffer()->address();
 
-    // seed and temperature are runtime-only (deliberately excluded from the program hash so that
-    // changing either reuses the cached program), so they must be re-applied on every cache hit
-    // alongside the buffer addresses -- from the SAME derivation build_program used (see
-    // derive_runtime_args). A temperature whose kernel selection CHANGED (crossing zero or the
-    // reciprocal-overflow floor) hashes to a different program anyway, so a cached program is never
-    // patched with the wrong variant's args. The rand from/scale bits are process constants baked
-    // at build time (kRandFromBits/kRandScaleBits) and are not re-patched.
+    // seed and temperature are runtime-only (excluded from the program hash so changing either
+    // reuses the cached program) and must be re-applied on every hit, from the SAME derivation the
+    // build used. A temperature whose kernel selection changed hashes to a different program, so a
+    // cached program is never patched with the wrong variant's args.
     const auto [inv_temperature_bits, positions_address, mask_entry_stride] =
         derive_runtime_args(operation_attributes, tensor_args);
 
@@ -650,34 +549,19 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
         auto& compute_g2_args =
             vars.has_compute_group_2 ? GetRuntimeArgs(program, vars.compute_kernel_group_2_id) : compute_g1_args;
 
-        // The merge routing (owner coords, slot, expected shard count) and the per-core tile runs
-        // are not re-patched here: they are properties of the work split, which is identical on
-        // every dispatch. Only the buffer addresses, the token-dimension pair, the seed and the
-        // temperature change.
+        // The merge routing and per-core tile runs are split properties, identical on every
+        // dispatch, and are not re-patched. Everything patched below is either a buffer address or
+        // token-derived: replayed stale, a cached program would read real but WRONG rows/pages --
+        // in bounds, no fault, silently wrong samples.
         for (const auto& info : vars.core_info) {
             const auto& core = info.core;
             {
                 auto& core_args = reader_args[core.x][core.y];
                 core_args[kReaderLogitsBufferIdx] = logits_address;
                 core_args[kReaderMaskBufferIdx] = mask_address;
-                // Ht is runtime-only (deliberately out of the program hash in position mode) so it
-                // must be re-applied on every cache hit. This is unconditional only because the
-                // reader emits the slot in BOTH modes. Were it appended for position mode alone,
-                // decode's arg vector would stop at four words and this line would write one past
-                // the end -- and RuntimeArgsData's bounds check is a TT_ASSERT that compiles away in
-                // Release, so it would land silently in the packed dispatch command.
                 core_args[kReaderHtIdx] = Ht;
-                // The positions BUFFER moves between dispatches (each prefill builds a new one), and
-                // a cached program replayed against a stale address reads whatever DRAM now occupies
-                // that region -- in bounds, no fault, a plausible-looking token. This patch prevents that.
                 core_args[kReaderPositionsBufferIdx] = positions_address;
-                // Like Ht: runtime-only and token-derived, so a cached program replayed without
-                // this patch would clamp positions against a STALE token count -- either rejecting
-                // valid rows or readmitting the padding band the clamp exists to keep out.
                 core_args[kReaderLogicalTokensIdx] = logical_tokens;
-                // Re-derived per dispatch: the SAME cached program serves both mask shapes, so a
-                // dispatch that switches between a shared and a per-row mask must re-patch the stride
-                // or the reader would walk the wrong mask pages -- in bounds, silently wrong rows.
                 core_args[kReaderMaskStrideIdx] = mask_entry_stride;
             }
             {
