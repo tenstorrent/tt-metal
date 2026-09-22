@@ -27,6 +27,7 @@ from models.tt_dit.utils.ltx import (
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
+    traced_default,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
@@ -77,6 +78,7 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
 )
 def test_pipeline_distilled(
     mesh_device,
+    device_params,
     sp_axis,
     tp_axis,
     num_links,
@@ -107,7 +109,9 @@ def test_pipeline_distilled(
     width = int(os.environ.get("WIDTH", "1920"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
-    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    # Traced by default wherever the mesh param reserves a trace region; LTX_TRACED=0/1 overrides
+    # (rule + rationale: utils.ltx.traced_default, unit-tested in tests/unit/test_ltx_traced_default.py).
+    traced = traced_default(device_params, os.environ.get("LTX_TRACED"))
 
     # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
     # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
@@ -198,13 +202,14 @@ def test_pipeline_distilled(
     # RUN_CLIP=0 skips the CLIP prompt-alignment gate; defaults on (mirrors the wan2.2 test).
     run_clip = os.environ.get("RUN_CLIP", "1") in ("1", "true", "True")
 
-    # An enabled quality gate whose deps are absent must report SKIPPED (visible), never a silent
-    # green pass. Unguarded by rank on purpose: dep availability is per-process (same venv on every
-    # rank), and a rank-divergent skip would hang the collective generate().
-    if run_vbench:
-        pytest.importorskip("vbench", reason="RUN_VBENCH=1 but vbench not installed (set RUN_VBENCH=0)")
+    export_dir = os.environ.get("VBENCH_EXPORT_DIR")
+    if export_dir and not run_vbench:
+        raise ValueError("VBENCH_EXPORT_DIR requires RUN_VBENCH=1")
+    # Missing dependencies must fail an enabled gate, including in CI.
+    if run_vbench and not export_dir:
+        __import__("vbench")
     if run_clip:
-        pytest.importorskip("decord", reason="RUN_CLIP=1 but decord not installed (set RUN_CLIP=0)")
+        __import__("decord")
 
     def check_output_with_vbench(prompt, number, seed=None):
         if not run_vbench:
@@ -222,6 +227,8 @@ def test_pipeline_distilled(
         # the rest are cheap warm replays. A single-clip caller (no seed) or OUTPUT_PATH (one pinned
         # filename) keeps the one-clip path.
         num_seeds = int(os.environ.get("VBENCH_SEEDS", "5"))
+        if export_dir and (seed is None or num_seeds != 5 or os.environ.get("OUTPUT_PATH")):
+            raise ValueError("CI VBench export requires five distinct traced seed clips")
         if seed is None or num_seeds <= 1 or os.environ.get("OUTPUT_PATH"):
             output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
@@ -245,7 +252,18 @@ def test_pipeline_distilled(
                 run(prompt=prompt, number=1000 + k, seed=seed + k)
                 _link(k, 1000 + k)
             logger.info(f"VBench gate averaged over {num_seeds} seeds (base seed {seed})")
-            assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
+            if export_dir:
+                from models.tt_dit.utils.vbench_bundle import export_bundle
+
+                export_bundle(
+                    vbench_dir,
+                    export_dir,
+                    prompt=prompt,
+                    thresholds=thresholds,
+                    temporal_width=int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0")),
+                )
+            else:
+                assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
 
     def check_output_with_clip(prompt, number, clip_threshold=None):
         # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each

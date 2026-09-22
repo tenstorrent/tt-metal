@@ -1041,3 +1041,21 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, error_msg, 
         assert torch.allclose(
             torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
         ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+def test_reduce_int32_identity_scalar_is_not_lossy(device):
+    """An Int32 reduce with scalar=1.0 must stay bit-exact above 2^24.
+
+    One program now serves every scalar, so the post-multiply is compiled in even when the caller
+    passes none, and it brackets Int32 with fp32 typecasts. The kernel must skip a 1.0f scalar at
+    runtime rather than execute a lossy multiply-by-one.
+    """
+    # 31 * 2^20 + (2^20 + 1) == 2^25 + 1, not representable in fp32 (ulp at 2^25 is 4).
+    row = torch.full((32,), 1048576, dtype=torch.int32)
+    row[0] = 1048577
+    torch_a = row.reshape(1, 1, 1, 32).expand(1, 1, 32, 32).contiguous()
+
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.int32)
+    tt_out = ttnn.to_torch(ttnn.sum(tt_a, dim=-1, keepdim=True, scalar=1.0))
+
+    assert torch.all(tt_out == 2**25 + 1)

@@ -38,7 +38,7 @@ jobs:
             slack_channel: "C0B7VTPPMRD"  # SLACK_BOT_TOKEN bot must be a member of this channel
             workflows:  # file names; must be shell-safe (no spaces) — passed unquoted to --workflows
               - blackhole-e2e-tests.yaml
-              - t3000-e2e-tests.yaml
+              - t3000-tests.yaml
               - blaze-models-prefill-tests.yaml
               - demo-sp-release.yaml
     steps:

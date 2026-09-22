@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -153,7 +154,7 @@ def test_owner_id_change_needs_no_hardware(repo: Repo):
     code, payload, _ = repo.scope()
     assert code == 0
     assert payload["status"] == "no_op"
-    assert payload["metadata_only"] == ["tests/pipeline_reorg/sample_unit_tests.yaml: unit alpha | arch=wormhole_b0"]
+    assert payload["metadata_only"] == ["tests/pipeline_reorg/sample_unit_tests.yaml: unit alpha"]
 
 
 def test_team_change_needs_no_hardware(repo: Repo):
@@ -406,8 +407,9 @@ def test_duplicate_composite_key_fails_closed(repo: Repo):
     assert "share the key" in stderr
 
 
-def test_id_disambiguates_same_name(repo: Repo):
-    """Unique ids distinguish same-name entries that run on different SKUs."""
+def test_same_name_on_different_skus_fails_closed(repo: Repo):
+    """Identity is (name, gtest_shard_index), so a distinct `id` no longer rescues
+    two entries that share a name."""
     same_name = textwrap.dedent(
         """\
         - id: unit-shared-wh
@@ -430,25 +432,48 @@ def test_id_disambiguates_same_name(repo: Repo):
         """
     )
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_name)
-    repo.commit_base()
-    repo.write(
-        "tests/pipeline_reorg/sample_unit_tests.yaml",
-        same_name.replace("./build/test/shared-bh", "./build/test/shared-bh --extra"),
-    )
-    code, payload, _ = repo.scope()
-    assert code == 0
-    assert payload["expected_leg_count"] == 1
-    assert payload["run_legs"][0]["sku"] == "bh_p150"
-    assert payload["run_legs"][0]["id"] == "unit-shared-bh"
+    code, _, stderr = repo.scope()
+    assert code == 1
+    assert "share the key" in stderr
 
 
-def test_duplicate_name_without_ids_still_fails_closed(repo: Repo):
-    """Yamls that declare no id keep keying on name alone, so the guard still bites."""
+def test_duplicate_name_fails_closed(repo: Repo):
+    """Two entries with one name are ambiguous, so the gate refuses rather than guess."""
     duplicated = BASE_GALAXY_YAML + BASE_GALAXY_YAML
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", duplicated)
     code, _, stderr = repo.scope()
     assert code == 1
     assert "share the key" in stderr
+
+
+def test_duplicates_already_on_the_base_do_not_fail_the_pr_that_fixes_them(repo: Repo):
+    """The guard applies to the head, not to the history it is cleaning up.
+
+    Erroring on the base would make the rule unlandable: the PR that renames the
+    duplicates is itself diffed against a base that still has them. Both renamed
+    entries read as added, so their legs run.
+    """
+    entry = textwrap.dedent(
+        """\
+        - name: shared name
+          cmd: ./build/test/shared
+          skus:
+            wh_n150_civ2:
+              timeout: 5
+          team: llk
+          owner_id: U006
+        """
+    )
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", entry + entry)
+    repo.commit_base()
+    repo.write(
+        "tests/pipeline_reorg/sample_unit_tests.yaml",
+        entry + entry.replace("shared name", "shared name (two)"),
+    )
+    code, payload, stderr = repo.scope()
+    assert code == 0, stderr
+    assert {leg["name"] for leg in payload["run_legs"]} == {"shared name", "shared name (two)"}
+    assert {leg["reason"] for leg in payload["run_legs"]} == {"added"}
 
 
 def test_entry_without_skus_fails_closed(repo: Repo):
@@ -557,8 +582,9 @@ def test_filter_keeps_only_the_touched_legs(repo: Repo):
     assert {r["sku"] for r in payload["legs"]} == {"wh_n150_civ2", "wh_n300_civ2"}
 
 
-def test_filter_matches_same_name_rows_by_id(repo: Repo):
-    """Two entries sharing a name and a SKU resolve to their own rows, not a collision."""
+def test_same_name_same_sku_fails_closed(repo: Repo):
+    """Nothing downstream could tell the legs apart, so the gate refuses the yaml
+    rather than resolving one arbitrarily."""
     same_sku = textwrap.dedent(
         """\
         - name: shared name
@@ -581,15 +607,13 @@ def test_filter_matches_same_name_rows_by_id(repo: Repo):
         """
     )
     repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_sku)
-    repo.commit_base()
-    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_sku.replace("--two", "--two --extra"))
     rows = [
         matrix_row("shared name [bh_p150]", "bh_p150", id="shared-one"),
         matrix_row("shared name [bh_p150]", "bh_p150", id="shared-two"),
     ]
-    code, payload, stderr = run_with_matrices(repo, {"sample_unit_tests": rows})
-    assert code == 0, stderr
-    assert [row["id"] for row in payload["legs"]] == ["shared-two"]
+    code, _, stderr = run_with_matrices(repo, {"sample_unit_tests": rows})
+    assert code == 1
+    assert "share the key" in stderr
 
 
 def test_filter_fails_when_a_leg_has_no_matrix_row(repo: Repo):
@@ -816,7 +840,7 @@ def test_codeowners_team_only_path_yields_no_individuals(repo: Repo):
 # --- owner review gating -----------------------------------------------------
 
 
-def run_reviews(repo: Repo, reviews: list, head_sha: str = "headsha"):
+def run_reviews(repo: Repo, reviews: list):
     """Invoke the gate directly with review data stubbed at the API boundary."""
     spec = importlib.util.spec_from_file_location("gate", SCRIPT)
     gate = importlib.util.module_from_spec(spec)
@@ -841,69 +865,79 @@ def run_reviews(repo: Repo, reviews: list, head_sha: str = "headsha"):
         "o/r",
         "--pr",
         "1",
-        "--head-sha",
-        head_sha,
         "--output",
         "result.json",
     ]
     (repo.root / "empty").mkdir(exist_ok=True)
     (repo.root / "empty/placeholder.json").write_text("[]")
+    step_output = repo.root / "step-output"
+    step_output.write_text("")
     stdout, stderr = io.StringIO(), io.StringIO()
     with pytest.MonkeyPatch.context() as patch, redirect_stdout(stdout), redirect_stderr(stderr):
         patch.chdir(repo.root)
-        patch.setenv("GITHUB_OUTPUT", str(repo.root / "github-output"))
+        patch.setenv("GITHUB_OUTPUT", str(step_output))
         patch.setattr(gate, "fetch_reviews", lambda *_: reviews)
         code = gate.main(argv)
-    return code, stdout.getvalue(), stderr.getvalue()
+    outputs = dict(
+        line.split("=", 1) for line in step_output.read_text().splitlines() if "=" in line and not line.startswith(" ")
+    )
+    return code, stdout.getvalue(), stderr.getvalue(), outputs
 
 
 def test_approval_from_the_files_own_code_owner_satisfies_the_gate(repo: Repo):
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
-    code, stdout, stderr = run_reviews(
+    code, stdout, stderr, outputs = run_reviews(
         repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "mtairum"}}]
     )
     assert code == 0, stderr
+    assert outputs["review-met"] == "true"
     assert "approved by: @mtairum" in stdout
-    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
 
 
 def test_approval_from_an_unrelated_owner_does_not_satisfy_the_gate(repo: Repo):
     """roseli-TT owns the directory, but this file has its own more specific owners."""
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
-    code, _, stderr = run_reviews(repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "roseli-TT"}}])
+    code, _, stderr, outputs = run_reviews(
+        repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "roseli-TT"}}]
+    )
     assert code == 0, stderr
-    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
+    assert outputs["review-met"] == "false"
     assert "@mtairum" in stderr
 
 
-def test_approval_on_an_earlier_commit_survives_a_push(repo: Repo):
-    """Match the existing policy: main does not dismiss approvals on a push."""
+def test_approval_on_an_earlier_commit_still_counts(repo: Repo):
+    """dismiss_stale_reviews_on_push is false on main, so GitHub keeps the approval
+    standing and the gate does not second-guess it."""
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
-    code, _, stderr = run_reviews(repo, [{"state": "APPROVED", "commit_id": "oldsha", "user": {"login": "mtairum"}}])
+    code, stdout, stderr, outputs = run_reviews(
+        repo, [{"state": "APPROVED", "commit_id": "oldsha", "user": {"login": "mtairum"}}]
+    )
     assert code == 0, stderr
-    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
+    assert outputs["review-met"] == "true"
+    assert "approved by: @mtairum" in stdout
 
 
 def test_team_owned_path_falls_back_to_any_approval(repo: Repo):
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_team_tests.yaml", BASE_GALAXY_YAML)
-    code, stdout, stderr = run_reviews(
+    code, stdout, stderr, outputs = run_reviews(
         repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "anyone"}}]
     )
     assert code == 0, stderr
+    assert outputs["review-met"] == "true"
     assert "falling back to the normal CODEOWNERS review requirement" in stdout
-    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
 
 
-def test_team_owned_path_with_no_approval_still_blocks(repo: Repo):
+def test_team_owned_path_with_no_approval_reports_unmet(repo: Repo):
+    """The gate reports the unmet review; the branch ruleset is what blocks the merge."""
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_team_tests.yaml", BASE_GALAXY_YAML)
-    code, _, stderr = run_reviews(repo, [])
+    code, _, stderr, outputs = run_reviews(repo, [])
     assert code == 0, stderr
-    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
+    assert outputs["review-met"] == "false"
     assert "a code owner" in stderr
 
 
@@ -914,9 +948,9 @@ def test_unsupported_yaml_is_blocked_not_skipped(repo: Repo):
     """vllm entries carry no cmd, so they route to review rather than passing."""
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", BASE_GALAXY_YAML.replace("wh_galaxy", "bh_p150"))
-    code, _, stderr = run_reviews(repo, [])
+    code, _, stderr, outputs = run_reviews(repo, [])
     assert code == 0, stderr
-    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
+    assert outputs["review-met"] == "false"
     assert "sample_vllm_tests.yaml" in stderr
 
 
@@ -1116,3 +1150,79 @@ def test_missing_skip_list_is_not_fatal(repo: Repo):
     code, payload, stderr = run_with_skips(repo, {"sample_sim_tests": rows})
     assert code == 0, stderr
     assert all(r.get("gate_pytest_deselect", "") == "" for r in payload["legs"] if r["sku"].startswith("sim_"))
+
+
+# --- unsupported yamls never reach prepare_test_matrix -----------------------
+
+CMDLESS_VLLM_YAML = """\
+- name: served model
+  model: google/gemma-4-E2B-it
+  mesh-device: N150
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: models
+  owner_id: U010
+"""
+
+
+def run_building_matrices(repo: Repo, unsupported: str, review_skus: str = DEFAULT_REVIEW_SKUS):
+    """Invoke the real build_matrices path -- prepare script runs, no --matrix-dir stub.
+
+    Reviews are stubbed as in run_reviews(): an unsupported yaml always yields a review leg.
+    """
+    import http.server, threading
+
+    payload = json.dumps([]).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+
+    shim = repo.root / "matrix_shim.py"
+    shim.write_text(
+        "import runpy, sys, urllib.request\n"
+        "_orig = urllib.request.Request\n"
+        "def _patched(url, *a, **k):\n"
+        f"    return _orig('http://127.0.0.1:{port}/reviews', *a, **k)\n"
+        "urllib.request.Request = _patched\n"
+        f"sys.argv = ['gate', '--base', {repo.base!r}, '--sku-config', '.github/sku_config.yaml',\n"
+        f"            '--review-skus', {review_skus!r}, '--unsupported-files', {unsupported!r},\n"
+        f"            '--prepare-script', {str(Path(SCRIPT).parent / 'prepare_test_matrix.py')!r},\n"
+        "            '--repo', 'o/r', '--pr', '1',\n"
+        "            '--output', 'result.json']\n"
+        f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')\n"
+    )
+    result = subprocess.run([sys.executable, str(shim)], cwd=repo.root, capture_output=True, text=True)
+    server.shutdown()
+    payload = json.loads((repo.root / "result.json").read_text()) if result.returncode == 0 else None
+    return result.returncode, payload, result.stdout + result.stderr
+
+
+def test_unsupported_yaml_is_not_handed_to_prepare_test_matrix(repo: Repo):
+    """An unsupported yaml's legs are all blocked, so no matrix is built for it.
+
+    vllm entries carry no `cmd`, so building one exits non-zero and fails the gate.
+    The supported yaml changed in the same PR must still resolve.
+    """
+    repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", CMDLESS_VLLM_YAML)
+    repo.commit_base()
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", BASE_TESTS_YAML.replace("alpha", "alpha2"))
+    repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", CMDLESS_VLLM_YAML.replace("N150", "N300"))
+
+    code, payload, output = run_building_matrices(repo, "sample_vllm_tests.yaml")
+    assert code == 0, output
+    assert "cmd is missing" not in output
+    assert {leg["sku"] for leg in payload["run_legs"]} == {"wh_n150_civ2", "wh_n300_civ2"}
+    assert [leg["blocked_by"] for leg in payload["review_legs"]] == ["unsupported_yaml"]

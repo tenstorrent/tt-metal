@@ -29,7 +29,13 @@ Tensor affine_exclusive_scan(
     const Tensor&,
     const Tensor&,
     uint32_t,
+    const Tensor&,
+    const Tensor&,
+    const Tensor&,
     const tt::tt_metal::MemoryConfig&,
-    const DeviceComputeKernelConfig&);
+    const DeviceComputeKernelConfig&,
+    const Tensor&,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows);
 
 }  // namespace ttnn::experimental::prim

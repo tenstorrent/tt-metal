@@ -102,6 +102,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 
 
 class TtMoERoutingSetup(LightweightModule):
@@ -207,15 +208,16 @@ class TtMoERoutingSetup(LightweightModule):
                 mesh_mapper=mesh_mapper,
             )
 
-        # The device gate (DEVICE / DEVICE_FP32 / HASH_DEVICE) emits TILE indices, so this is a no-op
-        # on the perf-critical path. The host-fallback gates (HOST_ALL / HOST_MATMUL / HOST_GROUPED_GATE
-        # / HASH_HOST) emit ROW_MAJOR indices; The tilize only ever runs on the (non-perf) host path.
+        # The device gate (DEVICE_FP32 / HASH_DEVICE) emits TILE indices, so this is a no-op
+        # on the perf-critical path. The host-fallback gates (HOST_ALL / HASH_HOST) emit ROW_MAJOR
+        # indices; the tilize only ever runs on the (non-perf) host path.
         if ttnn_top_k_experts_indices.layout != ttnn.TILE_LAYOUT:
             ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.TILE_LAYOUT)
 
         if len(ttnn_top_k_experts_indices.shape) == 3:
             ttnn_top_k_experts_indices = ttnn.squeeze(ttnn_top_k_experts_indices, 0)
-        logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"{ttnn_top_k_experts_indices.shape=}")
 
         expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts, num_experts_per_tok
