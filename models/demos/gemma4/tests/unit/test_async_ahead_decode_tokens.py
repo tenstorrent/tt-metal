@@ -10,6 +10,7 @@ device buffers were narrower than the host batch.
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
@@ -183,3 +184,40 @@ def test_slot_remap_beyond_device_width_still_falls_back():
     )
     assert src == "host_fallback"
     assert int(merged[0]) == 111
+
+
+@pytest.mark.parametrize("inactive_device_position", [-1, 0, 1])
+@pytest.mark.parametrize("remap", [None, [2, 0, 1]])
+def test_inactive_host_row_stays_disabled_while_live_rows_keep_device_feedback(inactive_device_position, remap):
+    host_toks = torch.tensor([964, 10, 20], dtype=torch.int32)
+    host_pos = torch.tensor([-1, 5, 6], dtype=torch.int64)
+    dev_toks = torch.tensor([123, 11, 21], dtype=torch.int32)
+    dev_pos = torch.tensor([inactive_device_position, 5, 7], dtype=torch.int64)
+    if remap is not None:
+        # Store feedback in old device rows; the caller supplies new host rows.
+        old_rows = torch.argsort(torch.tensor(remap))
+        dev_toks, dev_pos = dev_toks[old_rows], dev_pos[old_rows]
+
+    merged, positions, source = merge_async_ahead_decode_tokens(
+        host_toks, host_pos, dev_toks, dev_pos, slot_remap_local=remap
+    )
+
+    assert source == "merged"
+    assert merged.tolist() == [964, 11, 21]
+    assert positions.tolist() == [-1, 5, 7]
+    assert host_toks.tolist() == [964, 10, 20]
+    assert host_pos.tolist() == [-1, 5, 6]
+
+
+def test_prefilled_override_and_inactive_rows_preserve_host_inputs_together():
+    merged, positions, source = merge_async_ahead_decode_tokens(
+        torch.tensor([964, 10, 20], dtype=torch.int32),
+        torch.tensor([-1, 5, 6], dtype=torch.int64),
+        torch.tensor([123, 11, 21], dtype=torch.int32),
+        torch.tensor([0, 6, 7], dtype=torch.int64),
+        prefilled_local={1},
+    )
+
+    assert source == "merged"
+    assert merged.tolist() == [964, 10, 21]
+    assert positions.tolist() == [-1, 5, 7]

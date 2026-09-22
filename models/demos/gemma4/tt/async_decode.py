@@ -93,7 +93,8 @@ def merge_async_ahead_decode_tokens(
         dev_toks = dev_toks_full[:host_b]
         dev_pos = dev_pos_full[:host_b]
 
-    use_dev = (dev_pos == host_pos) | (dev_pos == host_pos + 1)
+    # Negative host positions keep inactive rows out of target KV writes.
+    use_dev = (host_pos >= 0) & ((dev_pos == host_pos) | (dev_pos == host_pos + 1))
     if prefilled_local:
         for slot in prefilled_local:
             if 0 <= slot < host_b:
