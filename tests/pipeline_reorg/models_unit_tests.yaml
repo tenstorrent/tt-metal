@@ -594,11 +594,22 @@
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_ and not test_spec_decode_ and not test_verify_batchsize_invariance and not test_assistant_" \
       models/demos/gemma4/tests/unit/
+    # MTP-related unit tests (real weights). Device cases are Wormhole T3K /
+    # 1x8 only — BH QuietBox skips via mesh/arch gates (fabric AllGather hang).
+    export HF_HUB_OFFLINE=0
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    pytest --timeout 1200 \
+      models/demos/gemma4/tests/unit/test_spec_decode.py::test_assistant_config_loads \
+      models/demos/gemma4/tests/unit/test_spec_decode.py::test_spec_decode_matches_greedy \
+      models/demos/gemma4/tests/unit/test_spec_decode.py::test_verify_batchsize_invariance
   model: gemma-4-31b
   model_family: Gemma
   skus:
     wh_llmbox:
-      timeout: 32
+      # 32 was too tight once MTP matches_greedy (~15 min) is included after the
+      # weight-free unit suite; measured MTP pytest alone ~15.6 min at the 900s cap.
+      timeout: 40
       tier: 2
     bh_quietbox_2:
       timeout: 15
@@ -609,32 +620,6 @@
     # bh_galaxy:
     #   timeout: 20
     #   tier: 2
-  owner_id: U088413NP0Q # Ashai Reddy
-  team: models
-  budget_type: unit
-
-# MTP / speculative-decode smoke (real weights). Wormhole T3K only — BH QuietBox
-# 1x4 hangs in fabric AllGather unicast scatter-write on large RM pages (31B TP=4).
-- name: Gemma-4-31B MTP smoke
-  cmd: |
-    uv pip install -r models/demos/gemma4/requirements.txt
-    export TT_METAL_WATCHER=30
-    export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
-    # Spec-decode smokes: real target + assistant weights are not always on the
-    # CI mount; allow Hub snapshot download (see configure_spec_decode_smoke_env).
-    export HF_HUB_OFFLINE=0
-    export HF_HOME=/mnt/MLPerf/huggingface
-    export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-    pytest --timeout 900 \
-      models/demos/gemma4/tests/unit/test_spec_decode.py::test_assistant_config_loads \
-      models/demos/gemma4/tests/unit/test_spec_decode.py::test_spec_decode_matches_greedy \
-      models/demos/gemma4/tests/unit/test_spec_decode.py::test_verify_batchsize_invariance
-  model: gemma-4-31b
-  model_family: Gemma
-  skus:
-    wh_llmbox:
-      timeout: 20
-      tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: unit
