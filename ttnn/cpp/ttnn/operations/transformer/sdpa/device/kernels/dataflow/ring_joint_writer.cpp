@@ -555,7 +555,6 @@ void kernel_main() {
     constexpr uint32_t cb_arg_offset =
         has_logical_length_tensor ? logical_l_args.next_compile_time_args_offset() : post_meta_args_offset;
 
-
     // Per-iteration chunk-list length (base chunks plus one float slot), or 0 when the host
     // declined the rotation. The offset clears the whole CB block, not just the CBs used here.
     // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
@@ -857,12 +856,17 @@ void kernel_main() {
             const uint32_t last_q_index = q_per_core - 1;
             const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
 
-            // TRID by Q position: Q[0] -> TRID_FIRST, Q[N-1] -> TRID_LAST, else TRID_INNER. Tags
-            // the current Q's save and selects which TRID to barrier before the next Q's restore.
-            // Under rotation last_q_index varies per iteration, so slot -> TRID is not stable across
-            // the save/restore boundary. Do not "fix" that in isolation: keying off rotated_max_slots
-            // makes the map stable but breaks accuracy, because need_barrier below assumes the last
-            // slot maps to TRID_LAST and skips its barrier when nothing does.
+            // Saves use this iteration's chunk count. Restores must use the previous executed
+            // iteration's count: gaining a float changes the last fixed slot from LAST to INNER,
+            // but its outstanding save still carries LAST. Active ordinals also handle skipped
+            // ring iterations and runtime-derived KV-padding masks.
+            uint32_t previous_q_per_core = q_per_core;
+            if constexpr (rotated_q_split_enabled) {
+                if (rotated_ordinal > 0) {
+                    previous_q_per_core = get_arg_val<uint32_t>(
+                        ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal - 1));
+                }
+            }
             auto trid_for_q = [&](uint32_t qi) {
                 return qi == 0 ? TRID_FIRST : qi == last_q_index ? TRID_LAST : TRID_INNER;
             };
@@ -907,11 +911,8 @@ void kernel_main() {
                     stats_tile_bytes);
             };
 
-            // Intra-ring prefetch: bounds-check next_q_index, then dispatch with the per-TRID
-            // barrier rule. Only barrier when next Q's TRID hasn't been cleared yet this ring
-            // iter: Q[0] -> wB(TRID_INNER), Q[N-2] -> wB(TRID_LAST), Q[1..N-3] -> skip
-            // (TRID_INNER already cleared at Q[0]).
-            // Coupled to trid_for_q above: assumes the last slot maps to TRID_LAST.
+            // Wait on the prior save's tag. INNER saves are all issued before the preceding
+            // iteration ends, so its first barrier covers subsequent INNER restores too.
             auto prefetch_intra_ring = [&](uint32_t next_q_index) {
                 if (next_q_index >= q_per_core) {
                     return;
@@ -924,9 +925,14 @@ void kernel_main() {
                         Semaphore<> handoff_sem(rotated_sem_ids[rotated_sem_slot(rotated_ordinal, rotated_sem_count)]);
                         handoff_sem.wait_min(rotated_has_mig_in_float);
                         handoff_sem.set(0);
+                        // The donor completed this save before signaling; no local TRID owns it.
+                        prefetch_for(q_slots.at(next_q_index), TRID_LAST, /*barrier_first=*/false);
+                        return;
                     }
                 }
-                const uint32_t next_trid = trid_for_q(next_q_index);
+                const uint32_t next_trid = next_q_index == 0                         ? TRID_FIRST
+                                           : next_q_index == previous_q_per_core - 1 ? TRID_LAST
+                                                                                     : TRID_INNER;
                 const bool need_barrier = (next_trid != TRID_INNER || next_q_index == 1);
                 prefetch_for(q_slots.at(next_q_index), next_trid, need_barrier);
             };

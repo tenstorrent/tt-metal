@@ -6054,10 +6054,43 @@ def test_ring_mla_rotated_q_accuracy_and_determinism(q_chunk_size, k_chunk_size)
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("q_chunk_size,k_chunk_size", [(32, 640), (64, 448)], ids=["q32", "q64"])
+def test_ring_mla_rotated_q_base_two_restore_accuracy_and_determinism(q_chunk_size, k_chunk_size):
+    """Fixed slot 1 switches LAST/INNER tags when a core gains or loses a remainder."""
+    local_heads = 16
+    local_q_chunks = 15  # 240 work units: base=2 with a moving remainder on 100/110 cores.
+    assert 2 * MESH_CONFIG.sdpa_cores < local_heads * local_q_chunks < 3 * MESH_CONFIG.sdpa_cores
+    chunk_size = local_q_chunks * q_chunk_size * MESH_CONFIG.sp_size
+    model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=local_heads)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, reserve_llk_kernel_config=False)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        for num_iterations in (1, 3):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                chunk_size=chunk_size,
+                total_seq=3 * chunk_size,
+                qk_configs=[(q_chunk_size, k_chunk_size)],
+                persistent_buffer_mode="reuse_max",
+                use_ring_mla=True,
+                num_iterations=num_iterations,
+                runtime=runtime,
+                reserve_llk_kernel_config=False,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("all_rows_have_remainder", [False, True], ids=["even", "all_rows_have_remainder"])
 def test_ring_mla_nonmoving_q_split_accuracy(all_rows_have_remainder):
-    """Non-moving schedules retain static allocation, including single-Q L1 persistence."""
+    """Non-moving schedules retain static allocation, including single-Q L1 persistence.
+
+    The third prefill chunk also crosses two cache-slab boundaries within one K chunk;
+    causal masking must account for both global-position jumps.
+    """
     chunk_size = 64 * MESH_CONFIG.sp_size
     local_heads = 2 * MESH_CONFIG.sdpa_cores - 1 if all_rows_have_remainder else MESH_CONFIG.sdpa_cores
     model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=local_heads)

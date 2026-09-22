@@ -1083,13 +1083,17 @@ static void apply_lightweight_mask_streaming(
                         }
                     }
                 } else {
-                    // Chunked-prefill straddle: K coord jumps by straddle_jump at col >= straddle_col
-                    // (the K-chunk crosses a slab boundary). Evaluate per-col.
+                    // Each cache slab belongs to a different global chunk. A wide K chunk can
+                    // cross several slabs, so apply the gap at every boundary, not just the first.
                     if (apply_causal) {
                         for (uint32_t col = 0; col < mask_cols; col++) {
                             int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
                             if (col >= straddle_col) {
-                                k_pos += static_cast<int32_t>(straddle_jump);
+                                uint32_t crossed_slabs = 1;
+                                if constexpr (kv_pad_q_local_padded_Nt > 0 && num_cols > kv_pad_q_local_padded_Nt) {
+                                    crossed_slabs += (col - straddle_col) / kv_pad_q_local_padded_Nt;
+                                }
+                                k_pos += static_cast<int32_t>(crossed_slabs * straddle_jump);
                             }
                             l1_acc_causal_col_mask(
                                 mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
@@ -1582,8 +1586,7 @@ static void sdpa_inner_loop_step(
 
             // sub_exp_block_bcast_cols softmaxes the last Q row in place, one column-subblock at a
             // time. The PACK->UNPACK barrier after it makes those in-place pack writes visible to
-            // the V-matmul unpack; only needed when q_num_subblocks==1 (Phase 1's hold_wr_ptr
-            // didn't sync them).
+            // the V-matmul unpack whenever its first row group overlaps the in-place writes.
 
             if constexpr (!kt_inplace_v) {
                 // Split-drain (common, materialized-V path): interleave each column-subblock's
@@ -2793,7 +2796,7 @@ void sdpa_ring_v2(
             // Chunked-prefill straddle. Background: each device's K cache holds the per-chunk
             // K region for every chunk back-to-back, q_local_padded_Nt tiles per region. When
             // k_chunk_size does not divide q_local_padded_Nt, a single K-chunk can begin in
-            // one region (chunk j) and end in the next (chunk j+1). Because adjacent regions
+            // one region (chunk j) and end one or more regions later. Because adjacent regions
             // map to *non-adjacent* global K positions (jumping by chunk_size_t between them),
             // the global K coord is no longer contiguous across the K-chunk's columns. We
             // signal this to the diag stamp via:
@@ -2803,7 +2806,7 @@ void sdpa_ring_v2(
             //     (= chunk_size_t - q_local_padded_Nt, i.e. the gap between region j's end and
             //     region j+1's start in global K).
             // When straddle_col > 0 the stamp evaluates the diagonal per column instead of
-            // per row, applying the jump for columns >= straddle_col.
+            // per row, applying the jump at straddle_col and every q_local_padded_Nt tiles thereafter.
             uint32_t step_straddle_col = 0;
             uint32_t step_straddle_jump = 0;
             if constexpr (chunked_enabled) {
