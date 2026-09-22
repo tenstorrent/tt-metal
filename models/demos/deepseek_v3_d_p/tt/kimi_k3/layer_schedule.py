@@ -85,6 +85,14 @@ class KimiK3LayerSchedule:
     def global_index(self, local_idx: int) -> int:
         return self.first_layer_idx + local_idx
 
+    @property
+    def num_kda_layers(self) -> int:
+        return self.num_layers - self.num_mla_layers
+
+    def kda_layer_ids_local(self) -> tuple[int, ...]:
+        """GLOBAL indices of this rank's KDA layers, ascending: the layer axis of its KDA state slabs."""
+        return tuple(self.global_index(local) for local in range(self.num_layers) if not self.local_is_mla(local))
+
     def kv_slot(self, local_idx: int) -> int | None:
         """This rank's KV slot for a local layer, or `None` if the layer writes no KV."""
         return self.kv_slot_of_local[local_idx]
