@@ -549,7 +549,7 @@ def run_perf(
             fwd_kwargs["user_id"] = 0
 
         def _forward_and_postprocess(dinputs):
-            transformed = model.transform_and_embed_prefill_inputs_device(*dinputs)
+            transformed = model.transform_and_embed_prefill_inputs_device(*dinputs, tt_chunk_start_idx=None)
             tt_out = model.ttnn_prefill_forward(
                 x=transformed[0],
                 page_table=transformed[1],
