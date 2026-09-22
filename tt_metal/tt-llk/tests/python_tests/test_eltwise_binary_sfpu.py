@@ -524,6 +524,12 @@ def _logsigmoid_stimuli_spec(input_format, input_dimensions):
 # =============================================================================
 
 
+def _default_input_dimensions(input_format):
+    # FP32 destination tiles occupy twice the register space. Keep four full destination
+    # blocks for those formats and four blocks of eight tiles for the remaining formats.
+    return [128, 128] if input_format.is_32_bit() else [256, 128]
+
+
 def sfpu_binary(
     formats,
     dest_acc,
@@ -550,12 +556,8 @@ def sfpu_binary(
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
-    # FP32 destination tiles occupy twice the register space. Keep four full destination
-    # blocks for those formats and four blocks of eight tiles for the remaining formats.
     if input_dimensions is None:
-        input_dimensions = (
-            [128, 128] if formats.input_format.is_32_bit() else [256, 128]
-        )
+        input_dimensions = _default_input_dimensions(formats.input_format)
 
     # Per-operand domains. Both operands live in buffer_A (even tile = in0, odd tile = in1),
     # so there is no spec_B knob in generate_stimuli -- the two specs are interleaved into one
@@ -996,6 +998,10 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
     #   fp32 in, bf16 out        |   3.87e-3   |    1.19e-2     | 9e-3   | 2.33x / 1.32x
     #   fp32 in, fp32 out        |   1.25e-7   |    9.02e-3     | 1e-5   |   80x /  902x
     #
+    # The final branch below also takes bf16 in, bf16 DEST, fp32 out. It shares the first
+    # row's bound, and on ttsim its output is bit-identical to that row's on both
+    # architectures: the result is rounded to bfloat16 in DEST before the packer widens it.
+    #
     # Two of these bounds carry one bfloat16 quantum of slack on purpose. The measurements
     # behind them are simulator-backed, and a bound whose headroom is under a single
     # bfloat16 rounding (2^-8 = 3.9e-3) is one silicon-vs-simulator rounding away from
@@ -1023,10 +1029,10 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
     else:
         atol, rtol = 0.0, 1.3e-2
 
-    # Same dimensions sfpu_binary would pick by default, named here because
+    # The dimensions sfpu_binary would pick by default, named here because
     # _logsigmoid_stimuli_spec has to build a face_specs list that covers this exact
     # buffer. Leaving it implicit would couple the two through nothing at all.
-    input_dimensions = [128, 128] if formats.input_format.is_32_bit() else [256, 128]
+    input_dimensions = _default_input_dimensions(formats.input_format)
 
     sfpu_binary(
         formats,

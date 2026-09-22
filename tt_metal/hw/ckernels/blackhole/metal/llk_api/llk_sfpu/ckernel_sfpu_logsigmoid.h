@@ -32,6 +32,11 @@ inline constexpr bool logsigmoid_input_is_fp32 = false;
  * residual tuned for eight mantissa bits would be exposed at full fp32 width.
  * Gating on the input dtype alone costs about 4.9e-4 relative, or roughly 7,700
  * fp32 ULP, in that second configuration.
+ *
+ * Through ttnn the input term never decides: an fp32 input forces an fp32 DEST
+ * (`unary.cpp`), so this reduces to `is_fp32_dest_acc_en`. It is kept as a guard
+ * for direct Compute API callers that pair an fp32 input with a bfloat16 DEST,
+ * where the bfloat16 residual would otherwise be selected.
  */
 template <bool is_fp32_dest_acc_en>
 inline constexpr bool logsigmoid_wants_fp32_residual = logsigmoid_input_is_fp32 || is_fp32_dest_acc_en;
@@ -127,9 +132,10 @@ sfpi_inline void logsigmoid_residual_bf16_x2(sfpi::vFloat& y0, sfpi::vFloat& y1,
  * log(e^x/(1+e^x)). The exponential is fed -|x|, built in one SFPSETSGN, so no
  * intermediate can overflow and there is no range split.
  *
- * The inputs are read from DEST twice, once to build -|x| and once for min(x, 0), so
- * that neither stays live in an LREG across the exponential and the residual; holding
- * them runs the fp32 path out of LREGs.
+ * On the fp32 path the inputs are read from DEST twice, once to build -|x| and once
+ * for min(x, 0), so that neither stays live in an LREG across the exponential and the
+ * residual; holding them runs that path out of LREGs. The bfloat16 path has the room
+ * and holds them, which saves one SFPLOAD per datum without a spill.
  *
  * @tparam is_fp32_dest_acc_en: If true, DEST is fp32 and the result is not rounded to bfloat16
  * @param in: DEST offset of the first datum; the second is at in + 1
@@ -140,8 +146,10 @@ sfpi_inline void logsigmoid_residual_bf16_x2(sfpi::vFloat& y0, sfpi::vFloat& y1,
  */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline void logsigmoid_x2(const std::uint32_t in, sfpi::vFloat& result0, sfpi::vFloat& result1) {
-    sfpi::vFloat n0 = sfpi::setsgn(sfpi::vFloat(sfpi::dst_reg[in]), 1);
-    sfpi::vFloat n1 = sfpi::setsgn(sfpi::vFloat(sfpi::dst_reg[in + 1]), 1);
+    sfpi::vFloat x0 = sfpi::dst_reg[in];
+    sfpi::vFloat x1 = sfpi::dst_reg[in + 1];
+    sfpi::vFloat n0 = sfpi::setsgn(x0, 1);
+    sfpi::vFloat n1 = sfpi::setsgn(x1, 1);
     sfpi::vFloat residual0;
     sfpi::vFloat residual1;
     if constexpr (logsigmoid_wants_fp32_residual<is_fp32_dest_acc_en>) {
@@ -169,8 +177,10 @@ sfpi_inline void logsigmoid_x2(const std::uint32_t in, sfpi::vFloat& result0, sf
         sfpi::vFloat t1 = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(n1);
         logsigmoid_residual_bf16_x2(residual0, residual1, t0, t1);
     }
-    sfpi::vFloat x0 = sfpi::dst_reg[in];
-    sfpi::vFloat x1 = sfpi::dst_reg[in + 1];
+    if constexpr (logsigmoid_wants_fp32_residual<is_fp32_dest_acc_en>) {
+        x0 = sfpi::dst_reg[in];
+        x1 = sfpi::dst_reg[in + 1];
+    }
     sfpi::vFloat xm0 = sfpi::min(x0, 0.0f);
     sfpi::vFloat xm1 = sfpi::min(x1, 0.0f);
     result0 = xm0 - residual0;
@@ -218,7 +228,14 @@ inline void calculate_logsigmoid() {
  * Its normal placement has in0 == out. Operand B held exp(-x) when the caller computed
  * it; the exponential is computed here now, so it is intentionally ignored.
  *
+ * @tparam APPROXIMATION_MODE: Ignored
+ * @tparam is_fp32_dest_acc_en: If true, DEST is fp32 and the result is not rounded to bfloat16
  * @tparam ITERATIONS: Number of iterations for given face; must be even
+ * @param dst_index_in0: DEST tile index of the input
+ * @param dst_index_in1: Ignored
+ * @param dst_index_out: DEST tile index of the output
+ * @note Call @ref logsigmoid_init first: the residual reads the programmable constants
+ *       that init loads, and produces wrong results without it.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_logsigmoid_binary(
@@ -241,7 +258,9 @@ inline void calculate_logsigmoid_binary(
  *
  * @tparam APPROXIMATION_MODE: Ignored
  * @tparam is_fp32_dest_acc_en: Must match the value passed to @ref calculate_logsigmoid,
- *         since it selects which residual, and therefore which coefficients, are used
+ *         since it selects which residual, and therefore which coefficients, are used.
+ *         An fp32 input (`INP_FLOAT32`) selects the fp32 residual as well; see
+ *         @ref logsigmoid_wants_fp32_residual
  * @note Must run before @ref calculate_logsigmoid.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -253,6 +272,7 @@ inline void logsigmoid_init() {
         sfpi::vConstFloatPrgm1 = -0x1.fffdc4p-3f;
         sfpi::vConstFloatPrgm2 = 0x1.995bb8p-3f;
     } else {
+        // c1, c2, c3 of P(t) = 1 + c1 t + c2 t^2 + c3 t^3, log1p(t) ~ t * P(t): fitted, P(0) = 1 imposed
         sfpi::vConstFloatPrgm0 = -0x1.f574b8p-2f;
         sfpi::vConstFloatPrgm1 = 0x1.0afacap-2f;
         sfpi::vConstFloatPrgm2 = -0x1.4057aep-4f;
