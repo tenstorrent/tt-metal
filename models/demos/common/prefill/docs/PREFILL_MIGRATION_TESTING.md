@@ -542,6 +542,7 @@ gates you intend to run require.
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
 | 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
 | 2 | `kv_migration_base_address` | alternative to the above, for a model with a SINGLE cache: just that cache's base DRAM address |
+| 1, 2 | `cache_kind` (adapter) | what each table config holds (`kvpe` / `index` / other); the producer's index check and the driver's cache plan key on it instead of the config count. Kimi-K3 declares its KDA state configs here (`tt/kda/KDA_STATE_MIGRATION.md`) |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 
