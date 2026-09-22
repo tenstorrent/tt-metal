@@ -93,6 +93,15 @@ class AccuracyContract:
         if self.metric == Metric.ULP:
             if self.max_ulp is None:
                 raise ValueError("a ulp contract needs max_ulp")
+            if isinstance(self.max_ulp, bool) or not isinstance(self.max_ulp, int):
+                # YAML 1.1 reads `true` as a bool -- and bool is an int, so it would pass
+                # the sign check below and enforce a 1-step budget. `1.0e+1` lands as a
+                # float and enforces 10. Neither is what the provenance parser reads back
+                # out of the row's comment, so the enforced budget and the audited one
+                # would differ with nothing to notice.
+                raise ValueError(
+                    f"max_ulp must be an int step count, got {self.max_ulp!r}"
+                )
             if self.max_ulp < 0:
                 raise ValueError(f"max_ulp must not be negative, got {self.max_ulp}")
             if self.atol is not None or self.rtol is not None:

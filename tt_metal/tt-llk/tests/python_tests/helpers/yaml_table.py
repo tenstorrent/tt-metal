@@ -3,10 +3,10 @@
 
 """Loading a table that lives in YAML rather than in Python.
 
-Two such tables exist: the budget registry, and the expectations its host tests hold it
-to. They are deliberately separate files -- an expectation the registry's own emitter
-could rewrite would agree with it by construction -- but they fail the same two ways, so
-the discipline lives here rather than twice.
+The budget registry is the one such table. Its host tests deliberately do not shadow it
+with a second file of expectations -- one the registry's own emitter could rewrite would
+agree with it by construction -- so provenance in the row's own comment is what holds it
+honest. What lives here is the two ways a YAML table fails silently.
 
 A *duplicate mapping key* is the dangerous one: YAML keeps the last silently, so a
 copy-pasted op name drops the earlier op's whole table with nothing downstream able to
@@ -76,7 +76,9 @@ def enum_member(enum_cls: Type[E], value: Any, where: str) -> E:
     as different Python types and must resolve to the same member.
     """
     try:
-        return enum_cls[value] if isinstance(value, str) else enum_cls(value)
+        if isinstance(value, str) and value in enum_cls.__members__:
+            return enum_cls[value]
+        return enum_cls(value)
     except (KeyError, ValueError):
         raise ValueError(
             f"{where}: {value!r} is not a {enum_cls.__name__}; expected one of "
