@@ -35,10 +35,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    torus_xy_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
