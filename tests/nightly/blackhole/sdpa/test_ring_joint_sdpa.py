@@ -5344,7 +5344,8 @@ else:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, sp=4 tp=1)
         ("wan2_2_1xGLX", 288, 512, 4, 68.5, RING_JOINT_PERF_MARGIN),
-        ("mla_100k", 160, 320, 4, 63.2, RING_JOINT_PERF_MARGIN),
+        # Recalibrated on 2026-09-22: 11 QuietBox runs measured 62.41-62.65% (mean 62.53%).
+        ("mla_100k", 160, 320, 4, 62.5, RING_JOINT_PERF_MARGIN),
     ]
 
 
