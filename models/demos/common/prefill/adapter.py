@@ -140,6 +140,15 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
 
+    def cache_kind(self, config_id: int) -> str:
+        """What migration-table config ``config_id`` holds: ``"kvpe"``, ``"index"`` (a DSA indexer key
+        cache) or ``"other"``. The default keeps the historical convention (config 1 of a multi-config
+        table is the index cache); a model whose second config is something else overrides this so the
+        producer and the migration driver stop inferring the kind from the config count."""
+        if config_id == 0:
+            return "kvpe"
+        return "index" if config_id == 1 else "other"
+
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
 
