@@ -134,10 +134,11 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
 ## 4. Shape, dtype and layout constraints
 
 - Tiles are 32x32 only. TinyTile is broken on Blackhole (#31385).
-- Canonical activation layout is `(1, 1, B*S, H)`. Attention and pooling need `(B, 1, S, H)`:
-  attention mixes tokens along S, pooling reduces along it, and both would cross the batch
-  boundary if it were flattened away. The reshape between the two is exact, and free only when
-  B is 1 or S is a multiple of 32.
+- Activations cross block boundaries as `(B, 1, S, H)`; the flat `(1, 1, B*S, H)` form is taken
+  inside `tt/moe.py` only, where the expert matmuls require it. Attention mixes tokens along S
+  and pooling reduces along it, so both would cross the batch boundary if it were flattened
+  away. The reshape between the two is exact, and free only when B is 1 or S is a multiple
+  of 32.
 - `rotary_embedding_hf` requires a padded head_dim of 32 or a multiple of 64. This model's 64
   qualifies.
 - **SDPA rejects a `(B, 1, 1, S)` mask** with `mask_shape[2] == q_shape[2]`. Torch broadcasts
@@ -153,6 +154,14 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
 - `ttnn.topk` accepts fp32, bf16 and `bfloat8_b`, but is only correct on the first two.
 - The MoE transient is `(1, E, T, F)`, about 50 MB at `T=1024` in bf16. It scales with batch
   times sequence length, not sequence length alone.
+- **`ttnn.matmul` deadlocks on broadcast-batch operands** (`in0_B == 1`, `in1_B > 1`) once the
+  block geometry has `num_blocks_h_dim * num_blocks_w_dim > 1`. The in0 reuse path replays
+  `num_blocks_inner_dim` blocks per extra batch, dropping the `h_dim * w_dim` factor the compute
+  kernel applies, so the reader under-produces and every core waits in `cb_wait_front` on in0.
+  At `(1, 1, T, 768) x (1, E, 768, 3072)` on an 11x10 grid, T=3520 passes and T=3552 hangs for
+  every E > 1 tried. The bound is joint in M and N: at M=32 tiles, N=3072 passes and N=4096
+  hangs. It is a hang rather than an exception, so recovery needs `tt-smi -r`. `tt/experts.py`
+  splits the token axis to stay under it; `tests/hangRepro` reproduces it standalone.
 
 ## 5. Negative controls
 

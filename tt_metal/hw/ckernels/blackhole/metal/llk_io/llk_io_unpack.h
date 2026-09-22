@@ -25,15 +25,19 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 
     uint16_t num_tiles_recv;
-    do {
-        tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
-        num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
-    } while (num_tiles_recv < num_tiles_u);
+    {
+        SYNC_WAIT("SYNC-CB-WAIT", operand);
+        do {
+            tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
+            num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
+        } while (num_tiles_recv < num_tiles_u);
+    }
 }
 
 // Pop N tiles from the incoming stream
 inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
+    SYNC_SIGNAL("SYNC-CB-POP", operand);
     std::uint32_t input = operand;
 
     // Convert the counter's byte address to a Tensix 4-byte word address, masked to 18 bits.

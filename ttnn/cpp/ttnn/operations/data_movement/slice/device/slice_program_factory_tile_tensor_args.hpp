@@ -18,12 +18,14 @@ struct SliceTileTensorArgsProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 
-    // Cache-hit hook: the four tensor bindings plus the per-core scalars, which are hash-excluded.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
-        const SliceParams& args,
-        const SliceInputs& tensor_args,
-        Tensor& output,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    struct shared_variables_t {
+        tt::tt_metal::experimental::ProgramRunArgs run_args;
+    };
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+    static void override_runtime_arguments(
+        cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 
 }  // namespace ttnn::prim

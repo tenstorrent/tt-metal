@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 
 #include <optional>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <span>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -292,12 +293,28 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs SliceTileTensorArgsProgramFactory::override_runtime_arguments(
-    const SliceParams& args,
-    const SliceInputs& tensor_args,
-    Tensor& output,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    return slice_program_run_args(SliceTileTensorArgsProgramFactory{}, args, tensor_args, output);
+SliceTileTensorArgsProgramFactory::cached_program_t SliceTileTensorArgsProgramFactory::create(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    auto artifacts = create_program_artifacts(args, tensor_args, output);
+    auto program = MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
+    SetProgramRunArgs(program, artifacts.run_params);
+    // Geometry is keyed; start/end values remain device-side controls. Retain owned scalar maps,
+    // not non-owning references to the tensors used on the cache miss.
+    artifacts.run_params.tensor_args.clear();
+    return {std::move(program), {.run_args = std::move(artifacts.run_params)}};
+}
+
+void SliceTileTensorArgsProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program, const SliceParams& /*args*/, const SliceInputs& tensor_args, Tensor& output) {
+    using namespace ttnn::prim::slice_metal2;
+    auto& run_args = cached_program.shared_variables.run_args;
+    run_args.tensor_args = {
+        {INPUT, tensor_args.input.mesh_tensor()},
+        {OUTPUT, output.mesh_tensor()},
+        {START_TENSOR, tensor_args.start_tensor.value().mesh_tensor()},
+        {END_TENSOR, tensor_args.end_tensor.value().mesh_tensor()}};
+    UpdateProgramRunArgs(cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
+    run_args.tensor_args.clear();
 }
 
 }  // namespace ttnn::prim
