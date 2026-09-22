@@ -626,3 +626,12 @@ def test_moreh_group_norm_backward_large_algorithm(
     run_test_moreh_group_norm_backward(
         N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
     )
+
+
+@pytest.mark.parametrize("HW", [[65, 65], [500, 500]])
+@pytest.mark.parametrize("gamma_requires_grad", [False, True])
+def test_moreh_group_norm_backward_shared_dycopy(device, HW, gamma_requires_grad):
+    # 65x65 gives 18 tiles/channel: an eight-tile block followed by ten tiles.
+    # Exercise masked tiles, block reuse, and gamma reading retained dycopy tiles.
+    torch.manual_seed(2024)
+    run_test_moreh_group_norm_backward(2, [4, 2], HW, 1e-5, True, False, gamma_requires_grad, True, device)

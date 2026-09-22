@@ -549,6 +549,13 @@ def test_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dim
     run_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, dtype, device)
 
 
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_layer_norm_backward_shared_dycopy(device, compute_kernel_options):
+    # Twenty tile rows require an eight-tile block followed by twelve tiles.
+    torch.manual_seed(2023)
+    run_moreh_layer_norm_backward(([2, 320, 45], 1), True, 1e-5, ttnn.bfloat16, device, compute_kernel_options)
+
+
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "dtype",
