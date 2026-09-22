@@ -182,6 +182,33 @@ Artifacts: external `sdpa-pr1-cleanup-validation-20260922/`, with
 `sdpa-cleanup-{before,after}-perf.xml`. `compare.py` checks coverage, numerical
 equality and timing deltas; `run.sh` and `watcher.sh` capture the run environment.
 
+## Review follow-up (2026-09-22)
+
+Rebuilt revision `c0295ea207d` on the same Blackhole after sharing production
+compute/CB descriptors with the resident benchmark and unifying host exceptions.
+
+- Release: **281 passed, 2 existing skips**, including all 14 FLUX.2 replays.
+- Watcher/asserts: **111 passed**; host policy/resolver: **13 passed**.
+- All 147 frozen output hashes and recorded numerical metrics remained exact.
+  Historical output hashes are diagnostic properties; L2 is the accuracy gate.
+  Cache/trace equality within a build remains mandatory.
+- Performance: **28 passed**. Resident timing changed by less than 0.02%;
+  other modes remained within 1% of the preceding cleanup run.
+- Five added cases cover accepted default scales and rejection of BF16-rounded
+  and nonfinite scales. Recipes, arithmetic and data movement are unchanged.
+
+Artifacts: external `sdpa-pr1-cleanup-validation-20260922/sdpa-review-*`;
+`review-compare.py` checks coverage, numerical equality and timing deltas.
+
+## Continuous coverage
+
+The [SDPA sanity group](../tests/pipeline_reorg/ttnn_sanity_tests.yaml) runs the
+entire `tests/ttnn/unit_tests/operations/sdpa` directory on Blackhole P100/P150.
+[Sanity CI](../.github/workflows/sanity-tests.yaml) runs on pushes to main and
+scheduled Blackhole runs. Model-capture replay requires `SDPA_MODEL_CAPTURE_DIR`;
+throughput requires `TEST_SDPA_RECIPE_PERF=1`. Those two suites are opt-in, not
+automatic post-commit coverage.
+
 ## Reproduction and evidence
 
 Build and install this branch with TTNN tests enabled, configure `TT_METAL_HOME`,
