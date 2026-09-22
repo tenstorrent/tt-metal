@@ -1,6 +1,6 @@
 # Streaming SDPA recipe qualification
 
-2026-09-21; single Blackhole P100. Main base
+Initial qualification: 2026-09-21; single Blackhole P100. Main base
 `dfaf6dc802f0a1321bbb2578ba7c4a0fb9b71ab8`, Clang 20, SFPI 7.80.0,
 Python 3.10, Torch 2.11 CPU. Host libraries and bindings were rebuilt and
 installed from this branch; device kernels were compiled from its sources.
@@ -23,7 +23,7 @@ attention to `rtol=atol=1e-12` on its cross-check.
 
 The core suite has normal, clipped, scaled-down Q/K, scaled-up Q/K, outlier,
 and uniform-attention inputs at KV4K/32K/256K, Q256, one head, D128.
-Common-Q/K/V stress uses KV32K. The regression gate is per-case
+Common-Q/K/V stress uses KV32K. The L2 regression gate is per-case
 `L2_percent <= 1.05 * frozen_L2_percent + 0.0001`; it is not a blanket accuracy
 promise. PCC, maximum absolute error and row-wise L2 tails are recorded too.
 
@@ -142,6 +142,42 @@ A/B/C/D and 2.26–2.32 ms for E. These timings are not portable CI thresholds.
 This P100 is a different hardware cohort from the historical P150 research
 runs: do not interpret cross-cohort absolute timing differences as a port
 regression or improvement. No new full-chip or model speedup is claimed.
+
+## Cleanup requalification (2026-09-22)
+
+Compared pre-cleanup `1a7825207e9` with compute revision `96de2e927c5` on the
+same reserved Blackhole (`yyzo-bh-26`), with the same build/toolchain and separate
+JIT caches. The final source differs from the release-tested source only in
+comments; the final revision was also compiled and run under Watcher.
+
+- Both release runs: **276 passed, 2 existing skips**, including 14 real-activation
+  replays. All **147 frozen output hashes matched exactly** in both runs; all
+  recorded numerical metrics and hashes were unchanged. Exact output equality is
+  now asserted by the accuracy test, in addition to its per-case L2 limit.
+- The normalized fixture expands to exactly the original metadata, hashes and
+  metrics. No test cases or input distributions were removed.
+- Final Watcher/assert run: **106 passed**. Host-policy tests: **13 passed**.
+  Reader/writer code, preparation, host dispatch, CB capacities and Q/K blocking
+  were unchanged.
+- Both matched performance runs passed all **28 cases**. Resident trace time
+  changed by -0.67% to +0.20%; distinct, changing-max and preparation-inclusive
+  modes changed by -1.05% to +0.30%. These small differences do not establish a
+  speedup or a material regression.
+
+| Variant | Resident TFLOP/s/core before | After |
+| --- | ---: | ---: |
+| A | 1.9951 | 1.9952 |
+| B | 1.7507 | 1.7568 |
+| C | 1.2343 | 1.2337 |
+| D | 0.8951 | 0.8933 |
+| E_bf16 | 2.1236 | 2.1379 |
+| E_bfp8 | 2.0918 | 2.0896 |
+| E_bfp4 | 2.0908 | 2.0910 |
+
+Artifacts: external `sdpa-pr1-cleanup-validation-20260922/`, with
+`sdpa-cleanup-{before,after,watcher,host}.xml`, matching logs, and
+`sdpa-cleanup-{before,after}-perf.xml`. `compare.py` checks coverage, numerical
+equality and timing deltas; `run.sh` and `watcher.sh` capture the run environment.
 
 ## Reproduction and evidence
 
