@@ -21,7 +21,6 @@ from models.tt_dit.models.vae.vae import (
     VaeResnetBlock,
     VaeRmsNorm,
     VaeUpsampler,
-    _all_gather_hw,
 )
 from models.tt_dit.parallel.config import Flux2VaeParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
@@ -121,6 +120,10 @@ class FiboVaeDecoder(Module):
         rename_substate(state, "decoder", "")
 
     def forward(self, z: ttnn.Tensor) -> ttnn.Tensor:
+        """Return the decoded image, replicated, in row-major layout.
+
+        The result has shape (B, H, W * C).
+        """
         z = self.post_quant_conv.forward(z)
         z = self.conv_in.forward(z)
 
@@ -135,12 +138,24 @@ class FiboVaeDecoder(Module):
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
         z = self.conv_out.forward(z)
+        z = ttnn.clamp(z, min=-1.0, max=1.0)
 
+        # In tile layout the unpatchify's trailing (P, P) dims would be padded to a tile.
+        z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
         if self._patch_size > 1:
             z = _unpatchify(z, patch_size=self._patch_size, out_channels=self._image_channels)
 
-        z = ttnn.clamp(z, min=-1.0, max=1.0)
-        return _all_gather_hw(self._ctx, z)
+        #  A row-major page holds one row of the last dimension, and pages of only C elements make
+        # the gather and the read to the host many times slower.
+        b, h, w, c = z.shape
+        z = ttnn.reshape(z, [b, h, w * c])
+
+        ctx = self._ctx
+        if ctx.h_factor > 1:
+            z = ctx.ccl_manager.all_gather(z, dim=1, mesh_axis=ctx.h_mesh_axis, use_hyperparams=True)
+        if ctx.w_factor > 1:
+            z = ctx.ccl_manager.all_gather(z, dim=2, mesh_axis=ctx.w_mesh_axis, use_hyperparams=True)
+        return z
 
 
 class FiboVaeUpBlock(Module):
@@ -422,4 +437,6 @@ class FiboVAEDecoderAdapter:
         )
         tt_out = self._tracer(tt_latents, traced=traced)
         torch_out = tensor.to_torch(tt_out)
+        b, out_h, _ = torch_out.shape
+        torch_out = torch_out.reshape(b, out_h, w * self.spatial_compression_ratio, -1)
         return torch_out.permute(0, 3, 1, 2)
