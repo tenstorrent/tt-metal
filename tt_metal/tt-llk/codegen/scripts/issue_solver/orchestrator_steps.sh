@@ -1053,6 +1053,13 @@ execute_step_advance_ttnn_test() {
 # the compatibility verdict/count fields consumed by final status and the
 # dashboard. Missing or unknown required results fail closed as ENV_ERROR.
 # ===========================================================================
+# Opt-in execution: 0 = reduced functional success, 20 = unsupported before
+# execution (use the existing tester), other = preserve evidence; do not rerun.
+execute_step_run_sealed_functional() {
+    local _L; _L="$(_LOG)"
+    rj execute-functional --worktree "$(_wt)"
+}
+
 execute_step_combine_verification_results() {
     local _L; _L="$(_LOG)"
     local route arches patch pool manifest

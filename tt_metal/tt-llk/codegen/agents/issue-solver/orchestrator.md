@@ -171,6 +171,17 @@ successful empty fix.
 
 ## 4. Functional Verification
 
+When `run.json.functional_executor` is `sealed-llk-v1` (enabled at initialization),
+call `execute_step_run_sealed_functional` after routing/sealing and before
+spawning a tester. It supports audit LLK silicon and explicitly marked host
+leaves. Exit 20 means no leaf executed: follow the normal tester route below.
+Exit 0 means every sealed functional leaf passed; skip the tester invocation
+and continue the existing combiner, review and performance gates. Any other
+exit preserves partial evidence in `run.json.functional_execution` and raw
+leaf logs: diagnose that failure through the existing retry path; do not
+resubmit successful or unresolved jobs to obtain a narrative summary. A changed
+candidate needs a new sealed attempt and all its required evidence.
+
 `VERIFY_ROUTE` is a canonical `+`-separated subset of `llk`, `metal`, and
 `ttnn`. Run every named suite, in that order:
 

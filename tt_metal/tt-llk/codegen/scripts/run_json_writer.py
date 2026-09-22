@@ -238,6 +238,9 @@ def _merge_patch(doc: dict[str, Any], patch: dict[str, Any]) -> None:
 def cmd_init(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
     start_time = args.start_time or _utcnow()
+    executor = os.environ.get("CODEGEN_FUNCTIONAL_EXECUTOR") or None
+    if executor not in (None, "sealed-llk-v1"):
+        raise ValueError("unsupported CODEGEN_FUNCTIONAL_EXECUTOR")
 
     doc: dict[str, Any] = {
         "run_id": args.run_id,
@@ -359,6 +362,10 @@ def cmd_init(args: argparse.Namespace) -> None:
     patch = _json_arg(args.patch_json, {})
     _merge_patch(doc, patch)
 
+    doc.pop("functional_execution", None)
+    doc.pop("functional_executor", None)
+    if executor:
+        doc["functional_executor"] = executor
     _atomic_write(log_dir, doc)
     print(f"init: wrote {_run_json_path(log_dir)}")
 
@@ -524,6 +531,12 @@ def cmd_failure(args: argparse.Namespace) -> None:
 def cmd_metric(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
     patch = _json_arg(args.patch_json, {})
+    if any(
+        next((part for part in key.split(".") if part), "")
+        in {"functional_executor", "functional_execution"}
+        for key in patch
+    ):
+        raise ValueError("functional execution identity belongs to init/executor")
     with _run_json_transaction(log_dir) as doc:
         _merge_patch(doc, patch)
     print(f"metric: patched {sorted(patch)}")
@@ -605,6 +618,8 @@ def cmd_finalize(args: argparse.Namespace) -> None:
         "runner_pool",
         "required_verification",
         "verification_reduction",
+        "functional_executor",
+        "functional_execution",
         "review",
     }
     for key in patch:
@@ -2391,13 +2406,6 @@ def _host_provenance(
     if document["inputs"] != current:
         markers.append("host_inputs_mutated_during_execution")
     nodeids = collection.get("nodeids")
-    if (
-        not isinstance(nodeids, list)
-        or len(nodeids) != collection["selected"]
-        or any(not isinstance(n, str) or not n for n in nodeids)
-        or len(set(nodeids)) != len(nodeids)
-    ):
-        raise ValueError("invalid exact host collection nodeids")
     observed = []
     junit_path = Path(args.junit)
     if junit_path.is_file():
@@ -2439,9 +2447,7 @@ def _host_provenance(
     }
 
 
-def cmd_verification_result(args: argparse.Namespace) -> int:
-    collection = json.loads(Path(args.collection_json).read_text(encoding="utf-8"))
-    host = args.backend == "host"
+def _validate_collection(collection: dict, *, host: bool) -> dict:
     expected_collection = {
         "schema",
         "version",
@@ -2468,6 +2474,23 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
             raise ValueError(f"collection {field} is invalid")
     if collection["collected"] < collection["selected"]:
         raise ValueError("collection selected count exceeds collected count")
+
+    if host:
+        nodeids = collection.get("nodeids")
+        if (
+            not isinstance(nodeids, list)
+            or len(nodeids) != collection["selected"]
+            or any(not isinstance(n, str) or not n for n in nodeids)
+            or len(set(nodeids)) != len(nodeids)
+        ):
+            raise ValueError("invalid exact host collection nodeids")
+    return collection
+
+
+def cmd_verification_result(args: argparse.Namespace) -> int:
+    collection = json.loads(Path(args.collection_json).read_text(encoding="utf-8"))
+    host = args.backend == "host"
+    _validate_collection(collection, host=host)
 
     marker_codes = list(args.infrastructure_code or [])
     output = ""
@@ -3239,6 +3262,431 @@ def cmd_verification_retry_context(args: argparse.Namespace) -> None:
             sort_keys=True,
         )
     )
+
+
+def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
+    """Preflight the whole supported route before executing any sealed leaf."""
+    run = _load(log_dir)
+    if (
+        run.get("functional_executor") != "sealed-llk-v1"
+        or run.get("runner_pool") != "audit"
+    ):
+        return {"supported": False, "reason": "not_opted_in_audit"}
+    log_dir, worktree = log_dir.resolve(strict=True), worktree.resolve(strict=True)
+    state = json.loads((log_dir / "state.json").read_text())
+    bootstrap = json.loads(
+        (worktree / "tt_metal/tt-llk/.codegen_run_state.json").read_text()
+    )
+    for data in (state, bootstrap):
+        if (
+            data.get("RUN_ID") != run["run_id"]
+            or Path(data.get("LOG_DIR") or "").resolve() != log_dir
+        ):
+            raise ValueError("functional execution run/bootstrap identity mismatch")
+    if Path(state.get("WORKTREE_DIR") or "").resolve() != worktree or (
+        run.get("worktree_dir") and Path(run["worktree_dir"]).resolve() != worktree
+    ):
+        raise ValueError("functional execution worktree identity mismatch")
+    if run.get("status") != "running":
+        raise ValueError("functional execution requires a running attempt")
+    manifest_path = Path(state["REQUIRED_VERIFICATION_MANIFEST"]).resolve(strict=True)
+    if not manifest_path.is_relative_to(log_dir):
+        raise ValueError("functional manifest must belong to this run")
+    manifest = _load_required_manifest(manifest_path)
+    current = run.get("required_verification") or {}
+    if (
+        manifest["run_id"] != run["run_id"]
+        or run.get("base_commit") != manifest["expected_base_sha"]
+        or state.get("GIT_COMMIT") != manifest["expected_base_sha"]
+        or any(
+            current.get(key) != manifest[key] for key in ("manifest_id", "attempt_id")
+        )
+        or state.get("REQUIRED_VERIFICATION_MANIFEST_ID") != manifest["manifest_id"]
+        or state.get("REQUIRED_VERIFICATION_ATTEMPT_ID") != manifest["attempt_id"]
+    ):
+        raise ValueError(
+            "functional manifest is not the current sealed run/attempt/base"
+        )
+    leaves = [r for r in manifest["requirements"] if r["suite"] != "perf"]
+    if (
+        not leaves
+        or manifest["waivers"]
+        or any(
+            r["suite"] != "llk"
+            or r["architecture"] not in {"blackhole", "wormhole"}
+            or r["backend"] not in {"silicon", "host"}
+            or r["required_measurements"]
+            for r in leaves
+        )
+    ):
+        return {"supported": False, "reason": "unsupported_functional_route"}
+    dispatch = (
+        shlex.split(state.get("HW_TEST_DISPATCH_CMD") or "")
+        if any(r["backend"] == "silicon" for r in leaves)
+        else []
+    )
+    if any(r["backend"] == "silicon" for r in leaves) and not dispatch:
+        return {"supported": False, "reason": "sealed_dispatch_unavailable"}
+    llk = worktree / "tt_metal/tt-llk"
+    wrapper = Path(__file__).resolve().parents[2] / ".claude/scripts/run_test.sh"
+    commands = []
+    for leaf in leaves:
+        identity = leaf["requirement_id"]
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", identity):
+            raise ValueError("unsafe functional requirement identity")
+        selector = leaf["selector"]
+        test_path = (llk / "tests/python_tests" / selector["test"]).resolve()
+        if (
+            not test_path.is_relative_to(llk / "tests/python_tests")
+            or not test_path.is_file()
+            or (
+                selector["test_id"] is not None
+                and not selector["test_id"].startswith(selector["test"] + "::")
+            )
+        ):
+            raise ValueError("functional selector is not a current contained test")
+        result = (
+            log_dir
+            / "verification-results"
+            / manifest["attempt_id"]
+            / f"{identity}.json"
+        )
+        env = {
+            "CODEGEN_RUN_ID": run["run_id"],
+            "CODEGEN_ATTEMPT_ID": manifest["attempt_id"],
+            "CODEGEN_REQUIREMENT_ID": identity,
+            "CODEGEN_VERIFICATION_SUITE": "llk",
+            "CODEGEN_VERIFICATION_BACKEND": leaf["backend"],
+            "CODEGEN_REQUIRED_VERIFICATION_MANIFEST": str(manifest_path),
+            "CODEGEN_BASE_COMMIT": manifest["expected_base_sha"],
+        }
+        if leaf["backend"] == "silicon":
+            argv = dispatch + [
+                "--log-dir",
+                str(log_dir),
+                "--requirement-id",
+                identity,
+                "--result-json-out",
+                str(result),
+            ]
+        else:
+            argv = [
+                "bash",
+                str(wrapper),
+                "host",
+                "--worktree",
+                str(llk),
+                "--arch",
+                leaf["architecture"],
+                "--test",
+                selector["test"],
+                "--log-dir",
+                str(log_dir),
+                "--result-json-out",
+                str(result),
+            ]
+            for field, flag in (("test_id", "--test-id"), ("k", "--k")):
+                if selector[field] is not None:
+                    argv.extend([flag, selector[field]])
+        commands.append({"leaf": leaf, "argv": argv, "env": env, "result": str(result)})
+    return {
+        "supported": True,
+        "run_id": run["run_id"],
+        "manifest_id": manifest["manifest_id"],
+        "attempt_id": manifest["attempt_id"],
+        "base": manifest["expected_base_sha"],
+        "patch_sha256": _candidate_patch_digest(
+            worktree, manifest["expected_base_sha"]
+        ),
+        "manifest": str(manifest_path),
+        "commands": commands,
+        "dispatch": dispatch,
+    }
+
+
+def cmd_execute_functional(args: argparse.Namespace) -> int:
+    """Opt-in audit adapter over existing executors, never a success finalizer."""
+    log_dir, worktree = Path(args.log_dir).resolve(), Path(args.worktree).resolve()
+    plan = _functional_execution_plan(log_dir, worktree)
+    if not plan["supported"]:
+        print("functional-execution fallback: " + plan["reason"])
+        return 20
+    identity = {
+        k: plan[k] for k in ("run_id", "manifest_id", "attempt_id", "patch_sha256")
+    }
+    previous = _load(log_dir).get("functional_execution") or {}
+    if previous.get("manifest_id") == plan["manifest_id"]:
+        # Never submit a possibly still-running job or repeat a completed leaf.
+        if not all(previous.get(k) == v for k, v in identity.items()):
+            raise ValueError(
+                "recorded functional attempt belongs to a different candidate"
+            )
+        print("functional-execution already recorded; no leaf will be resubmitted")
+        if previous.get("status") != "success":
+            return 1
+        cmd_reduce_verification(
+            argparse.Namespace(
+                log_dir=str(log_dir),
+                manifest=plan["manifest"],
+                results_dir=str(log_dir / "verification-results"),
+                scope="functional",
+                worktree=str(worktree),
+                perf_result=None,
+                output=None,
+            )
+        )
+        reduction = _load_verification_reduction(
+            log_dir / "verification_reduction.json"
+        )
+        if reduction["classification"] != "success":
+            with _run_json_transaction(log_dir) as run:
+                run["functional_execution"]["status"] = "failed"
+            return 1
+        return 0
+    existing_results = log_dir / "verification-results"
+    if existing_results.exists():
+        for path in existing_results.rglob("*.json"):
+            receipt = _load_verification_result(path)
+            if all(receipt[key] == plan[key] for key in ("run_id", "attempt_id")):
+                raise ValueError(
+                    "current-attempt receipts already exist; inspect them without resubmitting"
+                )
+    if args.timeout <= 0 or not args.timeout < float("inf"):
+        raise ValueError("functional timeout must be finite and positive")
+    # Check the complete executor interface and host fixture eligibility before
+    # any test body or queue submission. Collection may import Python modules.
+    if plan["dispatch"]:
+        help_result = subprocess.run(
+            plan["dispatch"] + ["--help"], capture_output=True, text=True, timeout=10
+        )
+        if help_result.returncode or any(
+            flag not in help_result.stdout
+            for flag in ("--requirement-id", "--describe", "--result-json-out")
+        ):
+            print("functional-execution fallback: dispatcher lacks sealed interface")
+            return 20
+    for command in plan["commands"]:
+        leaf = command["leaf"]
+        argv = command["argv"] + (
+            ["--describe"] if leaf["backend"] == "silicon" else ["--collect-only"]
+        )
+        try:
+            proc = subprocess.run(
+                argv,
+                cwd=worktree / "tt_metal/tt-llk",
+                env={**os.environ, **command["env"]},
+                capture_output=True,
+                text=True,
+                timeout=10 if leaf["backend"] == "silicon" else None,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            if _functional_execution_plan(log_dir, worktree) != plan:
+                raise ValueError(
+                    "functional identity changed during preflight"
+                ) from exc
+            print(
+                f"functional-execution preflight unavailable: {leaf['requirement_id']}: {exc}"
+            )
+            return 20
+        if _functional_execution_plan(log_dir, worktree) != plan:
+            raise ValueError("functional identity changed during preflight")
+        if proc.returncode:
+            print(
+                f"functional-execution preflight failed: {leaf['requirement_id']}: {proc.stderr}"
+            )
+            return 20  # No leaf has executed: the existing tester owns diagnosis.
+        document = json.loads(proc.stdout)
+        if leaf["backend"] == "silicon":
+            expected = {
+                "run_id": plan["run_id"],
+                "attempt_id": plan["attempt_id"],
+                "manifest_id": plan["manifest_id"],
+                "requirement_id": leaf["requirement_id"],
+                "arch": leaf["architecture"],
+                "kind": "llk",
+                "base": plan["base"],
+                "worktree": str(worktree),
+                "runner_pool": "audit",
+                "copy_result_json": True,
+                "test": leaf["selector"]["test_id"] or leaf["selector"]["test"],
+                "test_filter": leaf["selector"]["k"],
+                "result_json_out": command["result"],
+            }
+            if any(document.get(k) != v for k, v in expected.items()):
+                raise ValueError(
+                    "sealed dispatcher description changed functional identity"
+                )
+        elif (
+            _validate_collection(document, host=True)["errors"] != 0
+            or document["returncode"] != 0
+            or document["selected"]
+            < max(leaf["minimum_selected"], leaf["minimum_executed"])
+        ):
+            print(
+                f"functional-execution fallback: host selection incomplete: {leaf['requirement_id']}"
+            )
+            return 20
+    if _functional_execution_plan(log_dir, worktree) != plan:
+        raise ValueError("functional identity changed during preflight")
+    record = {**identity, "status": "running", "leaves": []}
+    with _run_json_transaction(log_dir) as run:
+        if (run.get("functional_execution") or {}).get("manifest_id") == plan[
+            "manifest_id"
+        ]:
+            raise ValueError("functional attempt was already claimed")
+        run["functional_execution"] = record
+    cmd_advance(
+        argparse.Namespace(
+            log_dir=str(log_dir),
+            now=None,
+            new_step="tester",
+            new_message="Executing sealed functional requirements",
+            prev_result="success",
+            prev_message="Fix applied; full functional route preflight passed",
+            agent=None,
+        )
+    )
+    stopped = None
+    for command in plan["commands"]:
+        leaf = command["leaf"]
+        evidence_log = (
+            log_dir / f"functional-{plan['attempt_id']}-{leaf['requirement_id']}.log"
+        )
+        entry = {
+            "requirement_id": leaf["requirement_id"],
+            "status": "running",
+            "log": str(evidence_log),
+            "result": command["result"],
+            "invocation_started": False,
+        }
+        try:
+            if _functional_execution_plan(log_dir, worktree) != plan:
+                raise ValueError("functional identity changed before next leaf")
+            record["leaves"].append(entry)
+            with _run_json_transaction(log_dir) as run:
+                run["functional_execution"] = record
+                run["current_step_message"] = (
+                    f"Verifying sealed leaf {leaf['requirement_id']}"
+                )
+            argv = command["argv"] + (
+                ["--timeout", str(args.timeout)] if leaf["backend"] == "silicon" else []
+            )
+            with evidence_log.open("w") as output:
+                entry["invocation_started"] = True
+                with _run_json_transaction(log_dir) as run:
+                    run["functional_execution"] = record
+                proc = subprocess.run(
+                    argv,
+                    cwd=worktree / "tt_metal/tt-llk",
+                    env={**os.environ, **command["env"]},
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
+            entry["returncode"] = proc.returncode
+            marker_lines = re.findall(
+                r"^HW_TEST_RESULT .*$", evidence_log.read_text(), re.MULTILINE
+            )
+            markers = [
+                dict(
+                    part.split("=", 1) for part in shlex.split(line)[1:] if "=" in part
+                )
+                for line in marker_lines
+            ]
+            marker = markers[-1] if markers else {}
+            entry["queue_job_id"] = (
+                marker.get("job") if marker.get("job") != "-" else None
+            )
+            entry["failure_stage"] = marker.get("failure_stage")
+            entry["summary"] = marker.get("summary")
+            receipt = _load_verification_result(Path(command["result"]))
+            if leaf["backend"] == "silicon" and (
+                len(markers) != 1
+                or receipt["job_id"] != entry["queue_job_id"]
+                or marker.get("arch") != leaf["architecture"]
+            ):
+                raise ValueError("executor receipt does not match its dispatched job")
+            if (
+                any(receipt[k] != plan[k] for k in ("run_id", "attempt_id"))
+                or any(
+                    receipt[k] != leaf[k]
+                    for k in (
+                        "requirement_id",
+                        "architecture",
+                        "suite",
+                        "backend",
+                        "selector",
+                    )
+                )
+                or receipt["provenance"]["patch_sha256"] != plan["patch_sha256"]
+                or any(
+                    receipt["provenance"][k] != plan["base"]
+                    for k in ("expected_base_sha", "actual_base_sha")
+                )
+            ):
+                raise ValueError(
+                    "executor receipt does not match sealed candidate/leaf"
+                )
+            entry.update(status="recorded", result_id=receipt["result_id"])
+            if proc.returncode and receipt["classification"] == "success":
+                raise ValueError("executor failed despite a success-shaped receipt")
+            if receipt["classification"] in {"infra_error", "timed_out"}:
+                stopped = "executor infrastructure failure: " + ", ".join(
+                    receipt["reason_codes"]
+                )
+                break
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            stopped = str(exc)
+            entry.update(status="unresolved", error=stopped)
+            if entry not in record["leaves"]:
+                record["leaves"].append(entry)
+            break
+        finally:
+            with _run_json_transaction(log_dir) as run:
+                run["functional_execution"] = record
+    try:
+        if _functional_execution_plan(log_dir, worktree) != plan:
+            raise ValueError("functional identity changed after execution")
+        cmd_reduce_verification(
+            argparse.Namespace(
+                log_dir=str(log_dir),
+                manifest=plan["manifest"],
+                results_dir=str(log_dir / "verification-results"),
+                scope="functional",
+                worktree=str(worktree),
+                perf_result=None,
+                output=None,
+            )
+        )
+        reduction = _load_verification_reduction(
+            log_dir / "verification_reduction.json"
+        )
+        record["status"] = (
+            "success"
+            if not stopped and reduction["classification"] == "success"
+            else "failed"
+        )
+        record["reduction_id"] = reduction["reduction_id"]
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        stopped = f"{stopped}; reduction failed: {exc}" if stopped else str(exc)
+        record["status"] = "failed"
+    record["error"] = stopped
+    record["unstarted"] = [
+        c["leaf"]["requirement_id"]
+        for c in plan["commands"]
+        if not any(
+            r["requirement_id"] == c["leaf"]["requirement_id"]
+            and r["invocation_started"]
+            for r in record["leaves"]
+        )
+    ]
+    with _run_json_transaction(log_dir) as run:
+        run["functional_execution"] = record
+    print(
+        "functional-execution: "
+        + record["status"]
+        + (f": {stopped}" if stopped else "")
+    )
+    return 0 if record["status"] == "success" else 1
 
 
 def cmd_reduce_verification(args: argparse.Namespace) -> int:
@@ -4075,6 +4523,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_common(retry_context)
     retry_context.set_defaults(func=cmd_verification_retry_context)
+
+    functional = sub.add_parser(
+        "execute-functional",
+        help="Opt-in sealed audit LLK execution; exit20 means unsupported before submission",
+    )
+    _add_common(functional)
+    functional.add_argument("--worktree", required=True)
+    functional.add_argument("--timeout", type=float, default=1800)
+    functional.set_defaults(func=cmd_execute_functional)
 
     review = sub.add_parser(
         "review", help="Prepare, record or check a candidate-bound review"

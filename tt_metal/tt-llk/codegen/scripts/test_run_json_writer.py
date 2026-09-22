@@ -5764,3 +5764,642 @@ def test_feedback_wrapper_preserves_explicit_pre_execution_compile_retry(
     run = json.loads(path.read_text())
     assert run["current_step"] == "fix_tests"
     assert run["status"] != "success"
+
+
+# Real Git, host pytest and strict reducer; only silicon dispatch is faked.
+def _functional_fixture(tmp_path, monkeypatch, requirements=None, host_body=None):
+    import argparse
+    import importlib.util
+
+    tree, _, base = _host_worktree(
+        tmp_path,
+        host_body
+        or """import pytest
+pytestmark=pytest.mark.llk_host
+@pytest.mark.parametrize("value", range(19))
+def test_host(value): assert value >= 0
+""",
+    )
+    root, logs = tree.parents[1], tmp_path / "logs"
+    logs.mkdir()
+    host = _requirement(
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+        minimum_selected=19,
+        minimum_executed=19,
+    )
+    device = _requirement(
+        index=2,
+        selector={
+            "test": "test_device.py",
+            "test_id": "test_device.py::test_device",
+            "k": None,
+        },
+        minimum_selected=35,
+        minimum_executed=35,
+    )
+    manifest, path = _reducer_manifest(logs, requirements or [host, device])
+    manifest.update(version=2, expected_base_sha=base)
+    manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+    path.write_text(json.dumps(manifest))
+    state = {
+        "RUN_ID": manifest["run_id"],
+        "LOG_DIR": str(logs),
+        "WORKTREE_DIR": str(root),
+        "GIT_COMMIT": base,
+        "REQUIRED_VERIFICATION_MANIFEST": str(path),
+        "REQUIRED_VERIFICATION_MANIFEST_ID": manifest["manifest_id"],
+        "REQUIRED_VERIFICATION_ATTEMPT_ID": manifest["attempt_id"],
+        "HW_TEST_DISPATCH_CMD": "sealed-dispatch-fixture",
+    }
+    (logs / "state.json").write_text(json.dumps(state))
+    (tree / ".codegen_run_state.json").write_text(
+        json.dumps({"RUN_ID": manifest["run_id"], "LOG_DIR": str(logs)})
+    )
+    (logs / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": manifest["run_id"],
+                "status": "running",
+                "runner_pool": "audit",
+                "base_commit": base,
+                "functional_executor": "sealed-llk-v1",
+                "required_verification": {
+                    "manifest_id": manifest["manifest_id"],
+                    "attempt_id": manifest["attempt_id"],
+                },
+            }
+        )
+    )
+    spec = importlib.util.spec_from_file_location("sealed_functional_writer", SCRIPT)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    monkeypatch.setenv("TT_LLK_LOCAL_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("CODEGEN_HOST_TIMEOUT_SECS", "10")
+    monkeypatch.delenv("CODEGEN_PATCH_SHA256", raising=False)
+    return (
+        writer,
+        argparse.Namespace(log_dir=str(logs), worktree=str(root), timeout=30),
+        manifest,
+        tree,
+    )
+
+
+def _fake_functional_dispatch(
+    monkeypatch,
+    writer,
+    args,
+    manifest,
+    *,
+    outcomes=None,
+    mutate=None,
+    bad_description=None,
+    missing=False,
+    job_mismatch=False,
+):
+    real_run, calls = subprocess.run, []
+    plan = writer._functional_execution_plan(Path(args.log_dir), Path(args.worktree))
+    commands = {c["leaf"]["requirement_id"]: c for c in plan["commands"]}
+
+    def fake(argv, **kwargs):
+        if argv[0] != "sealed-dispatch-fixture":
+            return real_run(argv, **kwargs)
+        calls.append(list(argv))
+        if "--help" in argv:
+            return subprocess.CompletedProcess(
+                argv, 0, "--requirement-id --describe --result-json-out", ""
+            )
+        identity = argv[argv.index("--requirement-id") + 1]
+        command = commands[identity]
+        leaf = command["leaf"]
+        if "--describe" in argv:
+            context = {
+                "run_id": plan["run_id"],
+                "attempt_id": plan["attempt_id"],
+                "manifest_id": plan["manifest_id"],
+                "requirement_id": identity,
+                "arch": leaf["architecture"],
+                "kind": "llk",
+                "base": plan["base"],
+                "worktree": args.worktree,
+                "runner_pool": "audit",
+                "copy_result_json": True,
+                "test": leaf["selector"]["test_id"] or leaf["selector"]["test"],
+                "test_filter": leaf["selector"]["k"],
+                "result_json_out": command["result"],
+            }
+            context.update(bad_description or {})
+            return subprocess.CompletedProcess(argv, 0, json.dumps(context), "")
+        assert kwargs["env"].items() >= command["env"].items()
+        assert kwargs["cwd"] == Path(args.worktree) / "tt_metal/tt-llk"
+        assert argv[-2:] == ["--timeout", "30"]
+        job_id = "job-device" if leaf["architecture"] == "blackhole" else "job-wormhole"
+        kwargs["stdout"].write(
+            f'HW_TEST_RESULT arch={leaf["architecture"]} ok=true ran=true passed=true job={job_id} failure_stage=build summary="fixture build output"\n'
+        )
+        if not missing:
+            counts = {"selected": 35, "executed": 35, "passed": 35, **(outcomes or {})}
+            result = _sealed_result(
+                manifest,
+                leaf,
+                patch_sha256=plan["patch_sha256"],
+                job_id="wrong-job" if job_mismatch else job_id,
+                **counts,
+            )
+            output = Path(command["result"])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(result))
+        if mutate:
+            mutate()
+        return subprocess.CompletedProcess(argv, 1 if missing else 0)
+
+    monkeypatch.setattr(writer.subprocess, "run", fake)
+    return calls
+
+
+def _submitted(calls):
+    return [c for c in calls if "--help" not in c and "--describe" not in c]
+
+
+def test_sealed_functional_executes_real_host_and_exact_device_once(
+    tmp_path, monkeypatch
+):
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 0
+    log = Path(args.log_dir)
+    run = json.loads((log / "run.json").read_text())
+    reduction = json.loads((log / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "success"
+    assert reduction["tests_total"] == reduction["tests_passed"] == 54
+    assert reduction["scope"] == "functional" and reduction["success_token"] is None
+    assert run["status"] == "running" and run["current_step"] == "tester"
+    assert [r["requirement_id"] for r in run["functional_execution"]["leaves"]] == [
+        r["requirement_id"] for r in manifest["requirements"]
+    ]
+    assert len(_submitted(calls)) == 1
+    before = list(calls)
+    assert writer.cmd_execute_functional(args) == 0 and calls == before
+    Path(run["functional_execution"]["leaves"][0]["result"]).unlink()
+    assert writer.cmd_execute_functional(args) == 1 and calls == before
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "def test_unmarked(): pass\n",
+        "import not_a_real_host_dependency\n",
+        """import pytest
+pytestmark=pytest.mark.llk_host
+@pytest.fixture
+def device(): raise AssertionError("device executed")
+def test_device(device): pass
+""",
+    ],
+)
+def test_sealed_functional_unsupported_host_preflights_whole_route(
+    tmp_path, monkeypatch, body, capsys
+):
+    device = _requirement(
+        selector={"test": "test_device.py", "test_id": None, "k": None}
+    )
+    host = _requirement(
+        index=2,
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+    )
+    writer, args, manifest, _ = _functional_fixture(
+        tmp_path, monkeypatch, [device, host], body
+    )
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 20 and not _submitted(calls)
+    assert "preflight failed" in capsys.readouterr().out
+    assert "functional_execution" not in json.loads(
+        (Path(args.log_dir) / "run.json").read_text()
+    )
+    assert not (Path(args.log_dir) / "verification-results").exists()
+
+
+@pytest.mark.parametrize(
+    "defect", ["prod", "disabled", "metal", "simulator", "dispatch"]
+)
+def test_sealed_functional_unsupported_plan_never_executes(
+    tmp_path, monkeypatch, defect
+):
+    requirements = [
+        _requirement(selector={"test": "test_device.py", "test_id": None, "k": None})
+    ]
+    if defect == "metal":
+        requirements.append(_requirement(suite="metal"))
+    if defect == "simulator":
+        requirements[0]["backend"] = "ttsim"
+    writer, args, _, _ = _functional_fixture(tmp_path, monkeypatch, requirements)
+    logs = Path(args.log_dir)
+    if defect in {"prod", "disabled"}:
+        run = json.loads((logs / "run.json").read_text())
+        run["runner_pool" if defect == "prod" else "functional_executor"] = (
+            "prod" if defect == "prod" else None
+        )
+        (logs / "run.json").write_text(json.dumps(run))
+    if defect == "dispatch":
+        state = json.loads((logs / "state.json").read_text())
+        state["HW_TEST_DISPATCH_CMD"] = ""
+        (logs / "state.json").write_text(json.dumps(state))
+    calls = []
+    monkeypatch.setattr(writer.subprocess, "run", lambda *a, **k: calls.append(a))
+    assert writer.cmd_execute_functional(args) == 20 and calls == []
+
+
+@pytest.mark.parametrize(
+    "defect", ["run", "attempt", "worktree", "base", "description"]
+)
+def test_sealed_functional_rejects_foreign_identity_before_dispatch(
+    tmp_path, monkeypatch, defect
+):
+    writer, args, manifest, tree = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(
+        monkeypatch,
+        writer,
+        args,
+        manifest,
+        bad_description={"run_id": "wrong"} if defect == "description" else None,
+    )
+    state_path = Path(args.log_dir) / "state.json"
+    state = json.loads(state_path.read_text())
+    if defect == "run":
+        state["RUN_ID"] = "wrong"
+    if defect == "attempt":
+        state["REQUIRED_VERIFICATION_ATTEMPT_ID"] = "wrong"
+    if defect == "worktree":
+        state["WORKTREE_DIR"] = str(tree)
+    if defect == "base":
+        state["GIT_COMMIT"] = "0" * 40
+    state_path.write_text(json.dumps(state))
+    with pytest.raises(ValueError, match="identity|current sealed"):
+        writer.cmd_execute_functional(args)
+    assert not _submitted(calls)
+
+
+@pytest.mark.parametrize(
+    "defect", ["skips", "numerical", "missing", "wrong_job", "mutation"]
+)
+def test_sealed_functional_preserves_partial_and_never_falls_back(
+    tmp_path, monkeypatch, defect
+):
+    device = _requirement(
+        selector={"test": "test_device.py", "test_id": None, "k": None}
+    )
+    host = _requirement(
+        index=2,
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+    )
+    writer, args, manifest, tree = _functional_fixture(
+        tmp_path, monkeypatch, [device, host]
+    )
+    counts = (
+        {"executed": 22, "passed": 22, "skipped": 13}
+        if defect == "skips"
+        else (
+            {"passed": 34, "failed": 1, "returncode": 1}
+            if defect == "numerical"
+            else {}
+        )
+    )
+    mutate = (
+        (
+            lambda: (tree / "tests/python_tests/test_device.py").write_text(
+                "def test_device(): assert False\n"
+            )
+        )
+        if defect == "mutation"
+        else None
+    )
+    calls = _fake_functional_dispatch(
+        monkeypatch,
+        writer,
+        args,
+        manifest,
+        outcomes=counts,
+        missing=defect == "missing",
+        job_mismatch=defect == "wrong_job",
+        mutate=mutate,
+    )
+    assert writer.cmd_execute_functional(args) == 1
+    logs = Path(args.log_dir)
+    record = json.loads((logs / "run.json").read_text())["functional_execution"]
+    assert record["status"] == "failed" and len(_submitted(calls)) == 1
+    if defect in {"missing", "wrong_job", "mutation"}:
+        assert record["leaves"][0]["queue_job_id"] == "job-device" and record["error"]
+        assert record["leaves"][0]["failure_stage"] == "build"
+        assert record["leaves"][0]["summary"] == "fixture build output"
+        assert record["unstarted"] == [host["requirement_id"]]
+    else:
+        reduction = json.loads((logs / "verification_reduction.json").read_text())
+        assert reduction["classification"] == (
+            "coverage_error" if defect == "skips" else "candidate_failure"
+        )
+        assert len(record["leaves"]) == 2
+    before = list(calls)
+    if defect == "mutation":
+        with pytest.raises(ValueError, match="different candidate"):
+            writer.cmd_execute_functional(args)
+    else:
+        assert writer.cmd_execute_functional(args) == 1
+    assert calls == before
+
+
+def test_host_collect_only_never_executes_or_emits_receipt(tmp_path):
+    proc, receipt, tree = _host_run(
+        tmp_path,
+        """from pathlib import Path
+import pytest
+pytestmark=pytest.mark.llk_host
+@pytest.mark.parametrize("value", range(19))
+def test_host(value): Path("BODY_RAN").write_text("bad")
+""",
+        extra=("--collect-only",),
+        env_extra={"CONSUMER_RETURN_CODE": "0"},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["selected"] == 19
+    assert receipt is None and not (tree / "tests/python_tests/BODY_RAN").exists()
+    assert "[RESULT]" not in proc.stderr
+    assert not list(tmp_path.rglob("consumer-junit.xml"))
+
+
+def test_host_collect_only_rejects_nonhost_modes(tmp_path):
+    proc = subprocess.run(
+        ["bash", str(RUN_TEST), "compile", "--collect-only"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 4 and "host-only" in proc.stderr
+
+
+@pytest.mark.parametrize("defect", ["nodeids", "version", "mutation"])
+def test_sealed_functional_collection_faults_cannot_admit_silicon(
+    tmp_path, monkeypatch, defect
+):
+    writer, args, manifest, tree = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    real_run = writer.subprocess.run
+
+    def collector(argv, **kwargs):
+        if "--collect-only" in argv:
+            if defect == "mutation":
+                (tree / "tests/python_tests/test_device.py").write_text(
+                    "def test_device(): assert False\n"
+                )
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "import failed after mutation"
+                )
+            doc = {
+                "schema": "tt.issue-solver.pytest-collection",
+                "version": 2,
+                "selected": 19,
+                "collected": 19,
+                "errors": 0,
+                "returncode": 0,
+                "nodeids": [f"test_host.py::test_host[{n}]" for n in range(19)],
+            }
+            if defect == "version":
+                doc["version"] = 1
+            else:
+                doc["nodeids"][1] = doc["nodeids"][0]
+            return subprocess.CompletedProcess(argv, 0, json.dumps(doc), "")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(writer.subprocess, "run", collector)
+    with pytest.raises(ValueError, match="schema|nodeids|identity changed"):
+        writer.cmd_execute_functional(args)
+    assert not _submitted(calls)
+
+
+def test_sealed_functional_refuses_preexisting_attempt_receipts(tmp_path, monkeypatch):
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    results = Path(args.log_dir) / "verification-results" / manifest["attempt_id"]
+    results.mkdir(parents=True)
+    (results / "existing.json").write_text(
+        json.dumps(_sealed_result(manifest, manifest["requirements"][1]))
+    )
+    with pytest.raises(ValueError, match="already exist"):
+        writer.cmd_execute_functional(args)
+    assert calls == []
+
+
+@pytest.mark.parametrize("mode", [None, "sealed-llk-v1", "unknown"])
+def test_sealed_functional_optin_only_initialized_from_environment(
+    tmp_path, monkeypatch, mode
+):
+    if mode:
+        monkeypatch.setenv("CODEGEN_FUNCTIONAL_EXECUTOR", mode)
+    else:
+        monkeypatch.delenv("CODEGEN_FUNCTIONAL_EXECUTOR", raising=False)
+    command = [
+        sys.executable,
+        str(SCRIPT),
+        "init",
+        "--log-dir",
+        str(tmp_path),
+        "--run-id",
+        "run-test",
+        "--kernel",
+        "test",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "writer",
+        "--first-message",
+        "fix",
+        "--patch-json",
+        '{"functional_executor":"forged","functional_execution":{"status":"success"}}',
+    ]
+    proc = subprocess.run(command, capture_output=True, text=True)
+    if mode == "unknown":
+        assert proc.returncode != 0 and not (tmp_path / "run.json").exists()
+        return
+    assert proc.returncode == 0, proc.stderr
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc.get("functional_executor") == mode and "functional_execution" not in doc
+    for key in (
+        "functional_executor",
+        "functional_execution.status",
+        ".functional_execution.status",
+    ):
+        before = (tmp_path / "run.json").read_bytes()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "metric",
+                "--log-dir",
+                str(tmp_path),
+                "--patch-json",
+                json.dumps({key: "success"}),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0 and (tmp_path / "run.json").read_bytes() == before
+
+
+def test_sealed_functional_existing_shell_step_real_host_only(tmp_path, monkeypatch):
+    host = _requirement(
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+        minimum_selected=19,
+        minimum_executed=19,
+    )
+    _, args, _, tree = _functional_fixture(tmp_path, monkeypatch, [host])
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_run_sealed_functional',
+            "step",
+            str(ORCHESTRATOR_STEPS.resolve()),
+        ],
+        cwd=tree,
+        capture_output=True,
+        text=True,
+        timeout=40,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert run["functional_execution"]["status"] == "success"
+    assert run["tests_passed"] == 19 and run["status"] == "running"
+    assert not (tree / "tests/sfpi").exists()
+
+
+def test_sealed_functional_terminal_timeout_preserves_unexecuted_coverage(
+    tmp_path, monkeypatch
+):
+    device = _requirement(
+        selector={"test": "test_device.py", "test_id": None, "k": None}
+    )
+    host = _requirement(
+        index=2,
+        backend="host",
+        selector={"test": "test_host.py", "test_id": None, "k": None},
+    )
+    writer, args, manifest, _ = _functional_fixture(
+        tmp_path, monkeypatch, [device, host]
+    )
+    calls = _fake_functional_dispatch(
+        monkeypatch,
+        writer,
+        args,
+        manifest,
+        outcomes={"executed": 0, "passed": 0, "timed_out": True, "returncode": 124},
+    )
+    assert writer.cmd_execute_functional(args) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    record = run["functional_execution"]
+    assert record["leaves"][0]["status"] == "recorded"
+    assert record["unstarted"] == [host["requirement_id"]]
+    assert "execution_timed_out" in record["error"] and len(_submitted(calls)) == 1
+    assert run["status"] == "running"
+
+
+def test_sealed_functional_old_dispatch_interface_falls_back_before_any_leaf(
+    tmp_path, monkeypatch
+):
+    writer, args, _, _ = _functional_fixture(tmp_path, monkeypatch)
+    real_run, seen = subprocess.run, []
+
+    def old_dispatch(argv, **kwargs):
+        if argv[0] == "sealed-dispatch-fixture":
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "--arch --test", "")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(writer.subprocess, "run", old_dispatch)
+    assert writer.cmd_execute_functional(args) == 20
+    assert seen == [["sealed-dispatch-fixture", "--help"]]
+
+
+def test_sealed_functional_all_architectures_execute_in_manifest_order(
+    tmp_path, monkeypatch
+):
+    requirements = [
+        _requirement(
+            arch,
+            selector={
+                "test": "test_device.py",
+                "test_id": "test_device.py::test_device",
+                "k": "device",
+            },
+        )
+        for arch in ("wormhole", "blackhole")
+    ]
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch, requirements)
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_functional(args) == 0
+    submitted = _submitted(calls)
+    assert [argv[argv.index("--requirement-id") + 1] for argv in submitted] == [
+        r["requirement_id"] for r in requirements
+    ]
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert run["tests_passed"] == 70
+    assert all(
+        run["arch_results"][arch]["verdict"] == "SUCCESS"
+        for arch in ("wormhole", "blackhole")
+    )
+
+
+def test_sealed_functional_host_only_checks_run_worktree_pointer(tmp_path, monkeypatch):
+    host = _requirement(
+        backend="host", selector={"test": "test_host.py", "test_id": None, "k": None}
+    )
+    writer, args, _, _ = _functional_fixture(tmp_path, monkeypatch, [host])
+    run_path = Path(args.log_dir) / "run.json"
+    run = json.loads(run_path.read_text())
+    run["worktree_dir"] = str(tmp_path / "foreign")
+    run_path.write_text(json.dumps(run))
+    with pytest.raises(ValueError, match="worktree identity"):
+        writer.cmd_execute_functional(args)
+
+
+@pytest.mark.parametrize("foreign_attempt", [False, True])
+def test_sealed_functional_preexisting_root_host_receipt_identity(
+    tmp_path, monkeypatch, foreign_attempt
+):
+    host = _requirement(
+        backend="host", selector={"test": "test_host.py", "test_id": None, "k": None}
+    )
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch, [host])
+    assert writer.cmd_execute_functional(args) == 0
+    logs = Path(args.log_dir)
+    run = json.loads((logs / "run.json").read_text())
+    receipt = Path(run.pop("functional_execution")["leaves"][0]["result"])
+    root_receipt = logs / "verification-results/manual-host.json"
+    receipt.rename(root_receipt)
+    assert writer._load_verification_result(root_receipt)["version"] == 3
+    if foreign_attempt:
+        manifest["attempt_id"] = "attempt-002"
+        manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+        (logs / "required_verification_manifest.json").write_text(json.dumps(manifest))
+        run["required_verification"] = {
+            key: manifest[key] for key in ("attempt_id", "manifest_id")
+        }
+        state = json.loads((logs / "state.json").read_text())
+        state.update(
+            REQUIRED_VERIFICATION_ATTEMPT_ID=manifest["attempt_id"],
+            REQUIRED_VERIFICATION_MANIFEST_ID=manifest["manifest_id"],
+        )
+        (logs / "state.json").write_text(json.dumps(state))
+    (logs / "run.json").write_text(json.dumps(run))
+    if foreign_attempt:
+        assert writer.cmd_execute_functional(args) == 0
+        reduction = json.loads((logs / "verification_reduction.json").read_text())
+        assert reduction["tests_passed"] == 19
+        assert (
+            reduction["excluded_results"][0]["reason"]
+            == "superseded_or_foreign_attempt"
+        )
+    else:
+        with pytest.raises(ValueError, match="already exist"):
+            writer.cmd_execute_functional(args)
+        assert len(list((logs / "verification-results").rglob("*.json"))) == 1

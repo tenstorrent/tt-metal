@@ -54,6 +54,7 @@
 #   --log-dir  DIR    Append the run's output to <DIR>/run.log (compile output to
 #                     <DIR>/compile.log).
 #   --result-json-out FILE  Write the exact structured verification result here.
+#   --collect-only         Host only: validate/collect, without executing or a receipt.
 #   --stall    SECS   Log-stall seconds that mark a hang (default 180 emulator,
 #                     300 silicon). Also settable via HANG_STALL.
 #   --verbose         Print step headers to stderr.
@@ -102,6 +103,7 @@ while [[ $# -gt 0 ]]; do
     --sim-path)  SIM_PATH="$2";  shift 2 ;;
     --log-dir)   LOG_DIR="$2";   shift 2 ;;
     --result-json-out) RESULT_JSON_OUT="$2"; shift 2 ;;
+    --collect-only) HOST_COLLECT_ONLY=true; shift ;;
     --stall)     STALL="$2";     shift 2 ;;
     --no-split)  NO_SPLIT="true"; shift ;;
     --verbose|-v) VERBOSE="true"; shift ;;
@@ -804,6 +806,10 @@ Path(sys.argv[1]).write_text(json.dumps({"schema":"tt.issue-solver.pytest-collec
     "version":2,"selected":0,"collected":0,"errors":1,"returncode":int(sys.argv[2]),"nodeids":[]}))
 HOST_COLLECTION
   fi
+  if [[ "${HOST_COLLECT_ONLY:-false}" == true ]]; then
+    cat "$COLLECTION_JSON"
+    return "$collection_rc"
+  fi
   CONSUMER_RETURN_CODE="$collection_rc"
   CONSUMER_TIMED_OUT=false
   if [[ "$collection_rc" == 0 ]]; then
@@ -920,6 +926,8 @@ trap _cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
+[[ "${HOST_COLLECT_ONLY:-false}" != true || "$CMD" == host ]] || { echo "ERROR: --collect-only is host-only" >&2; exit 4; }
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 _rc=0
@@ -937,11 +945,13 @@ esac
 # Once a consumer ran, the structured classification is authoritative. This can
 # tighten an exit-0 process to coverage/infra failure but never turn a failing
 # process into success.
-if [[ "$CMD" == "simulate" || "$CMD" == "run" || "$CMD" == "host" ]] && [[ -n "${CONSUMER_RETURN_CODE:-}" ]]; then
+if [[ "${HOST_COLLECT_ONLY:-false}" != true ]] && [[ "$CMD" == "simulate" || "$CMD" == "run" || "$CMD" == "host" ]] && [[ -n "${CONSUMER_RETURN_CODE:-}" ]]; then
   _emit_structured_result
   _rc=$?
 fi
 
 # count's stdout contract is "just the integer" — no verdict line.
-case "$CMD" in host|compile|simulate|run) _emit_verdict "$_rc" "$CMD" ;; esac
+if [[ "${HOST_COLLECT_ONLY:-false}" != true ]]; then
+  case "$CMD" in host|compile|simulate|run) _emit_verdict "$_rc" "$CMD" ;; esac
+fi
 exit "$_rc"
