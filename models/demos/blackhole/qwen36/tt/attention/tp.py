@@ -230,7 +230,8 @@ class TPAttention:
             if x.shape[-2] > tpc.TILE_SIZE:
                 # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
                 # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide) + the
-                # existing L1-out. See test_mlp_matmul_sweep_prefill.
+                # existing L1-out. See test_mlp_matmul_sweep_prefill. On WH the L1 output does not fit
+                # alongside this matmul's CBs -- see tpc.prefill_l1_output_ok().
                 pc = tpc.create_prefill_mlp_matmul_program_config(
                     x.shape[-2],
                     weight.shape[-2],
@@ -243,7 +244,7 @@ class TPAttention:
                     weight,
                     compute_kernel_config=self.compute_cfg,
                     program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=(ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_output_ok() else ttnn.DRAM_MEMORY_CONFIG),
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
