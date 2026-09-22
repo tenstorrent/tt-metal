@@ -1392,16 +1392,25 @@ tt::tt_fabric::FabricConfig fabric_config_for_active_mgd() {
         return FabricConfig::FABRIC_2D;
     }
     tt::tt_fabric::MeshGraphDescriptor mgd(std::filesystem::path(rtoptions.get_custom_fabric_mesh_graph_desc_path()));
-    bool ring_ns = false;  // device dim 0 (N/S)
-    bool ring_ew = false;  // device dim 1 (E/W)
+    // Intersect (AND) the declared ring axes over all meshes: a process-wide fabric config must not
+    // request more connectivity than ANY mesh provides, or the control plane throws (mesh_graph.cpp:468
+    // "requires more connectivity than MGD provides"). A mesh that rings only one axis therefore drops
+    // the other axis for the whole MGD; mixed single-axis meshes fall back to FABRIC_2D.
+    bool any_mesh = false;
+    bool ring_ns = true;  // device dim 0 (N/S)
+    bool ring_ew = true;  // device dim 1 (E/W)
     for (const auto& mesh_name : mgd.get_all_mesh_names()) {
         const auto declared = mgd.try_get_declared_topology(mesh_name);
         if (!declared.has_value()) {
             continue;
         }
+        any_mesh = true;
         const auto effective = tt::tt_fabric::with_effective_ring_dims(*declared);
-        ring_ns = ring_ns || (effective.ring_dims.size() > 0 && effective.ring_dims[0]);
-        ring_ew = ring_ew || (effective.ring_dims.size() > 1 && effective.ring_dims[1]);
+        ring_ns = ring_ns && (effective.ring_dims.size() > 0 && effective.ring_dims[0]);
+        ring_ew = ring_ew && (effective.ring_dims.size() > 1 && effective.ring_dims[1]);
+    }
+    if (!any_mesh) {
+        return FabricConfig::FABRIC_2D;
     }
     if (ring_ns && ring_ew) {
         return FabricConfig::FABRIC_2D_TORUS_XY;
