@@ -2677,8 +2677,15 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
         device_markers_per_core_risc_map, device_arch, device_core_frequency, max_compute_cores, log_path);
 
     if (MetalContext::instance(context_id).rtoptions().get_profiler_noc_events_enabled()) {
-        log_warning(
-            tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
+        // The rtoption is fixed for the process's lifetime, but writeDeviceResultsToFiles() runs once per
+        // mid-run/final dump for every DeviceProfiler (one per chip), so without a latch this identical
+        // warning repeats on every dump for every device. Warn once per process instead.
+        static std::once_flag noc_events_enabled_warning_flag;
+        std::call_once(noc_events_enabled_warning_flag, [] {
+            log_warning(
+                tt::LogAlways,
+                "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
+        });
         FabricRoutingLookup routing_lookup;
         std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> noc_trace_data =
             convertNocTracePacketsToJson(
