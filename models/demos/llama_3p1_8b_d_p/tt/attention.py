@@ -9,51 +9,18 @@ from collections.abc import Mapping
 import torch
 
 import ttnn
-from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
-from models.demos.llama_3p1_8b_d_p.tt.kv_cache import LlamaKVCache, _cache_memory_config, _validate_cache_tensor
-from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, PrefillGeometry
+from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
+    SUPPORTED_CACHE_DTYPES,
+    LlamaKVCache,
+    _cache_memory_config,
+    _validate_cache_tensor,
+)
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry, validate_mesh
 
-_MESH_SHAPE = (4, 8)
-_SP = 4
-_TP = 8
-_SP_AXIS = 0
-_TP_AXIS = 1
-_NUM_USERS = 2
-_NUM_LAYERS = Llama31_8BConfig.NUM_LAYERS
-_GLOBAL_CHUNK = 1024
-_LOCAL_SEQUENCE = _GLOBAL_CHUNK // _SP
-_HEAD_DIM = Llama31_8BConfig.HEAD_DIM
-_NUM_Q_HEADS = Llama31_8BConfig.NUM_ATTENTION_HEADS
-_NUM_KV_HEADS = Llama31_8BConfig.NUM_KEY_VALUE_HEADS
-_LOCAL_Q_HEADS = _NUM_Q_HEADS // _TP
-_HIDDEN_SIZE = Llama31_8BConfig.EMB_SIZE
-_SUPPORTED_CACHE_DTYPES = (ttnn.bfloat16, ttnn.bfloat8_b)
-_O_WEIGHT_SHAPE = (_HIDDEN_SIZE, _HIDDEN_SIZE)
-
-
-def _validate_mesh(mesh_device, mesh_config, owner):
-    required = ("mesh_shape", "tp", "tp_axis", "sp_axis", "sp")
-    missing = [name for name in required if not hasattr(mesh_config, name)]
-    if missing:
-        raise ValueError(f"{owner} mesh_config is missing: {', '.join(missing)}")
-    if tuple(mesh_config.mesh_shape) != _MESH_SHAPE:
-        raise ValueError(f"{owner} requires mesh_shape={_MESH_SHAPE}, got {tuple(mesh_config.mesh_shape)}")
-    if (mesh_config.sp, mesh_config.tp, mesh_config.sp_axis, mesh_config.tp_axis) != (
-        _SP,
-        _TP,
-        _SP_AXIS,
-        _TP_AXIS,
-    ):
-        raise ValueError(
-            f"{owner} requires SP=4 on mesh axis 0 and TP=8 on mesh axis 1; "
-            f"got SP={mesh_config.sp}, TP={mesh_config.tp}, "
-            f"sp_axis={mesh_config.sp_axis}, tp_axis={mesh_config.tp_axis}"
-        )
-    if tuple(mesh_device.shape) != _MESH_SHAPE or mesh_device.get_num_devices() != _SP * _TP:
-        raise ValueError(
-            f"{owner} device requires {_MESH_SHAPE} with {_SP * _TP} chips; "
-            f"got shape={tuple(mesh_device.shape)}, devices={mesh_device.get_num_devices()}"
-        )
+_O_WEIGHT_SHAPE = (Model.EMB_SIZE, Model.EMB_SIZE)
 
 
 def _validate_scalar(name, value):
@@ -68,8 +35,8 @@ def _validate_device_tensor(tensor, mesh_device, *, name, shape, dtype):
         raise ValueError(f"{name} must reside on the constructor mesh")
     if tuple(tensor.shape) != shape:
         raise ValueError(f"{name} must have local shape {shape}, got {tuple(tensor.shape)}")
-    if len(ttnn.get_device_tensors(tensor)) != _SP * _TP:
-        raise ValueError(f"{name} must cover {_SP * _TP} mesh devices")
+    if len(ttnn.get_device_tensors(tensor)) != layout.num_devices:
+        raise ValueError(f"{name} must cover {layout.num_devices} mesh devices")
     if tensor.dtype != dtype:
         raise ValueError(f"{name} must be {dtype}, got {tensor.dtype}")
     if tensor.layout != ttnn.TILE_LAYOUT:
@@ -80,9 +47,9 @@ def _validate_device_tensor(tensor, mesh_device, *, name, shape, dtype):
 
 def _forwarding_links(mesh_device, *, axis, required_links, owner):
     links = []
-    axis_size = _MESH_SHAPE[axis]
+    axis_size = layout.mesh_shape[axis]
     other_axis = 1 - axis
-    other_size = _MESH_SHAPE[other_axis]
+    other_size = layout.mesh_shape[other_axis]
     for other_coord in range(other_size):
         for axis_coord in range(axis_size):
             src = [0, 0]
@@ -119,15 +86,15 @@ class FullCausalAttention:
     def __init__(self, mesh_device, mesh_config, *, cache_dtype=ttnn.bfloat8_b, max_seq_len=DEFAULT_MAX_SEQ_LEN):
         self.geometry = PrefillGeometry(max_seq_len)
         self.max_seq_len = self.geometry.max_seq_len
-        _validate_mesh(mesh_device, mesh_config, "FullCausalAttention")
-        if cache_dtype not in _SUPPORTED_CACHE_DTYPES:
+        validate_mesh(mesh_device, mesh_config, "FullCausalAttention")
+        if cache_dtype not in SUPPORTED_CACHE_DTYPES:
             raise ValueError(f"attention cache_dtype must be bfloat16 or bfloat8_b, got {cache_dtype}")
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.cache_dtype = cache_dtype
         self.fabric_links = _forwarding_links(
             mesh_device,
-            axis=_SP_AXIS,
+            axis=layout.sp_axis,
             required_links=(0,),
             owner="FullCausalAttention",
         )
@@ -151,7 +118,7 @@ class FullCausalAttention:
 
         # The packed cache has one KV head per TP column. Select one slot/layer plane and gather its
         # capacity/256 SP blocks into these persistent output buffers before restoring natural order.
-        gather_shape = (1, 1, self.max_seq_len, _HEAD_DIM)
+        gather_shape = (1, 1, self.max_seq_len, Model.HEAD_DIM)
         self.gathered_k = ttnn.empty(
             gather_shape,
             dtype=cache_dtype,
@@ -169,11 +136,11 @@ class FullCausalAttention:
 
         # Each SP row receives one exact FP32 absolute-position stream. Row-major storage keeps the
         # persistent logical local payload to 32*max_seq_len bytes; only the selected slice is tiled.
-        query_positions = torch.empty(self.max_seq_len // ttnn.TILE_SIZE, _SP, _LOCAL_SEQUENCE, 1)
+        query_positions = torch.empty(self.max_seq_len // ttnn.TILE_SIZE, layout.sp, layout.local_sequence, 1)
         for start_index, actual_start in enumerate(range(0, self.max_seq_len, ttnn.TILE_SIZE)):
-            owned = [[] for _ in range(_SP)]
-            for position in range(actual_start, actual_start + _GLOBAL_CHUNK):
-                owned[(position % _GLOBAL_CHUNK) // _LOCAL_SEQUENCE].append(position)
+            owned = [[] for _ in range(layout.sp)]
+            for position in range(actual_start, actual_start + layout.chunk_size):
+                owned[(position % layout.chunk_size) // layout.local_sequence].append(position)
             for sp_coord, positions in enumerate(owned):
                 query_positions[start_index, sp_coord, :, 0] = torch.tensor(positions, dtype=torch.float32)
         self.query_position_table = ttnn.from_torch(
@@ -182,7 +149,7 @@ class FullCausalAttention:
             dtype=ttnn.float32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=_MESH_SHAPE, dims=(1, None)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=layout.mesh_shape, dims=(1, None)),
         )
         self.key_positions = ttnn.from_torch(
             torch.arange(self.max_seq_len, dtype=torch.float32).reshape(1, 1, 1, self.max_seq_len),
@@ -197,7 +164,7 @@ class FullCausalAttention:
         if not isinstance(kv_cache, LlamaKVCache):
             raise ValueError(f"kv_cache must be LlamaKVCache, got {type(kv_cache).__name__}")
         metadata = (kv_cache.num_users, kv_cache.num_layers, kv_cache.max_seq_len, kv_cache.sp)
-        expected = (_NUM_USERS, _NUM_LAYERS, self.max_seq_len, _SP)
+        expected = (layout.num_users, Model.NUM_LAYERS, self.max_seq_len, layout.sp)
         if metadata != expected:
             raise ValueError(f"attention cache metadata must be {expected}, got {metadata}")
         for name, tensor in (("k", kv_cache.k), ("v", kv_cache.v)):
@@ -220,10 +187,10 @@ class FullCausalAttention:
             ("actual_end", actual_end),
         ):
             _validate_scalar(name, value)
-        if not 0 <= slot_idx < _NUM_USERS:
-            raise ValueError(f"slot_idx {slot_idx} out of range [0, {_NUM_USERS})")
-        if not 0 <= layer_idx < _NUM_LAYERS:
-            raise ValueError(f"layer_idx {layer_idx} out of range [0, {_NUM_LAYERS})")
+        if not 0 <= slot_idx < layout.num_users:
+            raise ValueError(f"slot_idx {slot_idx} out of range [0, {layout.num_users})")
+        if not 0 <= layer_idx < Model.NUM_LAYERS:
+            raise ValueError(f"layer_idx {layer_idx} out of range [0, {Model.NUM_LAYERS})")
         if actual_start < 0 or actual_start % ttnn.TILE_SIZE:
             raise ValueError(f"actual_start must be nonnegative and tile-aligned, got {actual_start}")
         if not 0 <= actual_start < actual_end <= self.max_seq_len:
@@ -231,14 +198,14 @@ class FullCausalAttention:
                 f"actual range must satisfy 0 <= start < end <= {self.max_seq_len}, "
                 f"got [{actual_start}, {actual_end})"
             )
-        if actual_end - actual_start > _GLOBAL_CHUNK:
+        if actual_end - actual_start > layout.chunk_size:
             raise ValueError(
-                f"actual range may contain at most {_GLOBAL_CHUNK} tokens, " f"got [{actual_start}, {actual_end})"
+                f"actual range may contain at most {layout.chunk_size} tokens, " f"got [{actual_start}, {actual_end})"
             )
 
     def _validate_request_resources(self, kv_cache):
         self._validate_cache(kv_cache)
-        topology = ttnn.get_usable_topology(kv_cache.k, topology=ttnn.Topology.Ring, cluster_axis=_SP_AXIS)
+        topology = ttnn.get_usable_topology(kv_cache.k, topology=ttnn.Topology.Ring, cluster_axis=layout.sp_axis)
         if topology != ttnn.Topology.Ring:
             raise RuntimeError(f"attention requires a live SP ring, but TTNN selected {topology}")
         self._require_sdpa_l1()
@@ -266,7 +233,7 @@ class FullCausalAttention:
             q,
             self.mesh_device,
             name="attention Q",
-            shape=(1, _LOCAL_Q_HEADS, _LOCAL_SEQUENCE, _HEAD_DIM),
+            shape=(1, layout.local_q_heads, layout.local_sequence, Model.HEAD_DIM),
             dtype=ttnn.bfloat16,
         )
         self._validate_request_resources(kv_cache)
@@ -289,7 +256,7 @@ class FullCausalAttention:
             cache_tensor,
             dim=2,
             output_tensor=output_tensor,
-            cluster_axis=_SP_AXIS,
+            cluster_axis=layout.sp_axis,
             num_links=1,
             input_batch_index=batch_index,
             gathered_dim_size=self.max_seq_len,
@@ -297,16 +264,16 @@ class FullCausalAttention:
         blocks = [
             ttnn.slice(
                 gathered,
-                [0, 0, block * _LOCAL_SEQUENCE, 0],
-                [1, 1, (block + 1) * _LOCAL_SEQUENCE, _HEAD_DIM],
+                [0, 0, block * layout.local_sequence, 0],
+                [1, 1, (block + 1) * layout.local_sequence, Model.HEAD_DIM],
             )
-            for block in range(_SP * (self.max_seq_len // _GLOBAL_CHUNK))
+            for block in range(layout.sp * (self.max_seq_len // layout.chunk_size))
         ]
         natural = ttnn.concat([blocks[index] for index in self.geometry.gather_block_order], dim=2)
         for block in blocks:
             block.deallocate(True)
         if logical_n < self.max_seq_len:
-            prefix = ttnn.slice(natural, [0, 0, 0, 0], [1, 1, logical_n, _HEAD_DIM])
+            prefix = ttnn.slice(natural, [0, 0, 0, 0], [1, 1, logical_n, Model.HEAD_DIM])
             natural.deallocate(True)
             natural = prefix
         return natural
@@ -316,7 +283,7 @@ class FullCausalAttention:
         query_positions_rm = ttnn.slice(
             self.query_position_table,
             [start_index, 0, 0, 0],
-            [start_index + 1, 1, _LOCAL_SEQUENCE, 1],
+            [start_index + 1, 1, layout.local_sequence, 1],
         )
         query_positions = ttnn.to_layout(query_positions_rm, ttnn.TILE_LAYOUT)
         query_positions_rm.deallocate(True)
@@ -349,7 +316,7 @@ class FullCausalAttention:
             actual_end=actual_end,
         )
         logical_n = math.ceil(actual_end / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        batch_index = slot_idx * _NUM_LAYERS + layer_idx
+        batch_index = slot_idx * Model.NUM_LAYERS + layer_idx
         natural_k = self._gather_and_reorder(
             kv_cache.k,
             self.gathered_k,
@@ -374,7 +341,7 @@ class FullCausalAttention:
             natural_v,
             attn_mask=mask,
             is_causal=False,
-            scale=_HEAD_DIM**-0.5,
+            scale=Model.HEAD_DIM**-0.5,
             program_config=self.program_config,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -389,13 +356,13 @@ class AttentionOutputProjection:
     """Concatenate TP-local heads, apply the row-parallel O weight, and TP all-reduce."""
 
     def __init__(self, mesh_device, mesh_config, state_dict):
-        _validate_mesh(mesh_device, mesh_config, "AttentionOutputProjection")
+        validate_mesh(mesh_device, mesh_config, "AttentionOutputProjection")
         weight = self._validate_weight(state_dict)
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.fabric_links = _forwarding_links(
             mesh_device,
-            axis=_TP_AXIS,
+            axis=layout.tp_axis,
             required_links=(0, 1),
             owner="AttentionOutputProjection",
         )
@@ -448,10 +415,10 @@ class AttentionOutputProjection:
             heads,
             self.mesh_device,
             name="attention output heads",
-            shape=(1, _LOCAL_Q_HEADS, _LOCAL_SEQUENCE, _HEAD_DIM),
+            shape=(1, layout.local_q_heads, layout.local_sequence, Model.HEAD_DIM),
             dtype=ttnn.bfloat16,
         )
-        topology = ttnn.get_usable_topology(heads, topology=ttnn.Topology.Ring, cluster_axis=_TP_AXIS)
+        topology = ttnn.get_usable_topology(heads, topology=ttnn.Topology.Ring, cluster_axis=layout.tp_axis)
         if topology != ttnn.Topology.Ring:
             raise RuntimeError(f"attention output requires a live TP ring, but TTNN selected {topology}")
 
@@ -469,7 +436,7 @@ class AttentionOutputProjection:
         concatenated.deallocate(True)
         output = ttnn.all_reduce(
             partial,
-            cluster_axis=_TP_AXIS,
+            cluster_axis=layout.tp_axis,
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Ring,

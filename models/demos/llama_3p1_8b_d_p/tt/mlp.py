@@ -9,18 +9,14 @@ from collections.abc import Mapping
 import torch
 
 import ttnn
-from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import validate_mesh
 
-_MESH_SHAPE = (4, 8)
-_SP = 4
-_TP = 8
-_LOCAL_SEQUENCE = 256
-_HIDDEN_SIZE = Llama31_8BConfig.EMB_SIZE
-_INTERMEDIATE_SIZE = Llama31_8BConfig.INTERMEDIATE_SIZE
 _WEIGHT_SHAPES = {
-    "gate_proj.weight": (_INTERMEDIATE_SIZE, _HIDDEN_SIZE),
-    "up_proj.weight": (_INTERMEDIATE_SIZE, _HIDDEN_SIZE),
-    "down_proj.weight": (_HIDDEN_SIZE, _INTERMEDIATE_SIZE),
+    "gate_proj.weight": (Model.INTERMEDIATE_SIZE, Model.EMB_SIZE),
+    "up_proj.weight": (Model.INTERMEDIATE_SIZE, Model.EMB_SIZE),
+    "down_proj.weight": (Model.EMB_SIZE, Model.INTERMEDIATE_SIZE),
 }
 
 
@@ -28,7 +24,7 @@ class MLP:
     """Run dense SwiGLU with TP-sharded projections and a TP all-reduce."""
 
     def __init__(self, mesh_device, mesh_config, state_dict):
-        self._validate_mesh(mesh_device, mesh_config)
+        validate_mesh(mesh_device, mesh_config, "MLP")
         host_weights = self._validate_weights(state_dict)
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
@@ -71,28 +67,6 @@ class MLP:
         self.down_weight = self._upload_weight(host_weights["down_proj.weight"], mesh_config.row_parallel(mesh_device))
 
     @staticmethod
-    def _validate_mesh(mesh_device, mesh_config):
-        required = ("mesh_shape", "tp", "tp_axis", "sp_axis", "sp")
-        missing = [name for name in required if not hasattr(mesh_config, name)]
-        if missing:
-            raise ValueError(f"MLP mesh_config is missing: {', '.join(missing)}")
-        if tuple(mesh_config.mesh_shape) != _MESH_SHAPE:
-            raise ValueError(f"MLP requires mesh_shape={_MESH_SHAPE}, got {tuple(mesh_config.mesh_shape)}")
-        if (mesh_config.sp, mesh_config.tp, mesh_config.sp_axis, mesh_config.tp_axis) != (_SP, _TP, 0, 1):
-            raise ValueError(
-                "MLP requires SP=4 on mesh axis 0 and TP=8 on mesh axis 1; "
-                f"got SP={mesh_config.sp}, TP={mesh_config.tp}, "
-                f"sp_axis={mesh_config.sp_axis}, tp_axis={mesh_config.tp_axis}"
-            )
-        actual_shape = tuple(mesh_device.shape)
-        if actual_shape != tuple(mesh_config.mesh_shape):
-            raise ValueError(
-                f"MLP mesh/config disagreement: device shape={actual_shape}, config shape={mesh_config.mesh_shape}"
-            )
-        if mesh_device.get_num_devices() != _SP * _TP:
-            raise ValueError(f"MLP requires {_SP * _TP} mesh devices, got {mesh_device.get_num_devices()}")
-
-    @staticmethod
     def _validate_weights(state_dict):
         if not isinstance(state_dict, Mapping):
             raise ValueError(f"MLP state_dict must be a mapping, got {type(state_dict).__name__}")
@@ -113,11 +87,11 @@ class MLP:
 
     def _validate_tp_fabric_links(self):
         links = []
-        for sp_coord in range(_SP):
-            for tp_coord in range(_TP):
+        for sp_coord in range(layout.sp):
+            for tp_coord in range(layout.tp):
                 src_coord = ttnn.MeshCoordinate([sp_coord, tp_coord])
                 src_node = self.mesh_device.get_fabric_node_id(src_coord)
-                for neighbor_tp in ((tp_coord - 1) % _TP, (tp_coord + 1) % _TP):
+                for neighbor_tp in ((tp_coord - 1) % layout.tp, (tp_coord + 1) % layout.tp):
                     dst_coord = ttnn.MeshCoordinate([sp_coord, neighbor_tp])
                     dst_node = self.mesh_device.get_fabric_node_id(dst_coord)
                     forwarding_indices = tuple(ttnn.get_forwarding_link_indices(src_node, dst_node))
@@ -145,11 +119,13 @@ class MLP:
     def _validate_input(self, x):
         if not isinstance(x, ttnn.Tensor) or not ttnn.is_tensor_storage_on_device(x):
             raise ValueError("MLP input must be a device ttnn.Tensor")
-        expected_shape = (1, 1, _LOCAL_SEQUENCE, _HIDDEN_SIZE)
+        if x.device() != self.mesh_device:
+            raise ValueError("MLP input must reside on the constructor mesh")
+        expected_shape = (1, 1, layout.local_sequence, Model.EMB_SIZE)
         if tuple(x.shape) != expected_shape:
             raise ValueError(f"MLP input must have local shape {expected_shape}, got {tuple(x.shape)}")
-        if len(ttnn.get_device_tensors(x)) != _SP * _TP:
-            raise ValueError(f"MLP input must cover {_SP * _TP} mesh devices")
+        if len(ttnn.get_device_tensors(x)) != layout.num_devices:
+            raise ValueError(f"MLP input must cover {layout.num_devices} mesh devices")
         if x.dtype != ttnn.bfloat16:
             raise ValueError(f"MLP input must be bfloat16, got {x.dtype}")
         if x.layout != ttnn.TILE_LAYOUT:

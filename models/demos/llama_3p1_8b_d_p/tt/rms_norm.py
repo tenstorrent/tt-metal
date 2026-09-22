@@ -44,6 +44,12 @@ class RMSNorm:
         )
 
     def __call__(self, x):
+        if not isinstance(x, ttnn.Tensor) or not ttnn.is_tensor_storage_on_device(x):
+            raise ValueError("RMSNorm input must be a device ttnn.Tensor")
+        if x.device() != self.mesh_device:
+            raise ValueError("RMSNorm input must reside on the constructor mesh")
+        if len(ttnn.get_device_tensors(x)) != self.mesh_device.get_num_devices():
+            raise ValueError("RMSNorm input must cover every device in the constructor mesh")
         if x.shape[-1] != Llama31_8BConfig.EMB_SIZE:
             raise ValueError(
                 f"RMSNorm input must contain the full hidden width {Llama31_8BConfig.EMB_SIZE} on every chip; "

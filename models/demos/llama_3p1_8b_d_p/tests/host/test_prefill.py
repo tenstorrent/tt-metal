@@ -17,7 +17,7 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 from models.demos.llama_3p1_8b_d_p.tt.input import pack_token_ids, validate_chunk_range
-from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry, validate_mesh
 from models.demos.llama_3p1_8b_d_p.tt.weights import CheckpointWeights, validate_checkpoint_config
 
 
@@ -261,3 +261,31 @@ def test_prefill_raw_checkpoint_layer_identity(layer_idx):
             raw = shard.get_tensor(full_name)
         assert loaded[name].dtype == raw.dtype
         assert torch.equal(loaded[name], raw), (layer_idx, name)
+
+
+# The shared guard must accept the validated Galaxy and reject incorrect mesh metadata or hardware
+# before any component can allocate device tensors. These stand-ins keep the check CPU-only.
+@pytest.mark.parametrize(
+    "config_updates,device_shape,device_count,error",
+    [
+        ({}, (4, 8), 32, None),
+        ({"mesh_shape": (8, 4)}, (4, 8), 32, "requires mesh_shape"),
+        ({"sp": 8}, (4, 8), 32, "requires SP=4"),
+        ({"tp": 4}, (4, 8), 32, "requires SP=4"),
+        ({"sp_axis": 1}, (4, 8), 32, "requires SP=4"),
+        ({"tp_axis": 0}, (4, 8), 32, "requires SP=4"),
+        ({}, (8, 4), 32, "device requires"),
+        ({}, (4, 8), 31, "device requires"),
+    ],
+)
+def test_prefill_mesh_validation(config_updates, device_shape, device_count, error):
+    config = SimpleNamespace(**dict(dict(mesh_shape=(4, 8), sp=4, tp=8, sp_axis=0, tp_axis=1), **config_updates))
+    device = SimpleNamespace(shape=device_shape, get_num_devices=lambda: device_count)
+    if error is None:
+        validate_mesh(device, config, "test component")
+        del config.tp
+        with unittest.TestCase().assertRaisesRegex(ValueError, "mesh_config is missing: tp"):
+            validate_mesh(device, config, "test component")
+    else:
+        with unittest.TestCase().assertRaisesRegex(ValueError, error):
+            validate_mesh(device, config, "test component")

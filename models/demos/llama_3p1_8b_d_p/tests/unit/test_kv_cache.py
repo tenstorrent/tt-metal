@@ -20,6 +20,7 @@ from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_
 from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _addresses
 from models.demos.llama_3p1_8b_d_p.tests.utils import metrics as _metrics
 from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
+from models.demos.llama_3p1_8b_d_p.tt import kv_cache as cache_module
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import LlamaKVCache, allocate_kv_cache, write_kv_chunk
 from models.demos.llama_3p1_8b_d_p.tt.qkv import QKVProjection
@@ -256,6 +257,77 @@ def _verify_cache(
     )
 
 
+# Model continuation must use a contiguous prefix shared by all executed layers. Replace only
+# device validation/enqueue here to cover a gap, overlap, restart, empty write, and K/V enqueue
+# failure without hardware. The placement test below exercises the same tracking on device.
+def test_cache_prefix_tracks_complete_writes_and_invalidates_failed_suffix(monkeypatch, expect_error):
+    cache = LlamaKVCache(object(), object(), NUM_USERS, NUM_LAYERS, MAX_SEQ_LEN, SP)
+    calls = []
+    failing_tensor = None
+
+    def enqueue(tensor, source, **metadata):
+        calls.append(tensor)
+        if tensor is failing_tensor:
+            raise RuntimeError("injected enqueue failure")
+
+    monkeypatch.setattr(cache_module, "_validate_write", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cache_module, "_write_one", enqueue)
+
+    def write(slot, layer, start, end):
+        write_kv_chunk(cache, None, None, slot_idx=slot, layer_idx=layer, actual_start=start, actual_end=end)
+
+    assert cache.populated_end(0, 1) == 0
+    write(0, 0, 0, 1024)
+    write(0, 0, 1024, 1500)
+    assert cache.populated_end(0, 1) == 1500
+    assert cache.populated_end(0, 2) == 0
+    write(0, 0, 1504, 1600)
+    assert cache.populated_end(0, 1) == 1500
+    write(0, 1, 0, 1024)
+    write(0, 1, 1024, 1536)
+    write(1, 0, 0, 512)
+    assert cache.populated_end(0, 2) == 1500
+    assert cache.populated_end(1, 1) == 512
+
+    before_empty = len(calls)
+    write(0, 0, 0, 0)
+    assert len(calls) == before_empty
+    assert cache.populated_end(0, 1) == 1500
+    write(0, 0, 1472, 1600)
+    assert cache.populated_end(0, 1) == 1600
+    assert cache.populated_end(0, 2) == 1536
+    write(0, 0, 0, 64)
+    assert cache.populated_end(0, 1) == 64
+
+    for tensor in (cache.k, cache.v):
+        failing_tensor = tensor
+        with expect_error(RuntimeError, "injected enqueue failure"):
+            write(0, 0, 32, 100)
+        assert cache.populated_end(0, 1) == 32
+        assert cache.populated_end(1, 1) == 512
+        failing_tensor = None
+        write(0, 0, 0, 1024)
+    write(0, 0, 1024, 1600)
+    assert cache.populated_end(0, 2) == 1536
+
+    # An old full-model cache must not survive a partial restart, including downstream
+    # layers which a reduced model never reaches. Invalidate before the first layer runs.
+    for layer in range(NUM_LAYERS):
+        write(0, layer, 0, 1024)
+    assert cache.populated_end(0, NUM_LAYERS) == 1024
+    cache.truncate_prefix(0, 512)
+    assert cache.populated_end(0, NUM_LAYERS) == 512
+    cache.truncate_prefix(0, 0)
+    write(0, 0, 0, 1024)
+    assert cache.populated_end(0, 1) == 1024
+    assert cache.populated_end(0, NUM_LAYERS) == 0
+    assert cache.populated_end(1, 1) == 512
+    for layer in range(1, NUM_LAYERS - 1):
+        write(0, layer, 0, 1024)
+    assert cache.populated_end(0, NUM_LAYERS - 1) == 1024
+    assert cache.populated_end(0, NUM_LAYERS) == 0
+
+
 # Allocate the exact 2-user/32-layer cache on the actual DRAM bank grid and read every chip; this
 # catches wrong batch packing, local sequence size, dtype, NdShard page geometry, or nonzero startup.
 @pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
@@ -264,6 +336,7 @@ def test_allocate_kv_cache_is_zero_and_has_packed_page_geometry(mesh_device, cac
     mesh_config = MeshConfig(MESH_SHAPE, TP)
     cache = allocate_kv_cache(mesh_device, mesh_config, cache_dtype=cache_dtype)
     assert isinstance(cache, LlamaKVCache)
+    assert all(cache.populated_end(slot, NUM_LAYERS) == 0 for slot in range(NUM_USERS))
     assert (cache.num_users, cache.num_layers, cache.max_seq_len, cache.sp) == (2, 32, 2048, 4)
     expected_grid = _cache_memory_config(mesh_device).nd_shard_spec.grid
     for tensor in (cache.k, cache.v):
@@ -340,6 +413,12 @@ def test_write_kv_chunk_places_bounded_rows_and_reuses_programs(mesh_device, cac
         new_inputs.extend(inputs)
         assert mesh_device.num_program_cache_entries() == warm_entries
 
+    # Layer zero in slot zero contains only token zero. Gapped writes in other planes do
+    # not advertise data before them, and neither slots nor layers share prefix metadata.
+    assert test_cache.populated_end(0, 1) == 1
+    assert test_cache.populated_end(0, NUM_LAYERS) == 0
+    assert test_cache.populated_end(1, 1) == 0
+    assert warm_cache.populated_end(0, 1) == 1
     before_noop = _addresses(test_cache.k) + _addresses(test_cache.v)
     noop_record, noop_inputs, _ = _run_write(mesh_device, test_cache, slot=1, layer=13, start=1024, end=1024)
     assert noop_record["start"] == noop_record["end"]

@@ -6,14 +6,16 @@
 from collections.abc import Mapping
 
 import ttnn
+from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
 from models.demos.llama_3p1_8b_d_p.tt.attention import (
     AttentionOutputProjection,
     FullCausalAttention,
     _validate_device_tensor,
-    _validate_mesh,
 )
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import write_kv_chunk
 from models.demos.llama_3p1_8b_d_p.tt.mlp import MLP
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import validate_mesh
 from models.demos.llama_3p1_8b_d_p.tt.qkv import QKVProjection
 from models.demos.llama_3p1_8b_d_p.tt.rms_norm import RMSNorm
 from models.demos.llama_3p1_8b_d_p.tt.rope import apply_indexed_rope
@@ -30,9 +32,9 @@ class DecoderLayer:
     def __init__(self, mesh_device, mesh_config, state_dict, *, layer_idx, attention, rope_tables, transformation_mat):
         if type(layer_idx) is not int:
             raise TypeError("layer_idx must be an eager Python int")
-        if not 0 <= layer_idx < 32:
+        if not 0 <= layer_idx < Model.NUM_LAYERS:
             raise ValueError(f"layer_idx {layer_idx} out of range [0, 32)")
-        _validate_mesh(mesh_device, mesh_config, "DecoderLayer")
+        validate_mesh(mesh_device, mesh_config, "DecoderLayer")
         if not isinstance(attention, FullCausalAttention) or attention.mesh_device != mesh_device:
             raise ValueError("attention must be a FullCausalAttention on the constructor mesh")
         if len(rope_tables) != 2:
@@ -42,7 +44,7 @@ class DecoderLayer:
                 table,
                 mesh_device,
                 name=f"decoder RoPE {name}",
-                shape=(1, 1, attention.geometry.rope_local_sequence, 128),
+                shape=(1, 1, attention.geometry.rope_local_sequence, Model.HEAD_DIM),
                 dtype=ttnn.bfloat16,
             )
         _validate_device_tensor(
@@ -95,7 +97,7 @@ class DecoderLayer:
             x,
             self.mesh_device,
             name="decoder input",
-            shape=(1, 1, 256, 4096),
+            shape=(1, 1, layout.local_sequence, Model.EMB_SIZE),
             dtype=ttnn.bfloat16,
         )
         self.attention.validate_request(
@@ -105,7 +107,7 @@ class DecoderLayer:
             actual_start=actual_start,
             actual_end=actual_end,
         )
-        topology = ttnn.get_usable_topology(x, topology=ttnn.Topology.Ring, cluster_axis=1)
+        topology = ttnn.get_usable_topology(x, topology=ttnn.Topology.Ring, cluster_axis=layout.tp_axis)
         if topology != ttnn.Topology.Ring:
             raise RuntimeError(f"decoder requires a live TP ring, but TTNN selected {topology}")
 
@@ -132,7 +134,7 @@ class DecoderLayer:
                     self.rope_tables,
                     self.transformation_mat,
                     kv_actual_global=actual_start,
-                    sp_axis=0,
+                    sp_axis=layout.sp_axis,
                 )
             )
             k_rotated = keep(
@@ -141,7 +143,7 @@ class DecoderLayer:
                     self.rope_tables,
                     self.transformation_mat,
                     kv_actual_global=actual_start,
-                    sp_axis=0,
+                    sp_axis=layout.sp_axis,
                 )
             )
             release(q)

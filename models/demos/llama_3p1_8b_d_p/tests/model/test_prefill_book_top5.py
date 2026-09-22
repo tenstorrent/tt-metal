@@ -88,6 +88,7 @@ def test_prefill_book_top5(context_length, request, record_property):
     from models.demos.llama_3p1_8b_d_p.tt.model import PrefillModel
 
     mesh_device = request.getfixturevalue("book_mesh_device")
+    expect_error = request.getfixturevalue("expect_error")
     model = PrefillModel(mesh_device, CHECKPOINT, num_layers=32, max_seq_len=context_length)
     cache = None
     try:
@@ -116,6 +117,17 @@ def test_prefill_book_top5(context_length, request, record_property):
                     actual_end=end,
                     skip_lm_head=end != context_length,
                 )
+                if start == 0:
+                    # A later chunk must not skip even one cache page. Rejection must leave the
+                    # valid prefix usable; the next normal chunk and final top-5 check still run.
+                    with expect_error(ValueError, "beyond populated cache prefix 1024"):
+                        model.prefill_chunk(
+                            tokens,
+                            cache,
+                            slot_idx=0,
+                            actual_start=1056,
+                            actual_end=1088,
+                        )
                 if end == context_length:
                     assert tuple(output.shape) == (1, 1, 256, 16032)
                     last_position = context_length - 1

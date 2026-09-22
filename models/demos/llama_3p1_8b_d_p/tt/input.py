@@ -5,12 +5,14 @@
 
 import torch
 
-from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, PrefillGeometry
+from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import CHUNK_SIZE, DEFAULT_MAX_SEQ_LEN
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PrefillGeometry
 
-CHUNK_SIZE = 1024
-LOCAL_CHUNK_SIZE = 256
+LOCAL_CHUNK_SIZE = layout.local_sequence
 MAX_SEQ_LEN = DEFAULT_MAX_SEQ_LEN
-VOCAB_SIZE = 128256
+VOCAB_SIZE = Model.VOCAB_SIZE
 
 
 def validate_chunk_range(actual_start, actual_end, *, max_seq_len=DEFAULT_MAX_SEQ_LEN):
@@ -45,7 +47,7 @@ def pack_token_ids(token_ids, *, actual_start, actual_end, pad_id=0, max_seq_len
     padded = torch.full((CHUNK_SIZE,), pad_id, dtype=torch.int64)
     padded[: ids.numel()] = ids
     positions = torch.arange(actual_start, actual_start + CHUNK_SIZE)
-    packed = torch.cat([padded[(positions // LOCAL_CHUNK_SIZE) % 4 == row] for row in range(4)])
+    packed = torch.cat([padded[(positions // LOCAL_CHUNK_SIZE) % layout.sp == row] for row in range(layout.sp)])
     return packed.reshape(1, 1, 1, CHUNK_SIZE)
 
 
@@ -53,7 +55,7 @@ def upload_token_chunk(mesh_device, token_ids, *, actual_start, actual_end, pad_
     """Allocate caller-owned UINT32 row-major device IDs; this is an explicit host input step."""
     import ttnn
 
-    if tuple(mesh_device.shape) != (4, 8) or mesh_device.get_num_devices() != 32:
+    if tuple(mesh_device.shape) != layout.mesh_shape or mesh_device.get_num_devices() != layout.num_devices:
         raise ValueError("token upload requires the full SP4/TP8 Galaxy")
     packed = pack_token_ids(
         token_ids, actual_start=actual_start, actual_end=actual_end, pad_id=pad_id, max_seq_len=max_seq_len
@@ -64,5 +66,5 @@ def upload_token_chunk(mesh_device, token_ids, *, actual_start, actual_end, pad_
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(4, 8), dims=(3, None)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=layout.mesh_shape, dims=(3, None)),
     )

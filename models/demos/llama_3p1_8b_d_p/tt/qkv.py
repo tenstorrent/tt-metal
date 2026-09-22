@@ -8,24 +8,16 @@ from collections.abc import Mapping
 import torch
 
 import ttnn
-from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
+from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import validate_mesh
 from models.demos.llama_3p1_8b_d_p.tt.rope import hf_to_meta
 
-_MESH_SHAPE = (4, 8)
-_SP = 4
-_TP = 8
-_LOCAL_SEQUENCE = 256
-_HIDDEN_SIZE = Llama31_8BConfig.EMB_SIZE
-_HEAD_DIM = Llama31_8BConfig.HEAD_DIM
-_NUM_Q_HEADS = Llama31_8BConfig.NUM_ATTENTION_HEADS
-_NUM_KV_HEADS = Llama31_8BConfig.NUM_KEY_VALUE_HEADS
-_LOCAL_Q_HEADS = _NUM_Q_HEADS // _TP
-_LOCAL_KV_HEADS = _NUM_KV_HEADS // _TP
-_LOCAL_QKV_WIDTH = (_LOCAL_Q_HEADS + 2 * _LOCAL_KV_HEADS) * _HEAD_DIM
+_LOCAL_QKV_WIDTH = (layout.local_q_heads + 2 * layout.local_kv_heads) * Model.HEAD_DIM
 _WEIGHT_SHAPES = {
-    "q_proj.weight": (_NUM_Q_HEADS * _HEAD_DIM, _HIDDEN_SIZE),
-    "k_proj.weight": (_NUM_KV_HEADS * _HEAD_DIM, _HIDDEN_SIZE),
-    "v_proj.weight": (_NUM_KV_HEADS * _HEAD_DIM, _HIDDEN_SIZE),
+    "q_proj.weight": (Model.NUM_ATTENTION_HEADS * Model.HEAD_DIM, Model.EMB_SIZE),
+    "k_proj.weight": (Model.NUM_KEY_VALUE_HEADS * Model.HEAD_DIM, Model.EMB_SIZE),
+    "v_proj.weight": (Model.NUM_KEY_VALUE_HEADS * Model.HEAD_DIM, Model.EMB_SIZE),
 }
 
 
@@ -37,7 +29,7 @@ class QKVProjection:
     """
 
     def __init__(self, mesh_device, mesh_config, state_dict):
-        self._validate_mesh(mesh_device, mesh_config)
+        validate_mesh(mesh_device, mesh_config, "QKV")
         host_weights = self._validate_weights(state_dict)
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
@@ -70,25 +62,6 @@ class QKVProjection:
         )
 
     @staticmethod
-    def _validate_mesh(mesh_device, mesh_config):
-        required = ("mesh_shape", "tp", "tp_axis", "sp_axis", "sp")
-        missing = [name for name in required if not hasattr(mesh_config, name)]
-        if missing:
-            raise ValueError(f"QKV mesh_config is missing: {', '.join(missing)}")
-        if tuple(mesh_config.mesh_shape) != _MESH_SHAPE:
-            raise ValueError(f"QKV requires mesh_shape={_MESH_SHAPE}, got {tuple(mesh_config.mesh_shape)}")
-        if (mesh_config.sp, mesh_config.tp, mesh_config.sp_axis, mesh_config.tp_axis) != (_SP, _TP, 0, 1):
-            raise ValueError(
-                "QKV requires SP=4 on mesh axis 0 and TP=8 on mesh axis 1; "
-                f"got SP={mesh_config.sp}, TP={mesh_config.tp}, "
-                f"sp_axis={mesh_config.sp_axis}, tp_axis={mesh_config.tp_axis}"
-            )
-        if tuple(mesh_device.shape) != _MESH_SHAPE:
-            raise ValueError(f"QKV device requires mesh_shape={_MESH_SHAPE}, got {tuple(mesh_device.shape)}")
-        if mesh_device.get_num_devices() != _SP * _TP:
-            raise ValueError(f"QKV requires {_SP * _TP} mesh devices, got {mesh_device.get_num_devices()}")
-
-    @staticmethod
     def _validate_weights(state_dict):
         if not isinstance(state_dict, Mapping):
             raise ValueError(f"QKV state_dict must be a mapping, got {type(state_dict).__name__}")
@@ -111,34 +84,36 @@ class QKVProjection:
     def _convert_qk_heads(raw_weight, num_heads):
         # HF Linear is [heads*head_dim, input]. Put head_dim last for hf_to_meta, then restore
         # [heads, head_dim, input]. Keeping heads separate prevents conversion across head boundaries.
-        per_head = raw_weight.reshape(num_heads, _HEAD_DIM, _HIDDEN_SIZE).transpose(-2, -1)
+        per_head = raw_weight.reshape(num_heads, Model.HEAD_DIM, Model.EMB_SIZE).transpose(-2, -1)
         return hf_to_meta(per_head).transpose(-2, -1).contiguous()
 
     @classmethod
     def _pack_raw_hf_weights(cls, weights):
-        q_heads = cls._convert_qk_heads(weights["q_proj.weight"], _NUM_Q_HEADS)
-        k_heads = cls._convert_qk_heads(weights["k_proj.weight"], _NUM_KV_HEADS)
-        v_heads = weights["v_proj.weight"].reshape(_NUM_KV_HEADS, _HEAD_DIM, _HIDDEN_SIZE)
+        q_heads = cls._convert_qk_heads(weights["q_proj.weight"], Model.NUM_ATTENTION_HEADS)
+        k_heads = cls._convert_qk_heads(weights["k_proj.weight"], Model.NUM_KEY_VALUE_HEADS)
+        v_heads = weights["v_proj.weight"].reshape(Model.NUM_KEY_VALUE_HEADS, Model.HEAD_DIM, Model.EMB_SIZE)
         groups = []
-        for tp_coord in range(_TP):
-            q0 = tp_coord * _LOCAL_Q_HEADS
-            q_local = q_heads[q0 : q0 + _LOCAL_Q_HEADS].reshape(_LOCAL_Q_HEADS * _HEAD_DIM, _HIDDEN_SIZE)
-            k_local = k_heads[tp_coord].reshape(_HEAD_DIM, _HIDDEN_SIZE)
-            v_local = v_heads[tp_coord].reshape(_HEAD_DIM, _HIDDEN_SIZE)
+        for tp_coord in range(layout.tp):
+            q0 = tp_coord * layout.local_q_heads
+            q_local = q_heads[q0 : q0 + layout.local_q_heads].reshape(
+                layout.local_q_heads * Model.HEAD_DIM, Model.EMB_SIZE
+            )
+            k_local = k_heads[tp_coord].reshape(Model.HEAD_DIM, Model.EMB_SIZE)
+            v_local = v_heads[tp_coord].reshape(Model.HEAD_DIM, Model.EMB_SIZE)
             groups.append(torch.cat((q_local, k_local, v_local), dim=0).transpose(-2, -1))
         packed = torch.cat(groups, dim=-1).contiguous()
-        return packed.reshape(1, 1, _HIDDEN_SIZE, _TP * _LOCAL_QKV_WIDTH)
+        return packed.reshape(1, 1, Model.EMB_SIZE, layout.tp * _LOCAL_QKV_WIDTH)
 
     def _validate_input(self, x):
         if not isinstance(x, ttnn.Tensor) or not ttnn.is_tensor_storage_on_device(x):
             raise ValueError("QKV input must be a device ttnn.Tensor")
         if x.device() != self.mesh_device:
             raise ValueError("QKV input must reside on the constructor mesh")
-        expected_shape = (1, 1, _LOCAL_SEQUENCE, _HIDDEN_SIZE)
+        expected_shape = (1, 1, layout.local_sequence, Model.EMB_SIZE)
         if tuple(x.shape) != expected_shape:
             raise ValueError(f"QKV input must have local shape {expected_shape}, got {tuple(x.shape)}")
-        if len(ttnn.get_device_tensors(x)) != _SP * _TP:
-            raise ValueError(f"QKV input must cover {_SP * _TP} mesh devices")
+        if len(ttnn.get_device_tensors(x)) != layout.num_devices:
+            raise ValueError(f"QKV input must cover {layout.num_devices} mesh devices")
         if x.dtype != ttnn.bfloat16:
             raise ValueError(f"QKV input must be bfloat16, got {x.dtype}")
         if x.layout != ttnn.TILE_LAYOUT:
@@ -158,8 +133,8 @@ class QKVProjection:
         )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             fused,
-            num_heads=_LOCAL_Q_HEADS,
-            num_kv_heads=_LOCAL_KV_HEADS,
+            num_heads=layout.local_q_heads,
+            num_kv_heads=layout.local_kv_heads,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             kv_tied=False,
