@@ -420,10 +420,9 @@ safe-outputs:
       - galaxy-sanity
       - galaxy-health
 
-      - t3000-e2e-tests
-      - t3000-integration-tests
+      - t3000-tests
+      - t3000-dispatch-tests
       - t3000-profiler-tests
-      - t3000-unit-tests
 
       - single-card-profiler-tests
       - pipeline-select-profiler
@@ -628,8 +627,9 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
 | `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
 | `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
-| `t3000-unit-tests`, `t3000-integration-tests`, `t3000-e2e-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
+| `t3000-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
 | `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
+| `t3000-dispatch-tests` | T3000 (8×WH) | The T3K fast (sanity) suite, on request |
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |
@@ -664,7 +664,7 @@ validation.** You must supply at least:
 | `models-t1-e2e-tests`, `models-t1-unit-tests` | `model` |
 | `models-t2-e2e-tests`, `models-t2-unit-tests` | `model` |
 | `models-t3-e2e-tests`, `models-t3-unit-tests` | `model` |
-| `t3000-integration-tests`, `t3000-unit-tests` | `model` |
+| `t3000-tests` | `unit-model`, `integration-model` |
 | `vllm-model-tests` | `model` |
 | `ttnn-run-sweeps` | `arch`, `log-level`, `runner-label`, `sweep_name` |
 
@@ -685,7 +685,7 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   values carry a human-readable suffix — use the option string exactly as written
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
 - **Suite and board toggles: `run-<something>` booleans, defaulting to `true` unless marked
-  otherwise below.** Three pipelines bundle independent suites this way, and taking the
+  otherwise below.** Four pipelines bundle independent suites this way, and taking the
   defaults runs all of them:
 
   | Pipeline | Toggles (default `true` unless noted) |
@@ -693,6 +693,7 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests`, `run-llk-sanity-tests` (default `false`) |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
+  | `t3000-tests` | `run-unit-tests`, `run-integration-tests`, and `run-e2e-tests` which defaults to **`false`** — the e2e suite costs about 195 of the 279 machine-minutes of a full run, so pass `run-e2e-tests: true` only when the change touches CCL, fabric or dispatch |
 
   The names say what each covers, so map them the same way you mapped paths to pipelines:
   a single-device `ttnn` op change reaches `run-ttnn-sanity-tests` and `run-ops-sanity-tests`

@@ -874,3 +874,40 @@ def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
         assert False, "Expected ValueError for ambiguous metric lookup"
     except ValueError as exc:
         assert "ambiguous" in str(exc)
+
+
+def test_ifeval_validates_accuracy_and_performance_from_the_same_run(tmp_path):
+    _vision_scaffold(tmp_path, "ifeval-demo")
+    target = {
+        "version": 1,
+        "targets": {
+            "ifeval-demo": {
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "status": "active",
+                                "accuracy": {"ifeval": 80, "ifeval_tolerance": 0.05},
+                                "perf": {"decode_t/s/u": 120, "decode_t/s/u_tolerance": 0.15},
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(target))
+    path = tmp_path / "generated/benchmark_data/complete_run_ifeval.json"
+    for accuracy, throughput, expected_code in [(80, 120, 0), (60, 120, 1), (80, 60, 1)]:
+        _write_complete_run(
+            path,
+            model="ifeval-demo",
+            batch_size=1,
+            seq_len=128,
+            decode_tsu=throughput,
+            extra_measurements=[{"step_name": "inference", "name": "ifeval_accuracy", "value": accuracy}],
+        )
+        result = _run_validator(tmp_path)
+        assert result.returncode == expected_code, result.stdout + result.stderr
+        assert "ifeval" in result.stdout and "decode_t/s/u" in result.stdout

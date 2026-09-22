@@ -103,7 +103,7 @@ set_target_properties(
             TRUE
 )
 target_compile_options(ttml_tests PRIVATE -fPIC)
-target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(ttml_tests ttml_pch)
 
 # Suppress false-positive -Wnonnull from xtensor internals on GCC < 13.
 # At -O3, GCC over-inlines xbroadcast::has_linear_assign and wrongly flags std::equal as null.
@@ -165,7 +165,7 @@ target_link_libraries(
         ttml
         TTNN::TTNN
 )
-target_precompile_headers(swiglu_fusion_benchmark REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(swiglu_fusion_benchmark ttml_pch)
 
 add_executable(moe_ffn_swiglu_benchmark benchmark/moe_ffn_swiglu_benchmark.cpp)
 target_link_libraries(
@@ -174,8 +174,7 @@ target_link_libraries(
         ttml
         TTNN::TTNN
 )
-target_precompile_headers(moe_ffn_swiglu_benchmark REUSE_FROM ttml_pch)
-
+tt_reuse_precompile_headers(moe_ffn_swiglu_benchmark ttml_pch)
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
@@ -205,6 +204,6 @@ if(TARGET benchmark::benchmark)
                 benchmark::benchmark
         )
         target_include_directories(${BENCH_TARGET} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
-        target_precompile_headers(${BENCH_TARGET} REUSE_FROM ttml_pch)
+        tt_reuse_precompile_headers(${BENCH_TARGET} ttml_pch)
     endforeach()
 endif()

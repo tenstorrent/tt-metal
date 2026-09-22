@@ -61,6 +61,7 @@ on:
           - galaxy-fabric-multi-mesh-2x8-2x4s
           - bh-galaxy-fabric-torus-stability
           - bh-galaxy-socket-pipeline
+          - bh-galaxy-tensor-prefetcher
         default: "disabled"
       galaxy-e2e-wormhole:
         description: "E2e: include wh_galaxy SKUs (matches standalone Galaxy e2e wormhole checkbox)"

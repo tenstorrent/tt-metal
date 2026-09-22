@@ -203,7 +203,11 @@ void write_dependency_hashes(
     }
 }
 
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path) {
+void write_dependency_hashes(
+    const std::string& out_dir,
+    const std::string& obj,
+    const std::string& hash_path,
+    const std::string& extra_dependency) {
     std::filesystem::path obj_path = obj;
     if (obj_path.is_relative()) {
         obj_path = out_dir / obj_path;
@@ -221,6 +225,9 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
         hash_file.setstate(std::ios::badbit);
     } else {
         auto dependencies = parse_dependency_file(dep_file);
+        if (!extra_dependency.empty() && dependencies.contains(obj)) {
+            dependencies.at(obj).push_back(extra_dependency);
+        }
         write_dependency_hashes(dependencies, out_dir, obj, hash_file);
     }
     hash_file.close();

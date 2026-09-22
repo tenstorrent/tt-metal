@@ -3,7 +3,6 @@
 
 """Gemma4 Galaxy prefill model with context-parallel ring attention."""
 
-
 import torch
 
 import ttnn
@@ -11,45 +10,9 @@ from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
-from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
-from models.demos.gemma4_d_p.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
-from models.demos.gemma4_d_p.utils.substate import substate
-
-
-def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
-    """Distribute a token-tile projection across the compute grid with vocabulary shards."""
-    tile_size = 32
-    grid = mesh_device.compute_with_storage_grid_size()
-    num_cores = grid.x * grid.y
-
-    m_tiles = max(1, (m + tile_size - 1) // tile_size)
-    k_tiles = max(1, k // tile_size)
-    n_tiles = max(1, n // tile_size)
-
-    if m_tiles > 1 or n > 64 * 1024:
-        return None
-
-    per_core_n = max(1, (n_tiles + num_cores - 1) // num_cores)
-
-    in0_block_w = 32
-    while in0_block_w > 1 and k_tiles % in0_block_w != 0:
-        in0_block_w //= 2
-
-    out_subblock_w = min(per_core_n, 4)
-    while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
-        out_subblock_w -= 1
-
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=out_subblock_w,
-        per_core_M=m_tiles,
-        per_core_N=per_core_n,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
+from models.demos.gemma4_d_p.tt.precision import dtype_to_str
+from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
+from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
 def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
@@ -86,19 +49,18 @@ def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
     return order
 
 
-def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None, prefill_chunk_size=None):
+def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=None):
     """Create chunk-major CP-sharded RoPE tables and replicated tables for traced position lookup."""
+    mesh_device = mesh_config.device
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
-
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-    cp = cp_degree(mesh_config) if (is_mesh and mesh_config is not None) else 1
+    cp = mesh_config.cp_degree if (is_mesh and mesh_config is not None) else 1
     row_order = None
     if cp > 1:
         assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
-        shard_dims = (-2, None) if mesh_config.sp_axis == 0 else (None, -2)
+        shard_dims = (-2, None) if mesh_config.cp_axis == 0 else (None, -2)
         prefill_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
         # Multi-chunk needs the rows reordered so one scalar slice serves every rank;
         # single-chunk (max_seq_len == chunk) is already correct without it.
@@ -169,36 +131,31 @@ class Gemma4Model:
 
     def __init__(
         self,
-        mesh_device,
+        mesh_config,
         hf_config,
         state_dict,
         ccl_manager,
+        prefill_chunk_size,
+        precision,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
-        mesh_config=None,
-        max_seq_len=131072,
+        max_seq_len=262144,
         max_local_batch_size=1,
         num_layers=None,
-        precision=None,
-        # Global prefill chunk size. Only needed under context parallelism with more
-        # than one chunk: it sets the RoPE cache's chunk-major row order and sizes the
-        # ring KV cache slabs. None means single-chunk prefill.
-        prefill_chunk_size=None,
         ring_kv_caches=None,
     ):
-        from models.demos.gemma4_d_p.config import validate_galaxy_mesh
+        assert state_dict and any(
+            key.startswith("model.language_model.") for key in state_dict
+        ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
+        mesh_device = mesh_config.device
 
-        validate_galaxy_mesh(mesh_device.shape)
-        if mesh_config is None or mesh_config.mesh_shape != tuple(mesh_device.shape):
-            raise ValueError("Galaxy prefill requires a matching mesh_config")
-        if prefill_chunk_size is None:
-            prefill_chunk_size = min(8192, max_seq_len)
         if max_seq_len <= 0 or prefill_chunk_size <= 0:
             raise ValueError("sequence and chunk lengths must be positive")
-        if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.prefill.sp * ttnn.TILE_SIZE):
+        if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):
             raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-        if prefill_chunk_size < 1024 * mesh_config.prefill.sp:
+        if prefill_chunk_size < 1024 * mesh_config.cp_degree:
             raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.prefill_chunk_size = prefill_chunk_size
@@ -206,12 +163,12 @@ class Gemma4Model:
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
-        self.final_logit_softcapping = hf_config.final_logit_softcapping
         self.embed_scale = hf_config.hidden_size**0.5
         self.ccl_manager = ccl_manager
         self._rope_prefill_positions = None
         self._packed_global_rope_trans_mat = None
-        if mesh_config is not None and mesh_config.prefill.sp > 1:
+
+        if mesh_config.cp_degree > 1:
             self._packed_global_rope_trans_mat = ttnn.from_torch(
                 get_rot_transformation_mat(),
                 device=mesh_device,
@@ -220,28 +177,17 @@ class Gemma4Model:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
+
         # When True the caller refreshes the ring metadata itself, outside any trace.
-        self._ring_metadata_external = False
+        self.prefill_metadata = PrefillMetadata(mesh_config)
+        self._prefill_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         n_layers = num_layers or hf_config.num_hidden_layers
 
-        # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
-        # any overrides loaded from precision_overrides.json; modules without
-        # an override fall back to ``dtype`` (the model-wide default). Dtypes
-        # are then threaded explicitly through DecoderLayer / used directly
-        # for embedding + lm_head, so each weight loads at the right precision
-        # and lands in a cache file tagged with that dtype.
-        from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
-
-        if precision is None:
-            precision = Gemma4Precision()
         mlp_dtype = precision.get("shared_mlp", dtype)
         attention_dtype = precision.get("attention", dtype)
         embedding_dtype = precision.get("embedding", dtype)
-        lm_head_dtype = precision.get("lm_head", dtype)
-        # Paged K/V storage, not a weight: it sizes with context rather than with the model,
-        # so it is the one tensor whose precision trades against how long a prompt fits.
         kv_cache_dtype = precision.get("kv_cache", dtype)
 
         # RoPE caches per layer type (sliding vs global)
@@ -249,11 +195,7 @@ class Gemma4Model:
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
         if hf_text_config is not None:
             self.rope_caches, self.rope_caches_2d = create_rope_caches(
-                mesh_device,
-                hf_text_config,
-                max_seq_len,
-                mesh_config=self.mesh_config,
-                prefill_chunk_size=prefill_chunk_size,
+                self.mesh_config, hf_text_config, max_seq_len, prefill_chunk_size=prefill_chunk_size
             )
         else:
             # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
@@ -263,30 +205,22 @@ class Gemma4Model:
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
         replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-        tp = mesh_config.tp if mesh_config else 1
+        tp = mesh_config.tp_degree
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
-        from models.demos.gemma4_d_p.tt.precision import dtype_to_str
-
-        if state_dict and "model.language_model.embed_tokens.weight" in state_dict:
-            embed_key = "model.language_model.embed_tokens.weight"
-        elif state_dict and "model.embed_tokens.weight" in state_dict:
-            embed_key = "model.embed_tokens.weight"
-        else:
-            embed_key = None
-
-        if embed_key and state_dict:
+        embed_key = "model.language_model.embed_tokens.weight"
+        if embed_key in state_dict:
             embed_weight = state_dict[embed_key]
 
             # Embedding: column-parallel (shard hidden dim across TP devices)
             # Each device holds [vocab, hidden/TP]; all-gather after lookup.
             if tp > 1:
-                embed_mapper = mesh_config.column_parallel(mesh_device)
+                embed_mapper = mesh_config.column_parallel()
             else:
                 embed_mapper = replicate
             embed_suffix = f"_{dtype_to_str(embedding_dtype)}"
             self.embedding_weight = ttnn.as_tensor(
-                cast_host_for_ttnn(embed_weight.unsqueeze(0).unsqueeze(0), embedding_dtype),
+                embed_weight.unsqueeze(0).unsqueeze(0),
                 device=mesh_device,
                 dtype=embedding_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -295,29 +229,9 @@ class Gemma4Model:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # LM head (tied with embeddings): column-parallel (shard vocab dim)
-            # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
-            # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
-            # argmax, but the override is exposed for systems that genuinely
-            # need the DRAM relief and can tolerate the precision loss.
-            lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
-            if tp > 1:
-                lm_mapper = mesh_config.column_parallel(mesh_device)
-            else:
-                lm_mapper = replicate
-            lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
-            self.lm_head_weight = ttnn.as_tensor(
-                lm_head_weight,
-                device=mesh_device,
-                dtype=lm_head_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=lm_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # Don't load LM head
         else:
             self.embedding_weight = None
-            self.lm_head_weight = None
 
         # Each layer owns a ring cache unless the caller supplies one.
         self.layers = []
@@ -325,7 +239,7 @@ class Gemma4Model:
             raise ValueError(f"expected {n_layers} external ring caches, got {len(ring_kv_caches)}")
         for i in range(n_layers):
             layer = Gemma4DecoderLayer(
-                mesh_device=mesh_device,
+                mesh_config=mesh_config,
                 hf_config=hf_config,
                 state_dict=state_dict,
                 layer_idx=i,
@@ -334,30 +248,15 @@ class Gemma4Model:
                 mlp_dtype=mlp_dtype,
                 attention_dtype=attention_dtype,
                 tensor_cache_path=tensor_cache_path,
-                mesh_config=mesh_config,
                 max_seq_len=self.ring_cache_max_seq_len,
                 max_local_batch_size=max_local_batch_size,
-                ring_kv_cache=(ring_kv_caches[i] if ring_kv_caches is not None else None),
+                ring_kv_cache=ring_kv_caches[i] if ring_kv_caches is not None else None,
             )
             self.layers.append(layer)
 
         self.tt_kv_cache = [layer.self_attn.ring_kv_cache for layer in self.layers]
 
-        # Final norm
-        if state_dict and "model.language_model.norm.weight" in state_dict:
-            norm_state = substate(state_dict, "model.language_model.norm")
-        elif state_dict and "model.norm.weight" in state_dict:
-            norm_state = substate(state_dict, "model.norm")
-        else:
-            norm_state = {}
-
-        self.norm = RMSNorm(
-            mesh_device=mesh_device,
-            hf_config=hf_config,
-            state_dict=norm_state,
-            tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
-            mesh_config=mesh_config,
-        )
+        # Skip final norm
 
     def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0):
         """Slice chunk-major RoPE caches using a CP-local row offset."""
@@ -378,28 +277,27 @@ class Gemma4Model:
     def __call__(
         self,
         hidden_states,
-        rope_mats=None,
         user_id=0,
         chunk_start_idx=0,
         on_layer_complete=None,
         d2h_service=None,
         metadata_msg=None,
     ):
-        """Prefill one user's chunk and return its post-norm hidden states.
+        """Prefill one user's chunk and return its final decoder hidden states.
 
-        The caller owns trace staging and runs the LM head on the final token
-        after the last chunk. Migration acknowledgements follow each layer's KV writes.
+        The caller owns trace staging. Migration acknowledgements follow each
+        layer's KV writes.
         """
         seq_len = hidden_states.shape[2]
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
-        if not self._ring_metadata_external:
-            self.ccl_manager.set_ring_metadata(slot_idx=user_id, kv_actual_global=chunk_start_idx)
+        if not self._prefill_metadata_external:
+            self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
         gathered_rope = {}
-        if rope_mats is None and self._rope_prefill_positions is not None:
+        if self._rope_prefill_positions is not None:
             for layer_type in set(self.hf_config.layer_types[: len(self.layers)]):
                 cos, sin = self.rope_caches_2d[layer_type]
                 gathered_rope[layer_type] = (
@@ -410,13 +308,11 @@ class Gemma4Model:
         packed_rope_by_type = {}
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
-            if rope_mats is not None:
-                layer_rope = rope_mats[layer_type] if isinstance(rope_mats, dict) else rope_mats
-            elif gathered_rope:
+            if gathered_rope:
                 layer_rope = gathered_rope[layer_type]
             else:
                 layer_rope = self._get_rope_mats(
-                    i, seq_len=seq_len, start_pos=chunk_start_idx // self.mesh_config.prefill.sp
+                    i, seq_len=seq_len, start_pos=chunk_start_idx // self.mesh_config.cp_degree
                 )
             if layer_type not in packed_rope_by_type and self._packed_global_rope_trans_mat is not None:
                 pack_rope = pack_global_rope_device if layer_type == "full_attention" else pack_sliding_rope_device
@@ -426,6 +322,7 @@ class Gemma4Model:
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
+                prefill_metadata=self.prefill_metadata,
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
@@ -438,38 +335,7 @@ class Gemma4Model:
                 else:
                     ttnn.synchronize_device(self.mesh_device)
                     on_layer_complete(i)
-        return self.norm.forward(hidden_states)
-
-    def _cp_gather_prefill_sequence(self, hidden_states):
-        """Gather a chunk across CP ranks without freeing the caller-owned hidden states."""
-        from models.demos.gemma4_d_p.tt.ccl import cp_degree
-
-        if cp_degree(self.mesh_config) <= 1:
-            return hidden_states
-        return ttnn.all_gather(
-            hidden_states,
-            dim=2,
-            cluster_axis=self.mesh_config.sp_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    def _apply_lm_head(self, hidden_states):
-        """Project a token tile to logits, apply softcapping, and gather the vocabulary."""
-        from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
-
-        if self.lm_head_weight is None:
-            raise RuntimeError("LM head weights not loaded")
-        program_config = _get_lm_head_program_config(
-            self.mesh_device, m=hidden_states.shape[2], k=self.hidden_size, n=self.lm_head_weight.shape[-1]
-        )
-        logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=program_config)
-        hidden_states.deallocate(True)
-        if self.final_logit_softcapping and self.final_logit_softcapping > 0:
-            cap = self.final_logit_softcapping
-            logits = ttnn.mul(logits, 1.0 / cap)
-            logits = ttnn.tanh(logits)
-            logits = ttnn.mul(logits, cap)
-        return ccl_allgather(logits, self.mesh_config, self.ccl_manager)
+        return hidden_states
 
     def embed_tokens(self, tokens):
         """Embed input tokens and scale by sqrt(hidden_size).
@@ -483,47 +349,16 @@ class Gemma4Model:
         embeds = ttnn.mul(embeds, self.embed_scale)
 
         # All-gather sharded hidden dim back to full hidden
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
+        if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
             embeds = ttnn.unsqueeze_to_4D(embeds)
             from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
 
             embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
         return embeds
 
-    # ── Generator-compatible interface ────────────────────────────────────
-
-    def _reshape_prefill_embeds(self, tt_embeds, seq_len):
-        if len(tt_embeds.shape) == 3:
-            return ttnn.reshape(tt_embeds, (1, 1, seq_len, self.hidden_size))
-        if tt_embeds.shape[2] != seq_len:
-            return ttnn.reshape(tt_embeds, (1, 1, seq_len, self.hidden_size))
-        return tt_embeds
-
     def transform_and_embed_prefill_inputs_device(self, tokens):
-        """Embed CP-sharded tokens into tiled hidden states inside the prefill trace."""
-        seq_len = tokens.shape[-1]
-        if len(tokens.shape) == 4:
-            tokens = ttnn.reshape(tokens, (1, seq_len))
-        embeds = self._reshape_prefill_embeds(self.embed_tokens(tokens), seq_len)
-        return ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
-
-    def process_output_prefill(self, tt_out, last_token_idx):
-        """Read prefill logits to host and slice to the last token's vocab row.
-
-        Under TP, Gemma4 all-gathers logits inside the model so a single
-        device tensor already holds the full vocab.
-        """
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-        else:
-            torch_output = ttnn.to_torch(tt_out)
-        return torch_output[..., last_token_idx, : self.vocab_size]
-
-    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
-        """Run the LM head on a chunk-relative token tile without freeing the trace output."""
-        gathered = self._cp_gather_prefill_sequence(hidden_states)
-        tile_start = (last_token_idx // 32) * 32
-        sliced = ttnn.slice(gathered, (0, 0, tile_start, 0), (1, 1, tile_start + 32, gathered.shape[-1]))
-        if gathered is not hidden_states and gathered is not sliced:
-            gathered.deallocate(True)
-        return self._apply_lm_head(sliced)
+        """Embed CP-sharded tokens into tiled hidden states."""
+        assert (
+            len(tokens.shape) == 2 and tokens.shape[0] == 1
+        ), f"Expected tokens shaped [1, sequence_length], got {tokens.shape}"
+        return ttnn.to_layout(self.embed_tokens(tokens), ttnn.TILE_LAYOUT)

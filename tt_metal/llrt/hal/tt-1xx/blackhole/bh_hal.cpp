@@ -132,8 +132,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 8 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(11);
+        // Upper bound: 9 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(12);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
@@ -144,6 +144,7 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole/noc");
         includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/llk_lib");
+        includes.push_back("tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -254,7 +255,7 @@ public:
         // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
         // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
         // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
-        // The link itself stays stock (-flto=auto): a fat-free object simply opts out of LTO.
+        // The link itself stays stock: a fat-free object simply opts out of LTO.
         //
         // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reachable through
         // explicit intrinsics; keep the auto-vectorizers from touching scalar kernel/LLK code.
@@ -417,6 +418,8 @@ void Hal::initialize_bh(
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
+            (addr == RISCV_DEBUG_REG_WALL_CLOCK_L ||
+             addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||                // read by the streaming profiler's clock sync
             (addr == IERISC_RESET_PC ||
              addr == SUBORDINATE_IERISC_RESET_PC) ||                // used to program start addr for eth FW
             (addr == DRISC_RESET_PC) ||                             // used to program start addr for DRAM FW

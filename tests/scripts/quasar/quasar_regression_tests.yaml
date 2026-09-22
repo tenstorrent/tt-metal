@@ -495,7 +495,7 @@ unit_tests_data_movement:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_device:
-  - filter: "*SimulatorFixture*QuasarStaticTlbReadWrite*"
+  - filter: "*SimulatorFixture*QuasarIoWindowReadWrite*"
     config: 1x3
     back2back: true
     env:

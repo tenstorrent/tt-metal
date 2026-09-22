@@ -30,6 +30,7 @@ set(TTNN_CORE_SRCS
     core/graph/graph_trace_utils.cpp
     core/graph/levelized_graph.cpp
     core/reports.cpp
+    core/tensor/flatbuffer/tensor_file_layout.cpp
     core/tensor/flatbuffer/tensor_flatbuffer.cpp
     core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
     core/tensor/flatbuffer/overlapped_tensor_flatbuffer.cpp
@@ -115,6 +116,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/experimental/disaggregation/tensor_helpers.cpp
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
+    cpp/ttnn-nanobind/prefetcher_pipe.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
     cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp

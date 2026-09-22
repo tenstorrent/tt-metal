@@ -57,6 +57,18 @@ def create_global_semaphores(mesh_device, cores, initial_value):
     return ccl_semaphore_handles
 
 
+def logical_length_tensor(mesh_device, value, *, on_device=True):
+    """Single-valued uint32 tensor for the logical_n / logical_l transport, replicated to every device.
+    on_device=False returns the spec-matching host twin for ttnn.copy_host_to_device_tensor."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        **({"device": mesh_device} if on_device else {}),
+    )
+
+
 def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor):
     submesh_shape = [0, 0]
     submesh_shape[rp_axis] = rp_factor
@@ -331,6 +343,8 @@ def run_ring_joint_sdpa(
     pcc_threshold,
     max_mse=None,
     fp32_dest_acc_en: bool = False,
+    # logical_n as a device tensor instead of a host int (logical_l stays defaulted). Pure transport change.
+    logical_as_tensor: bool = False,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -468,6 +482,8 @@ def run_ring_joint_sdpa(
 
     tt_out_list = []
     tt_joint_out_list = []
+    # Allocated once, outside run_iters, so a traced capture bakes a stable address.
+    tt_logical_n = logical_length_tensor(submesh, base_seq_len) if logical_as_tensor else base_seq_len
 
     def run_iters(tt_out_list, tt_joint_out_list):
         with submesh.cache_entries_counter.measure():
@@ -482,7 +498,7 @@ def run_ring_joint_sdpa(
                     persistent_output_buffer_k=persistent_output_buffers[i][0],
                     persistent_output_buffer_v=persistent_output_buffers[i][1],
                     joint_strategy="rear",
-                    logical_n=base_seq_len,
+                    logical_n=tt_logical_n,
                     program_config=program_config,
                     compute_kernel_config=compute_kernel_config,
                     dim=2,
@@ -904,6 +920,9 @@ model_input_ids = [
         "4rpx2up",
     ],
 )
+# logical_n-only transport (replicated joint, logical_l defaulted): the shape family the DiT and
+# minimax_h3 callers use, checked against the host-int path over this whole matrix.
+@pytest.mark.parametrize("logical_as_tensor", [False, True], ids=["scalar", "tensor"])
 def test_ring_joint_sdpa_shapes(
     mesh_device,
     b,
@@ -921,6 +940,7 @@ def test_ring_joint_sdpa_shapes(
     rp_factor,
     up_axis,
     up_factor,
+    logical_as_tensor,
     all_gather_topology,
     skip_check,
     reset_seeds,
@@ -958,6 +978,7 @@ def test_ring_joint_sdpa_shapes(
         all_gather_topology,
         skip_check,
         0.999,
+        logical_as_tensor=logical_as_tensor,
     )
 
 
@@ -1297,6 +1318,7 @@ def run_ring_joint_sdpa_sharded_prompt(
     k_chunk_size,
     num_links,
     logical_l=None,
+    logical_as_tensor=False,
     topology=ttnn.Topology.Linear,
     pcc_threshold=0.999,
 ):
@@ -1305,7 +1327,14 @@ def run_ring_joint_sdpa_sharded_prompt(
     internal gather and the output joint tensor is also sharded L/P per device.
 
     logical_l (defaulting to padded_joint_seq_len) is the real joint length;
+
+    logical_as_tensor selects which lengths travel as device tensors: False/"none", True/"both", "n", "l".
+    Pure transport change, so the result must be identical; the garbage-filled pad tails make any missed
+    mask collapse PCC.
     """
+    tensor_modes = {False: "none", True: "both"}
+    tensor_mode = tensor_modes.get(logical_as_tensor, logical_as_tensor)
+    assert tensor_mode in ("none", "both", "n", "l"), f"bad logical_as_tensor={logical_as_tensor}"
     dtype = ttnn.bfloat16
 
     full_compute_grid = submesh.compute_with_storage_grid_size()
@@ -1480,8 +1509,8 @@ def run_ring_joint_sdpa_sharded_prompt(
         persistent_output_buffer_k=persistent_kv_bufs[0],
         persistent_output_buffer_v=persistent_kv_bufs[1],
         joint_strategy="rear",
-        logical_n=base_seq_len,
-        logical_l=logical_l,
+        logical_n=logical_length_tensor(submesh, base_seq_len) if tensor_mode in ("both", "n") else base_seq_len,
+        logical_l=logical_length_tensor(submesh, logical_l) if tensor_mode in ("both", "l") else logical_l,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
         dim=2,
@@ -1522,6 +1551,71 @@ def run_ring_joint_sdpa_sharded_prompt(
     jout_pass, jout_pcc = comp_pcc(tt_joint_out_pt, gt_joint, pcc_threshold)
     logger.info(f"[sharded-joint] joint PCC={jout_pcc}")
     assert jout_pass, f"Joint PCC {jout_pcc} below threshold {pcc_threshold}"
+
+
+# The full matrix above covers "neither" and "both"; this covers the two mixed modes on a shape with a
+# sub-tile partial column on BOTH tails, where a crossed-over transport shows immediately.
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, b, nh, base_seq_len, padded_joint_seq_len, d, q_chunk_size, k_chunk_size, logical_l",
+    [
+        ((2, 4), 0, 1, 24, 63, 64, 64, 32, 32, 63),
+        ((4, 8), 0, 1, 24, 127, 128, 64, 32, 32, 127),
+    ],
+    ids=["m2x4", "m4x8"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("logical_as_tensor", ["n", "l"], ids=["n_only", "l_only"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+def test_ring_joint_sdpa_sharded_prompt_mixed_logical_transport(
+    mesh_device,
+    sp_axis,
+    b,
+    nh,
+    base_seq_len,
+    padded_joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    logical_l,
+    logical_as_tensor,
+    all_gather_topology,
+    reset_seeds,
+):
+    """One logical length as a device tensor, the other as a host int."""
+    sp_factor = mesh_device.shape[sp_axis]
+    up_axis = 1 - sp_axis
+    num_links = sharded_prompt_num_links(mesh_device.shape)
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+    submesh.cache_entries_counter = CacheEntriesCounter(submesh)
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, sp_factor)
+    run_ring_joint_sdpa_sharded_prompt(
+        submesh,
+        b=b,
+        nh=nh,
+        base_seq_len=base_seq_len,
+        padded_seq_len=padded_seq_len,
+        padded_joint_seq_len=padded_joint_seq_len,
+        d=d,
+        rp_axis=sp_axis,
+        rp_factor=sp_factor,
+        up_axis=up_axis,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        num_links=num_links,
+        logical_l=logical_l,
+        logical_as_tensor=logical_as_tensor,
+        topology=all_gather_topology,
+    )
 
 
 def sharded_prompt_num_links(mesh_shape):
@@ -1597,6 +1691,8 @@ def sharded_prompt_num_links(mesh_shape):
     indirect=["device_params"],
     ids=["line"],
 )
+# Both ways of supplying logical_n / logical_l must agree over the whole matrix above.
+@pytest.mark.parametrize("logical_as_tensor", [False, True], ids=["scalar", "tensor"])
 def test_ring_joint_sdpa_sharded_prompt(
     mesh_device,
     sp_axis,
@@ -1608,6 +1704,7 @@ def test_ring_joint_sdpa_sharded_prompt(
     q_chunk_size,
     k_chunk_size,
     logical_l,
+    logical_as_tensor,
     all_gather_topology,
     reset_seeds,
 ):
@@ -1639,5 +1736,267 @@ def test_ring_joint_sdpa_sharded_prompt(
         k_chunk_size=k_chunk_size,
         num_links=num_links,
         logical_l=logical_l,
+        logical_as_tensor=logical_as_tensor,
         topology=all_gather_topology,
     )
+
+
+# One captured ring-joint SDPA segment plus its runtime args; 32 MB is ample headroom.
+LOGICAL_TENSOR_TRACE_REGION_SIZE = 32 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, b, nh, padded_seq_len, padded_joint_seq_len, d, q_chunk_size, k_chunk_size, logical_pairs",
+    [
+        # (logical_n, logical_l) pairs moving every live-driven geometry: full, sub-tile tails, emptied
+        # iterations, mixed. logical_l must exceed the per-device joint shard to select the sharded path;
+        # a fully-empty iteration needs ring_size >= 3, so the (4,8) row carries that case.
+        ((2, 4), 0, 1, 24, 128, 128, 64, 32, 32, [(128, 128), (95, 127), (64, 65), (127, 100)]),
+        ((4, 8), 0, 1, 24, 256, 256, 64, 32, 32, [(256, 256), (191, 127), (64, 65), (255, 200)]),
+    ],
+    ids=["m2x4", "m4x8"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": LOGICAL_TENSOR_TRACE_REGION_SIZE,
+            },
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+# Both joint layouts, because they reach the transport differently: the sharded joint varies logical_n AND
+# logical_l, while the replicated joint (the DiT / minimax_h3 usage) pins logical_l by shape and varies
+# logical_n alone, leaving logical_lt compile-time.
+@pytest.mark.parametrize("joint_sharded", [True, False], ids=["sharded_joint", "replicated_joint"])
+def test_ring_joint_sdpa_logical_tensor_trace_replay(
+    mesh_device,
+    sp_axis,
+    b,
+    nh,
+    padded_seq_len,
+    padded_joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    logical_pairs,
+    joint_sharded,
+    all_gather_topology,
+    reset_seeds,
+):
+    """ONE captured trace, replayed once per (logical_n, logical_l) pair with only the length tensors
+    refreshed in place, must match the host-scalar path bit-for-bit.
+
+    Inputs are uploaded once, so the lengths are the only thing distinguishing one replay from the next.
+    Catches the two multi-dispatch failure modes single-dispatch tests cannot: a stale read of the
+    fixed-address tensors (missing invalidate_l1_cache), and an iteration emptied by the live length but
+    marked active by the placeholder-derived mask (compute waits on work that never arrives).
+    """
+    sp_factor = mesh_device.shape[sp_axis]
+    up_axis = 1 - sp_axis
+    num_links = sharded_prompt_num_links(mesh_device.shape)
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+    submesh.cache_entries_counter = CacheEntriesCounter(submesh)
+    assert padded_seq_len % sp_factor == 0, "padded_seq_len must be divisible by sp_factor"
+    assert padded_joint_seq_len % sp_factor == 0, "padded_joint_seq_len must be divisible by sp_factor"
+    submesh.enable_program_cache()  # a trace replays cached programs; capture cannot JIT-compile
+
+    dtype = ttnn.bfloat16
+    full_compute_grid = submesh.compute_with_storage_grid_size()
+    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
+    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group([worker_sub_device_id])
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(2)]
+
+    spatial_shard_dims = [None, None]
+    spatial_shard_dims[sp_axis] = 2
+    spatial_shard_dims[up_axis] = 1
+    kv_buf_shard_dims = [None, None]
+    kv_buf_shard_dims[up_axis] = 1
+    # Sharded joint: L/P per device (seq sharded), needing the internal gather. Replicated: full L per
+    # device, head-sharded only.
+    joint_shard_dims = list(spatial_shard_dims) if joint_sharded else list(kv_buf_shard_dims)
+    # A replicated joint output is a full copy per ring device; concat the replicas into batch so the
+    # comparison covers every one of them.
+    joint_composer_dims = list(joint_shard_dims)
+    if not joint_sharded:
+        joint_composer_dims[sp_axis] = 0
+
+    # Garbage (not zero) everywhere: rows past logical_n / logical_l must be masked out, and leaked
+    # garbage collapses the comparison where a leaked zero would barely move it.
+    padded_Q = 8.0 * fa_rand(b, nh, padded_seq_len, d)
+    padded_K = 8.0 * fa_rand(b, nh, padded_seq_len, d)
+    padded_V = 8.0 * fa_rand(b, nh, padded_seq_len, d)
+    joint_Q = 8.0 * fa_rand(b, nh, padded_joint_seq_len, d)
+    joint_K = 8.0 * fa_rand(b, nh, padded_joint_seq_len, d)
+    joint_V = 8.0 * fa_rand(b, nh, padded_joint_seq_len, d)
+
+    def upload(host_tensor, dims):
+        return ttnn.from_torch(
+            host_tensor,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=dims),
+        )
+
+    # Allocated ONCE: under trace these addresses are baked into the capture.
+    tt_Q = upload(padded_Q, spatial_shard_dims)
+    tt_K = upload(padded_K, spatial_shard_dims)
+    tt_V = upload(padded_V, spatial_shard_dims)
+    tt_joint_Q = upload(joint_Q, joint_shard_dims)
+    tt_joint_K = upload(joint_K, joint_shard_dims)
+    tt_joint_V = upload(joint_V, joint_shard_dims)
+    persistent_kv_bufs = [
+        upload(torch.zeros(b, nh, padded_seq_len, d), kv_buf_shard_dims),
+        upload(torch.zeros(b, nh, padded_seq_len, d), kv_buf_shard_dims),
+    ]
+    persistent_joint_kv_bufs = [
+        upload(torch.zeros(b, nh, padded_joint_seq_len, d), kv_buf_shard_dims),
+        upload(torch.zeros(b, nh, padded_joint_seq_len, d), kv_buf_shard_dims),
+    ]
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_compute_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        submesh.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_logical_n = logical_length_tensor(submesh, logical_pairs[0][0])
+    tt_logical_l = logical_length_tensor(submesh, logical_pairs[0][1]) if joint_sharded else None
+
+    def load_lengths(logical_n, logical_l):
+        """Deliver a pair the way a traced runner does: in-place refresh, no reallocation."""
+        ttnn.copy_host_to_device_tensor(logical_length_tensor(submesh, logical_n, on_device=False), tt_logical_n)
+        if joint_sharded:
+            ttnn.copy_host_to_device_tensor(logical_length_tensor(submesh, logical_l, on_device=False), tt_logical_l)
+
+    def call(logical_n, logical_l):
+        joint_kwargs = (
+            {
+                "logical_l": logical_l,
+                "persistent_output_buffer_joint_k": persistent_joint_kv_bufs[0],
+                "persistent_output_buffer_joint_v": persistent_joint_kv_bufs[1],
+            }
+            if joint_sharded
+            else {}
+        )
+        return ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            tt_joint_Q,
+            tt_joint_K,
+            tt_joint_V,
+            persistent_output_buffer_k=persistent_kv_bufs[0],
+            persistent_output_buffer_v=persistent_kv_bufs[1],
+            joint_strategy="rear",
+            logical_n=logical_n,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=ccl_semaphore_handles,
+            num_links=num_links,
+            cluster_axis=sp_axis,
+            mesh_device=submesh,
+            topology=all_gather_topology,
+            subdevice_id=worker_sub_device_id,
+            ccl_core_grid_offset=ccl_core_grid_offset,
+            **joint_kwargs,
+        )
+
+    spatial_composer = ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=spatial_shard_dims)
+    joint_composer = ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=joint_composer_dims)
+
+    def valid_rows(tt_out, tt_joint_out, logical_n, logical_l):
+        # A replicated joint has no logical_l to vary: every row of it is real.
+        joint_rows = logical_l if joint_sharded else padded_joint_seq_len
+        spatial = ttnn.to_torch(tt_out, mesh_composer=spatial_composer)[:, :, :logical_n, :]
+        joint = ttnn.to_torch(tt_joint_out, mesh_composer=joint_composer)[:, :, :joint_rows, :]
+        return spatial, joint
+
+    trace_id = None
+    try:
+        # 1) Host-scalar references, eager, one program per pair. Same device inputs as the replays.
+        references = []
+        for logical_n, logical_l in logical_pairs:
+            tt_out, tt_joint_out, tt_stats = call(logical_n, logical_l)
+            ttnn.synchronize_device(submesh)
+            references.append(valid_rows(tt_out, tt_joint_out, logical_n, logical_l))
+            for t in (tt_out, tt_joint_out, tt_stats):
+                ttnn.deallocate(t)
+
+        # Guard against a vacuous pass: if every pair produced the same numbers, a replay reading a stale
+        # length would still match. Compare each pair's spatial output over the rows they share.
+        for i in range(1, len(logical_pairs)):
+            shared = min(logical_pairs[i][0], logical_pairs[0][0])
+            assert not torch.equal(references[i][0][:, :, :shared, :], references[0][0][:, :, :shared, :]), (
+                f"pairs {logical_pairs[0]} and {logical_pairs[i]} give identical output over their shared "
+                f"{shared} rows, so replays could not distinguish them; pick different lengths"
+            )
+
+        # 2) Compile the tensor-path program, then capture it ONCE. Its host scalars are the placeholders,
+        #    identical for every pair, so the capture holds no per-pair information at all.
+        load_lengths(*logical_pairs[0])
+        warm = call(tt_logical_n, tt_logical_l)
+        ttnn.synchronize_device(submesh)
+        for t in warm:
+            ttnn.deallocate(t)
+
+        trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+        tt_out_traced, tt_joint_out_traced, _ = call(tt_logical_n, tt_logical_l)
+        ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+        ttnn.synchronize_device(submesh)
+
+        # 3) Replay the single capture. The order is deliberately not ascending: a forward pass, then a
+        #    descending pass (where a stale length is too LARGE and over-attends), then out of order.
+        n_pairs = len(logical_pairs)
+        replay_order = list(range(n_pairs)) + list(reversed(range(n_pairs))) + [0, n_pairs - 1, 1]
+        for replay_idx, i in enumerate(replay_order):
+            logical_n, logical_l = logical_pairs[i]
+            load_lengths(logical_n, logical_l)
+            ttnn.execute_trace(submesh, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(submesh)
+            got_spatial, got_joint = valid_rows(tt_out_traced, tt_joint_out_traced, logical_n, logical_l)
+            ref_spatial, ref_joint = references[i]
+            for name, got, ref in (("spatial", got_spatial, ref_spatial), ("joint", got_joint, ref_joint)):
+                assert torch.equal(got, ref), (
+                    f"replay {replay_idx} of order {replay_order}: pair {i} "
+                    f"(logical_n={logical_n}, logical_l={logical_l}): traced {name} output differs from the "
+                    f"host-scalar path (max abs diff {(got - ref).abs().max().item()}). Matching pair "
+                    f"{i - 1} instead points at a stale length read."
+                )
+            logger.info(f"logical-tensor trace replay {replay_idx} (pair {i}={logical_pairs[i]}): bit-exact")
+
+        logger.success(
+            f"logical-tensor trace: 1 capture, {len(replay_order)} replays over {n_pairs} "
+            f"(logical_n, logical_l) pairs (order {replay_order}), all bit-exact vs the host-scalar path"
+        )
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(submesh, trace_id)
+        submesh.reset_sub_device_stall_group()
+        submesh.clear_loaded_sub_device_manager()
+        submesh.remove_sub_device_manager(sub_device_manager)

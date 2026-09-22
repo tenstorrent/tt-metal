@@ -23,20 +23,26 @@ struct RingSDPAOpReceiver {
 
     RingSDPAOpReceiver() {}
 
-    RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx) : wait_for_op_signal(wait_for_op_signal) {
-        uint32_t ring_size = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t ring_index = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t forward_writes_expected = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t backward_writes_expected = get_arg_val<uint32_t>(rt_args_idx++);
+    RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx) :
+        RingSDPAOpReceiver(
+            wait_for_op_signal, rt_args_idx, [](uint32_t index) { return get_arg_val<uint32_t>(index); }) {}
+
+    template <typename ReadArg>
+    RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx, ReadArg read_arg) :
+        wait_for_op_signal(wait_for_op_signal) {
+        uint32_t ring_size = read_arg(rt_args_idx++);
+        uint32_t ring_index = read_arg(rt_args_idx++);
+        uint32_t forward_writes_expected = read_arg(rt_args_idx++);
+        uint32_t backward_writes_expected = read_arg(rt_args_idx++);
 
         if (this->wait_for_op_signal) {
             // First semaphore is AllGather's BWD semaphore. It belongs to direction 1.
-            signal_op_semaphore_ids[1] = get_arg_val<uint32_t>(rt_args_idx++);
+            signal_op_semaphore_ids[1] = read_arg(rt_args_idx++);
             // Second is AllGather's FWD semaphore. It belongs to direction 0.
-            signal_op_semaphore_ids[0] = get_arg_val<uint32_t>(rt_args_idx++);
-            split_forwarding_enabled = get_arg_val<uint32_t>(rt_args_idx++) == 1;
-            split_shard_id = get_arg_val<uint32_t>(rt_args_idx++);
-            split_second_half_wait = get_arg_val<uint32_t>(rt_args_idx++);
+            signal_op_semaphore_ids[0] = read_arg(rt_args_idx++);
+            split_forwarding_enabled = read_arg(rt_args_idx++) == 1;
+            split_shard_id = read_arg(rt_args_idx++);
+            split_second_half_wait = read_arg(rt_args_idx++);
         }
 
         seq = RingIdSequencer(ring_index, ring_size, backward_writes_expected, forward_writes_expected);

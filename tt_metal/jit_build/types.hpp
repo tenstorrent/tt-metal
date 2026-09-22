@@ -22,6 +22,8 @@ struct TargetRecipe {
     std::string cflags;
     std::vector<std::string> defines;
     std::string includes;
+    // Source umbrella path; the PCH artifact is built and cached on the compiling machine.
+    std::string pch_umbrella;
     std::string compiler_opt_level;
     std::vector<std::string> srcs;
     std::vector<std::string> objs;

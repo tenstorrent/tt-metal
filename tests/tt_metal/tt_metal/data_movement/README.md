@@ -6,7 +6,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 This test suite includes tests using both fast dispatch (Mesh Device API) and slow dispatch modes:
 
 ### Fast Dispatch (Mesh Device API)
-Most test suites use the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. These tests use `GenericMeshDeviceFixture` and run on single-device unit meshes with fast dispatch mode for optimal performance.
+Most test suites use the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. These tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes with fast dispatch mode for optimal performance.
 
 ### Slow Dispatch
 Some test suites use slow dispatch mode for reliable program execution. These tests use `MeshDeviceFixture`. With TT-Mesh, APIs for executing programs in slow dispatch are the same as in fast dispatch, using `tt::tt_metal::distributed::EnqueueMeshWorkload`. Tests requiring slow dispatch include:
@@ -15,7 +15,7 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 - **Reshard Hardcoded** (IDs 17-20)
 
 ### Quasar Simulator
-Quasar data movement tests (IDs 912-927) use `GenericMeshDeviceFixture` with `arch == ARCH::QUASAR` branches inside each test. They require `TT_METAL_SLOW_DISPATCH_MODE=1` (fast dispatch is not yet supported on the Quasar emulator). The base fixture skips gracefully if fast dispatch is attempted. Tests that require `≥2 Tensix columns` (e.g. subordinate core `{1,0}`) also skip with an informative message when run on a 1-column emulator — use `emu-quasar-2x3` or larger for those tests.
+Quasar data movement tests (IDs 912-927) use `UnitMeshFastDispatchFixture` with `arch == ARCH::QUASAR` branches inside each test. They require `TT_METAL_SLOW_DISPATCH_MODE=1` (fast dispatch is not yet supported on the Quasar emulator). The base fixture skips gracefully if fast dispatch is attempted. Tests that require `≥2 Tensix columns` (e.g. subordinate core `{1,0}`) also skip with an informative message when run on a 1-column emulator — use `emu-quasar-2x3` or larger for those tests.
 
 ## Device 2.0 API Support
 This test suite now includes tests using the new device 2.0 NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
@@ -99,9 +99,9 @@ An exhaustive list of options and their descriptions can be found in `./conftest
 Follow these steps to add new tests to this test suite.
 
 1. **Choose dispatch mode:** Decide whether your test should use fast dispatch (Mesh Device API) or slow dispatch:
-    - **Fast Dispatch (recommended)**: Use `GenericMeshDeviceFixture` for new performance tests
+    - **Fast Dispatch (recommended)**: Use `UnitMeshFastDispatchFixture` for new performance tests
     - **Slow Dispatch**: Use `MeshDeviceFixture` only if fast dispatch APIs don't work for your specific test case
-    - **Quasar Simulator**: Use `GenericMeshDeviceFixture` with an `arch == ARCH::QUASAR` branch inside the test; run with `TT_METAL_SLOW_DISPATCH_MODE=1`
+    - **Quasar Simulator**: Use `UnitMeshFastDispatchFixture` with an `arch == ARCH::QUASAR` branch inside the test; run with `TT_METAL_SLOW_DISPATCH_MODE=1`
 2. Create a new directory with a descriptive name for the test.
     - **Example:** `./dram_unary`
 3. In this directory, create the c++ test file with a filename that starts with "test_".

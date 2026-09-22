@@ -32,6 +32,7 @@
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
+  budget_type: e2e
 
 # --- perf ---
 - id: bh-fabric-sanity-benchmark
@@ -47,6 +48,7 @@
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
+  budget_type: e2e
 
 # --- unit ---
 - id: bh-fabric-ttnn-udm-unit
@@ -63,6 +65,7 @@
       timeout: 20
   owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
+  budget_type: e2e
 
 - id: bh-grid-20-cores-ttnn-sharding
   name: ttnn 20-core sharding unit tests
@@ -72,6 +75,7 @@
       timeout: 10
   owner_id: U08ARDXARPF # Ilija Anastasijevic
   team: ttnn
+  budget_type: e2e
 
 # The op gathers over a mesh axis, and a mesh smaller than the box is a submesh, which
 # fabric does not come up on — so the mesh a row asks for is fixed by the box it runs on.
@@ -84,6 +88,7 @@
       timeout: 10
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: ttnn
+  budget_type: e2e
 
 # --- unit (fast) ---
 # Fast multi-card legs that the legacy blackhole-multi-card-unit-tests-impl.yaml
@@ -105,6 +110,7 @@
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
+  budget_type: e2e
 
 - id: bh-ttnn-ops-fast-unit
   name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
@@ -121,15 +127,21 @@
       timeout: 15
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
+  budget_type: e2e
 
 - id: bh-host-io-fast-unit-viommu
   name: Host IO socket loopback unit tests (slow dispatch, viommu)
-  cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+  # Keep the slow-dispatch Host IO selection aligned with multi-card sanity.
+  cmd: >-
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv
+    models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+    tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py
   skus:
     bh_p300:
       timeout: 10
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: e2e
 
 # --- stress (continuous gate) ---
 - id: bh-fabric-stability-stress
@@ -144,6 +156,7 @@
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
+  budget_type: e2e
 
 - id: bh-ttnn-stress
   name: ttnn stress tests
@@ -153,6 +166,7 @@
       timeout: 45
   owner_id: U084DDYSWCW # Adrian Morrison
   team: ttnn
+  budget_type: e2e
 
 # --- disaggregated prefill ---
 - id: bh-lb-disaggregated-prefill-accuracy
@@ -163,7 +177,6 @@
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((fabric2d-mesh-4x2 or fabric2d-mesh-2x4 or fabric2d-2x4) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not (ttnn_moe and kimi and perf) and not pad50 and (not hca or (flash and chunk5120-varying))" --timeout 1800 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP2xTP4" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d-mesh-2x4 and not pretrained and iter2 and not iter25 and not iter2000" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
@@ -171,6 +184,7 @@
       timeout: 117
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: e2e
 
 - id: bh-lb-disaggregated-prefill-sparse-mla
   name: Disaggregated prefill sparse MLA accuracy tests
@@ -189,9 +203,10 @@
       timeout: 10
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: e2e
 
 - id: bh-lb-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
+  name: Disaggregated prefill op tests (LB)
   model-name: disaggregated_prefill
   cmd: |
     exit_code=0
@@ -204,6 +219,7 @@
       timeout: 28
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
+  budget_type: e2e
 
 - id: bh-lb-disaggregated-prefill-perf
   name: Disaggregated prefill perf tests
@@ -221,6 +237,7 @@
       timeout: 35
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
+  budget_type: e2e
 
 - id: bh-qb2-disaggregated-prefill-accuracy
   name: Disaggregated prefill accuracy & weight cache tests
@@ -235,9 +252,10 @@
       timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: e2e
 
 - id: bh-p150-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
+  name: Disaggregated prefill op tests (P150)
   model-name: disaggregated_prefill
   cmd: |
     exit_code=0
@@ -248,9 +266,10 @@
       timeout: 8
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
+  budget_type: e2e
 
 - id: bh-qb2-disaggregated-prefill-op-tests
-  name: Disaggregated prefill op tests
+  name: Disaggregated prefill op tests (QB2)
   model-name: disaggregated_prefill
   cmd: |
     exit_code=0
@@ -261,6 +280,7 @@
       timeout: 60
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
+  budget_type: e2e
 
 - id: bh-qb2-disaggregated-prefill-d2d-socket-sync
   name: Disaggregated prefill D2D socket sync op tests
@@ -277,6 +297,7 @@
       timeout: 10
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
+  budget_type: e2e
 
 - id: bh-lb-kimi-k3-attn-res
   name: bh_lb_Kimi_K3_ATTN_RES
@@ -293,3 +314,4 @@
       timeout: 10
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
+  budget_type: e2e

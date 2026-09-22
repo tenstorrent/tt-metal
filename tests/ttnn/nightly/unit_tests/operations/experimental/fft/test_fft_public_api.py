@@ -20,6 +20,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole
 
 # N=2^20 with B=1 sits at the L1 boundary; only run it when the user opts in
 # via TT_FFT_AGGRESSIVE=1 (same convention as test_fft_all_n.py).
@@ -29,15 +30,6 @@ _AGGRESSIVE = os.getenv("TT_FFT_AGGRESSIVE", "0") == "1"
 def _rel_err(got_complex, ref_complex):
     """L2 relative error between two complex tensors."""
     return (torch.linalg.norm(got_complex - ref_complex) / torch.linalg.norm(ref_complex).clamp_min(1e-12)).item()
-
-
-def _is_blackhole(device):
-    """Best-effort arch probe — falls back to False if the attribute is
-    unavailable on this build of ttnn."""
-    arch = getattr(device, "arch", None)
-    if callable(arch):
-        arch = arch()
-    return str(arch).lower().endswith("blackhole")
 
 
 # ── Shape / dtype plumbing ──────────────────────────────────────────────────
@@ -361,17 +353,13 @@ def test_fft_complex_input(device, N, dtype, tol):
     assert rel < tol, f"complex-input fft N={N} dtype={dtype} rel err {rel:.2e} exceeds {tol:.0e}"
 
 
-# ── Blackhole parity tests (DISABLED — tracked in follow-up PR) ─────────────
-# Blackhole bring-up is intentionally out of scope for this PR. Small-N
-# (N <= 1024) currently passes on BH; cross-core stages (N >= 4096 fp32 pow2,
-# N >= 1000 fp32 non-pow2) fail due to a NoC ordering / L1 coherence issue
-# in batch_fft_reader.cpp that needs a dedicated investigation. Tests are kept in
-# place but unconditionally skipped so CI is green on both archs and the
-# follow-up PR can flip the gate without touching test code.
-_BH_FOLLOWUP = "Blackhole bring-up tracked in follow-up PR (#TBD)"
+# ── Blackhole parity tests ─────────────────────────────────────────────────
+# Gated with @run_for_blackhole() (Wormhole collection skip). Measured on an
+# 11×10 Blackhole (KMD 2.9.0, FW 19.12.0): fp32 pow-2 through N=65536 matched
+# torch at ~2e-7 rel; the old cross-core NoC skip is no longer needed.
 
 
-@pytest.mark.skip(reason=_BH_FOLLOWUP)
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "N, tol",
     [
@@ -385,8 +373,6 @@ _BH_FOLLOWUP = "Blackhole bring-up tracked in follow-up PR (#TBD)"
 def test_fft_blackhole_fp32_pow2(device, N, tol):
     """BH parity for the Stockham fp32 pow-2 path. Verifies cross-core sync
     in batch_fft_reader.cpp under various LOG2P values."""
-    if not _is_blackhole(device):
-        pytest.skip("Blackhole-specific")
     torch_in = torch.randn(N, dtype=torch.float32)
     tt_in = ttnn.from_torch(
         torch_in,
@@ -404,7 +390,7 @@ def test_fft_blackhole_fp32_pow2(device, N, tol):
     assert rel < tol, f"BH fp32 pow2 N={N} rel err {rel:.2e}"
 
 
-@pytest.mark.skip(reason=_BH_FOLLOWUP)
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "N, tol",
     [
@@ -418,8 +404,6 @@ def test_fft_blackhole_fp32_nonpow2(device, N, tol):
     """BH parity for non-pow-2 N (all routed through Bluestein). The
     inner FFTs use the same Stockham / two-pass kernels as the pow-2
     path, so success here is dominated by Stockham correctness on BH."""
-    if not _is_blackhole(device):
-        pytest.skip("Blackhole-specific")
     torch_in = torch.randn(N, dtype=torch.float32)
     tt_in = ttnn.from_torch(
         torch_in,
@@ -437,7 +421,7 @@ def test_fft_blackhole_fp32_nonpow2(device, N, tol):
     assert rel < tol, f"BH fp32 nonpow2 N={N} rel err {rel:.2e}"
 
 
-@pytest.mark.skip(reason=_BH_FOLLOWUP)
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "N, tol",
     [
@@ -450,8 +434,6 @@ def test_fft_blackhole_fp32_nonpow2(device, N, tol):
 def test_fft_blackhole_bf16(device, N, tol):
     """BH parity for the bf16 path. Same tolerance ceiling as WH since
     precision is dominated by bf16 representation, not arch."""
-    if not _is_blackhole(device):
-        pytest.skip("Blackhole-specific")
     torch_in = torch.randn(N, dtype=torch.float32)
     tt_in = ttnn.from_torch(
         torch_in,
@@ -469,7 +451,7 @@ def test_fft_blackhole_bf16(device, N, tol):
     assert rel < tol, f"BH bf16 N={N} rel err {rel:.2e}"
 
 
-@pytest.mark.skip(reason=_BH_FOLLOWUP)
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "N, dtype, tol",
     [
@@ -481,8 +463,6 @@ def test_fft_blackhole_bf16(device, N, tol):
 def test_fft_blackhole_ifft_roundtrip(device, N, dtype, tol):
     """BH parity for ifft. Reuses forward fft kernels with conjugate
     twiddles + 1/N scale, so passes once the forward path passes."""
-    if not _is_blackhole(device):
-        pytest.skip("Blackhole-specific")
     torch_in = torch.randn(N, dtype=torch.float32)
     tt_in = ttnn.from_torch(
         torch_in,

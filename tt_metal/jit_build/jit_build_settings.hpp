@@ -121,6 +121,10 @@ class JitBuildSettings {
 public:
     // Returns the full kernel name
     virtual const std::string& get_full_kernel_name() const = 0;
+
+    // Zone tu-id registry key: identical across runs and across compile-time-arg variants of one source;
+    // get_full_kernel_name() embeds a per-variant hash.
+    virtual std::string get_profiler_zone_src_id() const { return this->get_full_kernel_name(); }
     // Returns the compiler optimization level
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
@@ -177,6 +181,12 @@ public:
     //    scratchpad's (framework-allocated) L1 base address
     virtual void process_scratchpad_binding_handles(
         std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
+
+    // PrefetcherPipe binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
+    //  - prefetcher_pipe_id: the program PrefetcherPipe slot the accessor constructs its PrefetcherPipe with
+    virtual void process_prefetcher_pipe_binding_handles(
+        std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).

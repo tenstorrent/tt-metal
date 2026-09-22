@@ -48,11 +48,6 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapte
 
 TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
 
-# kimi_k3 is TEST-ONLY for the same reason, more strongly: 69 of its 93 layers are KDA
-# linear-attention layers with no TT implementation, so only its MLA layer is testable.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
-
-TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     download_infinitebench_subset,
@@ -399,7 +394,7 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
         ]
 
         # Add custom model code files (needed for trust_remote_code=True)
@@ -490,7 +485,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
         ]
 
         # Add custom model code files (needed for trust_remote_code=True)
@@ -531,12 +526,6 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
                 if f"model.layers.{layer_id}." in key:
                     required_shards.add(shard_file)
 
-        # Find shard for model.norm (always needed by pretrained_transformer_weights fixture)
-        for key, shard_file in weight_map.items():
-            if "model.norm.weight" in key:
-                required_shards.add(shard_file)
-                break
-
         # Convert shard filenames to patterns
         shard_patterns = []
         for shard_file in sorted(required_shards):
@@ -545,7 +534,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             shard_patterns.append(f"*-{shard_num}-of-*.safetensors")
 
         logger.info(
-            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings + norm..."
+            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings..."
         )
         logger.info(
             f"Required shards: {len(required_shards)} files ({', '.join(sorted(required_shards)[:5])}{'...' if len(required_shards) > 5 else ''})"
@@ -600,7 +589,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
         variant: The TestVariant to resolve weights for.
         layer_idx: Which layer weights to ensure are available.
         num_layers: Number of layers to download (default: 6).
-                    When >1, downloads additional shards including shard 160 for model.norm.
+                    When >1, downloads the additional per-layer shards.
 
     Returns:
         Path to model directory with weights.
@@ -617,7 +606,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
             if index_file.exists():
                 logger.info(f"Using existing model from {variant.env_var}: {model_path}")
                 # Keep the user path absolute but do NOT symlink-resolve it: resolve() would follow a
-                # dot-free symlink (e.g. Kimi-K2_6) back to a dotted real dir (Kimi-K2.6), and HF
+                # dot-free symlink (e.g. Kimi-K2_7-Code) back to a dotted real dir (Kimi-K2.7-Code), and HF
                 # trust_remote_code cannot import a dynamic module whose name contains a '.'. The
                 # safetensors load works through the symlink either way; only the config import cares.
                 # This matches _resolve_config_only, which already loads config from the raw env path.
@@ -651,7 +640,8 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
 
 
 def _unwrap_multimodal_config(cfg):
-    """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
+    """Unwrap a Kimi multimodal wrapper config (K2.7-Code ships
+    ``KimiK25ForConditionalGeneration``) to the inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
     under `text_config`.
@@ -706,7 +696,9 @@ def _resolve_config_only(variant_name: str):
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:
-        model_path = Path(env_path)
+        # Same hub-cache descent get_or_download_model does: *_HF_MODEL may point at the
+        # repo root, whose config.json lives one level down in snapshots/<sha>/.
+        model_path = _resolve_hf_snapshot_dir(Path(env_path))
         if (model_path / "config.json").exists():
             logger.info(f"Using existing config from {v.env_var}: {model_path}")
             return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(model_path), trust_remote_code=True))
@@ -756,7 +748,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     for candidate in candidates:
         if candidate is None:
             continue
-        p = Path(candidate)
+        p = _resolve_hf_snapshot_dir(Path(candidate))
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
             tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=trust_remote_code)
@@ -975,9 +967,10 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     """
     Dequantized pretrained weights for N-layer transformer in TT state_dict format.
 
-    Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
+    Extracts embed and per-layer weights (attention, FFN/MoE) using
     sub_state_dict() + convert_state_dict(), matching the format produced
-    by extract_tt_state_dict() in transformer_helpers.py.
+    by extract_tt_state_dict() in transformer_helpers.py. No final norm: the
+    prefill transformer has no norm / LM-head tail.
 
     Parametrize with num_layers (default 6) via indirect fixture or marker:
         @pytest.mark.parametrize("pretrained_transformer_weights", [4], indirect=True)
@@ -1011,11 +1004,6 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     result = {
         "embed_weight": embed_dequant["weight"].float(),
     }
-
-    # Final norm
-    norm_sd = sub_state_dict(state_dict, f"{prefix}model.norm.")
-    norm_dequant = convert_state_dict(norm_sd, hf_config)
-    result["norm_weight"] = norm_dequant["weight"]
 
     # Per-layer weights
     result["layers"] = []
