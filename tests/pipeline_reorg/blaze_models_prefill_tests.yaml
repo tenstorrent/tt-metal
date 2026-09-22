@@ -1143,7 +1143,7 @@
 
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -k "pcc-prompt_5k and no_determinism and iter1" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_mistral4_prefill_block_chunked -vvv --tb=short
       '
     ) || rc=$?
     section_end "$rc"
