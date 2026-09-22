@@ -77,7 +77,7 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
         // allocation it is. The remote CB is created against the GCB and bakes both of these addresses
         // at build time, and UpdateDynamicCircularBufferAddress refuses to re-point a GCB-backed CB, so
         // two same-shaped GCBs at different allocations must not share a program.
-        static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->cb_buffer().address() : 0),
+        static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->buffer_address() : 0),
         static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->config_address() : 0),
         static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
         static_cast<uint32_t>(dataformat),

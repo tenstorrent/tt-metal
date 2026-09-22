@@ -59,6 +59,7 @@ public:
 
     const CoreRangeSet& sender_cores() const;
     const CoreRangeSet& receiver_cores() const;
+    DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
     uint32_t size() const;
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;

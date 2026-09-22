@@ -183,7 +183,7 @@ void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCi
         "Specified cores are not contained in associated GlobalCircularBuffer");
     this->config().set_globally_allocated_address(global_circular_buffer.cb_buffer());
     this->shadow_global_circular_buffer_ = &global_circular_buffer;
-    this->globally_allocated_address_ = global_circular_buffer.impl().buffer_address();
+    this->globally_allocated_address_ = global_circular_buffer.buffer_address();
     this->global_circular_buffer_config_address_ = global_circular_buffer.config_address();
 }
 

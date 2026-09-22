@@ -163,7 +163,7 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
         // refuses to re-point a GCB-backed CB, so two same-shaped GCBs at different allocations must not
         // share a program. Same reasoning as dram_prefetcher_validator.
         static_cast<uint64_t>(
-            args.matmul_struct.global_cb.has_value() ? args.matmul_struct.global_cb->cb_buffer().address() : 0),
+            args.matmul_struct.global_cb.has_value() ? args.matmul_struct.global_cb->buffer_address() : 0),
         static_cast<uint64_t>(
             args.matmul_struct.global_cb.has_value() ? args.matmul_struct.global_cb->config_address() : 0),
         input0_shape,

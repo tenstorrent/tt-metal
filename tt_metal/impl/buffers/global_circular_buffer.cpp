@@ -537,6 +537,8 @@ const CoreRangeSet& GlobalCircularBuffer::sender_cores() const { return impl().s
 
 const CoreRangeSet& GlobalCircularBuffer::receiver_cores() const { return impl().receiver_cores(); }
 
+DeviceAddr GlobalCircularBuffer::buffer_address() const { return impl().buffer_address(); }
+
 DeviceAddr GlobalCircularBuffer::config_address() const { return impl().config_address(); }
 
 uint32_t GlobalCircularBuffer::size() const { return impl().size(); }

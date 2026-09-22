@@ -32,8 +32,8 @@ struct GlobalCircularBufferDramSenderInternals;
 // Impl-only backing state for tt-metalium/global_circular_buffer.hpp's GlobalCircularBuffer.
 // The public type holds a unique_ptr to this impl and copies by value (deep-copy of *impl_).
 // MeshBuffer / DriscL1Allocation members still share device resources across copies.
-// Callers inside tt_metal/ that need the INTERNAL-only surface (all_cores(),
-// buffer_address(), get_device()) go through GlobalCircularBuffer::impl().
+// Callers inside tt_metal/ that need the INTERNAL-only surface (all_cores(), get_device())
+// go through GlobalCircularBuffer::impl().
 class GlobalCircularBufferImpl {
 public:
     GlobalCircularBufferImpl(
