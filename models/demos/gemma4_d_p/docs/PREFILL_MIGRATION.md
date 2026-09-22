@@ -30,8 +30,6 @@ The loopback command runs all loopback cases. List available cases with:
 pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py --collect-only -q
 ```
 
-Use a quoted node ID from this list to select another case.
-
 ## Reported metrics
 
 The test prints a table with one row per layer and an overall row, pooling all compared heads:
