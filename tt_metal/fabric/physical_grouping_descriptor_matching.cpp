@@ -41,15 +41,6 @@
 
 using namespace tt::tt_fabric;
 
-// Split of candidate-enumeration wall time within one placement solve (file scope so both the enumerate
-// helper and SatPlacementEnumerationSession, which live in separate anonymous-namespace blocks, share it).
-// Reset at session construction and logged after enumeration: "host match" is the one-time per-variant
-// constraint build (trait pinning + PSD host alignment / host-split acceptance); "candidate finding" is
-// the topology-solver session loop that actually produces footprints. Single-threaded per rank's
-// placement, so plain counters suffice.
-static std::chrono::microseconds g_enum_host_match_elapsed{};
-static std::chrono::microseconds g_enum_candidate_find_elapsed{};
-
 namespace {
 
 // TEMPORARY(2x2-4x1-cross): true iff one of {MGD mesh, grouping} is a 2x2 and the other a 4x1 (by
@@ -929,12 +920,6 @@ bool configure_pgd_psd_host_alignment_constraints(
     const std::vector<std::set<AsicID>> global_groups =
         collect_psd_host_groups(physical_graph, physical_system_descriptor);
     if (global_groups.size() <= 1) {
-        log_debug(
-            tt::LogFabric,
-            "DIAG host alignment '{}': {} target(s), PSD exposes {} host partition(s) -> no host constraint applied",
-            grouping_info.name,
-            all_targets.size(),
-            global_groups.size());
         return true;
     }
 
@@ -967,10 +952,7 @@ bool configure_pgd_psd_host_alignment_constraints(
         }
         std::vector<std::set<LogicalChipId>> target_groups;
         target_groups.reserve(targets_by_group.size());
-        std::vector<std::size_t> group_sizes;
-        group_sizes.reserve(targets_by_group.size());
         for (auto& [_, group_targets] : targets_by_group) {
-            group_sizes.push_back(group_targets.size());
             target_groups.push_back(std::move(group_targets));
         }
 
@@ -979,90 +961,15 @@ bool configure_pgd_psd_host_alignment_constraints(
         // host_topology finer than the physical hosts stays legal; what is rejected is a single declared rank
         // whose chips would have to come from two different hosts.
         if (!constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
-            std::map<std::size_t, std::size_t> global_size_histogram;
-            for (const auto& asics : global_groups) {
-                ++global_size_histogram[asics.size()];
-            }
-            std::vector<std::string> global_size_text;
-            global_size_text.reserve(global_size_histogram.size());
-            for (const auto& [asic_count, host_count] : global_size_histogram) {
-                global_size_text.push_back(fmt::format("{}x{}chips", host_count, asic_count));
-            }
-            log_debug(
-                tt::LogFabric,
-                "PGD host split '{}' REJECTED: no PSD host can hold one of the {} declared host group(s) sized "
-                "[{}]; PSD exposes {} host partition(s) [{}]",
-                grouping_info.name,
-                target_groups.size(),
-                fmt::join(group_sizes, ","),
-                global_groups.size(),
-                fmt::join(global_size_text, ","));
-            // DIAG: distinguish "no host is big enough" from "traits already pinned the group across hosts".
-            const auto& forbidden_pairs = constraints.get_forbidden_pairs();
-            const auto& valid_mappings = constraints.get_valid_mappings();
-            for (std::size_t group_index = 0; group_index < target_groups.size(); ++group_index) {
-                const std::set<LogicalChipId>& group = target_groups[group_index];
-                std::size_t unconstrained_members = 0;
-                for (const LogicalChipId& target : group) {
-                    unconstrained_members += valid_mappings.contains(target) ? 0 : 1;
-                }
-                std::size_t best_covered = 0;
-                std::size_t best_host_asics = 0;
-                for (const auto& partition : global_groups) {
-                    std::size_t covered = 0;
-                    for (const LogicalChipId& target : group) {
-                        for (const AsicID& asic_id : partition) {
-                            if (forbidden_pairs.contains({target, asic_id})) {
-                                continue;
-                            }
-                            if (!valid_mappings.contains(target) || constraints.is_valid_mapping(target, asic_id)) {
-                                ++covered;
-                                break;
-                            }
-                        }
-                    }
-                    if (covered > best_covered) {
-                        best_covered = covered;
-                        best_host_asics = partition.size();
-                    }
-                }
-                log_debug(
-                    tt::LogFabric,
-                    "DIAG host split '{}' group {}: {} chip(s) ({} unconstrained); best single PSD host covers "
-                    "{}/{} member(s) and has {} asic(s)",
-                    grouping_info.name,
-                    group_index,
-                    group.size(),
-                    unconstrained_members,
-                    best_covered,
-                    group.size(),
-                    best_host_asics);
-            }
             return false;
         }
         // Cap the hosts used at the number of declared groups: the split may collapse onto fewer hosts, never
         // spread onto more than it declared.
         constraints.set_max_same_rank_groups_used(target_groups.size());
-        log_debug(
-            tt::LogFabric,
-            "PGD host split '{}' ACCEPTED: {} declared host group(s) sized [{}] each required onto a single one of "
-            "{} PSD host partition(s)",
-            grouping_info.name,
-            target_groups.size(),
-            fmt::join(group_sizes, ","),
-            global_groups.size());
         return true;
     }
 
-    if (!prefer_minimal_host_cover(all_targets)) {
-        log_debug(
-            tt::LogFabric,
-            "PGD host alignment '{}': target count {} exceeds largest single PSD partition; preferring minimal host "
-            "cover across {} partition(s)",
-            grouping_info.name,
-            all_targets.size(),
-            global_groups.size());
-    }
+    prefer_minimal_host_cover(all_targets);
     return true;
 }
 
@@ -1211,16 +1118,9 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
         }
         // Encode the grouping's trait / host-alignment constraints once; the session constructor snapshots them.
         // This is the "host match" phase.
-        const auto host_match_start = std::chrono::steady_clock::now();
         const bool encoded =
             add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr);
-        g_enum_host_match_elapsed +=
-            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - host_match_start);
         if (!encoded) {
-            log_debug(
-                tt::LogFabric,
-                "DIAG enumerate '{}': CONSTRAINT-ENCODE-FAILED (trait or host alignment)",
-                grouping_info.name);
             state.exhausted = true;
             return {};
         }
@@ -1233,7 +1133,6 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
             TopologyMappingSolverEngine::Auto,
             unique_shapes);
         if (state.session == nullptr || !state.session->started()) {
-            log_debug(tt::LogFabric, "DIAG enumerate '{}': SESSION-CONSTRUCT-FAILED", grouping_info.name);
             state.exhausted = true;
             return {};
         }
@@ -1249,26 +1148,12 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_flat_grouping_embedd
         MappingResult<LogicalChipId, AsicID> mapping = state.session->next();
         ++state.solves;
         if (!mapping.success) {
-            if (i == 0) {
-                log_debug(
-                    tt::LogFabric,
-                    "DIAG enumerate '{}': NO-EMBEDDING ({} target node(s) on {} asic(s), validation_mode={}, "
-                    "unique_shapes={}): {}",
-                    grouping_info.name,
-                    grouping_info.adjacency_graph.get_nodes().size(),
-                    physical_graph.get_nodes().size(),
-                    static_cast<int>(validation_mode),
-                    unique_shapes,
-                    mapping.error_message);
-            }
             state.exhausted = true;
             break;
         }
         state.excluded.push_back(mapping.target_to_global);
         mappings.push_back(std::move(mapping));
     }
-    g_enum_candidate_find_elapsed +=
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - solve_start);
 
     // Aggregate per-call stats for the non-resuming callers. Inner per-solve counts are deliberately not
     // threaded through: a resuming caller passes stats=nullptr and tracks candidates its own way.
@@ -1471,22 +1356,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
     bool require_placement) const {
     ValidGroupingsMap result;
-
-    // Times the whole matcher call regardless of entry path (placement builder, multi-MGD, or the
-    // rank-bound pinning enrichment fast path), logging on exit. require_placement separates the
-    // placement call (true) from the pinning-only enrichment call (false).
-    struct GvfmTimer {
-        std::chrono::steady_clock::time_point start;
-        bool require_placement;
-        ~GvfmTimer() {
-            log_info(
-                tt::LogFabric,
-                "TIMING get_valid_groupings_for_mgd (require_placement={}): {} ms",
-                require_placement,
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
-                    .count());
-        }
-    } gvfm_timer{std::chrono::steady_clock::now(), require_placement};
 
     std::optional<AdjacencyGraph<tt::tt_metal::AsicID>> psd_physical_graph;
     if (physical_system_descriptor != nullptr) {
@@ -2532,11 +2401,6 @@ bool inject_sat_placement_fallbacks(
         }
         if (it->second.add_grouping(fallback)) {
             added = true;
-            log_info(
-                tt::LogFabric,
-                "SAT joint placement: enabling MGD fallback variant '{}' for global mesh {}",
-                fallback.name,
-                *mesh_id);
         }
     }
     return added;
@@ -2643,7 +2507,6 @@ std::vector<MappingResult<GlobalMeshId, const Candidate*>> solve_sat_placement(
     const AdjacencyGraph<const Candidate*>& seat_graph,
     const MappingConstraints<GlobalMeshId, const Candidate*>& constraints,
     bool relaxed_inter_mesh_policy,
-    std::size_t candidate_count,
     std::size_t& attempts,
     PlacementSolveStats* stats,
     const std::vector<std::map<GlobalMeshId, const Candidate*>>& excluded_mappings = {},
@@ -2676,15 +2539,6 @@ std::vector<MappingResult<GlobalMeshId, const Candidate*>> solve_sat_placement(
                 std::chrono::duration_cast<std::chrono::microseconds>(solve_end - encode_end);
             stats->master_sat_attempts = attempts;
         }
-        log_info(
-            tt::LogFabric,
-            "SAT joint placement: attempt {} ({} seams): {} candidates; encode {} ms, solve {} ms -> {}",
-            attempts,
-            relaxed ? "relaxed" : "strict",
-            candidate_count,
-            std::chrono::duration_cast<std::chrono::milliseconds>(encode_end - encode_start).count(),
-            std::chrono::duration_cast<std::chrono::milliseconds>(solve_end - encode_end).count(),
-            result.success ? "SAT" : "UNSAT");
         if (!result.success) {
             continue;
         }
@@ -2791,8 +2645,6 @@ void SatPlacementEnumerationSession::finish_init(
     }
     physical_graph_ = AdjacencyGraph<AsicID>(
         tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(*physical_system_descriptor_));
-    g_enum_host_match_elapsed = std::chrono::microseconds{};
-    g_enum_candidate_find_elapsed = std::chrono::microseconds{};
 
     for (const GlobalMeshId& mesh_id : mesh_level_graph_.get_nodes()) {
         if (!global_mesh_groupings_.contains(mesh_id)) {
@@ -3008,7 +2860,6 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
             seat_graph,
             constraints_,
             relaxed_inter_mesh_policy_,
-            count_sat_placement_candidates(*pools_),
             attempts_,
             stats_,
             excluded_seat_maps(),
@@ -3027,7 +2878,6 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         const bool at_cap = cycle_ >= kMaxGrowthCycles;
         // c. No solution: grow pools that still have variants. Exhausted pools are skipped.
         const std::size_t grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
-        log_info(tt::LogFabric, "SAT joint placement: growth cycle {} added {} candidate(s)", cycle_, grown);
         if (grown != 0 && !at_cap) {
             continue;
         }
@@ -3035,7 +2885,6 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         if (!fallbacks_in_ && inject_sat_placement_fallbacks(*pools_, mgd_fallback_by_mesh_)) {
             fallbacks_in_ = true;
             const std::size_t fallback_grown = grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
-            log_info(tt::LogFabric, "SAT joint placement: MGD fallback grow added {} candidate(s)", fallback_grown);
             if (fallback_grown != 0) {
                 continue;
             }
@@ -3065,7 +2914,6 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         for (const auto& result : results) {
             pending_.push_back(decode_sat_placement(result));
         }
-        log_info(tt::LogFabric, "SAT joint placement: enumerated {} seating(s)", pending_.size());
         remember_yielded(pending_[pending_index_]);
         AssignedMeshes assigned = pending_[pending_index_++];
         record_success(assigned);

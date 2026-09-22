@@ -352,8 +352,6 @@ private:
     ::tt::tt_fabric::ConnectionValidationMode inter_mesh_validation_mode_ =
         ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
     std::unique_ptr<::tt::tt_fabric::SatPlacementEnumerationSession> placement_session_;
-    std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::AsicID>>> failed_mesh_candidates_;
-    std::size_t attempts_ = 0;
     std::size_t emitted_ = 0;
 
     void fill_host_and_asic_positions_from_psd();

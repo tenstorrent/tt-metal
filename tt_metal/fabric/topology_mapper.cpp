@@ -1765,6 +1765,22 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     TT_THROW("No possible mesh shape found to match physical adjacency matrix");
 }
 
+void TopologyMapper::print_logical_adjacency_map(
+    const ::tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const {
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        graph.print_adjacency_map(fmt::format("Logical Mesh {} Internal Graph", mesh_id.get()), true);
+    }
+}
+
+void TopologyMapper::print_physical_adjacency_map(
+    const ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const {
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        graph.print_adjacency_map(fmt::format("Physical Mesh {} Internal Graph", mesh_id.get()), true);
+    }
+}
+
 void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
     log_debug(tt::LogFabric, "TopologyMapper: Verifying topology mapping against PSD and cluster API");
 

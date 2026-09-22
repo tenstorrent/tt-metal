@@ -7,7 +7,6 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -1090,60 +1089,18 @@ bool add_exit_node_constraints(
 
 namespace {
 
-template <typename NodeId>
-std::string format_adjacency_degree_histogram(const AdjacencyGraph<NodeId>& graph) {
-    std::map<std::size_t, std::size_t> degree_hist;
-    for (const auto& node : graph.get_nodes()) {
-        const auto& neighbors = graph.get_neighbors(node);
-        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
-        degree_hist[unique_neighbors.size()]++;
+void print_logical_adjacency_map(const LogicalMultiMeshGraph& multi_mesh_graph) {
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        graph.print_adjacency_map(fmt::format("Logical Mesh {} Internal Graph", mesh_id.get()), true);
     }
-
-    std::string hist_str = "{";
-    bool first = true;
-    for (const auto& [degree, count] : degree_hist) {
-        if (!first) {
-            hist_str += ", ";
-        }
-        first = false;
-        hist_str += fmt::format("{}:{}", degree, count);
-    }
-    hist_str += "}";
-    return hist_str;
 }
 
-template <typename NodeId>
-std::string format_intra_mesh_degree_histograms(const std::map<MeshId, AdjacencyGraph<NodeId>>& mesh_graphs) {
-    if (mesh_graphs.empty()) {
-        return "(none)";
+void print_physical_adjacency_map(const PhysicalMultiMeshGraph& multi_mesh_graph) {
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        graph.print_adjacency_map(fmt::format("Physical Mesh {} Internal Graph", mesh_id.get()), true);
     }
-
-    std::string hist_str;
-    bool first = true;
-    for (const auto& [mesh_id, graph] : mesh_graphs) {
-        if (!first) {
-            hist_str += ", ";
-        }
-        first = false;
-        hist_str += fmt::format("mesh{} {}", mesh_id.get(), format_adjacency_degree_histogram(graph));
-    }
-    return hist_str;
-}
-
-void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph) {
-    log_info(
-        tt::LogFabric,
-        "Logical multi-mesh adjacency: intermesh degree histogram {}; intra-mesh degree histograms {}",
-        format_adjacency_degree_histogram(multi_mesh_graph.mesh_level_graph_),
-        format_intra_mesh_degree_histograms(multi_mesh_graph.mesh_adjacency_graphs_));
-}
-
-void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph) {
-    log_info(
-        tt::LogFabric,
-        "Physical multi-mesh adjacency: intermesh degree histogram {}; intra-mesh degree histograms {}",
-        format_adjacency_degree_histogram(multi_mesh_graph.mesh_level_graph_),
-        format_intra_mesh_degree_histograms(multi_mesh_graph.mesh_adjacency_graphs_));
 }
 
 }  // namespace
@@ -1256,11 +1213,6 @@ TopologyMappingResult complete_intra_mesh_for_placement(
                 physical_exit_node_graph,
                 inter_mesh_validation_mode);
             if (!exit_node_constraints_success) {
-                log_debug(
-                    tt::LogFabric,
-                    "DIAG intra-mesh: logical mesh {} -> physical mesh {} FAILED (exit-node constraints)",
-                    logical_mesh_id.get(),
-                    physical_mesh_id.get());
                 result.success = false;
                 result.error_message = fmt::format(
                     "intra-mesh mapping failed: exit-node constraints for logical mesh {} -> physical mesh {}",
@@ -1277,11 +1229,6 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto pinning_constraint_failure =
             add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
         if (pinning_constraint_failure.has_value()) {
-            log_debug(
-                tt::LogFabric,
-                "DIAG intra-mesh: logical mesh {} -> physical mesh {} FAILED (MGD pinning constraints)",
-                logical_mesh_id.get(),
-                physical_mesh_id.get());
             result.success = false;
             result.error_message = fmt::format(
                 "intra-mesh mapping failed: MGD pinning constraints for logical mesh {} -> physical mesh {}",
@@ -1314,14 +1261,6 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
             logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);
         if (!sub_mapping.success) {
-            log_debug(
-                tt::LogFabric,
-                "DIAG intra-mesh: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)) FAILED (solve): {}",
-                logical_mesh_id.get(),
-                logical_graph.get_nodes().size(),
-                physical_mesh_id.get(),
-                physical_graph.get_nodes().size(),
-                sub_mapping.error_message);
             result.success = false;
             result.error_message = fmt::format(
                 "intra-mesh mapping failed: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)): {}",
@@ -1335,13 +1274,6 @@ TopologyMappingResult complete_intra_mesh_for_placement(
             }
             return result;
         }
-        log_debug(
-            tt::LogFabric,
-            "DIAG intra-mesh: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)) OK",
-            logical_mesh_id.get(),
-            logical_graph.get_nodes().size(),
-            physical_mesh_id.get(),
-            physical_graph.get_nodes().size());
         for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
             result.fabric_node_to_asic.insert({fabric_node, asic});
             result.asic_to_fabric_node.insert({asic, fabric_node});
@@ -1413,7 +1345,6 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
     MeshGraphDescriptor merged =
         MeshGraphDescriptor::merge(mesh_graph_descriptors, &per_part_local_to_global_mesh_ids_);
     logical_ = build_logical_multi_mesh_adjacency_graph(merged);
-    log_logical_multi_mesh_adjacency_histograms(logical_);
 
     if (config_.mesh_validation_modes.empty()) {
         for (std::size_t mgd_index = 0; mgd_index < per_part_local_to_global_mesh_ids_.size(); ++mgd_index) {
@@ -1510,18 +1441,12 @@ std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     while (true) {
         AssignedMeshes seating = placement_session_->next();
         if (seating.empty()) {
-            log_info(
-                tt::LogFabric,
-                "Multi-mesh enumeration exhausted after {} seating attempt(s), {} solution(s)",
-                attempts_,
-                emitted_);
             return {};
         }
-        ++attempts_;
 
         PhysicalMultiMeshGraph physical = build_hierarchical_from_flat_graph(flat_graph_, seating);
-        log_logical_multi_mesh_adjacency_histograms(logical_);
-        log_physical_multi_mesh_adjacency_histograms(physical);
+        print_logical_adjacency_map(logical_);
+        print_physical_adjacency_map(physical);
         std::unordered_map<MeshId, MeshId> identity;
         identity.reserve(seating.size());
         for (const PlacedMesh& placed : seating) {
@@ -1558,25 +1483,8 @@ std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
         }
 
         if (!placement_session_->add_forbidden_constraint(*failed_placed)) {
-            log_info(
-                tt::LogFabric,
-                "DIAG multi-mesh enumeration: seating #{} rejected, could not forbid logical mesh {} against {} "
-                "ASIC(s) (forbidden so far={})",
-                attempts_,
-                failed_placed->mesh_id.get(),
-                failed_placed->placement.asics.size(),
-                failed_mesh_candidates_.size());
             return {};
         }
-        failed_mesh_candidates_.emplace_back(failed_placed->mesh_id, failed_placed->placement.asics);
-        log_info(
-            tt::LogFabric,
-            "DIAG multi-mesh enumeration: seating #{} rejected, forbidding logical mesh {} against {} ASIC(s) "
-            "(forbidden so far={})",
-            attempts_,
-            failed_placed->mesh_id.get(),
-            failed_placed->placement.asics.size(),
-            failed_mesh_candidates_.size());
     }
 }
 
