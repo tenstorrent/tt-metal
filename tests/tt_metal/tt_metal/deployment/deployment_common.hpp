@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _DEPLOYMENT_COMMON_H
-#define _DEPLOYMENT_COMMON_H
+#ifndef DEPLOYMENT_COMMON_H
+#define DEPLOYMENT_COMMON_H
 
 #include "tt_metal/api/tt-metalium/hal.hpp"
 #include "command_queue_fixture.hpp"
@@ -188,4 +188,4 @@ static void get_env(const char* varname, uint32_t* var) {
     }
 }
 
-#endif /* _DEPLOYMENT_COMMON_H */
+#endif /* DEPLOYMENT_COMMON_H */

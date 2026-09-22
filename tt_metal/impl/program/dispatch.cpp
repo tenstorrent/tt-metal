@@ -601,8 +601,9 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    // Mock/emulated devices don't have real binaries, skip finalization
-    if (metal_ctx.get_cluster().is_mock_or_emulated()) {
+    // Emule and Quasar mock don't have real binaries, skip finalization.
+    const auto target = metal_ctx.get_cluster().get_target_device_type();
+    if (target == tt::TargetDevice::Emule || (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR)) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;

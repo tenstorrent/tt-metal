@@ -88,7 +88,8 @@ Tensor accumulation_invoke(
     std::optional<Tensor> optional_out,
     const bool& reverse_order,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::prim::AccumulationOp op) {
+    ttnn::prim::AccumulationOp op,
+    bool disable_compensation) {
     const auto& input_shape = input_tensor.logical_shape();
     const int32_t& input_rank = input_shape.rank();
 
@@ -131,7 +132,8 @@ Tensor accumulation_invoke(
         reverse_order,
         std::nullopt,
         memory_config.has_value() ? memory_config.value() : wip_tensor.memory_config(),
-        op);
+        op,
+        disable_compensation);
     wip_tensor = common::postprocess_output_tensor(wip_tensor, cum_axis, permutation, input_shape, input_rank);
     if (optional_out.has_value()) {
         // TODO(#37807):

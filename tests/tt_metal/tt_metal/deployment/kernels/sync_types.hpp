@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _SYNC_TYPES_H
-#define _SYNC_TYPES_H
+#ifndef SYNC_TYPES_H
+#define SYNC_TYPES_H
 
 typedef std::atomic_flag spinlock;
 
@@ -14,4 +14,4 @@ struct barrier {
     spinlock lock;
 };
 
-#endif /* _SYNC_TYPES_H */
+#endif /* SYNC_TYPES_H */

@@ -171,7 +171,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: false
 
   build-profiler:
@@ -184,7 +184,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
 
   fetch-ttsim:

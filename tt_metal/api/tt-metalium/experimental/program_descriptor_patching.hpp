@@ -60,7 +60,7 @@ struct ProgramDescriptor;
 // is_common == true means the arg is in common (non-per-core) runtime args.
 struct ResolvedRtArgBinding {
     uint32_t kernel_idx = 0;
-    CoreCoord core{};  // unused when is_common == true
+    CoreCoord core;  // unused when is_common == true
     uint32_t arg_idx = 0;
     uint32_t tensor_buffer_idx = 0;
     bool is_common = false;
@@ -157,7 +157,7 @@ void apply_resolved_bindings(
 // just the destination (kernel/core/arg) plus the value to write.
 struct DynamicRuntimeArg {
     uint32_t kernel_idx = 0;  // index into ProgramDescriptor::kernels
-    CoreCoord core{};         // ignored when is_common == true
+    CoreCoord core;           // ignored when is_common == true
     uint32_t arg_idx = 0;     // position within that kernel/core's runtime args
     uint32_t value = 0;       // current value, derived from the live operation_attributes
     bool is_common = false;   // true => common (non-per-core) runtime args
