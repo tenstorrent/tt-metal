@@ -26,40 +26,21 @@ _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wr
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
 
 # Mistral Small 4 has its own driver rather than a row in test_ds_moe: its reference stores all 128
-# experts as one fused stacked parameter and its router is bias-free (see test_mistral4_moe).
-# '-perf' selects run_pcc_check=False, keeping the measured region to the device forward.
+# experts as one fused stacked parameter and its router is bias-free.
 #
-# 'fabric2d-8x4', NOT 'torus-xy-8x4' like every sibling row in this file -- that is the only mesh
-# test_mistral4_moe declares, and deliberately so: on CI run 32567382271 every torus_xy mistral4 case
-# SKIPPED for want of a cabling-certified ring/ring allocation, and a skipped leg reports green.
-# The consequence for this row is that its number is NOT comparable to the deepseek 8x4 rows above,
-# which are TorusXY; re-point it when bh_sc1 is ring-cabled and test_mistral4_moe follows.
+# fabric2d-8x4 is the only mesh test_mistral4_moe declares, so this number is NOT comparable to the
+# TorusXY deepseek rows above.
 _MISTRAL4_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe"
 _CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabric2d-8x4' --wrapper-invocation"
-# SP=8 x TP=1 on a LoudBox: the stage shape PP=4 runs, and the only shape a Tracy-capable CI
-# workflow can host -- blaze builds without Tracy, and an (8,1) row cannot run on a Galaxy.
+# SP=8 x TP=1 on a LoudBox: the stage shape PP=4 runs. Blaze builds without Tracy, so this is the
+# only Tracy-capable CI home for it.
 _CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and torus-y-8x1' --wrapper-invocation"
 
-# Migration starting threshold, NOT a gate. Measured 2026-09-04 on bh-glx-120-b03u02, unwrapped
-# FABRIC_2D, DDR 14000, single run: 2_661_495 ns, split Combine 615_339 / Dispatch 595_076 /
-# UnifiedRoutedExpertFfn 514_844.
-#
-# The margin still admits any measurement, for the same reasons as the Mistral4 row in
-# test_mla_perf.py: local, one run, DDR 14000 against baselines cut at 16000 -- and here also a
-# different fabric from every sibling row. Replace BOTH with the first CI result on this fabric.
+# Record-only: one local run on a different fabric from every sibling row, so the margin admits any
+# measurement. Replace both with the first CI result on this fabric.
 _MISTRAL4_MOE_NS_UNCALIBRATED = 2_661_495
-# Single LoudBox CI run on the post-rebase branch (run 35648827107), which is the first run on
-# main including #57133 ([Performance] Reduce MoE op and model host overhead for GLM prefill).
-# That PR optimized dispatch scheduling and kernel readers/writers for the routed-expert path,
-# making this row 14% FASTER (4,101,099 vs the prior 4,781,146). The box did not move: DeepSeek's
-# 8x1 proxy measured 3,360,055 in that run, matching its committed baseline to <0.1%. It supersedes
-# 4,781,146 from runs 35025551183/35025541781, which in turn superseded 5,468,946.
-#
-# 10% rather than the 3% the sibling rows use: this baseline will keep moving as long as the branch
-# is pre-merge. Re-cut it tight once the branch has landed and the number stops moving.
-#
-# Breakdown at the superseded number: Other 5,133,978 / Matmul 310,647 / CCL 24,321. CCL is 0.44%
-# here against ~21% of a layer at TP=4, which is why the TP=4 lever ranking does not carry across.
+# One LoudBox CI run, 35648827107. 10% rather than the sibling rows' 3% because this keeps moving
+# while the branch is pre-merge; re-cut it tight once landed.
 _MISTRAL4_MOE_LB_8X1_NS = 4_101_099
 _MISTRAL4_MOE_LB_8X1_MARGIN = 0.10
 
@@ -87,11 +68,8 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Re-cut 2026-09-07 on the CI LoudBox (bh_loudbox), run 34128459250. One sample.
-        # The routed expert is the whole delta: it reads 994,733 ns against a 2,365,321 ns
-        # remainder the previous centre also had to contain, which puts the op alone at 1.67x --
-        # inside the 1.10-1.69x its own gate records at these token counts.
-        expected_ns_8x1=3_360_055,
+        # CI LoudBox, run 35739065634. One sample.
+        expected_ns_8x1=3_237_489,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
         # Re-cut 2026-09-15 on the CI LoudBox (bh_loudbox). One sample, and UNATTRIBUTED: the 8x1
@@ -165,14 +143,10 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
 def test_mistral4_moe_perf_galaxy():
     """Mistral Small 4 MoE on the 8x4 Galaxy at the chunked-prefill shape (640 tokens/chip).
 
-    RECORD-ONLY: the baseline is uncalibrated (see _MISTRAL4_MOE_NS_UNCALIBRATED) and the margin
-    admits any measurement. It exists as an op-level iteration target for the PP=4 prefill work --
-    MoE dominates a shallow Mistral4 layer but, unlike MLA/SDPA, does not grow with KV depth, so this
-    row is the control that shows an MLA change has not moved the flat part of the layer.
+    RECORD-ONLY: uncalibrated baseline, margin admits any measurement. MoE does not grow with KV
+    depth, so this row shows an MLA change has not moved the flat part of the layer.
 
-    Runs on unwrapped FABRIC_2D, not TorusXY -- see _CMD_MISTRAL4_8X4. No _require_certified_torus_xy
-    call for that reason: demanding a certification this row does not use would fail it on every
-    healthy non-certified galaxy.
+    Runs on unwrapped FABRIC_2D, so it deliberately makes no _require_certified_torus_xy call.
     """
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
