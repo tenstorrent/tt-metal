@@ -5,7 +5,7 @@
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace ckernel::sfpu {
 // Compute the small online-softmax correction accurately with the full scale.
-// The sum update subsequently forms correction - 1 for the L1 numerator update.
+// Rescale the prior numerator and denominator when the online maximum changes.
 template <uint32_t scale_fp32>
 inline void calculate_sdpa_exp_correction() {
 #ifndef SDPA_RECIPE_FP32
@@ -39,8 +39,8 @@ inline void init_sdpa_exp_grid() {
     TTI_SFPCONFIG(0, 14, 0);
 }
 
-// Two-score FP32 subtraction/grid/refinement. Keep subtraction separate
-// from the grid MAD to preserve the selected FP32 rounding point.
+// Negate the maximum for FP32 L1 subtraction. Keep subtraction separate
+// from the exponent grid MAD to preserve the selected FP32 rounding point.
 inline void calculate_sdpa_negate_max() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     for (int i = 0; i < 32; ++i) {
