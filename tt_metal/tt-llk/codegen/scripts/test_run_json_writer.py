@@ -6403,3 +6403,82 @@ def test_sealed_functional_preexisting_root_host_receipt_identity(
         with pytest.raises(ValueError, match="already exist"):
             writer.cmd_execute_functional(args)
         assert len(list((logs / "verification-results").rglob("*.json"))) == 1
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "missing", "expected_class", "repair"),
+    [
+        (
+            {"selected": 48, "executed": 35, "passed": 35, "skipped": 13},
+            False,
+            "VERIFICATION_PLAN_ERROR",
+            True,
+        ),
+        (
+            {"selected": 35, "executed": 35, "passed": 34, "failed": 1},
+            False,
+            "TESTS_FAILED",
+            True,
+        ),
+        (
+            {"selected": 0, "executed": 0, "passed": 0},
+            False,
+            "MISSING_TEST_COVERAGE",
+            True,
+        ),
+        ({}, True, "ENV_ERROR", False),
+        ({}, False, "", False),
+    ],
+)
+def test_sealed_executor_reduction_drives_existing_retry_wrapper(
+    tmp_path, monkeypatch, outcomes, missing, expected_class, repair
+):
+    """The adapter's real reduction, not a hand-built hint, drives retry routing."""
+    writer, args, manifest, tree = _functional_fixture(tmp_path, monkeypatch)
+    calls = _fake_functional_dispatch(
+        monkeypatch, writer, args, manifest, outcomes=outcomes, missing=missing
+    )
+    success = not missing and not outcomes
+    assert writer.cmd_execute_functional(args) == (0 if success else 1)
+    logs = Path(args.log_dir)
+    reduction = json.loads((logs / "verification_reduction.json").read_text())
+    assert reduction["scope"] == "functional"
+    assert reduction["success_token"] is None
+    state_path = logs / "state.json"
+    state = json.loads(state_path.read_text())
+    state.update(ISSUE_NUMBER="5", DEBUG_CYCLES=0, MAX_DEBUG_CYCLES=3)
+    state_path.write_text(json.dumps(state))
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_debug_feedback "sealed execution evidence"',
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=tree,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert (result.returncode == 0) is repair, result.stdout + result.stderr
+    state = json.loads(state_path.read_text())
+    assert state["FAILURE_CLASS"] == expected_class
+    context = state["VERIFICATION_RETRY_CONTEXT"]
+    assert context["reduction_id"] == reduction["reduction_id"]
+    assert context["retry_allowed"] is repair
+    assert context["manifest_id"] == manifest["manifest_id"]
+    if not success:
+        assert len(context["leaves"]) == 1
+        assert context["leaves"][0]["backend"] == "silicon"
+        assert (
+            context["leaves"][0]["requirement_id"]
+            == manifest["requirements"][1]["requirement_id"]
+        )
+    run = json.loads((logs / "run.json").read_text())
+    assert run["status"] == "running"
+    assert run["current_step"] == ("fix_tests" if repair else "tester")
+    assert len(_submitted(calls)) == 1
+    before = list(calls)
+    assert writer.cmd_execute_functional(args) == (0 if success else 1)
+    assert calls == before  # diagnostic routing cannot resubmit the same attempt
