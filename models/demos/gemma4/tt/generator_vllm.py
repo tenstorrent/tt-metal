@@ -2669,23 +2669,11 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         return self._spec_drafter
 
     def warmup_model_decode(self, *args, **kwargs):
-        """Warm the BATCHED BASELINE decode buckets -- in spec mode too.
+        """Prepare ordinary and speculative state before capturing either path.
 
-        The adaptive model serves every concurrency>1 step through the plain
-        batched baseline, so those buckets need warming exactly like a non-spec
-        model. Only the SOLO spec step is a per-session fused trace, and that
-        genuinely cannot be pre-warmed: its capture is per request and bucketed
-        by prompt length (pv_bucket).
-
-        This used to no-op in spec mode because the base warmup reader rejected
-        the old sentinel-PADDED block output. That padding is gone -- the
-        batched and no-session paths now return RAW DEVICE OUTPUT at width 1 --
-        so the base warmup applies again. Skipping it made the first conc>1
-        request of a run pay trace capture inside the measured window: on a
-        P150x8 31B benchmark the 128/128 conc-32 cell showed TTFT 27.1 s cold
-        against 11.7 s once the same shape had been driven first.
-
-        Kill switch: GEMMA4_DFLASH_WARMUP_DECODE=0 restores the old no-op.
+        The plugin runs eager warmup before trace-enabled warmup. Persistent
+        drafter state must be allocated in the eager phase so an ordinary trace
+        cannot record temporary addresses later reused by the drafter.
         """
         if self._SPEC_BLOCK <= 1:
             return super().warmup_model_decode(*args, **kwargs)
@@ -2700,28 +2688,21 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             return None
         logger.info("Gemma4DFlash: warming batched baseline decode buckets")
         out = super().warmup_model_decode(*args, **kwargs)
-        # Phase 2 (enable_trace) is where the plugin captures decode traces, and
-        # where the verify width set belongs: it is the last point before
-        # serving at which a capture is allowed.
-        if self._spec_width_set and kwargs.get("enable_trace"):
+        # Eager warmup prepares persistent dFlash allocations before either
+        # ordinary prefill or ordinary decode records temporary addresses.
+        if kwargs.get("enable_trace") is False:
+            self._spec_get_drafter()
+            if self._spec_width_set:
+                self._spec_capture_width_set(kwargs.get("kv_cache"), kwargs.get("num_blocks"), prepare_only=True)
+        elif self._spec_width_set and kwargs.get("enable_trace"):
             self._spec_capture_width_set(kwargs.get("kv_cache"), kwargs.get("num_blocks"))
         return out
 
-    def _spec_capture_width_set(self, kv_cache, num_blocks):
-        """Capture one fused verify trace per width, before the first request.
+    def _spec_capture_width_set(self, kv_cache, num_blocks, *, prepare_only=False):
+        """Prepare or capture verify widths without replacing their decoder.
 
-        The decoder built here is PERSISTENT for the life of the server: the
-        traces belong to its buffers, so every request reseeds this one instance
-        rather than constructing its own. That is the cross-request reuse path
-        (GEMMA4_DFLASH_DECODER_REUSE), re-measured byte-identical to per-request
-        capture on a 31B server -- same acceptance, same replies -- so making it
-        the only path costs nothing and saves the per-request capture.
-
-        The scratch page table is all zeros (block 0) at the FULL per-request
-        width, which is what sizes v_pt at its maximum; every request refreshes
-        the contents. Writing a handful of verify rows into block 0 at positions
-        [0, P_v) during capture is harmless: any request that later owns that
-        block overwrites those positions with its own prefill before it decodes.
+        The full-width scratch page table reserves the maximum input shape.
+        Request bootstrap refreshes the scratch contents before replay.
         """
         import time as _time
 
@@ -2748,12 +2729,18 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             kv_layers = kv_layers[0]
         blocks = int(num_blocks) if num_blocks else max(1, max_seq_len // 64)
         scratch_pt = torch.zeros(1, blocks, dtype=torch.int32)
+        dec = self._spec_decoder
+        if dec is None:
+            dec = DFlashFusedDecoder(self.model[0], self._spec_get_drafter(), kv_layers, scratch_pt)
+            self._spec_decoder = dec
+            self._spec_width_ladder = ladder
+        elif self._spec_width_ladder != ladder:
+            raise RuntimeError("Gemma4 dFlash verify widths changed after preparation")
+        if prepare_only:
+            dec.prepare_widths(ladder)
+            return
         t0 = _time.time()
-        self._spec_release_decoder()
-        dec = DFlashFusedDecoder(self.model[0], self._spec_get_drafter(), kv_layers, scratch_pt)
         cost = dec.capture_widths(ladder)
-        self._spec_decoder = dec
-        self._spec_width_ladder = ladder
         logger.info(
             f"Gemma4DFlash: captured {len(cost)} verify widths in {_time.time()-t0:.1f}s "
             f"(max_model_len={max_seq_len}, widths={ladder}, per-width={ {k: round(v, 2) for k, v in cost.items()} })"
@@ -3041,9 +3028,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             f"(anchor={int(anchor_id)}, start={start}, bucket={self._spec_decoder_bucket})"
         )
 
-    def _spec_release_decoder(self, drop_page_tables=True):
+    def _spec_release_decoder(self, drop_page_tables=True, *, teardown=False):
         dec = self._spec_decoder
-        if self._spec_width_set and getattr(dec, "_pv_widths", None):
+        if not teardown and self._spec_width_set and getattr(dec, "_pv_widths", None):
             # The captured WIDTH SET lives on this decoder, and its traces are
             # the whole point: tearing it down here would push every later
             # request back onto a per-session capture, which is the behaviour
@@ -3383,7 +3370,10 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_pending = None
         self._spec_pending_owner = None
         self._spec_carry = []
-        self._spec_release_decoder()
+        try:
+            self._spec_release_decoder(teardown=True)
+        finally:
+            super().release_persistent_capture()
 
 
 class Gemma4DFlashContractForCausalLM(DFlashContractMixin, Gemma4DFlashForCausalLM):

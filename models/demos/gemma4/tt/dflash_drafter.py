@@ -1404,6 +1404,21 @@ class DFlashFusedDecoder:
         self.win_first = n - keep
         self.ctx_len = n
         self._upload_ctx()
+        self._seed_ctx_cache()
+        self._mask_key = None  # fresh generation: ramp state differs, rebuild masks
+        # Fresh seed: the next replay's start-of-body merge must be a no-op
+        # (identity), not the previous generation's stale commit map.
+        h = ttnn.from_torch(
+            torch.arange(self.cap, dtype=torch.int64).reshape(1, self.cap),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=self._mapper,
+        )
+        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
+        h.deallocate(True)
+
+    def _seed_ctx_cache(self):
+        """Project the fixed-capacity context into the persistent drafter KV."""
         if self.ctx_cache:
             # One-time seed of the per-layer roped ctx K/V caches from the
             # freshly uploaded raw ctx (row r holds absolute position
@@ -1430,17 +1445,6 @@ class DFlashFusedDecoder:
                 ttnn.assign(v_new, self.ctx_v[li])
                 k_new.deallocate(True)
                 v_new.deallocate(True)
-        self._mask_key = None  # fresh generation: ramp state differs, rebuild masks
-        # Fresh seed: the next replay's start-of-body merge must be a no-op
-        # (identity), not the previous generation's stale commit map.
-        h = ttnn.from_torch(
-            torch.arange(self.cap, dtype=torch.int64).reshape(1, self.cap),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            mesh_mapper=self._mapper,
-        )
-        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
-        h.deallocate(True)
 
     def _pv_setup(self, start, max_new):
         """Allocate the packed-verify persistent inputs (see use_packed).
@@ -1686,48 +1690,68 @@ class DFlashFusedDecoder:
         self._replay_on_first = False
 
     # ── packed-verify width SET: capture at config time, select per step ─────
-    def capture_widths(self, widths, anchor_id=1, start=0):
-        """Capture one fused trace per verify WIDTH, before any request exists.
-
-        This is what makes the fused verify conformant with the plugin's
-        serving contract (vllm-tt-plugin#110 section 8): the set of widths is
-        derived from ``max_model_len`` at config time and every one of them is
-        captured here, so no capture happens during serving and no captured
-        shape depends on a request existing. Per step the narrowest covering
-        width is selected (``select_width``), and a request that outgrows its
-        width moves to the next one -- the largest covers ``max_model_len``, so
-        one always fits.
-
-        The taps and the anchor set the CONTENT of the first iteration, never a
-        shape, so capturing against their construction values is sound; every
-        request re-points the trace with ``reseed`` + ``prefill_ingest`` +
-        ``refresh_page_tables``. Returns {width: seconds}.
-        """
-        import time as _time
-
+    def prepare_widths(self, widths, anchor_id=1, start=0):
+        """Prepare persistent inputs and programs before any related capture."""
         if not self.use_packed:
             raise NotImplementedError("width-set capture is packed-verify only")
+        widths = sorted(set(int(width) for width in widths))
+        prepared = getattr(self, "_prepared_widths", set())
+        missing = set(widths) - prepared
+        if not missing:
+            return
+        if any(record["trace"] is not None for record in self._pv_widths.values()):
+            raise RuntimeError("Cannot prepare new dFlash widths after trace capture")
         self._pv_ring_meta()
+        # All width-specific buffers must survive before the first trace can
+        # record temporary addresses that a later allocation could reuse.
+        for width in widths:
+            self._pv_width_install(width)
+        try:
+            self._seed_ctx_cache()
+            for width in widths:
+                self._pv_width_activate(self._pv_widths[width])
+                self._pv_upload(start)
+                self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
+                self._upload_iter_inputs(anchor_id, start)
+                self._body()
+                ttnn.synchronize_device(self.mesh_device)
+                prepared.add(width)
+            self._prepared_widths = prepared
+        finally:
+            self.target.dflash_capture_taps(None)
+            self.restore_model_logits_mode()
+
+    def capture_widths(self, widths, anchor_id=1, start=0):
+        """Capture prepared verify widths on the same persistent decoder."""
+        import time as _time
+
+        widths = sorted(set(int(width) for width in widths))
+        self.prepare_widths(widths, anchor_id, start)
         cost = {}
-        for w in sorted(int(x) for x in widths):
-            t0 = _time.time()
-            self._pv_width_install(w)
-            if self._pv_widths[w]["trace"] is not None:
-                continue
-            self._pv_upload(start)
-            self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
-            self._upload_iter_inputs(anchor_id, start)
-            self._body()  # compile pass
-            ttnn.synchronize_device(self.mesh_device)
-            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-            self._out = self._body()
-            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
-            self._pv_widths[w]["trace"] = tid
-            self.trace = tid
-            cost[w] = _time.time() - t0
-        self.target.dflash_capture_taps(None)
-        # Nothing has run for a real request yet: the next one must replay
-        # rather than read _out, and must reset the per-request buffers.
+        try:
+            for width in widths:
+                self._pv_width_activate(self._pv_widths[width])
+                if self._pv_widths[width]["trace"] is not None:
+                    continue
+                t0 = _time.time()
+                self._pv_upload(start)
+                self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
+                self._upload_iter_inputs(anchor_id, start)
+                ttnn.synchronize_device(self.mesh_device)
+                tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                try:
+                    self._out = self._body()
+                except BaseException:
+                    ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                    ttnn.release_trace(self.mesh_device, tid)
+                    raise
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                self._pv_widths[width]["trace"] = tid
+                self.trace = tid
+                cost[width] = _time.time() - t0
+        finally:
+            self.target.dflash_capture_taps(None)
+            self.restore_model_logits_mode()
         self._replay_on_first = True
         return cost
 

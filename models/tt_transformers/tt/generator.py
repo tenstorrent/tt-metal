@@ -3887,11 +3887,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table = torch.cat([page_table, padding], dim=1)
             return page_table[:, :num_blocks]
 
-    ## Destructor
-
-    def __del__(self):
-        # Release all captured traces to prevent nanobind memory leaks
-        # Traces must be released before closing the mesh device
+    def release_persistent_capture(self) -> None:
+        """Release model-lifetime traces once, while the mesh is still open."""
+        if getattr(self, "_generator_capture_released", False):
+            return
+        self._generator_capture_released = True
         try:
             # Release prefill traces
             if hasattr(self, "trace_id_prefill"):
@@ -3959,6 +3959,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             pass  # Ignore errors during cleanup
         except Exception:
             pass  # Ignore any errors during trace cleanup
+
+    def __del__(self):
+        Generator.release_persistent_capture(self)
 
         # Workaround for issue #19052
         if self.data_parallel > 1:

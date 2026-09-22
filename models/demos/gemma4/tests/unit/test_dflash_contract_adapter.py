@@ -41,7 +41,16 @@ def adapter():
         patch.delenv("GEMMA4_CONTRACT_ASYNC", raising=False)
         patch.delenv("GEMMA4_DFLASH_MAX_SPEC_ISL", raising=False)
         patch.setenv("GEMMA4_DFLASH_VERIFY", "5")
-        patch.setitem(sys.modules, "ttnn", _module("ttnn", synchronize_device=lambda mesh: mesh.append(("sync",))))
+        patch.setitem(
+            sys.modules,
+            "ttnn",
+            _module(
+                "ttnn",
+                synchronize_device=lambda mesh: mesh.append(("sync",)),
+                MemoryConfig=object,
+                DRAM_MEMORY_CONFIG=object(),
+            ),
+        )
         lower_modules = {
             "models.demos.gemma4.tt.common": {"create_tt_model": _unused},
             "models.demos.gemma4.tt.generator": {
@@ -72,6 +81,10 @@ def adapter():
                 "allocate_vllm_kv_cache": _unused,
             },
             "models.demos.gemma4.tt.dflash_drafter": {"DFlashFusedDecoder": _unused},
+            "models.demos.gemma4.tt.attention": {"__path__": [str(root / "models/demos/gemma4/tt/attention")]},
+            "models.demos.gemma4.tt.attention.weights": {"AttentionWeights": object},
+            "models.demos.gemma4.tt.dram_sharded": {"DramShardedLinear": object},
+            "models.demos.gemma4.tt.ccl": {"ccl_allreduce": _unused},
         }
         for name, members in lower_modules.items():
             patch.setitem(sys.modules, name, _module(name, **members))
@@ -132,12 +145,29 @@ def adapter():
         module = importlib.import_module(name)
         yield module
         sys.modules.pop(name, None)
+        sys.modules.pop("models.demos.gemma4.tt.attention.operations", None)
 
 
 @pytest.fixture
 def expect_error():
     # The repository fixture imports TT runtime state outside this host harness.
     return pytest.raises  # allow-pytest.raises: root conftest requires hardware runtime
+
+
+@pytest.fixture(scope="module")
+def decoder_width_for(adapter):
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(sys.modules["ttnn"], "bfloat16", object(), raising=False)
+        patch.setitem(
+            sys.modules,
+            "models.demos.gemma4.tt.ccl",
+            _module("models.demos.gemma4.tt.ccl", ccl_allgather=_unused, ccl_allreduce=_unused),
+        )
+        name = "models.demos.gemma4.tt.dflash_drafter"
+        parent = importlib.import_module("models.demos.gemma4.tt")
+        patch.setattr(parent, "dflash_drafter", None, raising=False)
+        patch.delitem(sys.modules, name, raising=False)
+        return importlib.import_module(name).DFlashFusedDecoder.width_for
 
 
 @dataclass
@@ -153,12 +183,22 @@ class HostResult:
 class Target:
     def __init__(self, events):
         self.events = events
-        self.layers = None
+        self.layers = [
+            SimpleNamespace(
+                self_attn=SimpleNamespace(
+                    config=SimpleNamespace(head_dim=8, num_key_value_heads=1, cache_position_modulo=None),
+                    weights=SimpleNamespace(kv_replicated=False),
+                )
+            )
+            for _ in range(2)
+        ]
+        self.mesh_config = SimpleNamespace(tp=1)
+        self.tap_layers = None
         self.taps = []
         self._dflash_sharded_logits = False
 
     def dflash_capture_taps(self, layers, **kwargs):
-        self.layers = layers
+        self.tap_layers = layers
         self.taps = []
         self.events.append(("capture", None if layers is None else tuple(layers)))
 
@@ -175,15 +215,20 @@ class Decoder:
         self.start = 0
         self.anchor = 0
         self.script = []
-        self._pv_widths = {1024: {}}
+        self.P_v = 6
+        self.pv_sk = 1024
+        self.use_packed = True
+        self._pv_widths = {1024: {"trace": 1}}
         self.refreshes = []
 
     def restore_model_logits_mode(self):
         self.target._dflash_sharded_logits = False
         self.events.append(("restore_logits",))
 
-    def width_for(self, start):
-        return 1024 if start < 1024 else None
+    def capture_widths(self, widths):
+        self.events.append(("capture_widths", tuple(sorted(widths))))
+        for width in widths:
+            self._pv_widths[width]["trace"] = width
 
     def select_width(self, start):
         self.events.append(("select_width", start))
@@ -214,7 +259,8 @@ class Decoder:
 
 
 @pytest.fixture
-def model(adapter, monkeypatch):
+def model(adapter, decoder_width_for, monkeypatch):
+    monkeypatch.setattr(Decoder, "width_for", decoder_width_for, raising=False)
     model = adapter.Gemma4DFlashContractForCausalLM.__new__(adapter.Gemma4DFlashContractForCausalLM)
     model._contract_init()
     model.events = []
@@ -238,9 +284,12 @@ def model(adapter, monkeypatch):
     model._slots_prefilled_since_decode = set()
     model.results = []
     model.readback_events = [object(), object()]
-    model.kv_cache = object()
+    cache = SimpleNamespace(padded_shape=(16, 1, 64, 8))
+    model.kv_cache = [[(cache, cache), (cache, cache)]]
     model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1, 2])
-    model._build_per_layer_page_tables = lambda per_layer, table: per_layer if per_layer is not None else [table]
+    model._build_per_layer_page_tables = (
+        lambda per_layer, table: per_layer if per_layer is not None else [table] * len(model.model[0].layers)
+    )
     model._pad_sliding_page_tables_for_bounded = lambda per_layer, cache, authoritative: per_layer
 
     def prefill(*args, **kwargs):
@@ -249,13 +298,13 @@ def model(adapter, monkeypatch):
         model.events.append(("prefill", kwargs))
         model.mode = "PREFILL"
         model._slots_prefilled_since_decode.update(kwargs.get("empty_slots", range(tokens.shape[0])))
-        if model.model[0].layers is not None:
+        if model.model[0].tap_layers is not None:
             model.model[0].taps.append(tokens.clone())
         return torch.zeros(tokens.shape[0], 1, dtype=torch.int32)
 
     def decode(*args, **kwargs):
         assert model.model[0]._dflash_sharded_logits is False
-        assert model.model[0].layers is None
+        assert model.model[0].tap_layers is None
         model.events.append(("decode", kwargs))
         assert model.results, "Supply a native ordinary result before submitting decode"
         return model.results.pop(0)
@@ -356,6 +405,129 @@ def test_initial_narrow_completion_bootstraps_real_adapter(model):
     assert model._slots_prefilled_since_decode == {0}
     names = [event[0] for event in model.events]
     assert names.index("sync") < names.index("ingest") < names.index("reseed") < names.index("replay")
+
+
+def test_prefill_masks_stale_aliases_without_mutating_request_tables(model):
+    table = _tensor([[5, 6, 7, 7, 6, 5]])
+    per_layer = [table, table.clone()]
+    model.prefill_forward(
+        tokens=_tensor([list(range(157))]),
+        prompt_lens=[157],
+        start_pos=[0],
+        page_table=table,
+        page_tables_per_layer=per_layer,
+        kv_cache=model.kv_cache,
+    )
+    forwarded = [event[1] for event in model.events if event[0] == "prefill"][-1]
+    assert forwarded["page_table"].tolist() == [[5, 6, 7, 0, 0, 0]]
+    assert all(item.tolist() == [[5, 6, 7, 0, 0, 0]] for item in forwarded["page_tables_per_layer"])
+    assert table.tolist() == [[5, 6, 7, 7, 6, 5]]
+    assert all(item.tolist() == table.tolist() for item in per_layer)
+    assert forwarded["page_table"].data_ptr() != table.data_ptr()
+    assert all(new.data_ptr() != old.data_ptr() for new, old in zip(forwarded["page_tables_per_layer"], per_layer))
+    assert model._ct_requests[5].tokens == list(range(157))
+
+
+def test_prefill_masks_each_batch_row_at_its_absolute_prefix_length(model):
+    table = _tensor([[10, 11, 12, 13], [20, 21, 22, 23], [30, 31, 32, 33], [40, 41, 42, 43]])
+    model.prefill_forward(
+        tokens=torch.zeros(4, 157, dtype=torch.int32),
+        prompt_lens=[63, 64, 65, 157],
+        empty_slots=[3, 0, 2, 1],
+        page_table=table,
+        kv_cache=model.kv_cache,
+    )
+    forwarded = [event[1] for event in model.events if event[0] == "prefill"][-1]
+    expected = [[10, 0, 0, 0], [20, 0, 0, 0], [30, 31, 0, 0], [40, 41, 42, 0]]
+    assert forwarded["page_table"].tolist() == expected
+    assert all(item.tolist() == expected for item in forwarded["page_tables_per_layer"])
+    assert forwarded["empty_slots"] == [3, 0, 2, 1]
+    assert [model._ct_requests[key].slot for key in (10, 20, 30, 40)] == [3, 0, 2, 1]
+
+
+def test_resumed_prefill_uses_chunk_end_without_adding_start_position(model):
+    table = _tensor([[5, 6, 7, 8, 5, 6]])
+    model.prefill_forward(
+        tokens=_tensor([list(range(256))]),
+        prompt_lens=[193],
+        start_pos=[128],
+        page_table=table,
+        kv_cache=model.kv_cache,
+    )
+    forwarded = [event[1] for event in model.events if event[0] == "prefill"][-1]
+    assert forwarded["page_table"].tolist() == [[5, 6, 7, 8, 0, 0]]
+    assert forwarded["start_pos"] == [128]
+    assert forwarded["prompt_lens"] == [193]
+    assert model._ct_requests[5].tokens == list(range(193))
+    assert table.tolist() == [[5, 6, 7, 8, 5, 6]]
+
+
+def test_reconstruction_masks_prefix_tables_but_preserves_verification_tables(model):
+    table = _tensor([[5, 6, 7, 8, 6, 5]])
+    per_layer = [table.clone(), table.clone()]
+    _prefill(model, keys=(5,), prompts=[list(range(188))])
+    model.results.append(DeviceResult(_tensor([[42]])))
+    ordinary = model.decode_forward(
+        tokens=_tensor([[41]]),
+        start_pos=_tensor([188]),
+        page_table=table,
+        page_tables_per_layer=per_layer,
+        kv_cache=model.kv_cache,
+    )
+    proposal = _complete(model, [[42]], [[189]])
+    assert proposal.num_valid.tolist() == [5]
+    reconstruction = [event[1] for event in model.events if event[0] == "prefill"][-1]
+    assert reconstruction["prompt_lens"] == [189]
+    assert reconstruction["page_table"].tolist() == [[5, 6, 7, 0, 0, 0]]
+    assert all(item.tolist() == [[5, 6, 7, 0, 0, 0]] for item in reconstruction["page_tables_per_layer"])
+    assert ordinary.step.page_table.tolist() == [[5, 6, 7, 8, 6, 5]]
+    assert model._spec_decoder.refreshes[-1].tolist() == [[5, 6, 7, 8, 6, 5]]
+    assert all(item.tolist() == [[5, 6, 7, 8, 6, 5]] for item in model.model[0]._active_page_tables_per_layer)
+    assert table.tolist() == [[5, 6, 7, 8, 6, 5]]
+
+
+def test_prefill_mask_uses_each_layer_cache_view_and_replicated_heads(model):
+    target = model.model[0]
+    target.mesh_config.tp = 8
+    target.layers[0].self_attn.config.num_key_value_heads = 8
+    second = target.layers[1].self_attn
+    second.config.num_key_value_heads = 4
+    second.config.head_dim = 16
+    second.weights.kv_replicated = True
+    cache = SimpleNamespace(padded_shape=(16, 4, 64, 8))
+    model.kv_cache[0][1] = (cache, cache)
+    table = _tensor([[5, 6, 7, 8]])
+    model.prefill_forward(
+        tokens=torch.zeros(1, 157, dtype=torch.int32),
+        prompt_lens=[157],
+        page_table=table,
+        page_tables_per_layer=[table, table],
+        kv_cache=model.kv_cache,
+    )
+    forwarded = [event[1] for event in model.events if event[0] == "prefill"][-1]
+    assert forwarded["page_table"].tolist() == [[5, 6, 7, 0]]
+    assert [item.tolist() for item in forwarded["page_tables_per_layer"]] == [
+        [[5, 6, 7, 0]],
+        [[5, 6, 0, 0]],
+    ]
+
+
+def test_prefill_preserves_bounded_ring_columns_and_masks_full_attention(model):
+    model._bounded_sliding_kv_cache = True
+    model.model[0].layers[0].self_attn.config.cache_position_modulo = 256
+    table = _tensor([[5, 6, 7, 8]])
+    model.prefill_forward(
+        tokens=torch.zeros(1, 65, dtype=torch.int32),
+        prompt_lens=[65],
+        page_table=table,
+        kv_cache=model.kv_cache,
+    )
+    forwarded = [event[1] for event in model.events if event[0] == "prefill"][-1]
+    assert forwarded["page_table"].tolist() == [[5, 6, 7, 8]]
+    assert forwarded["page_tables_per_layer"][0].tolist() == [[5, 6, 7, 8]]
+    assert forwarded["page_tables_per_layer"][1].tolist() == [[5, 6, 0, 0]]
+    assert forwarded["page_tables_per_layer"][0].data_ptr() != table.data_ptr()
+    assert table.tolist() == [[5, 6, 7, 8]]
 
 
 def test_initial_batched_ordinary_decode_resumes_original_survivor(model):
@@ -526,7 +698,7 @@ def test_padded_solo_at_nonzero_row_rebuilds_only_its_own_prefix(model):
     assert proposal.num_valid.tolist() == [0, 5]
     assert proposal.draft_token_ids[1].tolist() == [21, 22, 23, 24, 25]
     rebuild = [event[1] for event in model.events if event[0] == "prefill"][-1]
-    assert rebuild["page_table"].tolist() == [[10, 11]]
+    assert rebuild["page_table"].tolist() == [[10, 0]]
     assert rebuild["empty_slots"] == [1]
     assert rebuild["tokens"].tolist() == [[1, 2, 3]]
 
@@ -742,6 +914,118 @@ def test_target_sequence_limit_bounds_physical_verify_extent(model, max_seq_len,
     proposal = _complete(model, [[4]], [[3]])
     assert proposal.num_valid.tolist() == [expected_valid]
     assert any(event[0] == "replay" for event in model.events) is bool(expected_valid)
+
+
+@pytest.mark.parametrize("max_seq_len, expected_valid", [(10, 0), (11, 5)])
+def test_target_sequence_limit_uses_decoder_physical_width(model, max_seq_len, expected_valid):
+    model.model_args[0].max_seq_len = max_seq_len
+    model._spec_decoder.P_v = 8
+    _prefill(model)
+    _ordinary(model, [3], [2], [10], DeviceResult(_tensor([[4]])))
+    model.events.clear()
+    proposal = _complete(model, [[4]], [[3]])
+    assert proposal.num_valid.tolist() == [expected_valid]
+    if not expected_valid:
+        assert model.events == []
+
+
+def _verified_completion_at(model, position):
+    _start_solo(model)
+    verified = _verify(model)
+    owner = model._ct_requests[10]
+    owner.tokens = list(range(position))
+    model._spec_decoder.start = position - 1
+    model.events.clear()
+    return verified.hidden
+
+
+@pytest.mark.parametrize(
+    "width, position, expected_valid",
+    [(3072, 3002, 5), (3072, 3003, 0), (4096, 4026, 5), (4096, 4027, 0), (4096, 4090, 0), (4096, 4091, 0)],
+)
+def test_captured_width_limit_declines_before_commit_or_device_work(model, width, position, expected_valid):
+    hidden = _verified_completion_at(model, position)
+    model.model_args[0].max_seq_len = 4096
+    model._spec_decoder._pv_widths = {width: {"trace": 1}}
+    proposal = _complete(model, [[42]], [[position]], hidden=hidden)
+    assert proposal.num_valid.tolist() == [expected_valid]
+    assert model._ct_requests[10].tokens[-1] == 42
+    if expected_valid:
+        assert any(event[0] == "commit" for event in model.events)
+        assert any(event[0] == "replay" for event in model.events)
+    else:
+        assert model.events == []
+        assert model._ct_proposal is None
+
+
+@pytest.mark.parametrize(
+    "budget_end, position, expected_valid",
+    [(2199, 2198, 5), (2199, 2199, 0), (4096, 3002, 5), (4096, 3003, 5), (4096, 3066, 5), (4096, 3067, 0)],
+)
+def test_fixed_capture_checks_policy_and_physical_extent_before_commit(model, budget_end, position, expected_valid):
+    hidden = _verified_completion_at(model, position)
+    model.model_args[0].max_seq_len = 4096
+    model._spec_width_set = False
+    model._spec_decoder.pv_sk = 3072
+    model._spec_budget_end = budget_end
+    proposal = _complete(model, [[42]], [[position]], hidden=hidden)
+    assert proposal.num_valid.tolist() == [expected_valid]
+    assert model._ct_requests[10].tokens[-1] == 42
+    if expected_valid:
+        assert any(event[0] == "commit" for event in model.events)
+        assert any(event[0] == "replay" for event in model.events)
+    else:
+        assert model.events == []
+        assert model._ct_proposal is None
+
+
+@pytest.mark.parametrize("width_set", [False, True])
+def test_exhausted_capture_keeps_ordinary_progress_without_rebuilding(model, width_set):
+    position = 4027 if width_set else 2199
+    hidden = _verified_completion_at(model, position)
+    model.model_args[0].max_seq_len = 8192
+    model._spec_width_set = width_set
+    model._spec_decoder._pv_widths = {4096: {"trace": 1}}
+    model._spec_decoder.pv_sk = 4096
+    model._spec_budget_end = 2199
+    assert _complete(model, [[42]], [[position]], hidden=hidden).num_valid.tolist() == [0]
+    for offset in (1, 3):
+        _ordinary(model, [43], [position + offset], [10], DeviceResult(_tensor([[44]])))
+        model.events.clear()
+        proposal = _complete(model, [[44]], [[position + offset + 1]])
+        assert proposal.num_valid.tolist() == [0]
+        assert model.events == []
+        assert model._ct_requests[10].tokens[-2:] == [43, 44]
+
+
+def test_prepared_widths_capture_once_before_first_request_reconstruction(model):
+    decoder = model._spec_decoder
+    decoder._pv_widths = {1024: {"trace": None}}
+    decoder._prepared_widths = {1024}
+    _start_solo(model)
+    captures = [event for event in model.events if event[0] == "capture_widths"]
+    assert captures == [("capture_widths", (1024,))]
+    names = [event[0] for event in model.events]
+    assert names.index("sync") < names.index("capture_widths") < names.index("ingest") < names.index("replay")
+    reconstruction = next(
+        index for index, event in enumerate(model.events) if event[0] == "prefill" and event[1]["prompt_lens"] == [3]
+    )
+    assert names.index("capture_widths") < reconstruction
+    _ordinary(model, [21], [4], [10], DeviceResult(_tensor([[22]])))
+    _complete(model, [[22]], [[5]])
+    assert sum(event[0] == "capture_widths" for event in model.events) == 1
+
+
+def test_prepared_widths_do_not_capture_an_unsupported_request(model):
+    decoder = model._spec_decoder
+    decoder._pv_widths = {1024: {"trace": None}}
+    decoder._prepared_widths = {1024}
+    _prefill(model, prompts=[list(range(954))])
+    _ordinary(model, [3], [954], [10], DeviceResult(_tensor([[4]])))
+    model.events.clear()
+    proposal = _complete(model, [[4]], [[955]])
+    assert proposal.num_valid.tolist() == [0]
+    assert model.events == []
 
 
 def test_contract_capabilities_default_to_synchronous(adapter):

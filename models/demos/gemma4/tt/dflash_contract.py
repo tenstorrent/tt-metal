@@ -111,13 +111,51 @@ class DFlashContractMixin:
         if decoder is not None:
             decoder.restore_model_logits_mode()
 
+    def _contract_prefill_tables(self, page_table, page_tables_per_layer, lengths, kv_cache):
+        from models.demos.gemma4.tt.attention.operations import effective_block_size
+
+        if page_table is None and page_tables_per_layer is None:
+            return None, None
+        per_layer = self._build_per_layer_page_tables(page_tables_per_layer, page_table)
+        kv_layers = kv_cache
+        if isinstance(kv_layers[0][0], (list, tuple)):
+            kv_layers = kv_layers[0]
+        target = self.model[0]
+        tp = target.mesh_config.tp or 1
+
+        def sanitize(table, layer_index):
+            if table is None:
+                return None
+            clean = table.clone()
+            attention = target.layers[layer_index].self_attn
+            config = attention.config
+            # Ring columns name fixed physical slots, not absolute positions.
+            if getattr(config, "cache_position_modulo", None) is not None:
+                return clean
+            local_heads = 1 if attention.weights.kv_replicated else config.num_key_value_heads // tp
+            block_size = int(effective_block_size(kv_layers[layer_index][0], config.head_dim, local_heads))
+            if clean.ndim != 2 or clean.shape[0] < len(lengths):
+                raise ValueError("Gemma4 dFlash prefill page-table rows do not match prompt lengths")
+            for row, length in enumerate(lengths):
+                # Traced prefill writes its padded bucket; stale tail columns
+                # can otherwise alias and overwrite this request's live KV.
+                clean[row, (int(length) + block_size - 1) // block_size :] = 0
+            clean[len(lengths) :] = 0
+            return clean
+
+        return sanitize(page_table, 0), [sanitize(table, index) for index, table in enumerate(per_layer)]
+
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        tokens = kwargs.get("tokens", args[0] if args else None)
+        lengths = kwargs.get("prompt_lens", [tokens.shape[1]] * tokens.shape[0])
+        if not self._ct_warmup_depth and not kwargs.get("warmup_prefill"):
+            kwargs["page_table"], page_tables_per_layer = self._contract_prefill_tables(
+                kwargs.get("page_table"), page_tables_per_layer, lengths, kwargs.get("kv_cache")
+            )
         self._contract_disarm()
         out = self._contract_target_prefill(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         if self._ct_warmup_depth or kwargs.get("warmup_prefill"):
             return out
-        tokens = kwargs.get("tokens", args[0] if args else None)
-        lengths = kwargs.get("prompt_lens", [tokens.shape[1]] * tokens.shape[0])
         slots = kwargs.get("empty_slots", range(tokens.shape[0]))
         tables = kwargs.get("page_table")
         if tables is None:
@@ -310,6 +348,34 @@ class DFlashContractMixin:
 
         return DraftOutput(torch.zeros((rows, k), dtype=torch.int32), num_valid=torch.zeros(rows, dtype=torch.int32))
 
+    def _contract_pending_widths(self):
+        decoder = self._spec_decoder
+        if not self._spec_width_set or decoder is None:
+            return ()
+        if any(record["trace"] is not None for record in decoder._pv_widths.values()):
+            return ()
+        return getattr(decoder, "_prepared_widths", ())
+
+    def _contract_covers_position(self, owner, position):
+        decoder = self._spec_decoder
+        physical_width = decoder.P_v if decoder is not None else self._SPEC_N
+        max_position = int(getattr(self.model_args[0], "max_seq_len", 0))
+        if max_position and position + physical_width > max_position:
+            return False
+        if decoder is None:
+            return True
+        if self._spec_width_set:
+            return decoder.width_for(position) is not None or any(
+                width >= position + physical_width + 64 for width in self._contract_pending_widths()
+            )
+        # A new request gets its own capture horizon. Retaining the exhausted
+        # owner's decoder prevents ordinary completions from restarting it.
+        if self._ct_decoder_owner is owner:
+            return position < self._spec_budget_end and (
+                not decoder.use_packed or position + physical_width <= decoder.pv_sk
+            )
+        return True
+
     def propose_draft_tokens(self, num_drafts, committed, positions, counts, hidden=None):
         from vllm_tt_plugin.spec_decode import DraftOutput
 
@@ -354,8 +420,7 @@ class DFlashContractMixin:
             return self._contract_no_drafts(rows, k)
         position = int(positions[row, int(counts[row]) - 1])
         anchor = int(committed[row, int(counts[row]) - 1])
-        max_position = int(getattr(self.model_args[0], "max_seq_len", 0))
-        if max_position and position + k + 1 > max_position:
+        if not self._contract_covers_position(owner, position):
             return self._contract_no_drafts(rows, k)
         if step.verified is owner and self._ct_decoder_owner is owner and self._spec_active:
             self._contract_refresh(step, row)
@@ -364,8 +429,8 @@ class DFlashContractMixin:
             self._contract_rebuild(owner, step, row, position, anchor)
         decoder = self._spec_decoder
         self._contract_refresh(step, row)
-        if self._spec_width_set and decoder.select_width(decoder.start) is None:
-            raise RuntimeError("Gemma4 dFlash position exceeds the captured verify widths")
+        if self._spec_width_set:
+            decoder.select_width(decoder.start)
         drafts, posterior = decoder.contract_replay(first=self._spec_first_step)
         self._spec_first_step = False
         drafts = [int(token) for token in drafts[:k]]
@@ -390,19 +455,25 @@ class DFlashContractMixin:
             raise RuntimeError("Gemma4 dFlash anchor does not end the committed prefix")
         self._contract_synchronize()
         self._contract_disarm()
+        pending_widths = self._contract_pending_widths()
+        if pending_widths:
+            # Eager-only ordinary execution leaves prepared widths uncaptured.
+            # Capture before reconstructing the request's target KV and taps.
+            self._spec_decoder.capture_widths(pending_widths)
         target = self.model[0]
         drafter = self._spec_get_drafter()
-        target.dflash_capture_taps(drafter.target_layer_ids)
         tables = _row_tables(step.page_table, row)
         per_layer = _row_tables(step.page_tables_per_layer, row)
+        prefill_table, prefill_per_layer = self._contract_prefill_tables(tables, per_layer, [position], step.kv_cache)
+        target.dflash_capture_taps(drafter.target_layer_ids)
         try:
             self._contract_target_prefill(
                 tokens=torch.tensor([owner.tokens[:position]], dtype=torch.int32),
                 prompt_lens=[position],
                 start_pos=[0],
                 empty_slots=[owner.slot],
-                page_table=tables,
-                page_tables_per_layer=per_layer,
+                page_table=prefill_table,
+                page_tables_per_layer=prefill_per_layer,
                 kv_cache=step.kv_cache,
                 enable_trace=False,
                 sampling_params=None,

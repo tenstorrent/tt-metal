@@ -48,6 +48,24 @@ prefix length. Prefix caching remains unsupported.
 `GEMMA4_CONTRACT_ASYNC=1` enables the experimental validation path. The async
 default must remain false until the device checklist passes.
 
+`warmup_model_decode(enable_trace=False)` prepares drafter weights, persistent
+verify inputs for every configured width, fixed-capacity context projection,
+and fused programs before ordinary trace capture. Trace-enabled warmup captures
+the same decoder. `prepare_widths` rejects new widths after any width is captured.
+`_contract_covers_position` checks the actual physical verification extent and
+captured coverage before commit or reconstruction. An uncovered position returns
+zero drafts and continues ordinary decoding.
+
+`_contract_prefill_tables` clones the submitted page tables and masks unused
+columns before traced prefill or prefix reconstruction. Traced padding must not
+write stale columns that alias live prompt pages. The masking uses each layer's
+physical KV block size and preserves bounded sliding-ring columns. Decode and
+speculative refresh retain the allocator's full lookahead tables.
+
+`release_persistent_capture` releases fused and ordinary traces while the mesh
+is open. Request-level release retains the width set for later requests; final
+shutdown bypasses that retention and releases each trace once.
+
 ## Host regression command
 
 From the tt-metal checkout, use Python 3.10 or newer with PyTorch, pytest,
@@ -58,13 +76,19 @@ checkout so the tests use the production `SpecPlan`, `DraftOutput`, and
 ```sh
 PYTHONPATH=/path/to/vllm-tt-plugin/src python -m pytest -o addopts='' \
   --confcutdir=models/demos/gemma4/tests/unit \
-  models/demos/gemma4/tests/unit/test_dflash_contract_adapter.py -q
+  models/demos/gemma4/tests/unit/test_dflash_contract_adapter.py \
+  models/demos/gemma4/tests/unit/test_dflash_width_prepare.py \
+  models/demos/gemma4/tests/unit/test_dflash_capture_cleanup.py -q
 ```
 
 The host test module supplies scoped stubs for lower TT imports. `--confcutdir`
 keeps the device-runtime fixtures out of this host invocation. The production
 adapter and the production inherited width-set bootstrap execute inside the
-tests; the tests replace TT device operations with recording stubs.
+tests; the tests replace TT device operations with recording stubs. The width
+lifecycle tests execute the real decoder preparation and capture code, including
+fixed-capacity context seeding, failure cleanup, and preparation of all widths
+before the first capture. Coverage tests check fixed-capture exhaustion,
+width-set exhaustion, and ordinary fallback without repeated reconstruction.
 
 ## Required device evidence before readiness
 
