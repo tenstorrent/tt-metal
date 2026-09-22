@@ -104,6 +104,9 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
         plan.work_group_1 > 1 || plan.work_group_2 > 1
             ? multi_output_replay_min_tiles
             : (hw_multi_column ? hw_multi_column_replay_min_tiles : single_output_replay_min_tiles);
+    // Match the DFB allocations below: two output tiles (double buffering),
+    // and, for HW, four FP32 partial tiles (two mean/variance pairs) plus
+    // the single combined-result tile produced by the writer.
     std::uint64_t footprint =
         static_cast<std::uint64_t>(replay_tiles) * plan.input_tile_size + 2 * plan.output_tile_size;
     footprint += plan.reduce_hw ? 4 * tile_size(DataFormat::Float32) + tile_size(plan.combined_format) : 0;
