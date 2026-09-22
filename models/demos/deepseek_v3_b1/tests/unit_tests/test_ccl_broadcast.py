@@ -453,7 +453,9 @@ def test_ccl_broadcast_remainder_chunk(
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_ccl_broadcast_auto_chunk(
     bh_2d_mesh_device,
     mesh_rows,
