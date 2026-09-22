@@ -1,5 +1,7 @@
 name: "(T3K) T3000 e2e tests"
 
+run-name: ":warning: WARNING :warning:: This Pipeline is deprecated, all tests moved to `t3000-tests.yaml`"
+
 on:
   workflow_dispatch:
     inputs:
