@@ -1,25 +1,42 @@
 {
-  "_README": "Expected values for check_baseline.py. Re-measure after any rebase: Asif's branch moves underneath us and a carried number is not a measured one. sigma: within-session 0.03% on a, cross-session 0.2-0.4%; treat >1% as a real shift.",
-  "_measured_on": "bh-glx-120-c03u08, 2026-09-22, tt-metal 196712f7fcf",
+  "_README": "Expected values for check_baseline.py. Re-measure after any rebase: the base moves underneath us and a carried number is not a measured one. sigma: within-session 0.03% on a, cross-session 0.2-0.4%; treat >1% as a real shift.",
+  "_measured_on": "bh-glx-120-c03u08, 2026-09-22, tt-metal 7f2906c4d71 (rebased onto mmanzoor/svuckovic/gemma4-prefill-runner-test-backup 7078eef21fa)",
   "_ctx": 262144,
   "_mesh": "8x4 (CP=8, TP=4)",
+  "_flag_polarity_warning": "GEMMA4_PREFILL_L1_ACT IS DEAD on this base and run_e2e.sh now refuses it. gemma4_d_p places short-lived prefill activations in L1 by DEFAULT; the opt-out is GEMMA4_ACTIVATIONS_DRAM_ONLY=1. The pre-rebase configs map across as: old 'L1 off' -> dram_only, old 'mmanzoor_only' -> base.",
   "configs": {
-    "mmanzoor_only": {
-      "flags": ["GEMMA4_PREFILL_L1_ACT=1"],
-      "2048": {"a": 126.6, "slope": 1.457, "total_s": 28.05},
-      "4096": {"a": 163.8, "slope": 3.030, "total_s": 16.59},
-      "8192": {"a": 203.5, "slope": 12.774, "total_s": 12.85}
+    "dram_only": {
+      "_what": "activations forced to DRAM -- the true 'before L1 placement' control",
+      "flags": ["GEMMA4_ACTIVATIONS_DRAM_ONLY=1"],
+      "2048": {"a": 130.6, "slope": 1.457, "total_s": 28.57},
+      "4096": {"a": 172.1, "slope": 3.018, "total_s": 17.10},
+      "8192": {"a": 223.1, "slope": 12.667, "total_s": 13.42}
+    },
+    "base": {
+      "_what": "the new base as it ships: L1 activations on, mmanzoor's core_grid / fused GELU / fused layer_scalar all unconditional",
+      "flags": [],
+      "2048": {"a": 126.5, "slope": 1.457, "total_s": 28.03},
+      "4096": {"a": 164.0, "slope": 3.025, "total_s": 16.59},
+      "8192": {"a": 204.0, "slope": 12.724, "total_s": 12.84}
     },
     "all_fixes": {
-      "flags": ["GEMMA4_PREFILL_L1_ACT=1", "GEMMA4_NORM_SHARD=1",
-                "GEMMA4_MLP_MM_CFG=1", "GEMMA4_MLP_MM_GRID=12x10", "GEMMA4_ATTN_MM_PC=1"],
-      "2048": {"a": 93.0, "slope": 1.456, "total_s": 23.74},
-      "4096": {"a": 116.3, "slope": 3.090, "total_s": 13.67},
-      "8192": {"a": 184.2, "slope": 12.955, "total_s": 12.32}
+      "_what": "base + our three landed fixes",
+      "flags": ["GEMMA4_NORM_SHARD=1", "GEMMA4_MLP_MM_CFG=1",
+                "GEMMA4_MLP_MM_GRID=12x10", "GEMMA4_ATTN_MM_PC=1"],
+      "2048": {"a": 92.8, "slope": 1.455, "total_s": 23.70},
+      "4096": {"a": 116.3, "slope": 3.092, "total_s": 13.68},
+      "8192": {"a": 184.8, "slope": 12.954, "total_s": 12.34}
     }
+  },
+  "_superseded_pre_rebase": {
+    "_note": "Measured on base 3bd2c2bbe299-era tree; kept only to show the rebase was perf-neutral. Every cell above reproduced these within +/-0.4%, i.e. inside documented cross-session drift.",
+    "L1_off":        {"2048": {"a": 130.5, "total_s": 28.51}, "4096": {"a": 171.9, "total_s": 17.00}, "8192": {"a": 223.9, "total_s": 13.20}},
+    "mmanzoor_only": {"2048": {"a": 126.6, "total_s": 28.05}, "4096": {"a": 163.8, "total_s": 16.59}, "8192": {"a": 203.5, "total_s": 12.85}},
+    "all_fixes":     {"2048": {"a": 93.0,  "total_s": 23.74}, "4096": {"a": 116.3, "total_s": 13.67}, "8192": {"a": 184.2, "total_s": 12.32}}
   },
   "_historical_pre_mmanzoor": {
     "_sha": "3bd2c2bbe299",
+    "_note": "NOT re-measured on the new base -- needs a separate checkout and full rebuild of a now doubly-stale commit. Carried for narrative only; do not compare against the configs above.",
     "2048": {"a": 132.7, "slope": 1.452, "total_s": 28.79},
     "4096": {"a": 176.1, "slope": 2.982, "total_s": 17.28},
     "8192": {"a": 243.5, "slope": 12.189, "total_s": 13.84}

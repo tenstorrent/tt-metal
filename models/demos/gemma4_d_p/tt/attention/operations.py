@@ -17,17 +17,30 @@ Handles:
 
 import os
 
+from loguru import logger
+
 import ttnn
 from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_config
 
 from .weights import AttentionWeights
 
+_ACT_WITNESS_DONE = set()
+
 
 def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     """Some ops improve overall perf by leaving their activations in L1. This function returns L1 interleaved config, unless overriden to DRAM."""
-    if os.environ.get("GEMMA4_ACTIVATIONS_DRAM_ONLY", "0").lower() in ("1", "true", "yes"):
-        return ttnn.DRAM_MEMORY_CONFIG
-    return ttnn.L1_MEMORY_CONFIG
+    dram_only = os.environ.get("GEMMA4_ACTIVATIONS_DRAM_ONLY", "0").lower() in ("1", "true", "yes")
+    # Witness, once per process: this placement is the single biggest e2e lever here and
+    # its flag was inverted by a rebase (the old GEMMA4_PREFILL_L1_ACT is dead on this
+    # model). A measurement harness must be able to prove which side it actually ran.
+    if dram_only not in _ACT_WITNESS_DONE:
+        _ACT_WITNESS_DONE.add(dram_only)
+        logger.info(
+            "[DIAG] prefill activations: DRAM-only (GEMMA4_ACTIVATIONS_DRAM_ONLY=1)"
+            if dram_only
+            else "[DIAG] prefill activations: L1 interleaved (default)"
+        )
+    return ttnn.DRAM_MEMORY_CONFIG if dram_only else ttnn.L1_MEMORY_CONFIG
 
 
 def projection_matmul_kwargs(hidden_states, weight):
