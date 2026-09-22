@@ -1,57 +1,38 @@
-<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
 
-# Llama-3.1-8B Prefill (`llama_3p1_8b_d_p`)
+# Llama-3.1-8B disaggregated prefill
 
-Disaggregated **prefill** for Llama-3.1-8B on **one 4×8 Blackhole Galaxy** (SP=4, TP=8), plugging
-into the model-agnostic `models/demos/common/prefill` engine. Decode runs separately in tt-blaze
-(the 40-stage ring, on SC4) and receives the KV through the migration data plane.
+Llama-3.1-8B-Instruct prefill runs on one Blackhole Galaxy with SP=4 and TP=8.
+The shared prefill runner owns input transport, cache lifetime, table publication,
+completion acknowledgements and shutdown. The model uses 32 layers, two slots,
+1,024-token compute chunks and a BFP8 K/V cache.
 
-Umbrella: [tt-blaze#4137](https://github.com/tenstorrent/tt-blaze/issues/4137) ·
-prefill: [#4138](https://github.com/tenstorrent/tt-blaze/issues/4138)
+Related issue: [tt-blaze#4138](https://github.com/tenstorrent/tt-blaze/issues/4138).
 
-Full32 prefill numerical validation, the shared runtime, and the first native2K prefill-to-passive transfer have recorded passes. See the [validation report](docs/validation-2k.md), [native result](docs/migration-native-2k.md), and [runnable migration fixtures](tests/migration/README.md) for exact scope, source identities and commands.
-See the [implementation and verification roadmap](ROADMAP.md) for the staged plan.
+## Run and verify
 
-The [native KV migration learning guide](docs/kv-migration-learning.md) explains the complete
-request path, address layouts, completion signals, and required tests. Its
-[standalone HTML edition](docs/kv-migration-learning.html) includes diagrams and expandable sections.
+- [SC1 runner guide and cache-table contract](docs/runner-integration.md): independent
+  golden traces, live table readback, shared runner/producer PCC and tt-run commands.
+- [Model numerical validation](docs/validation-2k.md): saved full-model and component evidence.
+- [Model performance](docs/performance-prefill.md): saved eager full-model measurements.
+- [Current integration milestones](ROADMAP.md).
+- [Longer-context scope](LONG_CONTEXT_PLAN.md).
 
-## Configuration
+The initial shared-runner acceptance case is 2K per slot. A model performance result
+at a larger length does not establish shared-runner acceptance at that length.
 
-```
-SP = 4 (mesh rows)   sequence sharded block-cyclic; weights IDENTICAL down a column
-TP = 8 (mesh cols)   heads + MLP width sharded; weights DIFFER per column
+## Source map
 
-PREFILL_CHUNK_SIZE    1024      -> S_loc = 256 tokens/chip;  must satisfy % (SP*32) == 0
-PREFILL_MAX_SEQ_LEN   2048      -> cache depth 512/chip;     must satisfy % CHUNK_SIZE == 0
-PREFILL_NUM_LAYERS    32        runner defaults to 61 — PIN IT
-layers_per_chunk      32        engine defaults to 64 — PIN IT
-KV cache dtype        bfloat8_b (matches decode; compute is bf16)
-```
+| Path | Purpose |
+|---|---|
+| `tt/` | Attention, MLP, decoder layers and full prefill model |
+| `tt/runners/adapters/llama_3p1_8b.py` | Import-light adapter registered with common prefill |
+| `tt/tt_prefill_runtime.py` | Eager chunk runtime with borrowed cache and post-sync acknowledgements |
+| `tt/runners/kv_chunk_table.py` | Source cache addresses, owners and protobuf export |
+| `tests/unit/`, `tests/full_model/` | Numerical model checks |
+| `tests/test_kv_cache_table.py` | Independent live table readback and protobuf checks |
+| `tests/test_prefill_runtime.py` | Compact runtime and adapter regressions |
 
-TP=8 is not arbitrary: `num_key_value_heads = 8` over 8 columns puts **exactly one KV head per
-chip**, so a KV chunk lives on exactly one chip and the migration DeviceGroup degenerates to a
-single node. It also divides every width cleanly — 4096/8 = 512 (16 tiles), 14336/8 = 1792
-(56 tiles) — so none of the tile-alignment padding other models carry is needed here.
-
-## Layout
-
-```
-reference/llama_3p1_8b_config.py   dim SSOT (Llama31_8BConfig, exposes FABRIC_PAYLOAD_SIZE)
-tt/config.py                       MeshConfig — SP/TP validation + shard mappers
-tt/model_config.py                 ModelArgs — weights path, HF config cross-check
-tt/runners/adapters/llama_3p1_8b.py   PrefillModelAdapter subclass (the engine's only seam)
-tt/runners/manifests/llama_3p1_8b.json  model manifest (keeps rank bindings model-agnostic)
-reference/ scripts/ tests/ tests/unit/ utils/   reference, test, and support areas for the stack above
-```
-
-## Correctness reference
-
-Module tests compare against independent PyTorch/Hugging Face references. The full-model reference
-is planned with [#4147](https://github.com/tenstorrent/tt-blaze/issues/4147).
-The roadmap and individual tests record their numerical limits.
-
-Report both correlation and magnitude-sensitive error. Keep device-input precision diagnostics
-separate from source-reference acceptance. Exact cache-byte checks establish placement; they do
-not establish complete model correctness.
+The model implements Llama-3.1 RoPE, RMSNorm, full causal grouped-query attention
+and bias-free dense SiLU SwiGLU. Cache keys use adjacent Meta rotary pairs.
