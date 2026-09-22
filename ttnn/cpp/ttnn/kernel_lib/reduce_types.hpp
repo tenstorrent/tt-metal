@@ -59,7 +59,6 @@ enum class ReduceInputPolicy : std::uint8_t {
     BulkWaitBulkPop = 1,
     WaitUpfrontNoPop = 2,
     NoWaitNoPop = 3,
-    ChunkedWaitChunkedPop = 4,
 };
 
 /** Concrete reduction datapath selected by the host planner. */

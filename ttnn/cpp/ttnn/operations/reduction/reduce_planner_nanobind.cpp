@@ -55,8 +55,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .value("WAIT_AND_POP_PER_TILE", compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile)
         .value("BULK_WAIT_BULK_POP", compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop)
         .value("WAIT_UPFRONT_NO_POP", compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop)
-        .value("NO_WAIT_NO_POP", compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop)
-        .value("CHUNKED_WAIT_CHUNKED_POP", compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
+        .value("NO_WAIT_NO_POP", compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
     nb::enum_<compute_kernel_lib::AccumulateReloadMode>(planner, "AccumulateReloadMode")
         .value("FOLD_VIA_ADD", compute_kernel_lib::AccumulateReloadMode::FoldViaAdd)
         .value("COPY_SEED_PAIRS", compute_kernel_lib::AccumulateReloadMode::CopySeedPairs)

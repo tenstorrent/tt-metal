@@ -13,7 +13,7 @@ void kernel_main() {
     // Exercise rebinding on both runtime alternatives, with no caller branch.
     using Call = ttnn::kernel_lib::BoundReduceCallArgs<LogicalCall, 3, 1, 16>;
     static_assert(Call::has_tail_variant);
-    static_assert(Call::auxiliary_tile_count == 0);
+    static_assert(Call::auxiliary_tile_count == 1);
     static_assert(Call::Tail::auxiliary_tile_count > 0);
     static_assert(Call::algorithm != Call::Tail::algorithm);
     static_assert(std::is_empty_v<Call>);

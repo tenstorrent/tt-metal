@@ -155,10 +155,6 @@ namespace compute_kernel_lib {
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB).
  *   For REDUCE_COL tiles are accessed in row-major order, same as WaitUpfrontNoPop.
  *
- * - ChunkedWaitChunkedPop: Keep the logical output resident in DEST while waiting for and
- *   popping host-planned reduction-axis chunks. The chunk descriptor passed to reduce()
- *   supplies the reduction-axis and output-group tile counts.
- *
  * Output synchronization is independent of the input policy: each output tile is
  * reserved and pushed individually.
  */
@@ -187,9 +183,7 @@ namespace compute_kernel_lib {
  *       expressible via additive accumulate,
  *     - float only (no Int32),
  *     - WaitAndPopPerTile streams one output at a time, with two input slots available. COL input must
- *       arrive one complete column at a time (output group = 1). The host downgrades requested
- *       ChunkedWaitChunkedPop to WaitAndPopPerTile when selecting AccumulateViaAdd.
- *       Explicit AccumulateViaAdd + ChunkedWaitChunkedPop calls fail a static assertion,
+ *       arrive one complete column at a time (output group = 1),
  *   PARTIAL (non-tile-aligned) reduce dims are supported standalone (NoAccumulation), ROW/COL only. The last
  *   reduce-dim tile is folded in with a masked accumulating broadcast-mul so padding contributes 0. The scaler
  *   CB also supplies zero for unpaired tiles. For partial AVG, reduce_factor is the true element count:
@@ -324,23 +318,15 @@ struct ReduceInputMemoryLayout {
 /**
  * @brief Host-planned input synchronization geometry.
  *
- * A zero field requests the existing automatic/default geometry. Non-zero values are required
- * by ReduceInputPolicy::ChunkedWaitChunkedPop. output_tiles is normally one, except REDUCE_COL
- * where it is the number of independent columns held in DEST together.
+ * A zero field requests the automatic/default geometry. output_tiles is normally one, except
+ * REDUCE_COL where it is the number of independent columns held in DEST together.
  */
 struct ReduceInputChunk {
     std::uint32_t reduce_axis_tiles = 0;
     std::uint32_t output_tiles = 0;
-    // Tail FIFO readers pad every packet to this fixed geometry, including the
-    // last axis/output group. Compute skips padding but consumes the whole packet.
-    bool padded = false;
-
     static constexpr ReduceInputChunk automatic() { return {}; }
     static constexpr ReduceInputChunk of(std::uint32_t reduce_tiles, std::uint32_t outputs = 1) {
         return {reduce_tiles, outputs};
-    }
-    static constexpr ReduceInputChunk padded_to(std::uint32_t reduce_tiles, std::uint32_t outputs = 1) {
-        return {reduce_tiles, outputs, true};
     }
 };
 

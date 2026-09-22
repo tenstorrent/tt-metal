@@ -23,7 +23,7 @@ PLAN_SEQUENCE_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_p
 PLAN_SEQUENCE_AUX_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_plan_sequence_aux.cpp"
 
 DIMS = ("REDUCE_ROW", "REDUCE_COL", "REDUCE_SCALAR")
-INPUT_MODES = ("bulk", "chunked", "per_tile", "alias")
+INPUT_MODES = ("bulk", "per_tile", "alias")
 
 _PLANNER = ttnn.reduce_planner
 _REDUCE_MATH = {
@@ -43,7 +43,6 @@ _FP32_MODE = {
 }
 _INPUT_POLICY = {
     "bulk": _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
-    "chunked": _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
     "alias": _PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
     "per_tile": _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
 }
@@ -134,7 +133,7 @@ def _input_space_cases() -> list[ReduceCase]:
     cases = []
     for dim in DIMS:
         rows, cols, batches = _shape_for_dim(dim)
-        modes = ("bulk", "chunked", "per_tile", "alias") if dim != "REDUCE_SCALAR" else ("bulk", "chunked", "per_tile")
+        modes = ("bulk", "per_tile", "alias") if dim != "REDUCE_SCALAR" else ("bulk", "per_tile")
         for input_mode in modes:
             for accumulated in (False, True):
                 cases.append(
@@ -418,9 +417,7 @@ def _assert_complete_case_matrix() -> None:
     expected = {
         (dim, input_mode, accumulated)
         for dim in DIMS
-        for input_mode in (
-            ("bulk", "chunked", "per_tile", "alias") if dim != "REDUCE_SCALAR" else ("bulk", "chunked", "per_tile")
-        )
+        for input_mode in (("bulk", "per_tile", "alias") if dim != "REDUCE_SCALAR" else ("bulk", "per_tile"))
         for accumulated in (False, True)
     }
     assert actual == expected
@@ -592,11 +589,7 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
     for index, (call, input_cb_id) in enumerate(zip(plan.calls, input_cb_ids)):
         assert call.input_cb_id == input_cb_id
         assert call.auxiliary_cb_id == (CB_SCALER if call.plan.auxiliary_tiles else _PLANNER.NO_CB_ID)
-        expected_policy = (
-            _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE
-            if case.input_mode == "chunked" and case.expected_algorithm == "ACCUMULATE_VIA_ADD"
-            else _INPUT_POLICY[case.input_mode]
-        )
+        expected_policy = _INPUT_POLICY[case.input_mode]
         assert call.plan.input_policy == expected_policy
         assert call.plan.algorithm == _ALGORITHM[case.expected_algorithm]
         assert call.plan.partial_mode == expected_partial
@@ -666,11 +659,11 @@ def _repeated_input_cb_plan(input_tensor, output):
     assert plan.calls[0].accumulation_mode == planner.ReduceAccumulationMode.INTERMEDIATE
     assert plan.calls[1].accumulation_mode == planner.ReduceAccumulationMode.FINAL
     assert plan.calls[0].auxiliary_tile_offset == 0
-    # The odd second call reloads the accumulated tile with a zero-pair recipe.
-    assert plan.calls[1].auxiliary_tile_offset == 1
+    # Both odd calls share the same zero-pair recipe.
+    assert plan.calls[1].auxiliary_tile_offset == 0
     assert plan.auxiliary.cb_id == CB_SCALER
-    assert len(plan.auxiliary.tiles) == 2
-    assert plan.auxiliary.tiles[1].type == planner.ReduceAuxiliaryTileType.ZERO
+    assert len(plan.auxiliary.tiles) == 1
+    assert plan.auxiliary.tiles[0].type == planner.ReduceAuxiliaryTileType.ZERO
 
     return plan
 
@@ -749,7 +742,6 @@ def _physical_input(case: ReduceCase, logical: torch.Tensor, call) -> torch.Tens
     streams_by_col_chunk = case.dim == "REDUCE_COL" and call.plan.input_policy in (
         _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
         _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
-        _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
     )
     if streams_by_col_chunk:
         ordered_tiles = []
@@ -1279,12 +1271,11 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
 @pytest.mark.parametrize("fp32_input", (False, True))
 @pytest.mark.parametrize(
     "input_policy,capacity_multiplier",
-    (("chunked", 1), ("chunked", 4), ("per_tile", 1), ("per_tile", 4), ("bulk", 1), ("bulk", 2)),
+    (("per_tile", 1), ("per_tile", 4), ("bulk", 1), ("bulk", 2)),
 )
 def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_input, input_policy, capacity_multiplier):
     """Full and tail overrides use the same compiled kernels through repeated FIFO wraps."""
     policy = {
-        "chunked": _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
         "per_tile": _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
         "bulk": _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
     }[input_policy]
@@ -1325,17 +1316,11 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
             algorithm=None if algorithm == "AUTO" else _ALGORITHM[algorithm],
         )
         plan = sequence.calls[0].plan
-        expected_policy = (
-            _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE
-            if input_policy == "chunked" and plan.algorithm == _ALGORITHM["ACCUMULATE_VIA_ADD"]
-            else policy
-        )
+        expected_policy = policy
         assert plan.input_policy == expected_policy
         input_pages = next(cb.page_count for cb in plan.cb_requirements if cb.role == _PLANNER.ReduceCbRole.INPUT)
         if input_policy != "bulk":
-            assert input_pages == (
-                2 if input_policy == "chunked" or plan.algorithm == _ALGORITHM["ACCUMULATE_VIA_ADD"] else 1
-            )
+            assert input_pages == (2 if plan.algorithm == _ALGORITHM["ACCUMULATE_VIA_ADD"] else 1)
         else:
             assert input_pages % plan.chunk.input_tiles == 0
             assert input_pages % plan.tail_plan.chunk.input_tiles == 0
@@ -1365,9 +1350,7 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                         for a in range(axis):
                             for o in range(group):
                                 h, w = (out + o, base + a) if dim == "REDUCE_ROW" else (base + a, out + o)
-                                if expected_policy != _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP and (
-                                    h >= ht or w >= wt
-                                ):
+                                if h >= ht or w >= wt:
                                     continue
                                 tiles.append(
                                     padded[batch, h * TILE : (h + 1) * TILE, w * TILE : (w + 1) * TILE]
@@ -1548,7 +1531,7 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
 
 @pytest.mark.parametrize("runtime_arg_offset", [0, 7])
 def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset):
-    """One call binds physical CBs for an auxiliary-free full path and a masked native tail."""
+    """One call binds physical CBs for an additive full path and a masked native tail."""
     block = _PLANNER.ReduceBlockSpec(
         32,
         256,
@@ -1579,7 +1562,8 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset)
         ),
     )
     plan = sequence.calls[0].plan
-    assert plan.full_auxiliary_tile_count == 0
+    assert plan.full_auxiliary_tile_count == 1
+    assert plan.auxiliary_tiles[0].type == _PLANNER.ReduceAuxiliaryTileType.ZERO
     assert plan.tail_plan.algorithm == _PLANNER.ReduceAlgorithm.REDUCE_TILE
     assert plan.algorithm == _PLANNER.ReduceAlgorithm.ACCUMULATE_VIA_ADD
     compute_args, auxiliary_args = _serialize_plan(sequence)
@@ -1789,7 +1773,7 @@ def test_reduce_helpers_empty_auxiliary(device, dtype, fp32_mode, pool, dim, cal
         cols=8 if dim == "REDUCE_ROW" else 3,
         batches=2,
         pool=pool,
-        input_mode="alias" if calls == 1 else "chunked",
+        input_mode="alias" if calls == 1 else "per_tile",
         calls=calls,
         input_dtype=dtype,
         output_dtype="int32" if dtype == "int32" else "fp32",
@@ -1843,7 +1827,7 @@ def test_reduce_helpers_shared_zero_pair(device, dim):
 @pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
 @pytest.mark.parametrize(
     "input_mode,partial,calls",
-    (("alias", 0, 2), ("alias", 15, 2), ("chunked", 0, 2), ("chunked", 15, 2), ("alias", 15, 1)),
+    (("alias", 0, 2), ("alias", 15, 2), ("bulk", 0, 2), ("bulk", 15, 2), ("alias", 15, 1)),
 )
 def test_reduce_helpers_mixed_auxiliary_format(device, dtype, dim, input_mode, partial, calls):
     """Compressed input alternates with BF16 zero/mask tiles after input-only startup."""

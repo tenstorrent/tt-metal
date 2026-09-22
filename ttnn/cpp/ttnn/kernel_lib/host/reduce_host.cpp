@@ -60,7 +60,7 @@ bool has_output_mask(const ReducePlan& plan) {
 void validate_block(const ReduceBlockSpec& block, ReduceOpDim dim, ReduceInputPolicy input_policy) {
     TT_FATAL(
         input_policy == ReduceInputPolicy::WaitAndPopPerTile || input_policy == ReduceInputPolicy::BulkWaitBulkPop ||
-            input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop || is_retained(input_policy),
+            is_retained(input_policy),
         "Reduce planner: unsupported input policy");
     TT_FATAL(
         block.logical_h > 0 && block.logical_w > 0 && block.batches > 0,
@@ -382,13 +382,6 @@ ReducePlan make_tiled_plan(
         !forced_algorithm.has_value() || *forced_algorithm != ReduceAlgorithm::AccumulateViaAdd || add_legal,
         "Reduce planner: AccumulateViaAdd was forced for an unsupported tiled reduction");
     plan.algorithm = forced_algorithm.value_or(automatic_algorithm);
-    // Additive reduction has no chunked execution path. Lower the requested
-    // policy before deriving packet geometry or auxiliary requirements.
-    if (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd &&
-        input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop) {
-        input_policy = ReduceInputPolicy::WaitAndPopPerTile;
-        plan.input_policy = input_policy;
-    }
     configure_scalar_and_aux(
         plan,
         math,
@@ -427,12 +420,6 @@ ReducePlan make_tiled_plan(
         }
         plan.chunk = {.reduce_axis_tiles = reduced_tiles, .output_tiles = bulk_outputs, .buffers = 1};
         input_pages = checked_mul_u32(reduced_tiles, bulk_outputs, "bulk input");
-    } else if (input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop) {
-        // A bounded packet, independent of total work or available memory. H
-        // keeps one output column so even a two-tile producer can make progress.
-        const auto axis = std::min(2U, reduced_tiles);
-        plan.chunk = {.reduce_axis_tiles = axis, .output_tiles = 1, .buffers = 1, .padded = block.tail.has_value()};
-        input_pages = axis;
     } else {
         // Additive streaming requires two input slots and consumes one output
         // column at a time for H reductions.
@@ -833,18 +820,6 @@ void recount_owned_bytes(ReducePlan& plan) {
 }
 
 void share_tail_input_packets(ReducePlan& full, ReducePlan& tail) {
-    if (full.input_policy != tail.input_policy) {
-        // Full and tail may choose different algorithms. If additive planning
-        // downgraded either chunked variant, stream both variants in the same order.
-        for (auto* plan : {&full, &tail}) {
-            TT_FATAL(
-                plan->input_policy == ReduceInputPolicy::WaitAndPopPerTile ||
-                    plan->input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop,
-                "Reduce planner: incompatible full/tail input policies");
-            plan->input_policy = ReduceInputPolicy::WaitAndPopPerTile;
-            plan->chunk = {.reduce_axis_tiles = 1, .output_tiles = 1, .buffers = 2};
-        }
-    }
     TT_FATAL(full.input_policy == tail.input_policy, "Reduce planner: full and tail must use the same input policy");
     if (full.input_policy == ReduceInputPolicy::BulkWaitBulkPop) {
         // One allocation must permit whole bulk reads for either runtime shape.
@@ -879,20 +854,6 @@ void share_tail_input_packets(ReducePlan& full, ReducePlan& tail) {
             recount_owned_bytes(*plan);
         }
         return;
-    }
-    if (full.input_policy != ReduceInputPolicy::ChunkedWaitChunkedPop) {
-        return;
-    }
-    const auto axis = std::max(full.chunk.reduce_axis_tiles, tail.chunk.reduce_axis_tiles);
-    for (auto* plan : {&full, &tail}) {
-        plan->chunk = {.reduce_axis_tiles = axis, .output_tiles = 1, .buffers = 1, .padded = true};
-        for (auto& requirement : plan->cb_requirements) {
-            if (requirement.role == ReduceCbRole::Input && requirement.owns_l1()) {
-                requirement.page_count = axis;
-                requirement.total_size_bytes = static_cast<std::size_t>(axis) * requirement.page_size;
-            }
-        }
-        recount_owned_bytes(*plan);
     }
 }
 
@@ -1026,6 +987,9 @@ std::uint32_t encode_configuration(const ReduceCallPlan& call) {
     const auto fp32_mode = static_cast<std::uint32_t>(plan.fp32_mode);
     const auto algorithm = static_cast<std::uint32_t>(plan.algorithm);
     const auto input_policy = static_cast<std::uint32_t>(plan.input_policy);
+    TT_FATAL(
+        input_policy <= static_cast<std::uint32_t>(ReduceInputPolicy::NoWaitNoPop),
+        "Reduce plan args: unsupported input policy");
     const auto reload_mode = static_cast<std::uint32_t>(plan.reload_mode);
     const auto reconfig_mode = static_cast<std::uint32_t>(plan.reconfig_mode);
     const auto within_tile = static_cast<std::uint32_t>(plan.within_tile);
@@ -1096,8 +1060,7 @@ std::uint32_t encode_chunk_and_auxiliary(const ReduceCallPlan& call) {
            insert(
                tile_count,
                chunk_and_auxiliary::auxiliary_tile_count_shift,
-               chunk_and_auxiliary::auxiliary_tile_count_mask) |
-           insert(plan.chunk.padded, chunk_and_auxiliary::padded_shift, chunk_and_auxiliary::padded_mask);
+               chunk_and_auxiliary::auxiliary_tile_count_mask);
 }
 
 std::uint32_t encode_auxiliary_header(const ReduceAuxiliaryPlan& auxiliary) {
@@ -1138,14 +1101,6 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
     using reduce_plan_args::CallWord;
     const auto& plan = call.plan;
     const bool accumulates = call.accumulation_mode != ReduceAccumulationMode::None;
-    TT_FATAL(
-        plan.algorithm != ReduceAlgorithm::AccumulateViaAdd ||
-            plan.input_policy != ReduceInputPolicy::ChunkedWaitChunkedPop,
-        "Reduce plan args: AccumulateViaAdd requires chunked input to be lowered to WaitAndPopPerTile");
-    TT_FATAL(
-        !plan.chunk.padded ||
-            (plan.input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop && plan.reduce_dim != ReduceOpDim::HW),
-        "Reduce plan args: padded input packets require chunked W or H reduction");
     TT_FATAL(
         accumulates == call.accumulator_cb_id.has_value(),
         "Reduce plan args: accumulation mode and accumulator CB presence disagree");

@@ -102,7 +102,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
         ReduceOpDim::H,
         1.0F,
         ReduceFp32Mode::Fast,
-        compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop};
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile};
     std::vector<reduce_host::ReduceCbConfig> reductions(std::min(reduce_repetitions, 3U), {0, reduction});
     auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
         reductions,

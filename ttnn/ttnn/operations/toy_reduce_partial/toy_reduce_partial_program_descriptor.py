@@ -32,7 +32,7 @@ def create_program_descriptor(
                         input_tensor.shape[-1],
                         input_tensor.dtype,
                         output_tensor.dtype,
-                        batches=math.prod(input_tensor.shape[:-2]),
+                        batches=math.prod(list(input_tensor.shape)[:-2]),
                         padded_h=input_tensor.padded_shape[-2],
                         padded_w=input_tensor.padded_shape[-1],
                         input_tile=input_tensor.spec.tile,
@@ -42,7 +42,7 @@ def create_program_descriptor(
                     reduce_dim=planner.ReduceDimension.ROW if reduce_row else planner.ReduceDimension.COLUMN,
                     scalar=1.0,
                     fp32_mode=planner.ReduceFp32Mode.FAST,
-                    input_policy=planner.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
+                    input_policy=planner.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
                 ),
             )
         ],

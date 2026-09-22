@@ -5,7 +5,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 
-// The test stores padded stream packets in resident CB 3. Copy them through the
+// The test stores stream tiles in resident CB 3. Copy them through the
 // planner-sized input FIFO, exercising real producer/consumer synchronization
 // and repeated wraparound. Runtime arguments select full or tail packet counts;
 // both auxiliary recipes are prepared independently of that choice.
@@ -18,15 +18,8 @@ void kernel_main() {
     const uint32_t rows = runtime.has_override() ? (runtime.height + 31) / 32 : Call::rows;
     const uint32_t columns = runtime.has_override() ? (runtime.width + 31) / 32 : Call::columns;
     const uint32_t batches = runtime.has_override() ? runtime.batches : Call::batches;
-    constexpr uint32_t axis_chunk = Call::reduce_axis_chunk_tiles;
-    constexpr uint32_t output_chunk = Call::output_chunk_tiles;
-    constexpr bool chunked = Call::input_policy == compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop;
-    constexpr uint32_t packet_tiles = chunked ? axis_chunk * output_chunk : 1;
-    const uint32_t packets =
-        !chunked ? batches * rows * columns
-        : Call::reduce_dim == ckernel::ReduceDim::REDUCE_ROW
-            ? batches * rows * ((columns + axis_chunk - 1) / axis_chunk)
-            : batches * ((columns + output_chunk - 1) / output_chunk) * ((rows + axis_chunk - 1) / axis_chunk);
+    constexpr uint32_t packet_tiles = 1;
+    const uint32_t packets = batches * rows * columns;
     DataflowBuffer source(3);
     DataflowBuffer input(Call::input_cb_id);
     Noc noc;

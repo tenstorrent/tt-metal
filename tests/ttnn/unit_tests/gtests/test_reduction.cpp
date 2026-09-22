@@ -64,14 +64,14 @@ ttnn::kernel_lib::host::ReduceBlockSpec local_reduce_block(
 }
 }  // namespace
 
-TEST(ReduceHostPlanner, AdditiveChunkedPolicyUsesPairwiseStreaming) {
+TEST(ReduceHostPlanner, AdditiveStreamingRequiresPairs) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
         for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32}) {
             const ReduceHardwareConfig hardware{.arch = arch, .fp32_dest_acc_en = true};
             const auto block = ReduceBlockSpec::tiled(9 * 32, 4 * 32, dtype, DataType::FLOAT32);
-            for (const auto dim : {ReduceOpDim::H, ReduceOpDim::W, ReduceOpDim::HW}) {
+            for (const auto dim : {ReduceOpDim::W, ReduceOpDim::HW}) {
                 const auto plan = make_reduce_plan(
                     block,
                     ReduceOpMath::SUM,
@@ -79,17 +79,17 @@ TEST(ReduceHostPlanner, AdditiveChunkedPolicyUsesPairwiseStreaming) {
                     1.0F,
                     ReduceFp32Mode::Fast,
                     hardware,
-                    compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
                 EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
                 EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
                 EXPECT_EQ(plan.chunk.reduce_axis_tiles, 1U);
                 EXPECT_EQ(plan.chunk.output_tiles, 1U);
                 EXPECT_EQ(plan.chunk.buffers, 2U);
                 EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, 2U);
-                EXPECT_FALSE(plan.chunk.padded);
+
                 EXPECT_NO_THROW(ReduceCallArgs(plan, {0, 1, 16}));
                 auto invalid = plan;
-                invalid.input_policy = compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop;
+                invalid.input_policy = static_cast<compute_kernel_lib::ReduceInputPolicy>(4);
                 EXPECT_ANY_THROW(ReduceCallArgs(invalid, {0, 1, 16}));
             }
         }
@@ -123,10 +123,10 @@ TEST(ReduceHostPlanner, StreamingCapacityDependsOnAlgorithm) {
         ReduceOpDim::W,
         ReduceFp32Mode::Fast,
         hardware,
-        Policy::ChunkedWaitChunkedPop);
+        Policy::WaitAndPopPerTile);
     EXPECT_EQ(native.algorithm, Algorithm::ReduceTile);
-    EXPECT_EQ(native.input_policy, Policy::ChunkedWaitChunkedPop);
-    EXPECT_EQ(native.chunk.reduce_axis_tiles, 2U);
+    EXPECT_EQ(native.input_policy, Policy::WaitAndPopPerTile);
+    EXPECT_EQ(native.chunk.reduce_axis_tiles, 1U);
 }
 
 TEST(ReduceHostPlanner, RowMajorColumnPacketsPreserveShortStaticTails) {
@@ -162,19 +162,13 @@ TEST(ReduceHostPlanner, RowMajorColumnPacketsPreserveShortStaticTails) {
             true,
             &rm);
         for (const auto& call : sequence.calls) {
-            EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+            EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
             EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
             EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 1U);
             EXPECT_EQ(call.plan.chunk.output_tiles, 1U);
-            EXPECT_FALSE(call.plan.chunk.padded);
-            EXPECT_EQ(call.plan.find_cb(ReduceCbRole::Input)->page_count, 2U);
+
+            EXPECT_EQ(call.plan.find_cb(ReduceCbRole::Input)->page_count, 1U);
             const auto words = ReduceCallArgs(call).get_compile_time_args();
-            EXPECT_EQ(
-                args::extract(
-                    words[static_cast<uint32_t>(args::CallWord::ChunkAndAuxiliary)],
-                    args::chunk_and_auxiliary::padded_shift,
-                    args::chunk_and_auxiliary::padded_mask),
-                0U);
             EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::TailRuntimeArgOffset)], args::no_runtime_arg);
         }
         EXPECT_EQ(sequence.calls.back().plan.Ht, (ht - 1) % 8 + 1);
@@ -827,14 +821,11 @@ TEST(ReduceHostPlanner, TailStreamsUseFixedBoundedPackets) {
             1.0F,
             ReduceFp32Mode::Fast,
             hardware,
-            compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
         EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-        EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, 2U);
-        EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, plan.chunk.input_tiles() * plan.chunk.buffers);
+        EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->page_count, dim == ReduceOpDim::W ? 2U : 1U);
         ASSERT_NE(plan.tail_plan, nullptr);
         EXPECT_EQ(plan.chunk.reduce_axis_tiles, plan.tail_plan->chunk.reduce_axis_tiles);
-        EXPECT_EQ(plan.chunk.output_tiles, plan.tail_plan->chunk.output_tiles);
-        EXPECT_FALSE(plan.chunk.padded);
     }
 }
 
@@ -862,20 +853,15 @@ TEST(ReduceHostPlanner, FullAndTailShareResolvedInputPolicy) {
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
         for (const auto policy :
-             {Policy::NoWaitNoPop,
-              Policy::WaitUpfrontNoPop,
-              Policy::BulkWaitBulkPop,
-              Policy::ChunkedWaitChunkedPop,
-              Policy::WaitAndPopPerTile}) {
+             {Policy::NoWaitNoPop, Policy::WaitUpfrontNoPop, Policy::BulkWaitBulkPop, Policy::WaitAndPopPerTile}) {
             auto block = ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32);
             block.tail = ReduceTailConfig{{135, 135, 1}};
             const auto plan = make_reduce_plan(block, ReduceOpMath::AVG, dim, ReduceFp32Mode::Fast, hardware, policy);
-            const auto resolved = policy == Policy::ChunkedWaitChunkedPop ? Policy::WaitAndPopPerTile : policy;
+            const auto resolved = policy;
             EXPECT_EQ(plan.input_policy, resolved);
             ASSERT_NE(plan.tail_plan, nullptr);
             EXPECT_EQ(plan.tail_plan->input_policy, resolved);
             EXPECT_EQ(plan.tail_plan->partial_reduce_axis_elements, 7U);
-            EXPECT_FALSE(plan.chunk.padded);
         }
     }
 }
@@ -1191,18 +1177,18 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     EXPECT_FLOAT_EQ(threshold_plan.post_scale, 0.25F);
 
     const auto tile_bytes = tt::tt_metal::tile_size(DataType::BFLOAT16);
-    const auto chunked_plan = make_reduce_plan(
+    const auto streaming_plan = make_reduce_plan(
         make_block(Shape{1, 1, 32, 8 * 32}),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,
         ReduceFp32Mode::Fast,
         hardware,
-        compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
-    EXPECT_EQ(chunked_plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-    EXPECT_EQ(chunked_plan.chunk.reduce_axis_tiles, 1U);
-    ASSERT_NE(chunked_plan.find_cb(ReduceCbRole::Input), nullptr);
-    EXPECT_EQ(chunked_plan.find_cb(ReduceCbRole::Input)->total_size_bytes, 2 * tile_bytes);
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+    EXPECT_EQ(streaming_plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+    EXPECT_EQ(streaming_plan.chunk.reduce_axis_tiles, 1U);
+    ASSERT_NE(streaming_plan.find_cb(ReduceCbRole::Input), nullptr);
+    EXPECT_EQ(streaming_plan.find_cb(ReduceCbRole::Input)->total_size_bytes, 2 * tile_bytes);
 
     const auto col_input = make_block(Shape{1, 1, 8 * 32, 8 * 32});
     const std::vector<ReduceCbConfig> reductions{
@@ -1213,7 +1199,7 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
              .reduce_dim = ReduceOpDim::H,
              .scalar = 1.0F,
              .fp32_mode = ReduceFp32Mode::Fast,
-             .input_policy = compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop}},
+             .input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop}},
         {1U,
          ReduceCallConfig{
              .block = col_input,
@@ -1221,7 +1207,7 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
              .reduce_dim = ReduceOpDim::H,
              .scalar = 1.0F,
              .fp32_mode = ReduceFp32Mode::Fast,
-             .input_policy = compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop}},
+             .input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop}},
     };
     const auto sequence = make_reduce_sequence_plan(
         reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
@@ -1242,9 +1228,9 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     EXPECT_EQ(sequence.calls[1].auxiliary_tile_offset, 0U);
     for (const auto& call : sequence.calls) {
         EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
-        EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-        EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 1U);
-        EXPECT_EQ(call.plan.chunk.output_tiles, 1U);
+        EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
+        EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 8U);
+        EXPECT_EQ(call.plan.chunk.output_tiles, 8U);
     }
 
     auto repeated_cb_reductions = reductions;
@@ -1695,7 +1681,7 @@ TEST_F(ReductionSmoke, HostPlannedWideSumSanity) {
     }
 }
 
-TEST_F(ReductionSmoke, HostPlannedChunkedColAddSanity) {
+TEST_F(ReductionSmoke, HostPlannedLongColumnReduction) {
     auto& device = *device_;
     constexpr uint32_t height = 32768;
     const auto input = ttnn::ones(ttnn::Shape{1, 1, height, 32}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
