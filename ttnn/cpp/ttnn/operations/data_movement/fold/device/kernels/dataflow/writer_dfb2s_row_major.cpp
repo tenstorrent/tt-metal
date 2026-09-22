@@ -30,8 +30,6 @@ void kernel_main() {
     constexpr uint32_t core_dst_offset = is_reader ? 0 : aligned_dst_pixel_size;
 
     constexpr bool is_aligned = (pixel_size == aligned_pixel_size);
-    constexpr uint32_t elements_per_pixel = pixel_size / element_size;
-    constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
 
     Noc noc;
     DataflowBuffer dfb_src0(dfb::src0);
@@ -60,19 +58,17 @@ void kernel_main() {
                     experimental::read_with_state(noc, dst_pixel_addr, src_addr_base + src_col_offset + h_offset);
                     dst_pixel_addr += aligned_chunk_size;
                 } else {
-                    // Slow path: element-wise copy for unaligned data
-                    // Cast to uint16_t* for element-level access to pixel data
-                    uint16_t* src_ptr = (uint16_t*)(src_addr_base + src_col_offset + h_offset);
-                    uint16_t* dst_ptr = (uint16_t*)dst_pixel_addr;
+                    // Slow path: byte-wise copy for unaligned data, so any element size is copied whole
+                    uint8_t* src_ptr = (uint8_t*)(src_addr_base + src_col_offset + h_offset);
+                    uint8_t* dst_ptr = (uint8_t*)dst_pixel_addr;
 
                     // Gather pixels along stride_w dimension
                     for (uint32_t w = 0; w < stride_w; ++w) {
-                        // Copy elements_per_pixel (half-words) from source to destination
-                        for (uint32_t i = 0; i < elements_per_pixel; ++i) {
+                        for (uint32_t i = 0; i < pixel_size; ++i) {
                             dst_ptr[i] = src_ptr[i];
                         }
-                        src_ptr += elements_per_aligned_pixel;
-                        dst_ptr += elements_per_pixel;
+                        src_ptr += aligned_pixel_size;
+                        dst_ptr += pixel_size;
                     }
                     dst_pixel_addr += pixel_size * stride_w;
                 }
