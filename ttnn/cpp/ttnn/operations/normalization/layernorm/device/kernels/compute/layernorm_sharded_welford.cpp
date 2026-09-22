@@ -216,10 +216,11 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_external_id = dfb::ex_external;
     constexpr uint32_t dfb_ex_global_id = dfb::ex_global;  // Interleaved E[x] and Var[x] final global mcast result
     constexpr uint32_t dfb_transpose_id = dfb::transpose;  // Transpose interleaved E[x] and Var[x] to columns
-    // FP32 normalisation writes xmm directly, leaving x free for gamma's
-    // output when beta follows. The tile path retains its original buffers.
-    constexpr uint32_t dfb_fusion_id = welford_fp32_alias && do_gamma ? dfb_x : dfb_xmm_id;
     constexpr uint32_t dfb_out_id = dfb::out;
+    constexpr uint32_t dfb_im_id = (do_gamma || do_beta) ? (welford_fp32_alias ? dfb_xmm_id : dfb_x) : dfb_out_id;
+    // Gamma alternates the intermediate buffers. Without gamma, beta must
+    // consume the normalised result directly, not the old centred input.
+    constexpr uint32_t dfb_fusion_id = do_gamma ? (welford_fp32_alias ? dfb_x : dfb_xmm_id) : dfb_im_id;
     constexpr uint32_t dfb_reciprocals = dfb::reciprocals;  // LUT of pre-computed reciprocals for Welford's algorithm
 
 #ifdef FUSE_GAMMA
@@ -237,7 +238,6 @@ void kernel_main() {
     DataflowBuffer dfb_fusion(dfb_fusion_id);
     DataflowBuffer dfb_out(dfb_out_id);
 
-    constexpr uint32_t dfb_im_id = (do_gamma || do_beta) ? (welford_fp32_alias ? dfb_xmm_id : dfb_x) : dfb_out_id;
     DataflowBuffer dfb_im(dfb_im_id);
     constexpr uint32_t dfb_outgamma_id = do_beta ? dfb_fusion_id : dfb_out_id;
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);

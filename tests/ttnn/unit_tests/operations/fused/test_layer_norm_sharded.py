@@ -796,6 +796,82 @@ _LARGE_OFFSET_PCC = 0.999
 _LARGE_OFFSET_BASES = [0.0, 1_000.0, 3_000.0, 10_000.0, 30_000.0, 100_000.0, 1_000_000.0]
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+@pytest.mark.parametrize("norm, use_welford", [("layer", False), ("layer", True), ("rms", False)])
+@pytest.mark.parametrize("has_residual", [False, True])
+@pytest.mark.parametrize("two_stage", [False, True])
+def test_sharded_norm_beta_only(device, dtype, norm, use_welford, has_residual, two_stage):
+    device.enable_program_cache()
+    # Fill the intermediate buffer: small shards can leave enough spare DFB
+    # capacity to hide a producer reserving its own unconsumed input.
+    h, w, cores_h, cores_w = (256, 320, 2, 5) if two_stage else (1024, 256, 4, 4)
+    memory_config = create_sharded_mem_config(h, w, cores_h, cores_w, two_stage)
+    torch.manual_seed(41)
+
+    def make_tensor(values, sharded=False):
+        return ttnn.from_torch(
+            values,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=memory_config if sharded else ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # Non-unit variance distinguishes (x - mean) + beta from LayerNorm + beta;
+    # correlation alone can miss an omitted inverse-standard-deviation scale.
+    input_tensor = make_tensor(5.0 + 3.0 * torch.randn(h, w), sharded=True)
+    residual = make_tensor(torch.randn(h, w), sharded=True) if has_residual else None
+    bias = make_tensor(torch.linspace(-0.25, 0.25, w))
+    reference_input = ttnn.to_torch(input_tensor).double()
+    if residual is not None:
+        reference_input += ttnn.to_torch(residual).double()
+    reference_bias = ttnn.to_torch(bias).double()
+    epsilon = 1e-5
+    if norm == "layer":
+        reference = torch.nn.functional.layer_norm(reference_input, [w], bias=reference_bias, eps=epsilon)
+    else:
+        reference = reference_input * torch.rsqrt(reference_input.square().mean(dim=-1, keepdim=True) + epsilon)
+        reference += reference_bias
+
+    shard = memory_config.shard_spec
+    config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        block_h=shard.shape[0] // 32,
+        block_w=shard.shape[1] // 32,
+        subblock_w=1,
+        use_welford=use_welford,
+        inplace=False,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    kwargs = {}
+    if use_welford:
+        kwargs["recip_tensor"] = ttnn.create_layer_norm_reciprocals(device, shard.grid, shard.shape[1])
+    op = ttnn.layer_norm if norm == "layer" else ttnn.rms_norm
+    for _ in range(2):
+        output = op(
+            input_tensor,
+            residual_input_tensor=residual,
+            bias=bias,
+            epsilon=epsilon,
+            memory_config=memory_config,
+            program_config=config,
+            compute_kernel_config=compute_config,
+            **kwargs,
+        )
+        actual = ttnn.to_torch(output).double()
+        assert torch.isfinite(actual).all()
+        assert_numeric_metrics(
+            reference,
+            actual,
+            rtol=0,
+            atol=0.125 if dtype == ttnn.bfloat8_b else 0.05,
+            frobenius_threshold=0.03 if dtype == ttnn.bfloat8_b else 0.01,
+            pcc_threshold=0.999,
+        )
+
+
 @pytest.mark.parametrize("block_wt", [1, 2, 3])
 @pytest.mark.parametrize("has_residual", [False, True])
 def test_layer_norm_sharded_fp32_preserves_centred_low_bits(device, block_wt, has_residual):

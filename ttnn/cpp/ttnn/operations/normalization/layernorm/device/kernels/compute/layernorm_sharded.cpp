@@ -114,7 +114,9 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_global_id = dfb::ex_global;        // E[x] global reduce
     constexpr uint32_t dfb_xmm2_id = dfb_x;                      // xmm^2
     constexpr uint32_t dfb_ex2pe_id = dfb::ex2pe;                // E[(x-E[x])^2]+eps
-    constexpr uint32_t dfb_fusion_id = dfb::xmm;                 // stream gamma/beta (alias of dfb_xmm_id)
+    // Without gamma, normalisation must not reserve its still-full xmm input
+    // for output. Use the now-consumed variance scratch, and let beta read it.
+    constexpr uint32_t dfb_fusion_id = do_gamma ? dfb::xmm : dfb_x;
     constexpr uint32_t dfb_out_id = dfb::out;
 #ifdef DO_COL_MASK
 #ifndef RMSNORM

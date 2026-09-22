@@ -102,10 +102,11 @@ constexpr StatisticsBackend select_sharded_statistics_backend(
     if (arch == tt::ARCH::QUASAR) {
         return StatisticsBackend::TILE_REDUCTION;
     }
-    // Retain Blackhole's calibrated tile path for lower-precision input. FP32
-    // requires two-pass statistics and SFPU subtraction: TF32 intake loses
-    // small variations around a large shared offset, even with FP32 DEST.
-    if (arch == tt::ARCH::BLACKHOLE && input_format != tt::DataFormat::Float32) {
+    // BF16/BFP8 sharded measurements favour tile reductions on both Wormhole
+    // and Blackhole. FP32 still requires full-precision SFPU statistics and
+    // normalisation: TF32 intake loses small variations around a large shared
+    // offset, even with FP32 DEST.
+    if (input_format != tt::DataFormat::Float32) {
         return StatisticsBackend::TILE_REDUCTION;
     }
     return StatisticsBackend::SFPU_TWO_PASS;
