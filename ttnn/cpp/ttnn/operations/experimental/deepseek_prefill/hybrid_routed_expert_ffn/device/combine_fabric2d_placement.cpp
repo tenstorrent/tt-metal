@@ -168,14 +168,17 @@ DevicePlacement decide_device_placement(
                 candidate.downstream_node});
     };
 
+    // Two streams can share a closest worker -- on a mesh whose axis neighbours sit behind eth cores
+    // in one column, both directions resolve to the same core. Whichever claims it keeps the extra
+    // hop off its path; the other falls through to the walk below rather than aborting the op.
     for (const auto& [stream, candidate] : candidates) {
-        if (candidate.noc_hops == SENDER_NOC_MIN_ETH_HOPS) {
+        if (candidate.noc_hops == SENDER_NOC_MIN_ETH_HOPS && !taken.contains(candidate.worker)) {
             assign(stream, candidate, candidate.worker);
         }
     }
     const uint32_t grid_width = mesh->compute_with_storage_grid_size().x;
     for (const auto& [stream, candidate] : candidates) {
-        if (candidate.noc_hops == SENDER_NOC_MIN_ETH_HOPS) {
+        if (placements.contains(stream)) {
             continue;
         }
         tt::tt_metal::CoreCoord worker = candidate.worker;

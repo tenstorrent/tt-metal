@@ -61,16 +61,13 @@ _TOKEN_THRESHOLD = 320
 
 # The proxy meshes an 8-card box can actually open, from the combine test's target_meshes. The
 # 8x4 full-model mesh is deliberately absent: it needs 32 chips.
-# One link per direction, where the full-model case uses two. Combine places a min-hop stream on
-# exactly the worker closest to its eth core with no relocation, so on a proxy mesh two links can
-# resolve to the same worker and the placement refuses -- a property of the mesh geometry, not of
-# the overlap.
-_NUM_LINKS = 1
+# Two links per direction, matching the full-model case. On this mesh both links reach distinct
+# workers, so nothing here drives the relocation combine's placement falls back on.
+_NUM_LINKS = 2
 
-_PROXY_MESHES = (
-    ((4, 2), ttnn.FabricConfig.FABRIC_2D, "mesh-4x2"),
-    ((8, 1), ttnn.FabricConfig.FABRIC_2D_TORUS_Y, "ring"),
-)
+# Combine drives its dispatch axis as a ring in both directions, so only a fabric that wraps that
+# axis can carry it. A 4x2 FABRIC_2D mesh leaves axis 0 linear and is rejected outright.
+_PROXY_MESHES = (((8, 1), ttnn.FabricConfig.FABRIC_2D_TORUS_Y, "ring"),)
 
 
 # (seq_len_per_chip, dispatch_buffer_capacity_factor). 128 is a quick shape check; 640 is where

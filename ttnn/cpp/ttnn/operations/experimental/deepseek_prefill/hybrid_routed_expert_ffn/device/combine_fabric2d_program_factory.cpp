@@ -598,6 +598,14 @@ void validate_inputs(const CombineFabric2dParams& args, const CombineFabric2dInp
         "combine: axis {} is out of range for a {} mesh",
         args.axis,
         args.device->shape());
+    // Placement reaches both axis neighbours of every chip directly, including the pair across the
+    // wrap, so an axis that does not close is not a ring the senders can drive -- the wrap edge is
+    // routed the long way round and the two directions deadlock on it.
+    TT_FATAL(
+        args.topology == tt::tt_fabric::Topology::Ring || args.topology == tt::tt_fabric::Topology::Torus,
+        "combine: axis {} must wrap, but topology is {}; combine drives a ring in both directions",
+        args.axis,
+        args.topology);
     const uint32_t extent = ring_extent(args);
     TT_FATAL(extent >= 4, "combine: axis {} extent {} needs 4+ chips", args.axis, extent);
     TT_FATAL(extent % 2 == 0, "combine: axis {} extent {} must be even", args.axis, extent);
