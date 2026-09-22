@@ -195,9 +195,11 @@ class MiniMaxH3VSACoarseStage:
         self.blend_dense = StateTensor()
         self._block_counts = StateTensor()
         self._bound_signature = None
-        # The tile <-> packed-row gathers run outside the traced block stack, so they rebind freely.
-        self.pack_idx = None
-        self.unpack_idx = None
+        # The tile <-> packed-row gathers run outside the traced block stack, but trace replay
+        # overwrites device memory allocated after capture, so these buffers must be as
+        # address-stable as the in-trace content: StateTensors, refreshed in place.
+        self.pack_idx = StateTensor()
+        self.unpack_idx = StateTensor()
 
     def _upload_row_structure(self, num_heads: int) -> None:
         """Head-expanded, rung-constant selection tensors: exempt prefix, sentinel tail, blend keep."""
@@ -308,19 +310,31 @@ class MiniMaxH3VSACoarseStage:
                 ),
                 traced=traced,
             )
-        self.pack_idx = from_torch(
-            geometry.row_source.to(torch.int32).reshape(1, -1),
-            device=md,
-            dtype=ttnn.uint32,
-            layout=ttnn.Layout.ROW_MAJOR,
-            mesh_axes=None,
+        self.pack_idx.update(
+            from_torch(
+                geometry.row_source.to(torch.int32).reshape(1, -1),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=None,
+            ),
+            traced=traced,
         )
-        self.unpack_idx = from_torch(
-            geometry.untile_index.to(torch.int32).reshape(1, -1),
-            device=md,
-            dtype=ttnn.uint32,
-            layout=ttnn.Layout.ROW_MAJOR,
-            mesh_axes=None,
+        # untile_index is [seq_len] (this request's packed length); pad to the rung-constant row
+        # count so the in-place refresh keeps one buffer shape. The pad rows land past seq_len in
+        # the unpacked tensor, beyond every output-index selection, so their content is a don't-care.
+        rung_rows = geometry.n_tiles * VSA_TILE_TOKENS
+        unpack = torch.zeros(rung_rows, dtype=torch.int32)
+        unpack[: geometry.untile_index.numel()] = geometry.untile_index.to(torch.int32)
+        self.unpack_idx.update(
+            from_torch(
+                unpack.reshape(1, -1),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=None,
+            ),
+            traced=traced,
         )
         self._bound_signature = signature
 

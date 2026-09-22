@@ -366,9 +366,11 @@ class MiniMaxH3Transformer3DModel(Module):
 
         `forward` gathers the assembled sequence into VSA tile order before the block stack and back
         to packed order after the output heads, reading the stage's `pack_idx`/`unpack_idx` live --
-        they rebind per request (`bind_request`) and run outside the traced stack. Pad slots replicate
-        a valid row of their tile (finite don't-cares; the fine stage masks pad key columns by valid
-        count and pad-row outputs are dropped by the unpack gather).
+        StateTensors refreshed per request (`bind_request`): the gathers run outside the traced
+        stack, but trace replay overwrites post-capture allocations, so the buffers must hold their
+        addresses. Pad slots replicate a valid row of their tile (finite don't-cares; the fine stage
+        masks pad key columns by valid count and pad-row outputs are dropped by the output-index
+        selection after the unpack gather).
         """
         assert self.vsa_active, "set_vsa_stage requires the model to be built with an unbypassed vsa_config"
         for block in self.transformer_blocks:
@@ -534,7 +536,7 @@ class MiniMaxH3Transformer3DModel(Module):
         if self.vsa_active:
             if getattr(self, "_vsa_stage", None) is None:
                 raise RuntimeError("vsa_config is set but no VSA stage is bound; call set_vsa_stage first")
-            hidden = self._vsa_gather_rows(hidden, self._vsa_stage.pack_idx)
+            hidden = self._vsa_gather_rows(hidden, self._vsa_stage.pack_idx.value)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
         # 3. One timestep embedding per slot, shared by every AdaLN projection. Stabilized because it
@@ -586,8 +588,8 @@ class MiniMaxH3Transformer3DModel(Module):
         # VSA: undo the tile-order reorder so `video_out_indices` / `audio_out_indices` (packed-order
         # rows) select correctly. Pad-slot rows fall out of the gather here.
         if self.vsa_active:
-            video_all = self._vsa_gather_rows(video_all, self._vsa_stage.unpack_idx)
-            audio_all = self._vsa_gather_rows(audio_all, self._vsa_stage.unpack_idx)
+            video_all = self._vsa_gather_rows(video_all, self._vsa_stage.unpack_idx.value)
+            audio_all = self._vsa_gather_rows(audio_all, self._vsa_stage.unpack_idx.value)
 
         # 6. Select each modality's target rows out of the reassembled global sequence -- gathers
         # with per-request index content and capacity-fixed shapes, mirroring the assembly. The

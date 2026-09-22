@@ -18,6 +18,7 @@ from loguru import logger
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.test import is_global_rank_zero
@@ -54,7 +55,7 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
         weights_dir=weights_dir("transformer", "text_encoder", "vae", "audio_vae"),
         lora_path=lora_path,
         lora_strength=float(os.environ.get("FASTH3_LORA_STRENGTH", 1.0)),
-        vsa_config=None,  # MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY),
+        vsa_config=MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY),
         vae_output_type="yuv420",
         vae_stitch_exchange=stitch,
         vae_profile=profile_phases,
