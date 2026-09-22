@@ -192,12 +192,18 @@ const char* kind_name(CoreType t) { return t == CoreType::WORKER ? "Tensix" : t 
 // else is on the NoC while it reads. Each initiator reads every node in its row and column. Every kernel is released
 // at the end, and on any failure, so no tile is left waiting on its go word.
 std::vector<Reading> read_network(
-    IDevice* device, ContextId ctx, const std::vector<Node>& nodes, const std::vector<uint32_t>& initiators) {
+    IDevice* device,
+    ContextId ctx,
+    const std::vector<Node>& nodes,
+    const std::vector<uint32_t>& initiators,
+    std::vector<Reading>* both_nocs = nullptr) {
     auto& cluster = MetalContext::instance(ctx).get_cluster();
     const uint32_t chip = static_cast<uint32_t>(device->id());
     const uint32_t nonce = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count()) | 0x10u;
     std::vector<Reading> readings;
     std::vector<std::vector<uint32_t>> args(nodes.size());
+    std::vector<std::vector<Reading*>> dest(nodes.size());
+    std::vector<std::pair<uint32_t, size_t>> dest_idx;
     for (uint32_t s : initiators) {
         args[s] = {nodes[s].scratch, kReps, nonce, 0};
         for (uint32_t t = 0; t < nodes.size(); t++) {
@@ -207,7 +213,36 @@ std::vector<Reading> read_network(
             const bool up = upward(nodes[s].phys, nodes[t].phys);
             args[s].push_back((up ? 0u : 1u << 31) | packed_xy(nodes[t].virt));
             readings.push_back(Reading{s, t, up ? 0u : 1u});
+            dest_idx.emplace_back(s, readings.size() - 1);
         }
+    }
+    // One idle eth tile reads every eth tile in its row on the other NoC too: around the ring the two NoCs' hops
+    // cancel, and one initiator's own latency is common to every target.
+    if (both_nocs != nullptr) {
+        both_nocs->clear();
+        const auto q = std::find_if(initiators.begin(), initiators.end(), [&](uint32_t i) {
+            return nodes[i].type == CoreType::ETH && !nodes[i].active_eth;
+        });
+        if (q != initiators.end()) {
+            for (uint32_t t = 0; t < nodes.size(); t++) {
+                if (nodes[t].type != CoreType::ETH || t == *q || !aligned(nodes[*q].phys, nodes[t].phys)) {
+                    continue;
+                }
+                const bool up = upward(nodes[*q].phys, nodes[t].phys);
+                args[*q].push_back((up ? 1u << 31 : 0u) | packed_xy(nodes[t].virt));
+                both_nocs->push_back(Reading{*q, t, up ? 1u : 0u});
+            }
+        }
+    }
+    for (const auto& [i, k] : dest_idx) {
+        dest[i].push_back(&readings[k]);
+    }
+    if (both_nocs != nullptr) {
+        for (Reading& r : *both_nocs) {
+            dest[r.s].push_back(&r);
+        }
+    }
+    for (uint32_t s : initiators) {
         args[s][3] = static_cast<uint32_t>(args[s].size() - 4);
         TT_FATAL(
             args[s][3] <= kernel_profiler::kTileNetMaxPartners,
@@ -310,7 +345,6 @@ std::vector<Reading> read_network(
         }
     };
     try {
-        size_t k = 0;
         for (uint32_t s : initiators) {
             const uint32_t n = args[s][3];
             const tt_cxy_pair core(chip, nodes[s].virt);
@@ -336,12 +370,13 @@ std::vector<Reading> read_network(
             const uint32_t go = kernel_profiler::kTileNetGoMeasure;
             cluster.write_core(&go, sizeof(go), core, table_of(s));
             await(~nonce, "finish its tile clock reads");
-            for (uint32_t m = 0; m < n; m++, k++) {
+            for (uint32_t m = 0; m < n; m++) {
                 const uint32_t w = kernel_profiler::TILE_NET_OUT_0 + kernel_profiler::TILE_NET_OUT_WORDS * m;
-                readings[k].median2 = static_cast<int32_t>(t[w]);
-                readings[k].spread2 = static_cast<int32_t>(t[w + 1]);
-                readings[k].rtt = static_cast<int32_t>(t[w + 2]);
-                readings[k].coarse = static_cast<int64_t>((uint64_t{t[w + 4]} << 32) | t[w + 3]);
+                Reading& r = *dest[s][m];
+                r.median2 = static_cast<int32_t>(t[w]);
+                r.spread2 = static_cast<int32_t>(t[w + 1]);
+                r.rtt = static_cast<int32_t>(t[w + 2]);
+                r.coarse = static_cast<int64_t>((uint64_t{t[w + 4]} << 32) | t[w + 3]);
             }
         }
     } catch (...) {
@@ -360,7 +395,8 @@ void measure_chip(IDevice* device, ContextId ctx) {
     for (uint32_t i = 0; i < nodes.size(); i++) {
         all[i] = i;
     }
-    const std::vector<Reading> readings = read_network(device, ctx, nodes, all);
+    std::vector<Reading> both;
+    const std::vector<Reading> readings = read_network(device, ctx, nodes, all, &both);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 
     // A pair: the lower node's NoC 0 reading of the higher and the higher's NoC 1 reading of the lower. Half their
@@ -374,8 +410,11 @@ void measure_chip(IDevice* device, ContextId ctx) {
         double offset, flight, rtt_diff;
     };
     std::vector<Pair> pairs;
+    // An active eth tile's own reads leave its NIU ~6 cycles later than an idle eth tile's (their mirrored round
+    // trips differ by 6.0 ticks), which biases a mirrored pair with one by a tick and a half; those tiles are placed
+    // from the both-NoC reads instead.
     for (const Reading& r : readings) {
-        if (r.noc != 0) {
+        if (r.noc != 0 || nodes[r.s].active_eth || nodes[r.t].active_eth) {
             continue;
         }
         const auto m = by_pair.find({r.t, r.s});
@@ -409,7 +448,40 @@ void measure_chip(IDevice* device, ContextId ctx) {
             }
         }
     }
-    const std::vector<double> x = solve_normal(N, rhs);
+    std::vector<double> x = solve_normal(N, rhs);
+    {
+        // est(t): the both-NoC initiator's two readings of eth tile t averaged, t's offset from it plus a constant
+        // common to every target. Active eth tiles take the idle eth targets' mean placement through it.
+        std::map<uint32_t, std::pair<const Reading*, const Reading*>> of_q;
+        for (const Reading& r : both) {
+            of_q[r.t].second = &r;
+        }
+        for (const Reading& r : readings) {
+            if (!both.empty() && r.s == both.front().s && of_q.contains(r.t)) {
+                of_q[r.t].first = &r;
+            }
+        }
+        const auto est = [&](uint32_t t) {
+            const auto& [a, b] = of_q.at(t);
+            return static_cast<double>(a->whole2() + b->whole2()) / 4.0;
+        };
+        double shift = 0.0;
+        size_t refs = 0;
+        for (const auto& [t, ab] : of_q) {
+            if (ab.first != nullptr && ab.second != nullptr && !nodes[t].active_eth && t != 0) {
+                shift += x[t - 1] - est(t);
+                refs++;
+            }
+        }
+        if (refs != 0) {
+            shift /= static_cast<double>(refs);
+            for (const auto& [t, ab] : of_q) {
+                if (ab.first != nullptr && ab.second != nullptr && nodes[t].active_eth) {
+                    x[t - 1] = shift + est(t);
+                }
+            }
+        }
+    }
     const auto x_of = [&](uint32_t i) { return i == 0 ? 0.0 : x[i - 1]; };
 
     double closure_ss = 0.0, closure_worst = 0.0, rtt_ss = 0.0, rtt_worst = 0.0;

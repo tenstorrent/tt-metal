@@ -119,7 +119,7 @@ enum TileNetTable : std::uint32_t {
 static constexpr std::uint32_t kTileNetGoMeasure = 1;
 static constexpr std::uint32_t kTileNetGoExit = 2;
 static constexpr std::uint32_t kTileNetTable = 64;
-static constexpr std::uint32_t kTileNetMaxPartners = 32;
+static constexpr std::uint32_t kTileNetMaxPartners = 40;
 static constexpr std::uint32_t kTileNetHist =
     kTileNetTable + 4 * (TILE_NET_OUT_0 + TILE_NET_OUT_WORDS * kTileNetMaxPartners);
 static constexpr std::uint32_t kTileNetBins = 128;
