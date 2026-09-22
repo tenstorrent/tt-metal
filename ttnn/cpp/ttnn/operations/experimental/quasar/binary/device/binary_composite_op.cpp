@@ -19,7 +19,6 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
-#include "ttnn/device.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
 
@@ -584,7 +583,9 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
     a_slim = ttnn::operations::experimental::quasar::to_layout(a_slim, ttnn::TILE_LAYOUT);
     b_slim = ttnn::operations::experimental::quasar::to_layout(b_slim, ttnn::TILE_LAYOUT);
 
-    auto* device = ttnn::GetDefaultDevice();
+    // Take the device from the operand that is already on one, not from the process-wide default
+    // device: that default is a raw pointer nothing clears when the device it names is closed.
+    auto* device = a_slim.device() != nullptr ? a_slim.device() : b_slim.device();
     if (device != nullptr) {
         if (a_slim.storage_type() != ttnn::StorageType::DEVICE) {
             a_slim = a_slim.to_device(device);
