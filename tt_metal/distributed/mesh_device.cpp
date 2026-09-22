@@ -374,9 +374,7 @@ MeshDeviceImpl::MeshDeviceImpl(
     const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =
         mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
-    // Register with the Inspector only once all the throwing work above has succeeded. Inspector stores a
-    // raw MeshDeviceImpl pointer that Data::rpc_get_mesh_devices later dereferences, so registering first
-    // would leave a dangling entry behind if the constructor threw.
+    // Register last: Inspector keeps a raw pointer, so a throw above must not leave an entry behind.
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
 }
 
@@ -497,9 +495,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     const auto root_devices = scoped_devices->root_devices();
 
-    // Build the view and the impl into locals first, so that a failure to construct either one never
-    // leaves behind a MeshDevice with a null `pimpl_`. `scoped_devices` is released by unwinding,
-    // which closes the devices it opened.
+    // Build into locals first so a failed construction never yields a MeshDevice with a null pimpl_.
     auto mesh_device_view = std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids);
     auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
         std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);

@@ -75,13 +75,9 @@ class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevic
     friend class MeshDeviceImpl;
 
 private:
-    // Adopts a fully-constructed impl. This is the only way to create a MeshDevice, which guarantees
-    // `pimpl_` is non-null for the entire lifetime of the object: a MeshDeviceView / MeshDeviceImpl
-    // that fails to construct never produces a half-built MeshDevice whose destructor would then
-    // dereference a null `pimpl_`.
+    // Adopts a fully-constructed impl, so pimpl_ is never null.
     explicit MeshDevice(std::unique_ptr<MeshDeviceImpl> impl);
 
-    // Never null; see the constructor above.
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
 public:
