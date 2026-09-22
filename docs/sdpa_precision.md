@@ -47,7 +47,9 @@ unmasked attention, and:
 - Q divisible by 256, K divisible by 512; fixed Q256/K512 blocks;
 - standard 32x32 tiles, no logical padding, interleaved DRAM inputs/output;
 - BF16 Q, BF16 KV for A-D, matching BF16/BFP8/BFP4 KV for E;
-- a rectangular origin-based grid with at least one core per head.
+- a rectangular origin-based grid with at least one core per head;
+- `scale=None` or the default `1 / sqrt(128)` represented as FP32. A BF16-rounded
+  scale is a different value and is rejected; the kernel always uses the default.
 
 The default grid is the device's compute grid. The host assigns a per-head KV
 forwarding chain, capped by `max_cores_per_head_batch` (default 16) and available

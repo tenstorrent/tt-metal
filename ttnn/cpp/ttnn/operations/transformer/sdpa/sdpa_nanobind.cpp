@@ -15,6 +15,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
+#include "sdpa_recipe.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -314,6 +315,13 @@ void bind_sdpa(nb::module_& mod) {
         .value("BALANCED", ttnn::transformer::SDPAPrecision::BALANCED)
         .value("ACCURATE", ttnn::transformer::SDPAPrecision::ACCURATE)
         .value("LOW_PRECISION", ttnn::transformer::SDPAPrecision::LOW_PRECISION);
+    mod.def(
+        "_sdpa_recipe_compute_program",
+        [](ttnn::transformer::SDPAPrecision precision, DataType kv_type, const CoreRangeSet& grid, uint32_t k_chunks) {
+            namespace recipe = sdpa::detail;
+            return recipe::recipe_compute_program(
+                recipe::resolve_precision_policy(recipe::select_recipe(precision, kv_type)), grid, k_chunks);
+        });
     ttnn::bind_function<"prepare_sdpa_input", "ttnn.transformer.">(
         mod,
         R"doc(Prepare an original BF16 tensor for LOW_PRECISION attention, without mutating it.

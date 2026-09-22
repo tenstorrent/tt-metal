@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/sdpa_numerics.hpp"
 
-#include <stdexcept>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::transformer::sdpa::detail {
 
@@ -19,16 +19,16 @@ ResolvedNumerics resolve_numerics(
             std::nullopt};
     }
     if (arch != tt::ARCH::BLACKHOLE) {
-        throw std::invalid_argument("Explicit SDPA precision recipes are qualified only on Blackhole");
+        TT_THROW("Explicit SDPA precision recipes are qualified only on Blackhole");
     }
     // ComputeKernelConfig has no per-field presence information. Reject the
     // combination rather than silently discarding an explicit caller request,
     // including one hidden behind an empty constructor's LoFi default.
     if (compute.has_value()) {
-        throw std::invalid_argument("Specify either an SDPA precision recipe or a compute kernel config, not both");
+        TT_THROW("Specify either an SDPA precision recipe or a compute kernel config, not both");
     }
     if (exp_approx_mode.has_value() && !exp_approx_mode.value()) {
-        throw std::invalid_argument("exp_approx_mode=false conflicts with the selected SDPA precision recipe");
+        TT_THROW("exp_approx_mode=false conflicts with the selected SDPA precision recipe");
     }
     const auto policy = resolve_precision_policy(recipe.value());
     DeviceComputeKernelConfig effective{

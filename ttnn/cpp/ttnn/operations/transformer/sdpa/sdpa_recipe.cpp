@@ -15,6 +15,104 @@
 namespace ttnn::operations::transformer::sdpa::detail {
 using namespace tt::tt_metal;
 
+RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataType kv_type) {
+    using ttnn::transformer::SDPAPrecision;
+    Recipe recipe;
+    switch (precision) {
+        case SDPAPrecision::FAST: recipe = Recipe::A; break;
+        case SDPAPrecision::COMPENSATED: recipe = Recipe::B; break;
+        case SDPAPrecision::BALANCED: recipe = Recipe::C; break;
+        case SDPAPrecision::ACCURATE: recipe = Recipe::D; break;
+        case SDPAPrecision::LOW_PRECISION: recipe = Recipe::E; break;
+        default: TT_THROW("Unknown SDPA precision recipe");
+    }
+    const auto storage = kv_type == DataType::BFLOAT4_B   ? KVStorage::BFP4
+                         : kv_type == DataType::BFLOAT8_B ? KVStorage::BFP8
+                                                          : KVStorage::BF16;
+    return {recipe, storage};
+}
+
+ProgramDescriptor recipe_compute_program(const PrecisionPolicy& policy, const CoreRangeSet& grid, uint32_t k_chunks) {
+    const bool fp32 = policy.fp32_destination;
+    const bool compensated = policy.recurrent_state == RecurrentState::CompensatedBF16;
+    const uint32_t stride = compensated ? 2 : 1;
+    const auto state_format = fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t state_bytes = fp32 ? 4096 : 2048;
+    const auto kv_type = policy.selection.kv_storage == KVStorage::BF16   ? DataType::BFLOAT16
+                         : policy.selection.kv_storage == KVStorage::BFP8 ? DataType::BFLOAT8_B
+                                                                          : DataType::BFLOAT4_B;
+    const auto kv_format = datatype_to_dataformat_converter(kv_type);
+    const uint32_t kv_bytes = kv_type == DataType::BFLOAT16 ? 2048 : kv_type == DataType::BFLOAT8_B ? 1088 : 576;
+    ProgramDescriptor program;
+    auto add_cb = [&](uint8_t index, uint32_t count, uint32_t page, tt::DataFormat format) {
+        CBDescriptor cb{
+            .total_size = count * page,
+            .core_ranges = grid,
+            .format_descriptors = {{.buffer_index = index, .data_format = format, .page_size = page}}};
+        if (index == 6 && fp32) {
+            cb.format_descriptors.push_back({.buffer_index = 7, .data_format = format, .page_size = page});
+        }
+        program.cbs.push_back(std::move(cb));
+    };
+    // Preserve the selected families' actual buffer depths: Q double buffered;
+    // K/V one slot for FP32, two slots for BF16. No hidden geometry retuning.
+    add_cb(0, 64, 2048, tt::DataFormat::Float16_b);
+    add_cb(1, fp32 ? 64 : 128, kv_bytes, kv_format);
+    add_cb(2, fp32 ? 64 : 128, kv_bytes, kv_format);
+    add_cb(3, 1, 2048, tt::DataFormat::Float16_b);
+    add_cb(4, 1, 2048, tt::DataFormat::Float16_b);
+    add_cb(5, 1, state_bytes, state_format);
+    add_cb(6, 128, state_bytes, state_format);
+    for (uint8_t index : {8, 9}) {
+        add_cb(index, 32 * stride, state_bytes, state_format);
+    }
+    for (uint8_t index : {10, 11}) {
+        add_cb(index, 8, 2048, tt::DataFormat::Float16_b);
+    }
+    for (uint8_t index : {12, 13}) {
+        add_cb(index, 8 * stride, state_bytes, state_format);
+    }
+    add_cb(14, 8, state_bytes, state_format);
+    add_cb(16, fp32 ? 8 : 16, 2048, tt::DataFormat::Float16_b);
+    ComputeConfigDescriptor compute_config{
+        .math_fidelity = policy.pv_fidelity,
+        .fp32_dest_acc_en = fp32,
+        .dst_full_sync_en = false,
+        .math_approx_mode = true};
+    if (fp32) {
+        compute_config.unpack_to_dest_mode.resize(64, UnpackToDestMode::Default);
+        for (uint32_t cb : {5, 7, 8, 9, 12, 13, 14}) {
+            compute_config.unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+    KernelDescriptor compute{
+        .kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_recipe.cpp",
+        .core_ranges = grid,
+        .compile_time_args = {k_chunks, std::bit_cast<uint32_t>(1.0f / std::sqrt(128.0f)), 8},
+        .defines =
+            {{"EXP_APPROX_MODE", "1"},
+             {"STATS_GRANULARITY", fp32 ? "4" : "8"},
+             {"SUB_EXP_GRANULARITY", fp32 ? "4" : "8"},
+             {"MUL_BCAST_GRANULARITY", fp32 ? "4" : "8"},
+             {"DHT_GRANULARITY", "4"},
+             {"REDUCE_GRANULARITY", fp32 ? "2" : "4"}},
+        .config = compute_config};
+    if (fp32) {
+        compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
+    }
+    if (policy.selection.recipe == Recipe::D) {
+        compute.defines.emplace_back("SDPA_RECIPE_ACCURATE", "1");
+    }
+    if (policy.selection.recipe == Recipe::E) {
+        compute.defines.emplace_back("SDPA_RECIPE_LOFI", "1");
+    }
+    if (policy.selection.recipe == Recipe::A) {
+        compute.defines.emplace_back("SDPA_RECIPE_BASELINE", "1");
+    }
+    program.kernels.push_back(std::move(compute));
+    return program;
+}
+
 Tensor run_recipe(
     const Tensor& q,
     const Tensor& k,
@@ -76,44 +174,7 @@ Tensor run_recipe(
     }
     const CoreRangeSet grid(ranges);
     auto output = create_device_tensor(q.tensor_spec(), q.device());
-    const bool fp32 = policy.fp32_destination;
-    const bool compensated = policy.recurrent_state == RecurrentState::CompensatedBF16;
-    const uint32_t stride = compensated ? 2 : 1;
-    const auto state_format = fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const uint32_t state_bytes = fp32 ? 4096 : 2048;
-    const auto kv_format = datatype_to_dataformat_converter(kv_type);
-    const uint32_t kv_bytes = kv_type == DataType::BFLOAT16 ? 2048 : kv_type == DataType::BFLOAT8_B ? 1088 : 576;
-    ProgramDescriptor program;
-    auto add_cb = [&](uint8_t index, uint32_t count, uint32_t page, tt::DataFormat format) {
-        CBDescriptor cb{
-            .total_size = count * page,
-            .core_ranges = grid,
-            .format_descriptors = {{.buffer_index = index, .data_format = format, .page_size = page}}};
-        if (index == 6 && fp32) {
-            cb.format_descriptors.push_back({.buffer_index = 7, .data_format = format, .page_size = page});
-        }
-        program.cbs.push_back(std::move(cb));
-    };
-    // Preserve the selected families' actual buffer depths: Q double buffered;
-    // K/V one slot for FP32, two slots for BF16. No hidden geometry retuning.
-    add_cb(0, 64, 2048, tt::DataFormat::Float16_b);
-    add_cb(1, fp32 ? 64 : 128, kv_bytes, kv_format);
-    add_cb(2, fp32 ? 64 : 128, kv_bytes, kv_format);
-    add_cb(3, 1, 2048, tt::DataFormat::Float16_b);
-    add_cb(4, 1, 2048, tt::DataFormat::Float16_b);
-    add_cb(5, 1, state_bytes, state_format);
-    add_cb(6, 128, state_bytes, state_format);
-    for (uint8_t index : {8, 9}) {
-        add_cb(index, 32 * stride, state_bytes, state_format);
-    }
-    for (uint8_t index : {10, 11}) {
-        add_cb(index, 8, 2048, tt::DataFormat::Float16_b);
-    }
-    for (uint8_t index : {12, 13}) {
-        add_cb(index, 8 * stride, state_bytes, state_format);
-    }
-    add_cb(14, 8, state_bytes, state_format);
-    add_cb(16, fp32 ? 8 : 16, 2048, tt::DataFormat::Float16_b);
+    auto program = recipe_compute_program(policy, grid, k_chunks);
     for (uint32_t i = 0; i < 3; ++i) {
         program.semaphores.push_back({.id = i, .core_ranges = grid, .initial_value = i == 2 ? 1u : 0u});
     }
@@ -132,41 +193,7 @@ Tensor run_recipe(
         .compile_time_args = {8},
         .config = WriterConfigDescriptor{}};
     TensorAccessorArgs(output.buffer()).append_to(writer.compile_time_args);
-    ComputeConfigDescriptor compute_config{
-        .math_fidelity = policy.pv_fidelity,
-        .fp32_dest_acc_en = fp32,
-        .dst_full_sync_en = false,
-        .math_approx_mode = true};
-    if (fp32) {
-        compute_config.unpack_to_dest_mode.resize(64, UnpackToDestMode::Default);
-        for (uint32_t cb : {5, 7, 8, 9, 12, 13, 14}) {
-            compute_config.unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
-        }
-    }
-    KernelDescriptor compute{
-        .kernel_source = prefix + "compute/sdpa_recipe.cpp",
-        .core_ranges = grid,
-        .compile_time_args = {k_chunks, std::bit_cast<uint32_t>(1.0f / std::sqrt(128.0f)), 8},
-        .defines =
-            {{"EXP_APPROX_MODE", "1"},
-             {"STATS_GRANULARITY", fp32 ? "4" : "8"},
-             {"SUB_EXP_GRANULARITY", fp32 ? "4" : "8"},
-             {"MUL_BCAST_GRANULARITY", fp32 ? "4" : "8"},
-             {"DHT_GRANULARITY", "4"},
-             {"REDUCE_GRANULARITY", fp32 ? "2" : "4"}},
-        .config = compute_config};
-    if (fp32) {
-        compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
-    }
-    if (policy.selection.recipe == Recipe::D) {
-        compute.defines.emplace_back("SDPA_RECIPE_ACCURATE", "1");
-    }
-    if (policy.selection.recipe == Recipe::E) {
-        compute.defines.emplace_back("SDPA_RECIPE_LOFI", "1");
-    }
-    if (policy.selection.recipe == Recipe::A) {
-        compute.defines.emplace_back("SDPA_RECIPE_BASELINE", "1");
-    }
+    auto compute = std::move(program.kernels.front());
     for (uint32_t i = 0; i < cores; ++i) {
         const auto core = coordinates[i];
         const uint32_t head = i / chain, rank = i % chain;

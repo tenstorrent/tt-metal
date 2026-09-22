@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
@@ -83,14 +83,14 @@ TEST(SDPAPrecisionPolicy, EStorageChangesOnlyStorageAndPreparation) {
 TEST(SDPAPrecisionPolicy, PackedInputsDoNotSilentlyChangeAnotherRecipe) {
     for (auto recipe : {Recipe::A, Recipe::B, Recipe::C, Recipe::D}) {
         for (auto storage : {KVStorage::BFP8, KVStorage::BFP4}) {
-            EXPECT_THROW(resolve_precision_policy({recipe, storage}), std::invalid_argument);
+            EXPECT_THROW(resolve_precision_policy({recipe, storage}), std::runtime_error);
         }
     }
 }
 
 TEST(SDPAPrecisionPolicy, RejectInvalidEnumValues) {
-    EXPECT_THROW(resolve_precision_policy({static_cast<Recipe>(255)}), std::invalid_argument);
-    EXPECT_THROW(resolve_precision_policy({Recipe::E, static_cast<KVStorage>(255)}), std::invalid_argument);
+    EXPECT_THROW(resolve_precision_policy({static_cast<Recipe>(255)}), std::runtime_error);
+    EXPECT_THROW(resolve_precision_policy({Recipe::E, static_cast<KVStorage>(255)}), std::runtime_error);
 }
 
 TEST(SDPAPrecisionPolicy, DistinctStorageAndRecipeIdentities) {

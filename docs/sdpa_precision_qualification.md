@@ -7,7 +7,8 @@ installed from this branch; device kernels were compiled from its sources.
 No research library, include override or Python operation monkeypatch was used.
 
 The numerical reference is frozen snapshot
-`e13f445161ad598de9700edf915e5ed7faa6dc34` (`sdpa-recipes-20260921-v1`).
+`e13f445161ad598de9700edf915e5ed7faa6dc34`
+([published tag `sdpa-recipes-20260921-v1`](https://github.com/tenstorrent/tt-metal/tree/sdpa-recipes-20260921-v1)).
 The production test fixture pins the source evidence hashes, original and
 prepared input digests, output digests and per-case metrics. Experimental sources
 are not imported. The [frontier plot](images/sdpa_precision_frontier.png) is copied
@@ -152,8 +153,10 @@ comments; the final revision was also compiled and run under Watcher.
 
 - Both release runs: **276 passed, 2 existing skips**, including 14 real-activation
   replays. All **147 frozen output hashes matched exactly** in both runs; all
-  recorded numerical metrics and hashes were unchanged. Exact output equality is
-  now asserted by the accuracy test, in addition to its per-case L2 limit.
+  recorded numerical metrics and hashes were unchanged. Exact equality was
+  required for this cleanup comparison. Ongoing accuracy CI gates on the per-case
+  L2 limit and records historical digest equality without requiring it; cache and
+  trace checks still require exact equality to fresh outputs from the same build.
 - The normalized fixture expands to exactly the original metadata, hashes and
   metrics. No test cases or input distributions were removed.
 - Final Watcher/assert run: **106 passed**. Host-policy tests: **13 passed**.

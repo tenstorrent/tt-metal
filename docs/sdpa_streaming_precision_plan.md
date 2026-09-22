@@ -3,7 +3,7 @@
 ## Frozen numerical contract
 
 The recipes and evidence are frozen at
-[sdpa-recipes-20260921-v1](https://github.com/tenstorrent/tt-metal/tree/e13f445161ad598de9700edf915e5ed7faa6dc34).
+[sdpa-recipes-20260921-v1](https://github.com/tenstorrent/tt-metal/tree/sdpa-recipes-20260921-v1).
 The [API guide](sdpa_precision.md) defines A/B/C/D and the three E storage choices;
 the [qualification report](sdpa_precision_qualification.md) records accuracy,
 performance, limitations, and reproduction commands.
@@ -46,7 +46,7 @@ of this deletion.
 
 ## Historical investigation
 
-The [original staged plan](https://github.com/tenstorrent/tt-metal/blob/1a7825207e92e07ab28beb0a459951634970f323/docs/sdpa_streaming_precision_plan.md)
-and [bring-up log](https://github.com/tenstorrent/tt-metal/blob/1a7825207e92e07ab28beb0a459951634970f323/docs/sdpa_streaming_precision_validation.md)
+The [original staged plan](https://github.com/tenstorrent/tt-metal/blob/sdpa-pr1-evidence-20260921-v1/docs/sdpa_streaming_precision_plan.md)
+and [bring-up log](https://github.com/tenstorrent/tt-metal/blob/sdpa-pr1-evidence-20260921-v1/docs/sdpa_streaming_precision_validation.md)
 retain the infrastructure recovery and intermediate validation history.
 They are historical evidence, not additional production contracts.

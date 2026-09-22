@@ -259,9 +259,6 @@ ALWI void pack_contiguous_rows(
 /**
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
- *
- * noinline on Wormhole: keeps sdpa_inner_loop_step's frame off the TR0 stack to stay within budget
- * for the ring cases (it would otherwise overflow). WH-only to avoid the call overhead elsewhere.
  */
 template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
 void blocked_matmul_and_pack(
@@ -276,11 +273,7 @@ void blocked_matmul_and_pack(
     uint32_t subblock_h,
     uint32_t inner_dim,
     uint32_t matmul_stride,
-#ifdef SDPA_RECIPE_FP32
     bool skip_pack_configure = false) {
-#else
-    bool skip_pack_configure = false) {
-#endif
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
@@ -1090,7 +1083,7 @@ static void sdpa_inner_loop_step(
     uint32_t pushed_rows = 0;
     // Q lives at [q_base_tiles, q_base_tiles + Sq_chunk_t*DHt) from the CB front. wait_front counts
     // from the front, so the wait target includes the chunks of earlier passes that stay resident.
-    uint32_t q_wait_tiles = (0) + q_subblock_num_tiles;
+    uint32_t q_wait_tiles = q_subblock_num_tiles;
     uint32_t q_index_offset = 0;
     uint32_t kt_index_offset = 0;
 
@@ -1519,8 +1512,7 @@ static void sdpa_inner_loop_step(
         }
 
 #endif
-        // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
-        [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
+        auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
 #ifndef SDPA_RECIPE_FP32
             if (is_first_iter) {
@@ -1773,7 +1765,6 @@ static void sdpa_inner_loop_step(
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
-    uint32_t Skt,
     uint32_t DHt,
     uint32_t vDHt,
     uint32_t scale_fp32,
@@ -1781,7 +1772,6 @@ template <
     uint32_t qkt_subblock_w,
     uint32_t qktv_subblock_h,
     uint32_t qktv_subblock_w,
-    bool use_padded_mask,
     uint32_t cb_q_in,
     uint32_t cb_kt_in,
     uint32_t cb_v_in,
@@ -1790,8 +1780,7 @@ template <
     uint32_t cb_exp_max_diff,
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
-    uint32_t cb_normalized_out,
-    uint32_t cb_mask_in>
+    uint32_t cb_normalized_out>
 void sdpa_standard_v2(
     uint32_t q_chunks_per_core,
     uint32_t k_num_chunks,
@@ -1801,7 +1790,7 @@ void sdpa_standard_v2(
     uint32_t cb_max_B,
     uint32_t cb_sum_A,
     uint32_t cb_sum_B) {
-    static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16 && DHt == 4 && vDHt == 4 && !use_padded_mask);
+    static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16 && DHt == 4 && vDHt == 4);
     init_sdpa_streaming_semaphores();
     for (uint32_t q = 0; q < q_chunks_per_core; ++q) {
         AccumulatorHalf prev = {cb_sum_A, cb_max_A, cb_out_im_A};

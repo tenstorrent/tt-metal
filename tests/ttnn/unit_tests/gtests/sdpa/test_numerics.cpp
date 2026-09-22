@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
@@ -105,15 +105,15 @@ TEST(SDPANumerics, EveryRecipeResolvesToItsFrozenComputeFields) {
 TEST(SDPANumerics, RejectAmbiguousOrConflictingExplicitControls) {
     EXPECT_THROW(
         resolve_numerics(tt::ARCH::BLACKHOLE, RecipeSelection{Recipe::A}, ttnn::ComputeKernelConfig{}, std::nullopt),
-        std::invalid_argument);
+        std::runtime_error);
     EXPECT_THROW(
-        resolve_numerics(tt::ARCH::BLACKHOLE, RecipeSelection{Recipe::D}, std::nullopt, false), std::invalid_argument);
+        resolve_numerics(tt::ARCH::BLACKHOLE, RecipeSelection{Recipe::D}, std::nullopt, false), std::runtime_error);
 }
 
 TEST(SDPANumerics, RecipeDoesNotClaimOtherArchitectureQualification) {
     for (auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::QUASAR}) {
         EXPECT_THROW(
-            resolve_numerics(arch, RecipeSelection{Recipe::B}, std::nullopt, std::nullopt), std::invalid_argument);
+            resolve_numerics(arch, RecipeSelection{Recipe::B}, std::nullopt, std::nullopt), std::runtime_error);
     }
 }
 }  // namespace

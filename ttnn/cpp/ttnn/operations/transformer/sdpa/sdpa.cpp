@@ -60,25 +60,14 @@ ttnn::Tensor scaled_dot_product_attention(
             "Named SDPA recipes currently support dense noncausal, unmasked attention only");
         TT_FATAL(!memory_config || *memory_config == DRAM_MEMORY_CONFIG, "SDPA recipes require DRAM output");
         TT_FATAL(!scale || *scale == 1.0f / std::sqrt(128.0f), "SDPA recipes currently require the default D128 scale");
-        numeric::Recipe recipe;
-        switch (*precision) {
-            case SDPAPrecision::FAST: recipe = numeric::Recipe::A; break;
-            case SDPAPrecision::COMPENSATED: recipe = numeric::Recipe::B; break;
-            case SDPAPrecision::BALANCED: recipe = numeric::Recipe::C; break;
-            case SDPAPrecision::ACCURATE: recipe = numeric::Recipe::D; break;
-            case SDPAPrecision::LOW_PRECISION: recipe = numeric::Recipe::E; break;
-            default: TT_THROW("Unknown SDPA precision recipe");
-        }
+        const auto selection = numeric::select_recipe(*precision, input_tensor_k.dtype());
         TT_FATAL(
-            inputs_prepared == (recipe == numeric::Recipe::E),
+            inputs_prepared == (selection.recipe == numeric::Recipe::E),
             "LOW_PRECISION requires inputs_prepared=True and explicit SDPA preparation; other recipes use ordinary "
             "inputs");
-        const auto storage = input_tensor_k.dtype() == DataType::BFLOAT4_B   ? numeric::KVStorage::BFP4
-                             : input_tensor_k.dtype() == DataType::BFLOAT8_B ? numeric::KVStorage::BFP8
-                                                                             : numeric::KVStorage::BF16;
         const auto resolved = numeric::resolve_numerics(
             input_tensor_q.device()->arch(),
-            numeric::RecipeSelection{recipe, storage},
+            selection,
             compute_kernel_config,
             program_config ? program_config->exp_approx_mode : std::nullopt);
         return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, *resolved.policy, program_config);

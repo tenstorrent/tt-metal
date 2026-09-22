@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <cstdint>
-#include <stdexcept>
+#include <tt_stl/assert.hpp>
 
 #include <tt-metalium/base_types.hpp>
 
@@ -46,10 +46,10 @@ constexpr PrecisionPolicy resolve_precision_policy(RecipeSelection selection) {
         case KVStorage::BF16:
         case KVStorage::BFP8:
         case KVStorage::BFP4: break;
-        default: throw std::invalid_argument("Unknown SDPA KV storage policy");
+        default: TT_THROW("Unknown SDPA KV storage policy");
     }
     if (selection.recipe != Recipe::E && selection.kv_storage != KVStorage::BF16) {
-        throw std::invalid_argument("Packed KV is qualified only for explicit SDPA recipe E");
+        TT_THROW("Packed KV is qualified only for explicit SDPA recipe E");
     }
     switch (selection.recipe) {
         case Recipe::A:
@@ -107,7 +107,7 @@ constexpr PrecisionPolicy resolve_precision_policy(RecipeSelection selection) {
                 preparation};
         }
     }
-    throw std::invalid_argument("Unknown SDPA precision recipe");
+    TT_THROW("Unknown SDPA precision recipe");
 }
 
 }  // namespace ttnn::operations::transformer::sdpa::detail

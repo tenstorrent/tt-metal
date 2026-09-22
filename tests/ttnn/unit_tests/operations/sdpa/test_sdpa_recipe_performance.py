@@ -8,10 +8,8 @@ The distinct-input case times the public operation separately. Trace wall time
 includes dispatch/synchronization; do not label it a device-profiler duration.
 """
 
-import math
 import os
 import statistics
-import struct
 import time
 
 import pytest
@@ -19,7 +17,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole
-from .sdpa_recipe_test_utils import VARIANTS, digest, make_inputs, prepare, run
+from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, prepare, run
 
 pytestmark = [
     pytest.mark.skipif(os.getenv("TEST_SDPA_RECIPE_PERF") != "1", reason="Opt-in performance benchmark"),
@@ -28,38 +26,15 @@ pytestmark = [
 
 
 def resident(device, inputs, variant, jobs=16, chunks=512):
-    fp32 = variant in ("C", "D")
-    compensated = variant == "B" or variant.startswith("E_")
-    bf, f32 = ttnn.bfloat16, ttnn.float32
-    fmt, page = (f32, 4096) if fp32 else (bf, 2048)
-    kv = inputs[1].dtype
-    kv_page = {bf: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}[kv]
-    stride = 2 if compensated else 1
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    specs = [
-        (0, 64, 2048, bf),
-        (1, 64 if fp32 else 128, kv_page, kv),
-        (2, 64 if fp32 else 128, kv_page, kv),
-        (3, 1, 2048, bf),
-        (4, 1, 2048, bf),
-        (5, 1, page, fmt),
-        (6, 128, page, fmt),
-        (8, 32 * stride, page, fmt),
-        (9, 32 * stride, page, fmt),
-        (10, 8, 2048, bf),
-        (11, 8, 2048, bf),
-        (12, 8 * stride, page, fmt),
-        (13, 8 * stride, page, fmt),
-        (14, 8, page, fmt),
-        (16, 8 if fp32 else 16, 2048, bf),
-    ]
-    cbs = []
-    for index, count, size, dtype in specs:
-        formats = [ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=size)]
-        if fp32 and index == 6:
-            formats.append(ttnn.CBFormatDescriptor(buffer_index=7, data_format=dtype, page_size=size))
-        cbs.append(ttnn.CBDescriptor(total_size=count * size, core_ranges=grid, format_descriptors=formats))
-    output = ttnn.allocate_tensor_on_device(inputs[0].shape, bf, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    descriptor = ttnn._ttnn.operations.transformer._sdpa_recipe_compute_program(
+        getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")), inputs[1].dtype, grid, chunks
+    )
+    compute = descriptor.kernels[0]
+    fp32 = compute.config.fp32_dest_acc_en
+    output = ttnn.allocate_tensor_on_device(
+        inputs[0].shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
     reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     reader_args[0][0] = [x.buffer_address() for x in inputs]
     writer_args[0][0] = [output.buffer_address()]
@@ -67,64 +42,25 @@ def resident(device, inputs, variant, jobs=16, chunks=512):
     reader_cta = [jobs, chunks, 1 if fp32 else 2]
     for x in inputs:
         reader_cta += ttnn.TensorAccessorArgs(x).get_compile_time_args()
-    defines = {
-        "EXP_APPROX_MODE": "1",
-        "STATS_GRANULARITY": "4" if fp32 else "8",
-        "SUB_EXP_GRANULARITY": "4" if fp32 else "8",
-        "MUL_BCAST_GRANULARITY": "4" if fp32 else "8",
-        "DHT_GRANULARITY": "4",
-        "REDUCE_GRANULARITY": "2" if fp32 else "4",
-    }
-    if fp32:
-        defines["SDPA_RECIPE_FP32"] = "1"
-    if variant == "D":
-        defines["SDPA_RECIPE_ACCURATE"] = "1"
-    if variant == "A":
-        defines["SDPA_RECIPE_BASELINE"] = "1"
-    if variant.startswith("E_"):
-        defines["SDPA_RECIPE_LOFI"] = "1"
-    fidelity = (
-        ttnn.MathFidelity.HiFi4
-        if variant == "D"
-        else ttnn.MathFidelity.LoFi if variant.startswith("E_") else ttnn.MathFidelity.HiFi2
-    )
-    config = ttnn.ComputeConfigDescriptor(
-        math_fidelity=fidelity, fp32_dest_acc_en=fp32, dst_full_sync_en=False, math_approx_mode=True
-    )
-    if fp32:
-        unpack = [ttnn.UnpackToDestMode.Default] * 64
-        for index in (5, 7, 8, 9, 12, 13, 14):
-            unpack[index] = ttnn.UnpackToDestMode.UnpackToDestFp32
-        config.unpack_to_dest_mode = unpack
+    compute.runtime_args = compute_args
     prefix = "tests/ttnn/unit_tests/operations/sdpa/kernels/"
-    descriptor = ttnn.ProgramDescriptor(
-        cbs=cbs,
-        semaphores=[],
-        kernels=[
-            ttnn.KernelDescriptor(
-                kernel_source=prefix + "reader_resident_recipe.cpp",
-                core_ranges=grid,
-                compile_time_args=reader_cta,
-                runtime_args=reader_args,
-                config=ttnn.ReaderConfigDescriptor(),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=prefix + "writer_resident_recipe.cpp",
-                core_ranges=grid,
-                compile_time_args=[jobs] + ttnn.TensorAccessorArgs(output).get_compile_time_args(),
-                runtime_args=writer_args,
-                config=ttnn.WriterConfigDescriptor(),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source="ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_recipe.cpp",
-                core_ranges=grid,
-                compile_time_args=[chunks, struct.unpack("I", struct.pack("f", 1 / math.sqrt(128)))[0], 8],
-                runtime_args=compute_args,
-                defines=list(defines.items()),
-                config=config,
-            ),
-        ],
-    )
+    descriptor.kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=prefix + "reader_resident_recipe.cpp",
+            core_ranges=grid,
+            compile_time_args=reader_cta,
+            runtime_args=reader_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=prefix + "writer_resident_recipe.cpp",
+            core_ranges=grid,
+            compile_time_args=[jobs] + ttnn.TensorAccessorArgs(output).get_compile_time_args(),
+            runtime_args=writer_args,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        compute,
+    ]
     return lambda: ttnn.generic_op([*inputs, output], descriptor)
 
 

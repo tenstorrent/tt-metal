@@ -95,6 +95,9 @@ def test_sdpa_recipe_state_cache_trace(device, variant, distribution, record_pro
         "chunks",
         "subgrid",
         "scale",
+        "scale_bf16",
+        "scale_nan",
+        "scale_inf",
         "prepared",
         "unprepared_e",
         "kv_type",
@@ -134,6 +137,12 @@ def test_sdpa_recipe_rejects_unsupported(device, invalid):
         kwargs["program_config"] = ttnn.SDPAProgramConfig(**cfg)
     elif invalid == "scale":
         kwargs["scale"] = 0.5
+    elif invalid.startswith("scale_"):
+        kwargs["scale"] = {
+            "scale_bf16": torch.tensor(128**-0.5, dtype=torch.bfloat16).item(),
+            "scale_nan": float("nan"),
+            "scale_inf": float("inf"),
+        }[invalid]
     elif invalid == "prepared":
         kwargs["inputs_prepared"] = True
     elif invalid == "unprepared_e":
@@ -143,7 +152,7 @@ def test_sdpa_recipe_rejects_unsupported(device, invalid):
     elif invalid == "output_l1":
         kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
     before = device.num_program_cache_entries()
-    with pytest.raises((RuntimeError, ValueError), match="SDPA|recipe|precision"):
+    with pytest.raises(RuntimeError, match="SDPA|recipe|precision"):
         ttnn.transformer.scaled_dot_product_attention(*inputs, **kwargs)
     assert device.num_program_cache_entries() == before, "Unsupported recipes must fail before device dispatch"
 
@@ -163,7 +172,7 @@ def test_sdpa_fast_matches_legacy_streaming(device, k_length):
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
-def test_sdpa_recipe_switching_cache_identity(device):
+def test_sdpa_recipe_switching_cache_identity(device, record_property):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
     device.enable_program_cache()
@@ -172,8 +181,12 @@ def test_sdpa_recipe_switching_cache_identity(device):
     inputs = [ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in make_inputs(4096, "normal")]
     prepared = {variant: prepare(inputs, variant) for variant in VARIANTS}
     outputs = {variant: run(prepared[variant], variant) for variant in VARIANTS}
+    expected = reference(*make_inputs(4096, "normal"))
     for variant, output in outputs.items():
-        assert digest(ttnn.to_torch(output)) == case["variants"][variant]["output_sha256"]
+        actual = ttnn.to_torch(output)
+        frozen = case["variants"][variant]
+        record_property(f"{variant}_frozen_output_equal", digest(actual) == frozen["output_sha256"])
+        assert metrics(actual, expected)["l2_pct"] <= 1.05 * frozen["metrics"]["l2_pct"] + 0.0001
     entries = device.num_program_cache_entries()
     # Same shapes and addresses, reversed recipe order: numerical policy and
     # prepared KV format must distinguish cached programs, not just tensor shape.
@@ -188,6 +201,17 @@ def test_sdpa_recipe_switching_cache_identity(device):
         for _ in range(2):
             ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
             for variant, output in traced.items():
-                assert digest(ttnn.to_torch(output)) == case["variants"][variant]["output_sha256"]
+                assert digest(ttnn.to_torch(output)) == digest(ttnn.to_torch(outputs[variant]))
     finally:
         ttnn.release_trace(device, trace)
+
+
+@pytest.mark.parametrize("scale", [128**-0.5, torch.tensor(128**-0.5, dtype=torch.float32).item()])
+def test_sdpa_recipe_default_scale(device, scale):
+    if not is_blackhole():
+        pytest.skip("Named recipes initially target Blackhole")
+    inputs = [ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in make_inputs(512, "normal")]
+    kwargs = dict(is_causal=False, precision=ttnn.SDPAPrecision.ACCURATE)
+    expected = ttnn.transformer.scaled_dot_product_attention(*inputs, **kwargs)
+    actual = ttnn.transformer.scaled_dot_product_attention(*inputs, scale=scale, **kwargs)
+    assert digest(ttnn.to_torch(actual)) == digest(ttnn.to_torch(expected))

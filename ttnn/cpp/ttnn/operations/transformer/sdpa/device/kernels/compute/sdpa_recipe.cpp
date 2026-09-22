@@ -42,7 +42,9 @@ void kernel_main() {
         sdpa_standard_v2<
             q_tiles,
             16,
+#ifdef SDPA_RECIPE_BASELINE
             16 * k_chunks,
+#endif
             4,
             4,
             scale,
@@ -57,7 +59,9 @@ void kernel_main() {
             2,
             4,
 #endif
+#ifdef SDPA_RECIPE_BASELINE
             false,
+#endif
             0,
             1,
             2,
@@ -66,8 +70,12 @@ void kernel_main() {
             14,
             4,
             5,
-            16,
-            15>(jobs, k_chunks, 8, 9, 10, 11, 12, 13);
+            16
+#ifdef SDPA_RECIPE_BASELINE
+            ,
+            15
+#endif
+            >(jobs, k_chunks, 8, 9, 10, 11, 12, 13);
     }
 }
 
