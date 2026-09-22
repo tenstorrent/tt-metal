@@ -105,6 +105,16 @@ def run(
     device,
     **kwargs,
 ) -> list:
+    import os
+
+    # Temporarily skip the model_traced suite on wormhole_b0 n300 (1x2 mesh) due to
+    # a recurring device-profiler-readback wedge that aborts the entire CI run.
+    # refs #52650
+    _arch = (os.environ.get("ARCH_NAME") or "").strip().lower()
+    _mesh = (os.environ.get("MESH_DEVICE_SHAPE") or "").strip().lower()
+    if _arch == "wormhole_b0" and _mesh in ("1x2", "2x1"):
+        return [(True, "Skipped on wormhole_b0 n300 (1x2 mesh): device wedge issue, refs #52650"), 0.0]
+
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
