@@ -100,3 +100,32 @@ Optional `reuse_scratch=True` aliases projection input/weight/partial storage,
 using one weight block to coexist with native prefill allocations. It passes
 real stage/layer tests; full-model performance is unqualified. GU16 passes the
 partial model tests but is slower; complete-layer composition requires GU8.
+
+For focused DRAM-addressed NoC payload accounting, keep traffic instrumentation
+separate from latency captures:
+
+```bash
+python -m tracy -r --collect-noc-traces -o /outside/repo/traffic-profile \
+    -m models.demos.llama31_8b_qb2.tests.profile_megakernel_traffic \
+    --mode mlp --output /outside/repo/traffic-run
+python -m models.demos.llama31_8b_qb2.tests.analyze_megakernel_traffic \
+    --logs /outside/repo/traffic-profile/logs \
+    --ops-csv /outside/repo/traffic-profile/reports/DATE/ops_perf_results_DATE.csv \
+    --extended-payload --output /outside/repo/traffic-counts.json
+```
+
+Repeat with `--mode baseline` at the same precision and geometry. The analyzer
+joins all four devices' captured operations to signposted replay windows and
+rejects missing files/durations, unequal operation counts, unresolved request
+state, saturated sizes and unbalanced kernel endpoints. Also inspect capture
+logs for dropped records. These are issued NoC payload bytes at32B resolution,
+not DRAM-controller bus counters or serving latency. Real traffic captures are
+still pending hardware access.
+
+This branch fixes a confirmed profiler encoding truncation: the old8-bit
+payload field capped every request above8,160B, including the16KB projection
+reads. Seven previously reserved bits now extend the cap to1,048,544B while
+preserving old captures' low-byte/posted-bit positions. Use matching rebuilt
+host and device profiler code; old analysis binaries do not understand the new
+high bits. Host wire-format boundary tests and SFPI profiling builds pass;
+this measurement fix still needs real device validation.

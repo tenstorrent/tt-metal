@@ -74,9 +74,14 @@ void kernel_main() {
                 if (mask & 1) { noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(semaphore)), 0); }
             }
         }
+#if LOOP_PATCH == 3 || LOOP_PATCH == 4
+        // Only KV update and attention readers need shared cache addresses.
+        // Projections already fetch their own weight row in the native body;
+        // norm, fabric and SFPU workers do not consume any table columns here.
         const auto table = TensorAccessor(loop_table_args, get_arg_val<uint32_t>(LOOP_RT_OFFSET + 4), 128);
         noc_async_read(table.get_noc_addr(first + layer), reinterpret_cast<uint32_t>(state + 448), 128);
         noc_async_read_barrier();
+#endif
 #endif
         // Both cross-RISC and cross-core boundaries are required: a core must
         // finish resetting local semaphores/CBs before any peer can produce.

@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 16:10 UTC. **Verified partial prototype; full decode megakernel incomplete.**
+Updated 2026-09-22 16:31 UTC. **Verified partial prototype; full decode megakernel incomplete.**
 
 Base origin/main: `b8915544692d8f9feb2c890afbc2f22791560cd2`.
 Branch: `codex/llama31-qb2-megakernel`. Last hardware-qualified checkpoint:
@@ -21,7 +21,7 @@ to have its owner release the hardware. Do not kill/reset underneath it.
 Our blocked mesh-opening process was terminated only after preserving evidence.
 `artifacts/OWNERSHIP_BLOCKED` guards the serialized runner and reset script.
 Check `/proc/*/status` NSpid when interpreting a container PID; fuser without
-root cannot enumerate all another user's FDs. Latest check16:04 still live.
+root cannot enumerate all another user's FDs. Latest check16:26 still live.
 
 Mark permits unlimited device resets during this allocation; no further reset
 approval is needed after ownership is clear. Last reset13:44 passed all4-device
@@ -201,3 +201,29 @@ Current host TTNN/health/Tracy build and tt_pybinds install pass. Logs and JSONs
 `compile-mock-head.log`, `compile-mock-token-final.log`,
 `token-descriptor-footprint.json`, `collect-token.log`, `build-token-checkpoint.log`.
 No newer hardware accuracy or speed claim replaces the0414386d results.
+
+## 16:31 traffic instrumentation and matching-grid compiler checks
+
+Parent verified cfbc1a67 on GitHub16:17 and preserved a curated287-entry evidence
+archive locally. Hardware conflict remains; no physical device work since14:31.
+
+A mock descriptor with two harvested columns now yields the actual11x10 worker
+layout and NUM_L1_BANKS=110. Full token model entry/cache reuse compiles and passes
+there too (`compile-mock-token-110.log`). A reviewed loop optimization reads the
+KV address table only on34 KV/attention reader cores;52 other workers did not
+consume those shared columns. Projection readers retain their own weight-table
+reads. This removes212,992 source-derived request bytes/chip/token, not a measured
+speedup. Compiler-only validation remains explicitly separate from hardware.
+
+Focused real-weight native/fused MLP traffic harness and coverage-gated analyzer
+are ready. NoC profiler metadata was found to clamp payloads at8,160B; host test
+reproduced8192->8160. Extended the payload into seven reserved bits, preserving
+wire size8B and old low-field encoding. Boundary/legacy tests pass through the
+real CMake target; host runtime/TTNN rebuild and install pass. First SFPI attempt
+caught an unsigned-int/uint32_t template mismatch, fixed with explicit template
+type; profiling-enabled head/full-token compilation now passes. Instrumented
+full-token maxcode/config59,936B (13x10 mock), uninstrumented54,208B. Actual
+hardware traffic and physical validation of this profiler change remain pending.
+Logs: `noc-event-metadata-before.log`, `noc-event-metadata-cmake-v2-test.log`,
+`build-noc-metadata-v2.log`, `compile-mock-head-noc-v2.log`,
+`compile-mock-token-noc.log`, `traffic-analyzer-host-check.log`.
