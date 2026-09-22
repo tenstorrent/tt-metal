@@ -182,7 +182,9 @@ class TPAttention:
         # QWEN36_SDPA_FULLSYNC=1: dst_full_sync_en for the SDPA compute config (8 fp32 dest tiles -> 2x4 subblocks).
         self._sdpa_k_chunk = int(os.environ.get("QWEN36_SDPA_K_CHUNK", "128"))
         # QWEN36_SDPA_Q_CHUNK: Q chunk of the FLEXIBLE (chunk_start_idx_tensor) chunked SDPA, i.e. the traced serving
-        # path. Must divide the 2048-token chunk. 128 = the pre-tuning value; see lane A results for the TP=1 sweep.
+        # path. Applies to ANY TP (it is not part of the QWEN36_TP1_PREFILL_OPT rollback); must divide 2048 (the chunk /
+        # bucket size, so chunk_start % q_chunk == 0 holds). Default 128 = the previous literal. Experiment knob: at TP=1
+        # 256 was 30% faster on the diagonal chunk, not measured over the full chunk range (laneA_RESULTS.md 5).
         self._sdpa_q_chunk = int(os.environ.get("QWEN36_SDPA_Q_CHUNK", "128"))
         self._sdpa_compute_cfg = self.compute_cfg
         # QWEN36_SDPA_BF16_DEST=1: bf16 DEST accumulation for the chunked SDPA (8 dest tiles -> 2x4 subblocks; numerics change,
