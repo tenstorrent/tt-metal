@@ -232,11 +232,19 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
         const auto output_layout = tensor_args.input.layout();
         const auto& memory_layout = args.memory_config.memory_layout();
         const auto& buffer_type = args.memory_config.buffer_type();
+
+        // ND_SHARDED does not carry a 2D shard_spec to reconstruct from. Reusing it is safe and the input's
+        // ND distribution still describes the output.
+        if (!args.memory_config.shard_spec().has_value() && args.memory_config.nd_shard_spec().has_value()) {
+            return tt::tt_metal::TensorSpec(
+                output_shape, TensorLayout(args.output_dtype, PageConfig(output_layout), args.memory_config));
+        }
+
         auto shard_spec_opt = args.memory_config.shard_spec();
 
         if (!shard_spec_opt.has_value()) {
             const auto& padded_out_shape = tensor_args.input.padded_shape();
-            if (tensor_args.input.is_sharded()) {
+            if (tensor_args.input.memory_config().shard_spec().has_value()) {
                 shard_spec_opt = adjust_to_shape(
                     *tensor_args.input.memory_config().shard_spec(),
                     tensor_args.input.padded_shape(),
@@ -291,25 +299,52 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
-    // different widths get separate cache entries. Consider hashing only the last
-    // dimension to allow cache reuse when only height differs
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return operation::hash_operation<UnaryDeviceOperation>(
-            attributes,
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            input_tensor.memory_config(),
-            input_tensor.padded_shape(),
-            src_shard_vol,
-            dst_shard_vol);
-    }
+    // On cache hit, the descriptor is not rebuilt and no relaxation is applied. The dispatched
+    // tensor_layout must be the same as the one built for the cached program.  Anything omitted
+    // from this key can give different config and fail validation (wrong data now and a hard TT_FATAL
+    // once the Metal 2.0 port declares TensorParameter relaxations). The output layout needs its
+    // own term because compute_output_specs can hand back a caller-supplied preallocated spec and
+    // validation only compares its Layout enum against the input's.
+    //
+    // Hashing tensor_layout does not ignore shape. Alignment is part of tensor_layout and since
+    // legacyShapeToAlignment returns {padded_h, padded_w} for an overpadded TILE tensor instead of tile
+    // dims, differently padded H/W values produce different keys. Tile-aligned tensors are unaffected.
+    //
+    // Sharded distribution needs its own term. Since shape and shard squeeze together, one shard spec resolves
+    // per shape ({64,64} over two cores: [64,64] -> [4], [64,128] -> [2,2]) and GRID_2D trims the bank list
+    // from the unsqueezed shape ([64,128] and [64,192] over two and three banks). The accessor passes both as
+    // compile-time args. Use the Buffer's stored sharding_args since they describe the actual buffer layout
+    // used by the factory. A reshaped view keeps its parent tensor's sharding_args. A null buffer means the
+    // output has not been allocated yet and its buffer will come from output_spec.
+    //
+    // TODO(port): When TensorParameter replaces TensorAccessorArgs, TensorSpec becomes the authoritative source.
+    // Swap the Buffer branch for the spec on both sides since Metal 2.0 validation reads
+    // spec.compute_buffer_sharding_args().
+    const auto distribution_key = [](const tt::tt_metal::TensorSpec& spec,
+                                     const Tensor* tensor) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
+        if (!spec.memory_config().is_sharded()) {
+            return std::nullopt;
+        }
+        const auto* buffer = tensor != nullptr && tensor->device() != nullptr ? tensor->buffer() : nullptr;
+        const auto computed = buffer == nullptr ? std::optional{spec.compute_buffer_sharding_args()} : std::nullopt;
+        const auto& distribution =
+            buffer != nullptr ? buffer->buffer_distribution_spec() : computed->buffer_distribution_spec();
+        if (!distribution.has_value()) {
+            return std::nullopt;
+        }
+        return std::pair{distribution->shard_shape_in_pages(), distribution->cores()};
+    };
 
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config(),
+        input_tensor.tensor_spec().tensor_layout(),
+        output_spec.tensor_layout(),
+        // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
+        // different widths get separate cache entries. Consider hashing only the last
+        // dimension to allow cache reuse when only height differs
+        input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
+        distribution_key(input_tensor.tensor_spec(), &input_tensor),
+        distribution_key(output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr),
         src_shard_vol,
         dst_shard_vol);
 }
@@ -341,11 +376,7 @@ Tensor unary(
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input,
-        optional_output_tensor,
-        std::optional<MemoryConfig>(output_memory_config),
-        sub_core_grids,
-        mem_config_actual);
+        input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,
