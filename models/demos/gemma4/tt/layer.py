@@ -68,6 +68,7 @@ class Gemma4DecoderLayer:
         attention_dtype=None,
         experts_dtype=None,
         router_dtype=None,
+        single_tile_dest_acc=None,
         bounded_sliding_kv_cache: bool = False,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
@@ -137,6 +138,7 @@ class Gemma4DecoderLayer:
             layer_idx=layer_idx,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
+            single_tile_dest_acc=single_tile_dest_acc,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
 
@@ -150,6 +152,7 @@ class Gemma4DecoderLayer:
             dtype=shared_mlp_dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
             layer_idx=layer_idx,
+            single_tile_dest_acc=single_tile_dest_acc,
         )
 
         # MoE block (router + routed experts) — split dtypes between the two

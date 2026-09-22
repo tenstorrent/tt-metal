@@ -23,7 +23,7 @@ import torch
 import ttnn
 from models.demos.gemma4.config import MeshConfig
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard, is_t3k_dense_target
-from models.demos.gemma4.tt.precision import default_single_tile_dest_acc
+from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded QKV / O-proj decode matmuls (same size as the interleaved
@@ -58,6 +58,7 @@ def load_attention_weights(
     mesh_config: MeshConfig,
     weight_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
+    single_tile_dest_acc=None,
 ) -> AttentionWeights:
     """
     Load and fuse attention weights with tensor parallelism.
@@ -233,5 +234,5 @@ def load_attention_weights(
         is_global=is_global,
         kv_replicated=kv_replicated,
         tuned_prefill=is_t3k_dense_target(mesh_device, config),
-        single_tile_dest_acc=default_single_tile_dest_acc(),
+        single_tile_dest_acc=resolve_single_tile_dest_acc(single_tile_dest_acc),
     )

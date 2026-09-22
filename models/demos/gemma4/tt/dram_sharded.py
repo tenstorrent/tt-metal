@@ -376,7 +376,8 @@ def single_tile_matmul_ckc(m, dest_acc):
 
     The accumulator is per model -- fp32 dest-acc carries 12B and is what makes
     31B loop -- so callers pass the variant's policy, resolved once at
-    weight-load time by ``default_single_tile_dest_acc``.
+    weight-load time from the model's own Gemma4Precision (or, for a module
+    built directly, ``default_single_tile_dest_acc``).
     """
     if int(m) > TILE_SIZE:
         return None

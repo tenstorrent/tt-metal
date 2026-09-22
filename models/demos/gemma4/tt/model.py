@@ -321,6 +321,10 @@ class Gemma4Model:
         router_dtype = precision.get("router", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
+        # Threaded like the dtypes rather than re-resolved from the environment
+        # inside each module, so a run selected by ``create_tt_model(model_path=...)``
+        # gets the policy for THAT checkpoint, not whatever HF_MODEL holds.
+        single_tile_dest_acc = precision.single_tile_dest_acc
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type
@@ -509,6 +513,7 @@ class Gemma4Model:
                 attention_dtype=attention_dtype,
                 experts_dtype=experts_dtype,
                 router_dtype=router_dtype,
+                single_tile_dest_acc=single_tile_dest_acc,
                 tensor_cache_path=tensor_cache_path,
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,

@@ -197,16 +197,24 @@ class Gemma4Precision:
 
 
 def default_single_tile_dest_acc():
-    """The variant's dest-accumulation policy, resolved from HF_MODEL.
+    """Fallback dest-accumulation policy, resolved from the environment.
 
-    Gemma4Attention / SharedMLP are constructed straight from an HF config by
-    the unit tests, so a value threaded through Gemma4Model never reaches them.
-    Both resolve the policy here instead, from the same table and the same
-    checkpoint name the rest of the precision lookup uses. The mesh shape passed
-    here is arbitrary because ``load`` reads this flag off the model entry, which
-    no mesh-specific block can shadow.
+    Gemma4Model threads ``precision.single_tile_dest_acc`` down instead, so a run
+    selected by ``create_tt_model(model_path=...)`` reads it from the same
+    explicit checkpoint as the dtype overrides; this serves the unit tests, which
+    build the modules from an HF config with nothing threaded through. The env
+    chain matches ``create_tt_model``'s: reading only HF_MODEL returned the
+    default for a run selected with GEMMA4_MODEL_PATH, which on 31B is the fp32
+    dest-accumulation its long generation degenerates under. The mesh shape is
+    arbitrary; ``load`` reads the flag off the model entry, which no
+    mesh-specific block can shadow.
     """
-    model_path = os.environ.get("HF_MODEL")
+    model_path = os.environ.get("HF_MODEL") or os.environ.get("GEMMA4_MODEL_PATH")
     if not model_path:
         return DEFAULT_SINGLE_TILE_DEST_ACC
     return Gemma4Precision.load(model_path, (1, 1)).single_tile_dest_acc
+
+
+def resolve_single_tile_dest_acc(threaded=None):
+    """The threaded policy when a caller passed one, else the env fallback."""
+    return default_single_tile_dest_acc() if threaded is None else bool(threaded)

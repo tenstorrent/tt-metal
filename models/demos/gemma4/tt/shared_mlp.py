@@ -35,7 +35,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     should_prefill_long_2d,
     single_tile_matmul_ckc,
 )
-from models.demos.gemma4.tt.precision import default_single_tile_dest_acc
+from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -79,6 +79,7 @@ class SharedMLP:
         dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         layer_idx=None,
+        single_tile_dest_acc=None,
     ):
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
@@ -160,7 +161,7 @@ class SharedMLP:
         is_moe = bool(getattr(hf_config, "enable_moe_block", False))
         dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
         self._tuned_prefill = is_t3k_dense_target(mesh_device, hf_config)
-        self._single_tile_dest_acc = default_single_tile_dest_acc()
+        self._single_tile_dest_acc = resolve_single_tile_dest_acc(single_tile_dest_acc)
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
             self.gate_up_proj = DramShardedLinear(

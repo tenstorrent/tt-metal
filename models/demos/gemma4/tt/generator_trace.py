@@ -92,6 +92,13 @@ def _resolve_max_trace_batched_prefill_tokens() -> int:
 GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = _resolve_max_trace_batched_prefill_tokens()
 
 
+# The auto decision for the current configuration. Not the environment: the
+# demo's configurations share one pytest process, so writing it there made every
+# later one take the explicit-override branch instead of rechecking its own
+# length and bounded-sliding state.
+_auto_chunked_prefill_trace = False
+
+
 def maybe_auto_enable_chunked_prefill_trace(
     *,
     batch_size: int,
@@ -115,13 +122,18 @@ def maybe_auto_enable_chunked_prefill_trace(
     and one capture is replayed across users, so trace buffers do not scale
     with demo batch.
     """
+    global _auto_chunked_prefill_trace
+
+    # Clear any earlier auto decision BEFORE evaluating this configuration, so
+    # each one is judged on its own length / bounded-sliding state.
+    _auto_chunked_prefill_trace = False
     if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
         return chunked_prefill_trace_enabled()
     trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN))
     if not bounded_sliding and int(prefill_chunk) < max_seq_len <= trace_max:
-        os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
+        _auto_chunked_prefill_trace = True
         logger.info(
-            "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
+            "Auto-enabled chunked prefill trace "
             f"(chunk={prefill_chunk} < max_seq_len={max_seq_len} <= ceiling={trace_max}, "
             f"unbounded, batch={batch_size})"
         )
@@ -132,13 +144,18 @@ def maybe_auto_enable_chunked_prefill_trace(
 def chunked_prefill_trace_enabled() -> bool:
     """True when long-ISL *generator* multi-chunk should replay 4k prefill traces.
 
-    Set ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` to measure / enable. Each generator
-    chunk (default 4096) replays the matching ``sp0_mc``/``sp1_mc`` prefill
-    trace instead of an eager ``ttnn_prefill_forward``. Does **not** authorize
-    vLLM APC / remnant JIT ``sp1`` captures — those stay eager via
+    Set ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` to measure / enable; unset, this
+    reports what :func:`maybe_auto_enable_chunked_prefill_trace` decided for the
+    current configuration. Each generator chunk (default 4096) replays the
+    matching ``sp0_mc``/``sp1_mc`` prefill trace instead of an eager
+    ``ttnn_prefill_forward``. Does **not** authorize vLLM APC / remnant JIT
+    ``sp1`` captures — those stay eager via
     :func:`can_gemma4_enable_prefill_trace`.
     """
-    return os.environ.get("GEMMA4_CHUNKED_PREFILL_TRACE", "0").lower() in ("1", "true", "yes")
+    explicit = os.environ.get("GEMMA4_CHUNKED_PREFILL_TRACE")
+    if explicit is not None:
+        return explicit.lower() in ("1", "true", "yes")
+    return _auto_chunked_prefill_trace
 
 
 # Default generator-level prefill chunk when GEMMA4_GEN_PREFILL_CHUNK is unset,

@@ -125,6 +125,7 @@ class Gemma4Attention:
         max_batch_size=1,
         max_seq_len=131072,
         weight_dtype=ttnn.bfloat16,
+        single_tile_dest_acc=None,
         bounded_sliding_kv_cache: bool = False,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
@@ -154,6 +155,7 @@ class Gemma4Attention:
             mesh_config=mesh_config,
             tensor_cache_path=tensor_cache_path,
             weight_dtype=weight_dtype,
+            single_tile_dest_acc=single_tile_dest_acc,
         )
 
         if create_kv_cache:
