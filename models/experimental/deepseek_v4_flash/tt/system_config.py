@@ -172,10 +172,9 @@ class AttentionSettings:
     sdpa_k_chunk_size: int = 32
     sdpa_max_cores_per_head_batch: int = 2
     sdpa_exp_approx_mode: bool = False
-    # CSA Lightning Indexer: ``on`` (the default) attaches it when the checkpoint
-    # has the weights; ``off`` keeps dense causal CSA. ``always`` / ``auto`` are
-    # the same switch.
-    indexer: str = "on"
+    # CSA Lightning Indexer. ``True`` attaches it when the checkpoint has the
+    # weights; ``False`` keeps dense causal CSA.
+    indexer: bool = True
     index_topk: int = 512
     # Sequence length below which CSA stays on dense causal SDPA. ``0`` means
     # ``compress_rate * index_topk``: fewer closed windows than ``index_topk``,
@@ -184,11 +183,8 @@ class AttentionSettings:
     index_dense_max_positions: int = 0
 
     def indexer_enabled(self) -> bool:
-        """True when CSA should run the Lightning Indexer (``always`` or a truthy flag)."""
-        value = self.indexer
-        if isinstance(value, bool):
-            return value
-        return str(value).lower() in ("always", "auto", "on", "true", "1")
+        """True when CSA should run the Lightning Indexer."""
+        return self.indexer
 
     def sdpa_program_config(self, device) -> Any:
         """The ``SDPAProgramConfig`` for ``device``, at this profile's settings.
@@ -477,7 +473,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("attention", "sdpa_q_chunk_size", "DEEPSEEK_V4_SDPA_Q_CHUNK", int),
     ("attention", "sdpa_k_chunk_size", "DEEPSEEK_V4_SDPA_K_CHUNK", int),
     ("attention", "sdpa_max_cores_per_head_batch", "DEEPSEEK_V4_SDPA_MAX_CORES_PER_HEAD", int),
-    ("attention", "indexer", "DEEPSEEK_V4_INDEXER", str),
+    ("attention", "indexer", "DEEPSEEK_V4_INDEXER", _env_bool),
     ("attention", "index_topk", "DEEPSEEK_V4_INDEX_TOPK", int),
     ("attention", "index_dense_max_positions", "DEEPSEEK_V4_INDEX_DENSE_MAX_POSITIONS", int),
     ("decode", "weight_dtype", "DEEPSEEK_V4_WEIGHT_DTYPE", str),
