@@ -322,6 +322,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     // spec.compute_buffer_sharding_args().
     const auto distribution_key = [](const tt::tt_metal::TensorSpec& spec,
                                      const Tensor* tensor) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
+        if (!spec.memory_config().is_sharded()) {
+            return std::nullopt;
+        }
         const auto* buffer = tensor != nullptr && tensor->device() != nullptr ? tensor->buffer() : nullptr;
         const auto computed = buffer == nullptr ? std::optional{spec.compute_buffer_sharding_args()} : std::nullopt;
         const auto& distribution =
@@ -373,11 +376,7 @@ Tensor unary(
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input,
-        optional_output_tensor,
-        std::optional<MemoryConfig>(output_memory_config),
-        sub_core_grids,
-        mem_config_actual);
+        input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,
