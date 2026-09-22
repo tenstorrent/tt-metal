@@ -367,7 +367,7 @@ class Qwen36MLP:
         # skip forcing DRAM there and let w2's own L1 output (mc_w2_out above) stand.
         _ar_mc = None if self.num_devices == 1 else ttnn.DRAM_MEMORY_CONFIG
         out = tt_all_reduce(
-            partial,
+            tpc.ccl_cast(partial),
             self.device,
             self.tt_ccl,
             cluster_axis=0,

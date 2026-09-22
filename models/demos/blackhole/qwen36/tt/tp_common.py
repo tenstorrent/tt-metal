@@ -453,6 +453,24 @@ def all_gather_matmul_prefill(
     return out
 
 
+def ccl_cast(x):
+    """QWEN36_CCL_BF8=1: narrow a row-parallel partial to bfloat8_b before the reduce-scatter.
+
+    tt_all_reduce's `dtype` argument only takes effect on the TG all-reduce branch; the
+    1-D-mesh branch feeds reduce_scatter_minimal_async the tensor as-is, so the wire format is
+    whatever the matmul produced (bf16). The reduce-scatters are ~13% of device time and ~25%
+    of the critical path at SP=4 x TP=8, and they sit at the 2-link ethernet roofline, so bytes
+    are the only lever. bf8 halves them.
+
+    Precision caveat: this narrows PARTIAL SUMS, which is exactly where the GDN out-proj is
+    known to be sensitive -- tp_common's fused path keeps fp32 there because bf16 took PCC to
+    ~0.69. Measure PCC, do not assume.
+    """
+    if os.environ.get("QWEN36_CCL_BF8") != "1":
+        return x
+    return ttnn.typecast(x, ttnn.bfloat8_b) if x.dtype != ttnn.bfloat8_b else x
+
+
 def agmm_disabled():
     """QWEN36_NO_AGMM=1 turns off every all_gather_minimal_matmul_async fusion.
 
