@@ -15,10 +15,8 @@
 
 namespace ttnn::prim::qsr {
 
-// Everything the op's validation, its output-spec derivation and the factory need from a
-// MatmulUnifiedProgramConfig plus the operand shapes. One function computes it so the three can never
-// disagree about which core owns which piece of C or how big the buffers are. Every constraint of the
-// config is checked in that function with TT_FATAL, so calling it is the config check.
+// Derived from a MatmulUnifiedProgramConfig + operand shapes by one function shared by validation,
+// output-spec derivation and the factory, so they cannot disagree (all config constraints TT_FATAL there).
 struct UnifiedMatmulPlan {
     uint32_t M_tiles = 0;
     uint32_t K_tiles = 0;
@@ -36,22 +34,15 @@ struct UnifiedMatmulPlan {
     uint32_t subblock_M_tiles = 0;
     uint32_t subblock_N_tiles = 0;
 
-    // C slice assignment: the C slices of one batch are walked row-major (across N, then down M) and
-    // split into contiguous runs, one per active core. The factory derives each core's run (origin +
-    // length RTAs) from these.
+    // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
+    // runs per active core (the factory derives the per-core RTAs).
     uint32_t C_slices_per_batch = 0;
     bool row_major_cores = true;
     std::vector<tt::tt_metal::CoreCoord> cores;
     uint32_t max_C_slices_per_core = 0;  // sizes the rings and gates partials aliasing
 
-    // Borrowing: an L1-sharded operand whose shard on every active core is exactly what that core's DFBs
-    // would hold is bound as the DFB itself (borrowed_from), so nothing is copied. A: the shard is the
-    // chunk's rows for all of K (one K chunk, chunks span N). B: the shard is the chunk's columns for all of
-    // K (chunks span M; K chunks are contiguous runs of it). C: the finished C slice is packed straight into
-    // the shard, which needs subblock-major pack order to equal the shard's row-major tile order, i.e.
-    // subblock_N_tiles == C_slice_N_tiles; the writer then only waits. All three need one C slice per core
-    // and batch 1, and a shard grid that lists the active cores in assignment order. Borrowed DFBs cost
-    // no extra L1.
+    // Borrowed operand: its L1 shard on each active core is bound as the DFB itself, no copy.
+    // Needs batch 1, one C slice per core, and a shard grid in assignment order.
     bool borrow_A = false;
     bool borrow_B = false;
     bool borrow_C = false;

@@ -3,10 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Unified (placement-first) matmul factory (GH#41910): one Metal 2.0 program for every placement.
-// The config names the cores and the C slice per core; this file turns that into a C slice assignment,
-// four DFBs (A slice, B slice, C slice, C partials), one reader, one compute kernel and one
-// writer. Nothing here depends on operand memory layout: the kernels address tiles by tile index
-// through the tensor accessor.
+// Kernels address tiles by tile index through the tensor accessor, so operand layout doesn't matter here.
 
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_unified_program_factory.hpp"
 
@@ -51,9 +48,8 @@ const KernelSpecName WRITER_KERNEL{"writer"};
 
 constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/";
 
-// A DFB touched by a TRISC keeps its ring extent in a uint16_t of 16-byte units (see
-// validate_ring_extent in dataflow_buffer.cpp). Enforced on every arch so a config that is legal on
-// Wormhole never becomes a program-creation FATAL on Quasar.
+// TRISC-visible DFB ring extent is a uint16_t of 16-byte units (validate_ring_extent); enforced on
+// every arch so a Wormhole-legal config never FATALs on Quasar.
 constexpr uint64_t MAX_DFB_RING_BYTES = 65535ull * 16ull;
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 
@@ -72,8 +68,7 @@ struct Borrowable {
     bool C = false;
 };
 
-// Everything about the DFBs that follows from one candidate K chunk. Pure: the plan is only read, so the
-// K chunk search can size several candidates and the plan is written exactly once with the winner.
+// DFB sizing for one candidate K chunk; pure so the K chunk search can size several candidates.
 struct DfbSizes {
     uint32_t K_chunk_tiles = 0;
     uint32_t num_K_chunks = 0;
@@ -130,11 +125,8 @@ DfbSizes size_dfbs(
     r.C_slice_entries = C_slice_tiles;
     r.C_partials_entries = C_slice_tiles;
 
-    // One entry per tile for every DFB (a 32x32 tile of every format is a multiple of the L1 alignment).
-    // Copied operands: double-buffer whenever more than one slice passes through. Borrowed operands: the
-    // DFB is the resident shard itself, one entry per shard tile.
-    // A can only be borrowed when the single K chunk covers all of K; a shard past the TRISC ring-extent
-    // limit takes the copy path.
+    // Copied operands double-buffer when more than one slice passes through; a borrowed DFB is the
+    // resident shard itself. A is borrowable only when one K chunk covers K and the shard fits the ring.
     const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * r.num_K_chunks > 1;
     const uint32_t slice_buffering_factor = more_than_one_slice ? 2 : 1;
     r.borrow_A = borrowable.A && r.num_K_chunks == 1 &&
@@ -149,10 +141,8 @@ DfbSizes size_dfbs(
     r.B_slice_entries = r.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles
                                    : K_chunk_tiles * plan.C_slice_N_tiles * slice_buffering_factor;
 
-    // Aliasing C_partials onto C_slice when a core produces more than one C slice (counting batches) is a
-    // race: the writer may still be draining C slice i from C_slice while the compute packs C slice i+1's first
-    // partials into the same bytes. Alias only when the partials can never be live while C_slice holds
-    // unread data: a single C slice per core, or no partials at all (one K chunk).
+    // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
+    // (else compute packs slice i+1's partials over slice i before the writer drains it).
     const bool partials_ever_written = r.num_K_chunks > 1;
     const bool one_C_slice_per_core = plan.batch_size == 1 && plan.max_C_slices_per_core == 1;
     r.alias_C_partials_onto_C_slice =
@@ -321,8 +311,6 @@ UnifiedMatmulPlan plan_unified_matmul(
     borrowable.B =
         one_C_slice_per_core_no_batch && C_slices_down_M == 1 && shard_matches(B, plan.K_tiles, plan.C_slice_N_tiles);
     // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order.
-    // A caller-provided output must really be laid out as the plan assumes; one the op allocates from this plan
-    // is, by construction.
     const bool C_shard_matches = output.has_value()
                                      ? shard_matches(output.value(), plan.C_slice_M_tiles, plan.C_slice_N_tiles)
                                      : (attributes.output_mem_config.is_sharded() &&

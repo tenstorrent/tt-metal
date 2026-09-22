@@ -2,15 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul compute kernel: produces num_C_slices C slices per batch, position-agnostic. Per K
-// chunk the reader delivers one A slice ([C_slice_M_tiles][K_chunk_tiles] tiles) and one B slice
-// ([K_chunk_tiles][C_slice_N_tiles] tiles), multiplied one subblock (what DST holds) at a time.
-//
-// Between K chunks the running sums leave DST: packed into C_partials and reloaded at the start of the
-// next K chunk (spill / reload), or with packer_l1_acc the packer adds DST onto the partials in L1 and
-// only the last K chunk reloads. The last K chunk packs the finished subblocks into C_slice for the
-// writer. Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks row-major
-// over the C slice, k_tile within the K chunk.
+// Unified matmul compute kernel: per K chunk, multiplies the reader's A slice by its B slice one
+// subblock (what DST holds) at a time; running sums spill to C_partials between K chunks (or
+// accumulate there via packer_l1_acc) and the last K chunk packs into C_slice for the writer.
+// Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks, k_tile.
 
 #include <cstdint>
 
@@ -52,20 +47,17 @@ void kernel_main() {
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const bool last_K_chunk = K_chunk == num_K_chunks - 1;
-                // Partials exist once a previous K chunk has packed them. Without packer L1 accumulation every
-                // later K chunk reloads them; with it the packer has been accumulating in L1 and only the last
-                // K chunk reloads the sum.
+                // Without packer L1 accumulation every later K chunk reloads the partials; with it only
+                // the last one does.
                 const bool reload_partials = K_chunk > 0 && (last_K_chunk || !packer_l1_acc);
-                // Every subblock of this K chunk is packed to the same DFB: the finished sum to C_slice on the
-                // last K chunk, the running sum to C_partials before that.
+                // Pack target: C_slice on the last K chunk, C_partials before that.
                 DataflowBuffer& pack_target = last_K_chunk ? C_slice : C_partials;
                 const uint32_t pack_target_id = last_K_chunk ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
-                // Packer setup for this K chunk. The two DFBs may hold different formats; with packer L1
-                // accumulation K chunk 0 overwrites the partials, later K chunks add DST onto them, and the
-                // finished sum is packed without accumulation. (The reload below touches only the unpacker.)
+                // With packer L1 accumulation, K chunk 0 overwrites the partials, later K chunks add DST
+                // onto them, and the finished sum is packed without accumulation.
                 if constexpr (partials_format_differs) {
                     pack_reconfig_data_format(pack_target_id);
                 }
@@ -73,18 +65,14 @@ void kernel_main() {
                     pack_reconfig_l1_acc((!last_K_chunk && K_chunk > 0) ? 1 : 0);
                 }
 
-                // Slice layouts: A is [C_slice_M_tiles][K_chunk_tiles] row-major, B is
-                // [K_chunk_tiles][C_slice_N_tiles]. Walk the C slice in subblocks: (m_tile, n_tile) is the
-                // subblock's first tile within the C slice.
+                // (m_tile, n_tile) is the subblock's first tile within the C slice.
                 for (uint32_t m_tile = 0; m_tile < C_slice_M_tiles; m_tile += subblock_M_tiles) {
                     const uint32_t A_subblock_first_tile = m_tile * K_chunk_tiles;  // A slice tile (m_tile, 0)
                     for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles; n_tile += subblock_N_tiles) {
                         const uint32_t B_subblock_first_tile = n_tile;  // B slice tile (0, n_tile)
                         tile_regs_acquire();
                         if (reload_partials) {
-                            // Copy this subblock's partial sums from the C_partials back into DST and keep
-                            // accumulating onto them. The unpacker is switched to the partials format for the
-                            // copy and back to B's format afterwards; the matmul MOP must be re-initialised
+                            // Reload this subblock's partials into DST; the matmul MOP must be re-initialised
                             // after any copy_init.
                             reconfig_data_format_srca(dfb::B_slice, dfb::C_partials);
                             copy_init(dfb::C_partials);
@@ -102,12 +90,8 @@ void kernel_main() {
                                 K_chunk_tiles);
                         }
 
-                        // Accumulate this subblock over the K chunk, one K tile per matmul_block call: each call
-                        // multiplies A's subblock_M_tiles-tall column of tiles at k_tile by B's
-                        // subblock_N_tiles-wide row of tiles at k_tile and adds the subblock_M_tiles x
-                        // subblock_N_tiles products onto DST tiles 0..subblock_tiles-1. The LLK has no
-                        // multi-K-tile call: kt_dim is only the row stride of the A slice
-                        // ([C_slice_M_tiles][K_chunk_tiles] tiles), so the k loop lives here.
+                        // One matmul_block call per K tile (the LLK has no multi-K-tile call; kt_dim is
+                        // only the A-slice row stride).
                         uint32_t A_slice_tile = A_subblock_first_tile;
                         uint32_t B_slice_tile = B_subblock_first_tile;
                         for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
