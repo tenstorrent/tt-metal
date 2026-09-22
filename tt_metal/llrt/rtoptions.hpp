@@ -304,9 +304,6 @@ class RunTimeOptions {
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
 
-    // Quasar: NoC address-translation-table (ATT) map device traffic is composed against (TT_METAL_NOC_ATT).
-    // Empty means plain XY addressing. MetalEnvImpl defaults it to "grendel_qsr1" on the qsr.s1 emulator model
-    // when the variable is unset; noc_att_specified_ records an explicit setting (including an explicit off).
     std::string noc_att_map_;
     bool noc_att_specified_ = false;
 
@@ -550,8 +547,6 @@ public:
 
     void disable_watcher_assert() { watcher_disabled_features.insert(watcher_assert_str); }
     void enable_watcher_assert() { watcher_disabled_features.erase(watcher_assert_str); }
-    // Auto-disabled under an ATT NoC map: the NoC sanitizer decodes XY operands and cannot run there.
-    void disable_watcher_noc_sanitize() { watcher_disabled_features.insert(watcher_noc_sanitize_str); }
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
@@ -704,8 +699,7 @@ public:
             compile_hash_str += get_brisc_firmware_header();
         }
         // Each ATT map gets its own JIT build directory so toggling ATT does not rebuild the non-ATT
-        // tree (the defines already hash the map; this only separates the directories). Appended only
-        // when a map is selected so non-ATT cache keys stay unchanged.
+        // tree. Appended only when a map is selected so non-ATT cache keys stay unchanged.
         if (!noc_att_map_.empty()) {
             compile_hash_str += "_att:";
             compile_hash_str += noc_att_map_;
@@ -843,7 +837,7 @@ public:
         }
         return std::string_view(noc_att_map_);
     }
-    // True when TT_METAL_NOC_ATT was set explicitly (any value, including off/none/0).
+    // True when TT_METAL_NOC_ATT was set explicitly.
     bool is_noc_att_specified() const { return noc_att_specified_; }
     void set_noc_att_map(std::string map) { noc_att_map_ = std::move(map); }
 

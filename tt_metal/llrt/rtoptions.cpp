@@ -701,17 +701,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_NOC_ATT
-        // Quasar: the NoC address-translation-table (ATT) map device traffic is composed against
-        // (grendel_qsr1 | quasar_aether_2x3). "off", "none" or "0" force plain XY addressing. When unset,
-        // XY addressing is used except that MetalEnvImpl defaults the qsr.s1 emulator model to
-        // grendel_qsr1 (its NoC only routes through the boot-programmed tables). Unknown map names are
-        // rejected by the Quasar HAL when the JIT defines are generated.
+        // Quasar: the NoC address-translation-table (ATT) map device traffic is composed against.
+        // "off", "none" or "0" force plain XY addressing. When unset, XY addressing is used except
+        // that MetalEnvImpl defaults the qsr.s1 emulator model to, grendel_qsr1. Unknown map names
+        // are rejected by the Quasar HAL when the JIT defines are generated.
         // Default: unset
         // Usage: export TT_METAL_NOC_ATT=grendel_qsr1
         case EnvVarID::TT_METAL_NOC_ATT: {
             this->noc_att_specified_ = true;
-            // Compare the off/none/0 sentinels case-insensitively (so "OFF", "Off", "None" all opt out);
-            // the map name itself is kept verbatim for the known-map lookup.
             std::string lowered(value);
             std::transform(
                 lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) { return std::tolower(ch); });

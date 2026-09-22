@@ -646,8 +646,6 @@ __attribute__((noinline)) void process_write_paged() {
             noc_write_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT, false>(
                 noc_index, 0, 0, page_size);
             do {
-                // Typed bank operand (see noc_read_with_state_bank in cq_common.hpp); the XY backend
-                // composes the identical packed operand.
                 uint64_t dst = noc_address_backend::bank_address<is_dram>(
                     walk_bank, walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank), noc_index);
                 ASSERT(dst == addr_gen.get_noc_addr(page_id, 0));

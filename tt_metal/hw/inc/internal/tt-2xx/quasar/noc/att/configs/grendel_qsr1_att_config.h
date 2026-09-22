@@ -138,8 +138,7 @@ constexpr std::uint8_t ATT_LOGICAL_DRAM_SELECTORS[] = {0, 1, 2, 3};
 
 // DRAM endpoint words by DRAM-window selector (boot rows 96..127): lane A (d2d0
 // ingress) at selectors 0..3, lane B (d2d1) at 16..19, the rest unprogrammed.
-// A host coordinate naming a DRAM tile resolves through these to the DRAM window
-// (CQ write_linear to a DRAM-sharded buffer addresses DRAM by coordinate).
+// A host coordinate naming a DRAM tile resolves through these to the DRAM window.
 // clang-format off
 constexpr std::uint16_t ATT_DRAM_ENDPOINT_WORDS[] = {
     0x246, 0x24a, 0x089, 0x085, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -158,10 +157,6 @@ inline constexpr noc_att::MapData::DispatchEntry DISPATCH_ENTRIES[] = {
     {.x = 10, .y = 1, .selector = 57, .window = noc_att::WindowClass::FullTile},
     {.x = 1, .y = 6, .selector = 58, .window = noc_att::WindowClass::FullTile},
     {.x = 9, .y = 5, .selector = 31, .window = noc_att::WindowClass::Worker},
-    // The other two live corners. A second command queue's dispatch kernels sit on one of them
-    // ([-1, 0] in the 8x4 Tensix-dispatch core descriptor), and workers resolve the dispatcher
-    // coordinates carried in a go message as a dispatch address, so every tile that can host a
-    // dispatcher must be listed. Two-queue fast dispatch passes only with both present.
     {.x = 2, .y = 5, .selector = 24, .window = noc_att::WindowClass::Worker},
     {.x = 9, .y = 2, .selector = 7, .window = noc_att::WindowClass::Worker},
 };

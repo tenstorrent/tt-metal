@@ -256,8 +256,7 @@ extern "C" uint32_t _start1() {
     }
     WAYPOINT("I");
     if (hartid == 0) {
-        // Reset the lock a stale cache line may have left taken (as brisc.cc does), then announce
-        // from DM0 only: all eight DMs share one print buffer.
+        // Reset the shared print lock and announce from DM0 only.
         DEVICE_PRINT_INITIALIZE_LOCK();
         DPRINT("DM0-FW: initialized\n");
     }

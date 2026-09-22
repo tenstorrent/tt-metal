@@ -118,7 +118,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, cq_id_);
 
     // Must match the host's get_packed_write_max_unicast_sub_cmds(): the worker fan-out, but never below
-    // one sub-command per CQ so event records can reach every dispatch core on a tiny worker grid.
+    // one sub-command per CQ so event records can reach every dispatch core on a worker grid.
     const uint32_t packed_write_max_unicast_sub_cmds = std::max<uint32_t>(
         device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y,
         device_->num_hw_cqs());
