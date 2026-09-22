@@ -33,7 +33,11 @@ constexpr uint32_t kFaceElems = 256;
 constexpr uint16_t kBf16One = 0x3F80;
 constexpr uint32_t kFp32One = 0x3F800000u;
 
+#ifdef FW_MASK_BITS
+constexpr uint16_t kBf16MinusInf = FW_MASK_BITS;  // experiment: a finite mask value
+#else
 constexpr uint16_t kBf16MinusInf = 0xFF80;
+#endif
 
 // The additive form of the transposed causal mask: 0 where col >= row (the
 // key index is at most the query index), -inf elsewhere. Added to S^T by the

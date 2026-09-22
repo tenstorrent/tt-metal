@@ -595,21 +595,67 @@ inline void exp_pair_body() {
 }
 
 // A face is 16 x 16: four groups of four rows, each two vectors; the two
-// chains interleaved instruction by instruction.
+// chains interleaved instruction by instruction. The body sits in the
+// thread's replay buffer, recorded once per run of tiles (exp_record,
+// below) rather than re-pushed on every face: 4 replay words a face
+// instead of 4 + the body.
+constexpr int kExpBodyLen = 2 * kExpSteps;
+
+inline void exp_record() {
+#ifdef FW_EXPERIMENT_REPLAY_PER_FACE
+#else
+    TTI_REPLAY(0, kExpBodyLen, /* execute_while_loading */ 0, /* load_mode */ 1);
+    exp_pair_body();
+#endif
+}
+
 inline void exp_face() {
-    constexpr int kBodyLen = 2 * kExpSteps;
-    TTI_REPLAY(0, kBodyLen, 1, 1);
+#ifdef FW_EXPERIMENT_REPLAY_PER_FACE
+    TTI_REPLAY(0, kExpBodyLen, 1, 1);
     exp_pair_body();
 #pragma GCC unroll 4
     for (uint32_t i = 1; i < 4u; ++i) {
-        TTI_REPLAY(0, kBodyLen, 0, 0);
+        TTI_REPLAY(0, kExpBodyLen, 0, 0);
     }
+#else
+#pragma GCC unroll 4
+    for (uint32_t i = 0; i < 4u; ++i) {
+        TTI_REPLAY(0, kExpBodyLen, 0, 0);
+    }
+#endif
 }
 
-// One tile: the LLK's framing sets the dst address, runs the body on each of
-// the four faces, and clears the address.
+// One tile, framed as the backward does it: the dst address set to the tile
+// (per thread, through SETC16), the body on each of the four faces, the
+// address cleared. Not the LLK's framing, whose start issues a
+// STALLWAIT(STALL_SFPU, MATH) per tile: the matrix unit is the math
+// thread's and busy under this exponential by design, so that wait is at
+// best a wasted slot and at worst serialises the two threads.
+inline void set_dst(const uint32_t tile) {
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile << 6) + get_dest_buffer_base());
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
+inline void next_face() {
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+}
+
+inline void clear_dst() {
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
 inline void exp_tile(const uint32_t tile) {
+#ifdef FW_EXPERIMENT_LLK_EXP_FRAMING
     _llk_math_eltwise_unary_sfpu_params_(exp_face, tile, VectorMode::RC);
+#else
+    set_dst(tile);
+    for (uint32_t face = 0; face < 4u; ++face) {
+        exp_face();
+        next_face();
+    }
+    clear_dst();
+#endif
 }
 
 }  // namespace pack_sfpu
@@ -753,18 +799,19 @@ void kernel_main() {
             static_assert(Bt <= 8u, "FW_FAST: the block maxima of a timestep share one half of the bf16 destination file");
             cb_reserve_back(cb_block_max, Bt);
             tile_regs_acquire();
+            // One init for the Bt reductions: nothing between them re-inits.
+            reconfig_data_format(cb_scores, cb_reduce_scaler);
+            reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, cb_block_max);
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
-                reconfig_data_format(cb_scores, cb_reduce_scaler);
-                reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, cb_block_max);
                 for (uint32_t b = 0; b < Bt; ++b) {
                     if (b >= live) {
                         break;
                     }
                     reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, b * Bt + a, 0, a);
                 }
-                reduce_uninit();
             }
+            reduce_uninit();
             {
                 DeviceZoneScopedN("WAIT-STATE");
                 cb_wait_front(cb_max_seed, Bt);
@@ -887,6 +934,7 @@ void kernel_main() {
 #ifndef FW_EXPERIMENT_NO_EXP
                 PACK((pack_sfpu::wait_for_math_done()));
                 PACK((pack_sfpu::exp_prepare()));
+                PACK((pack_sfpu::exp_record()));
                 for (uint32_t b = 0; b < Bt; ++b) {
                     if (b >= live) {
                         break;

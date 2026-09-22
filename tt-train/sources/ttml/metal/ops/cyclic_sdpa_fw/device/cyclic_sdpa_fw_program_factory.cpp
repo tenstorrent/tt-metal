@@ -201,6 +201,11 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
                 defines["FID_O"] = "3";
             } else if (item.rfind("EXP_GUARD=", 0) == 0) {
                 defines["FW_EXP_GUARD"] = item.substr(10);  // 0 none (wrong), 1 mask, 2 clamp
+            } else if (item.rfind("MASK=", 0) == 0) {
+                // The causal mask's value as bf16 bits (default 0xFF80, -inf): a
+                // large finite value makes the exponential's guard unnecessary
+                // if the float-to-int16 conversion saturates.
+                defines["FW_MASK_BITS"] = item.substr(5);
             } else if (item.rfind("LAZY_TAU=", 0) == 0) {
                 defines["FW_LAZY_THRESHOLD"] = "(static_cast<float>(" + item.substr(9) + "))";  // the lazy-rescale threshold
             } else if (!item.empty()) {
