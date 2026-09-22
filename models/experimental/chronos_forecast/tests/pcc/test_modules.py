@@ -120,3 +120,45 @@ def test_group_attention_pcc(request):
     assert got.shape == x.shape
     log_golden("tt_group_attn/device_8", got)
     assert_with_pcc(expected.float(), got, pcc=0.99)
+
+
+def test_encoder_block_pcc(request):
+    """TT Chronos2EncoderBlock (tiny golden dims) vs reference oracle. Single-chip only."""
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.model import (
+        Chronos2EncoderBlock as RefBlock,
+    )
+    from models.experimental.chronos_forecast.tests.golden_helpers import tiny_config
+    from models.experimental.chronos_forecast.tt.encoder_block import (
+        TtEncoderBlock,
+        TtEncoderBlockWeights,
+    )
+    from models.experimental.chronos_forecast.tt.time_attention import build_rope_cache
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    cfg = tiny_config()
+    torch.manual_seed(0)
+    block = RefBlock(cfg).eval()
+    weights = TtEncoderBlockWeights.from_torch_block(block)
+    tt = TtEncoderBlock(device=mesh_device, weights=weights)
+
+    torch.manual_seed(1)
+    x = torch.randn(2, 8, cfg.d_model)
+    position_ids = torch.arange(8).unsqueeze(0).expand(2, -1)
+    expected = block(
+        x,
+        position_ids=position_ids,
+        attention_mask=torch.zeros(2, cfg.num_heads, 8, 8),
+        group_time_mask=torch.zeros(8, 1, 2, 2),
+    ).hidden_states
+
+    cos, sin = build_rope_cache(position_ids, weights.time.inv_freq)
+    got = tt.forward(x, cos, sin, torch.zeros(1, 1, 8, 8), torch.zeros(8, 1, 2, 2))
+    assert got.shape == x.shape
+    log_golden("tt_encoder_block/device_8", got)
+    assert_with_pcc(expected.float(), got, pcc=0.99)

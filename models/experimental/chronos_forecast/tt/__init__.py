@@ -9,6 +9,10 @@ from models.experimental.chronos_forecast.tt.residual_block import (
     TtResidualBlockWeights,
 )
 from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, TtMhaWeights
+from models.experimental.chronos_forecast.tt.encoder_block import (
+    TtEncoderBlock,
+    TtEncoderBlockWeights,
+)
 from models.experimental.chronos_forecast.tt.group_attention import (
     TtGroupAttention,
     TtGroupAttentionWeights,
@@ -39,6 +43,8 @@ __all__ = [
     "Chronos2PackedInputs",
     "Chronos2PatchedInputs",
     "TtChronos",
+    "TtEncoderBlock",
+    "TtEncoderBlockWeights",
     "TtGroupAttention",
     "TtGroupAttentionWeights",
     "TtMhaCore",
