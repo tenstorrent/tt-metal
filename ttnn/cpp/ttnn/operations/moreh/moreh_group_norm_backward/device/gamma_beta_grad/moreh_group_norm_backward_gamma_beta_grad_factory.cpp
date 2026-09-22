@@ -113,7 +113,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const DFBSpecName DYADD{"dyadd"};    // Add[dy]
     const DFBSpecName YDYADD{"ydyadd"};  // Add[y * dy]
     const DFBSpecName XMM{"xmm"};        // x - mean
-    const DFBSpecName REDUCE_YDY{"reduce_ydy"};
     const DFBSpecName DYCOPY{"dycopy"};  // dycopy
 
     const TensorParamName OUTPUT_GRAD{"output_grad"};
@@ -137,7 +136,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const uint32_t out1_t = beta_grad_has_value ? 1 : 0;   // beta_grad(==dbeta)
 
     const uint32_t im0_t = 1;  // output(==y)
-    const uint32_t im1_t = 1;  // y * dy
     const uint32_t im2_t = 1;  // Add[dy]
     const uint32_t im3_t = 1;  // Add[y * dy]
     const uint32_t im4_t = 1;  // x - mean
@@ -183,17 +181,15 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     add_dfb(DGAMMA, out0_t);  // gamma_grad(==dgamma)
     add_dfb(DBETA, out1_t);   // beta_grad(==dbeta)
     add_dfb(Y, im0_t);        // output(==y)
-    add_dfb(YDY, im1_t);      // y * dy
+    add_dfb(YDY, gamma_grad_has_value ? reduction.buffer_tiles : 1);  // y * dy
     add_dfb(DYADD, im2_t);    // Add[dy]
     add_dfb(YDYADD, im3_t);   // Add[y * dy]
     add_dfb(XMM, im4_t);      // x - mean
     add_dfb(DYCOPY, beta_grad_has_value ? reduction.buffer_tiles : 1);
-    add_dfb(REDUCE_YDY, gamma_grad_has_value ? reduction.buffer_tiles : 0);
-    // Keep the existing FP32 reduction inputs and accumulators. With beta enabled,
-    // dycopy also serves as the reduction input instead of a separate staging CB.
+    // dycopy retains the input dtype: copying and masking dy needs no extra precision.
+    // Pack gamma products directly into the FP32 reduction input; keep FP32 running accumulators.
     for (auto& buffer : dfbs) {
-        if ((buffer.unique_id == DYCOPY && beta_grad_has_value) || buffer.unique_id == REDUCE_YDY ||
-            buffer.unique_id == DYADD || buffer.unique_id == YDYADD) {
+        if (buffer.unique_id == YDY || buffer.unique_id == DYADD || buffer.unique_id == YDYADD) {
             buffer.entry_size = tt::tile_size(tt::DataFormat::Float32);
             buffer.data_format_metadata = tt::DataFormat::Float32;
         }
@@ -342,12 +338,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     if (do_mask_w) {
         compute_dfb_bindings.push_back(
             DFBBinding{.dfb_spec_name = MASK_W, .accessor_name = "mask_w", .endpoint_type = DFBEndpointType::CONSUMER});
-    }
-    if (reduce_grad_tiles && gamma_grad_has_value) {
-        compute_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = REDUCE_YDY, .accessor_name = "reduce_ydy", .endpoint_type = DFBEndpointType::PRODUCER});
-        compute_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = REDUCE_YDY, .accessor_name = "reduce_ydy", .endpoint_type = DFBEndpointType::CONSUMER});
     }
     if (gamma_grad_has_value) {
         compute_dfb_bindings.push_back(

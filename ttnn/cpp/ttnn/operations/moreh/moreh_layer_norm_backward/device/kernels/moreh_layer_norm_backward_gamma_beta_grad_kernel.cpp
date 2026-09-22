@@ -20,9 +20,6 @@ void kernel_main() {
     constexpr auto buffer_tiles = get_arg(args::reduce_buffer_tiles);
 #ifdef REDUCE_GRAD_TILES
     constexpr auto num_blocks = NCHt < block_tiles ? 1 : NCHt / block_tiles;
-#ifdef GAMMA_GRAD_HAS_VALUE
-    DataflowBuffer reduce_ydy(dfb::reduce_ydy);
-#endif
 #else
     constexpr uint32_t num_blocks = 1;
 #endif
@@ -105,7 +102,7 @@ void kernel_main() {
 #ifdef REDUCE_GRAD_TILES
             const uint32_t current_tiles = block + 1 == num_blocks ? NCHt - block * block_tiles : block_tiles;
 #ifdef GAMMA_GRAD_HAS_VALUE
-            reduce_ydy.reserve_back(buffer_tiles);
+            dfb_ydy_obj.reserve_back(buffer_tiles);
 #endif
 #else
             const uint32_t current_tiles = NCHt;
@@ -271,31 +268,26 @@ void kernel_main() {
             // Compute ydy
             tile_regs_acquire();
             dfb_y_obj.wait_front(onetile);
+#ifndef REDUCE_GRAD_TILES
             dfb_ydy_obj.reserve_back(onetile);
+#endif
 
             mul_tiles_init_with_dt(dfb_y_obj, dfb_dycopy_obj);
             mul_tiles(dfb::y, dfb::dycopy, 0, dycopy_index, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile_with_dt(dst0, dfb_ydy_obj);
-
-            dfb_y_obj.pop_front(onetile);
-            dfb_ydy_obj.push_back(onetile);
-            tile_regs_release();
-
 #ifdef REDUCE_GRAD_TILES
-            dfb_ydy_obj.wait_front(onetile);
-            tile_regs_acquire();
-            copy_tile_init_with_dt(dfb_ydy_obj);
-            copy_tile(dfb::ydy, 0, dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(dfb::reduce_ydy);
-            pack_tile<true>(dst0, dfb::reduce_ydy, tile);
-            tile_regs_release();
-            dfb_ydy_obj.pop_front(onetile);
+            pack_reconfig_data_format(dfb::ydy);
+            pack_tile<true>(dst0, dfb::ydy, tile);
 #else
+            pack_tile_with_dt(dst0, dfb_ydy_obj);
+            dfb_ydy_obj.push_back(onetile);
+#endif
+            dfb_y_obj.pop_front(onetile);
+            tile_regs_release();
+
+#ifndef REDUCE_GRAD_TILES
             // Compute ydyadd
             if (inner_idx == 0) {
                 tile_regs_acquire();
@@ -340,9 +332,9 @@ void kernel_main() {
 
 #ifdef REDUCE_GRAD_TILES
 #ifdef GAMMA_GRAD_HAS_VALUE
-            reduce_ydy.push_back(buffer_tiles);
-            reduce_moreh_grad_block<dfb::reduce_ydy, dfb::dgamma, dfb::ydyadd>(block, num_blocks);
-            reduce_ydy.pop_front(buffer_tiles);
+            dfb_ydy_obj.push_back(buffer_tiles);
+            reduce_moreh_grad_block<dfb::ydy, dfb::dgamma, dfb::ydyadd>(block, num_blocks);
+            dfb_ydy_obj.pop_front(buffer_tiles);
 #endif
 #ifdef BETA_GRAD_HAS_VALUE
             // Advance a full buffer per block so indexed consumers never cross a FIFO wrap.

@@ -112,7 +112,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     const DFBSpecName DYADD{"dyadd"};    // Add[dy]
     const DFBSpecName YDYADD{"ydyadd"};  // Add[y * dy]
     const DFBSpecName XMM{"xmm"};        // x - mean
-    const DFBSpecName REDUCE_YDY{"reduce_ydy"};
     const DFBSpecName DYCOPY{"dycopy"};  // dycopy
     // mask_w is deliberately absent: this op's do_mask_w is compile-time false (is_groupnorm is
     // false), so it never allocated that buffer. moreh_group_norm_backward, which shares the compute
@@ -141,7 +140,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     const uint32_t out1_t = beta_grad_has_value ? 1 : 0;   // beta_grad(==dbeta)
 
     const uint32_t im0_t = 1;  // output(==y)
-    const uint32_t im1_t = 1;  // y * dy
     const uint32_t im2_t = 1;  // Add[dy]
     const uint32_t im3_t = 1;  // Add[y * dy]
     const uint32_t im4_t = 1;  // x - mean
@@ -183,12 +181,11 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     push_dfb(DGAMMA, out0_t, data_format);
     push_dfb(DBETA, out1_t, data_format);
     push_dfb(Y, im0_t, intermed_format);
-    push_dfb(YDY, im1_t, intermed_format);
+    push_dfb(YDY, reduce_grad_tiles && gamma_grad_has_value ? reduction.buffer_tiles : 1, intermed_format);
     push_dfb(DYADD, im2_t, intermed_format);
     push_dfb(YDYADD, im3_t, intermed_format);
     push_dfb(XMM, im4_t, intermed_format);
     push_dfb(DYCOPY, reduce_grad_tiles && beta_grad_has_value ? reduction.buffer_tiles : 1, intermed_format);
-    push_dfb(REDUCE_YDY, reduce_grad_tiles && gamma_grad_has_value ? reduction.buffer_tiles : 0, intermed_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -322,12 +319,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     if (do_mask_h) {
         compute_dfb_bindings.push_back(
             DFBBinding{.dfb_spec_name = MASK_H, .accessor_name = "mask_h", .endpoint_type = DFBEndpointType::CONSUMER});
-    }
-    if (reduce_grad_tiles && gamma_grad_has_value) {
-        compute_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = REDUCE_YDY, .accessor_name = "reduce_ydy", .endpoint_type = DFBEndpointType::PRODUCER});
-        compute_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = REDUCE_YDY, .accessor_name = "reduce_ydy", .endpoint_type = DFBEndpointType::CONSUMER});
     }
     if (gamma_grad_has_value) {
         compute_dfb_bindings.push_back(
