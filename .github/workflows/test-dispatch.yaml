@@ -82,37 +82,47 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      # 3-D matrix: 2 dtypes x 2 shapes x 5 shards = 20 cells off the ONE
-      # build. Everything runs on N150 now — the board axis (N150/P100a) and
-      # the 1024x1024 shape were traded for a dtype axis, keeping the same 20
-      # cells. include entries attach per-dtype (perf_dtype) and per-shape
-      # (perf_shape) — GitHub merges an include entry into every cell whose
-      # existing keys it matches, so `dtype:` entries fan across all
-      # shapes/shards and `shape:` entries across all dtypes/shards.
-      # inputs.arch / inputs.runner-label are unused — the board is fixed here.
+      # 4-D matrix: board x dtype x shape x 5 shards, with P100a limited by
+      # `exclude` to ONE combo (bf16 x 32x32). Grid = 20 N150 cells + 5 P100a
+      # cells = 25, all off the ONE arch-agnostic build. include entries attach
+      # per-board (runner label, arch), per-dtype (perf_dtype) and per-shape
+      # (perf_shape); GitHub merges an include entry into every cell whose
+      # existing keys it matches. inputs.arch / inputs.runner-label are unused.
       #
-      # The dtype/shape VALUES are load-bearing: the dashboard globs the
+      # The board/dtype/shape VALUES are load-bearing: the dashboard globs the
       # artifact name below to decide which combo directory a result lands in,
-      # and re-checks it against the metadata.perf_dtype/perf_shape the harness
-      # stamps from these env vars. They must stay in step with DTYPES/SHAPES
-      # in the dashboard's daily-eltwise-perf.yml.
+      # and re-checks it against the metadata.perf_dtype/perf_shape/perf_arch
+      # the harness stamps from PERF_DTYPE/PERF_SHAPE/ARCH_NAME. They must stay
+      # in step with COMBOS in the dashboard's daily-eltwise-perf.yml. N150 is
+      # the implicit board there (no prefix in the artifact name) so the four
+      # original combos' names, directories and history never had to change.
+      #
+      # `label` rides on the board entries and runs-on reads matrix.label: the
+      # container block keys off contains(matrix.label, ...) to pick the viommu
+      # paths (harbor image prefix, /nohugepages, no /mnt/MLPerf). Hard-coding
+      # the runner would silently take the non-viommu branch and mount paths
+      # that do not exist on the pod.
       matrix:
+        board: [n150, p100a]
         dtype: [bf16, fp32]
         shape: [32x32, 256x256]
         shard: [1, 2, 3, 4, 5]
+        exclude:
+          - board: p100a
+            dtype: fp32
+          - board: p100a
+            shape: 256x256
         include:
-          # `label` is carried on BOTH dtype entries (so every cell gets it)
-          # rather than hard-coded at runs-on: the container block below keys
-          # off contains(matrix.label, ...) to pick the viommu paths — harbor
-          # image prefix, /nohugepages instead of /dev/hugepages-1G, and no
-          # /mnt/MLPerf. Dropping matrix.label would silently evaluate those to
-          # the non-viommu branch and mount paths that do not exist on the pod.
+          - board: n150
+            label: tt-ubuntu-2204-N150-viommu-stable
+            arch: wormhole_b0
+          - board: p100a
+            label: tt-ubuntu-2204-P100a-viommu-stable
+            arch: blackhole
           - dtype: bf16
             perf_dtype: bfloat16
-            label: tt-ubuntu-2204-N150-viommu-stable
           - dtype: fp32
             perf_dtype: float32
-            label: tt-ubuntu-2204-N150-viommu-stable
           - shape: 32x32
             perf_shape: "1,1,32,32"
           - shape: 256x256
@@ -121,7 +131,7 @@ jobs:
     container:
       image: ${{ contains(matrix.label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
       env:
-        ARCH_NAME: wormhole_b0                 # N150 only now
+        ARCH_NAME: ${{ matrix.arch }}          # per board; the harness stamps it as perf_arch
         PERF_SHAPE: ${{ matrix.perf_shape }}   # test_eltwise_operations.py reads this
         PERF_DTYPE: ${{ matrix.perf_dtype }}   # ...and this (defaults to bfloat16 if unset)
         LOGURU_LEVEL: INFO
@@ -196,7 +206,9 @@ jobs:
         with:
           # Per-board, per-shape, per-shard artifact so the combine job can
           # group by (board, shape).
-          name: eltwise-perf-results-${{ matrix.dtype }}-${{ matrix.shape }}-shard-${{ matrix.shard }}
+          # N150 keeps the un-prefixed name it always had; other boards get a
+          # `<board>-` prefix. Mirrors the dashboard's COMBOS key rule.
+          name: eltwise-perf-results-${{ matrix.board != 'n150' && format('{0}-', matrix.board) || '' }}${{ matrix.dtype }}-${{ matrix.shape }}-shard-${{ matrix.shard }}
           path: /work/shard-${{ matrix.shard }}.json
           if-no-files-found: error
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
