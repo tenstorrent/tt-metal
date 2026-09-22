@@ -39,7 +39,6 @@
 
 namespace tt::tt_metal {
 class Allocator;
-class MetalEnv;
 class SubDevice;
 class SystemMemoryManager;
 
