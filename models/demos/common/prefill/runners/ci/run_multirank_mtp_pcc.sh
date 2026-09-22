@@ -37,9 +37,13 @@ MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
 # One length, not two. The MTP tail golden is exactly [0, 56320) -- kv_cache/layer_78/ holds the single
-# shard rows_00000000_00056320.safetensors -- so running past it would add only unverifiable rows. This
-# leg carries no throughput number: MTP runs untraced (PREFILL_USE_TRACE=0 in the manifest, because the
-# MTP path is not trace-captured), so its wall clock is not comparable to the traced trunk legs anyway.
+# shard rows_00000000_00056320.safetensors -- so running past it would add only unverifiable rows. The
+# trunk leg is the same shape: one run, PCC over the golden's prefix and the rate over the whole thing.
+# This leg reports a rate too -- the runner gets PREFILL_SYNC_PER_CHUNK=1 and PREFILL_TIMING_DIR below,
+# so summarize_ci_run.py prints its completion cadence in tok/s. That cadence is THE throughput number;
+# the producer DONE line cleanup() also scrapes is push-side only (see there). Both are UNTRACED
+# (PREFILL_USE_TRACE=0 in the manifest, because the MTP path is not trace-captured), so the rate compares
+# against this leg's own history and never against a traced one.
 CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=${GOLDEN_LEN}
@@ -106,6 +110,9 @@ mkdir -p "${TIMING_DIR}"
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 # First and last chunk only: 11 chunks is too few for a rate/latency split, and the indexer's cost grows
 # with the prefix, so the pair brackets the run instead of pretending to sample it.
+# No warmup here, unlike the trunk launcher's 10 chunks -- 11 chunks is the whole run. That costs the
+# chunk_time and ttft rows at probe 0, which carry the cold first chunk, but not the throughput rows:
+# those are a completion CADENCE (end[hi] - end[lo]), so chunk 0's own latency is never inside one.
 PROBE_CHUNKS="0,$((REAL_CHUNKS - 1))"
 
 cleanup() {
@@ -123,6 +130,15 @@ cleanup() {
   echo "==================== MTP per-level KV PCC ===================="
   find "${RANKLOGS}" -type f 2>/dev/null -exec grep -h -E "MTP level|MTP KV PCC|MTP: golden|MTP:.*level slots" {} + \
     | tail -40 || echo "no MTP PCC lines in the rank logs"
+  # The PUSH side of the same request -- NOT the prefill rate. Its `wall` covers only the push loop, which
+  # returns once the sockets have taken the chunks: measured 8.7s for 56320 tokens (6459 tok/s) on a run
+  # whose producer process actually spanned ~300s. So read it for push_ms p50/p90/p99, which is where
+  # socket backpressure shows up; summarize_ci_run.py below owns the throughput number. Scraped because
+  # the tails below are capped at 40 lines.
+  echo "==================== producer push-side rate + backpressure ===================="
+  if ! find "${RANKLOGS}" -type f 2>/dev/null -exec grep -h -F "[producer] DONE" {} +; then
+    echo "no producer DONE line in the rank logs"
+  fi
   if [ -d "${RANKLOGS}" ]; then
     echo "==================== ranklog tails ===================="
     find "${RANKLOGS}" -type f | sort | while read -r f; do

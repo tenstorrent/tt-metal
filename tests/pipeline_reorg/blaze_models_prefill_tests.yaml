@@ -1650,8 +1650,14 @@
 # raw splits onto the same starts. The equivalents do differ: [22,20,20,23] here against MTP4's
 # [22,20,20,20], so the tail rank holds 16 trunk layers plus all 7 levels and is the critical path at
 # ~15% more work than ranks 1 and 2, which is not the balance the splitter was aiming for.
-# Untraced, as the MTP4 work is, so this wall clock is not comparable to the traced entries above.
-- name: "(GLM-5.2-744B) MTP7 prefill KV accuracy 55k@5k, SC4"
+# Perf as well as PCC, from the one run: the launcher gives the runner PREFILL_SYNC_PER_CHUNK=1 and a
+# timing dir, so summarize_ci_run.py reports its completion cadence in tok/s over the same 11 chunks the
+# PCC is taken from. That cadence is the throughput number; the producer DONE line the launcher also
+# scrapes is push-side only and is there for its backpressure percentiles. There is no longer perf arm the
+# way the trunk entry above runs 1M: MTP has never run on four ranks, so its per-chunk time is
+# unmeasured and a 215-chunk arm cannot be budgeted against the timeout below with any honesty.
+# Untraced, as the MTP4 work is, so neither number is comparable to the traced entries above.
+- name: "(GLM-5.2-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1761,7 +1767,10 @@
 # rank carries, and 3 more KV caches than the single-galaxy MTP4 runs that have passed. Whether it fits
 # is the open question this leg exists to answer; if it dies in weight load or on a static-CB/L1 clash
 # (the runner has hit L1_SMALL exhausted at 1152 B), that is the answer, and MTP7 is SC4-only.
-- name: "(GLM-5.2-744B) MTP7 prefill KV accuracy 55k@5k, SC1"
+# Reports the same completion cadence as the SC4 entry, from the same launcher, which makes it the
+# pipeline-free control: a rate here is one rank's compute, so a quad rate below it is the pipeline,
+# not the model.
+- name: "(GLM-5.2-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"

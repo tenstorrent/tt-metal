@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Three 5120-token chunks of GLM-5.2 MTP4 through the real ``TtPrefillTransformer``.
+"""GLM-5.2 MTP4 and MTP7 chunked prefill through the real ``TtPrefillTransformer``.
 
 Drives the production device path -- the same union embedding, per-level windows and on-device
 generation the runtime uses -- and gates every level against a teacher-forced CPU reference.
+:data:`SCHEDULE_AXIS` chooses how the request is cut up: three full chunks, a short last chunk,
+or two turns sharing one cache.
 """
 
 from __future__ import annotations
@@ -64,11 +66,40 @@ CHUNK = 5 * 1024  # 5120 -- the production chunk size, and TtPrefillTransformer.
 NUM_CHUNKS = 3
 TOTAL = CHUNK * NUM_CHUNKS  # 15360 prompt tokens
 
-PROVIDED_AXIS = {"all": lambda k: k, "half": lambda k: k // 2, "none": lambda k: 0}
-"""How many of the last chunk's K levels arrive with their lookahead token already in the stream.
+# A last chunk whose real end sits INSIDE a tile: 2540 = 79 * 32 + 12.
+PARTIAL_TAIL = 2540
+# Two turns on one cache. 3072 is tile-aligned, so turn 2 may resume there, but it is NOT a
+# multiple of CHUNK -- which is the point, see SCHEDULE_AXIS.
+MT_PREFIX = 3072
+MT_TURN2 = 2500
 
-Set by extending the request past the chunks driven here: ``actual_isl = TOTAL + j`` leaves the final
-chunk exactly ``j`` provided levels. ``half`` is the only leg where a wrongly cleared row shows up."""
+
+def _one_turn(actual_isl: int, num_chunks: int = NUM_CHUNKS) -> list[tuple[int, int]]:
+    """``num_chunks`` chunks of a single request of ``actual_isl`` tokens, starting at 0."""
+    return [(i * CHUNK, actual_isl) for i in range(num_chunks)]
+
+
+SCHEDULE_AXIS = {
+    "provided-all": lambda k: _one_turn(TOTAL + k),
+    "provided-half": lambda k: _one_turn(TOTAL + k // 2),
+    "provided-none": lambda k: _one_turn(TOTAL),
+    "partial": lambda k: _one_turn(2 * CHUNK + PARTIAL_TAIL),
+    "multiturn": lambda k: [(0, MT_PREFIX), (MT_PREFIX, MT_PREFIX + MT_TURN2)],
+}
+"""Name -> K -> the ``(actual_start, actual_isl)`` of every chunk this test drives, in order.
+
+``provided-*`` are one request of three full chunks, extended ``j`` tokens past them so the final
+chunk arrives with exactly ``j`` of its K levels already in the stream -- the axis a wrongly
+cleared union row shows up on. The other two are the partial-chunk coverage #57013 asked for:
+
+* ``partial`` ends the request 2540 tokens into its third chunk. That chunk is SHORT and its real
+  end falls inside a tile, and row ``real_len - 1`` lands on chip 3 of 8 -- so the LM head reads
+  its row off a middle chip instead of the last one, which every other leg does.
+* ``multiturn`` is two requests over one cache: 3072 tokens, then 2500 more resumed at 3072. That
+  start is tile-aligned but not chunk-aligned, so the second turn drives update_padded_kv_cache's
+  ROTATED mid-slab write and the indexed rope/SDPA that go with it. Both are degenerate on every
+  chunk-aligned leg. Its first turn is short too, so both of its chunks generate.
+"""
 
 MTP_LEVEL_AXIS = (4, 7)
 """The level counts this test runs: MTP4 and MTP7, the two shipping configurations.
@@ -109,23 +140,23 @@ def _from_device(t: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
 def mtp_chunk_stream(
     all_tokens: Sequence[int],
-    chunk_idx: int,
+    chunk_start: int,
     chunk_size: int,
     n_mtp: int,
     num_levels: int,
     *,
     actual_isl: int | None = None,
 ) -> tuple[list[int], int, int]:
-    """A whole prompt + a chunk index -> that chunk's ``(stream, real_len, provided_levels)``.
+    """A whole prompt + a chunk's absolute start -> its ``(stream, real_len, provided_levels)``.
 
     The stream is ``chunk_size + n_mtp`` ids: this chunk's positions followed by the lookahead, with
     the pad sentinel at every global position at or past ``actual_isl``.
     """
     total = len(all_tokens)
     c, n, k = int(chunk_size), int(n_mtp), int(num_levels)
-    s = int(chunk_idx) * c
+    s = int(chunk_start)
     isl = total if actual_isl is None else int(actual_isl)
-    assert 0 <= s < isl, f"chunk {chunk_idx} starts at {s}, past the {isl} real tokens"
+    assert 0 <= s < isl, f"chunk starts at {s}, past the {isl} real tokens"
     assert n > 0, f"n_mtp must be positive, got {n}"
     assert isl <= total, f"actual_isl {isl} exceeds the {total} ids available"
 
@@ -238,21 +269,22 @@ def _next_token_fn(transformer: TtPrefillTransformer, actual_isl: int):
 # --- The token-level reference ---
 
 
-def _expected_window(full_seq: list[int], chunk_idx: int, level: int) -> list[int]:
+def _expected_window(full_seq: list[int], chunk_start: int, level: int, width: int) -> list[int]:
     """The ONE statement this whole test is checking, written independently of production code.
 
-    Level ``k`` of chunk ``c`` sees ``full_seq[c*C + k + 1 : c*C + k + 1 + C]`` -- one expression for
-    the interior chunks and the last one alike, indexed off the full sequence, not off the stream.
+    Level ``k`` of the chunk at ``s`` sees ``full_seq[s + k + 1 : s + k + 1 + width]`` -- one
+    expression for an interior chunk, a turn's last chunk and a resumed turn alike, indexed off the
+    full sequence, not off the stream. ``width`` is the chunk's REAL length: the device fills the
+    rows past it with Emb(clamped pad) and nothing here compares them.
     """
-    start = chunk_idx * CHUNK + level + 1
-    return list(full_seq[start : start + CHUNK])
+    start = chunk_start + level + 1
+    return list(full_seq[start : start + width])
 
 
 def _host_window_embedding(embed_table: torch.Tensor, window_ids: list[int]) -> torch.Tensor:
     """The embedding the device MUST have produced for ``window_ids`` [C, H], derived here.
 
-    Bit-identical, because the device's path from ids to window is arithmetic-free. The position-0
-    mask is left out deliberately, so the row-0 check can tell a masking device from one that is not.
+    Bit-identical, because the device's path from ids to window is arithmetic-free.
     """
     return embed_table[torch.tensor(window_ids, dtype=torch.long)]
 
@@ -283,8 +315,8 @@ _MESH_PARAMS = [
 # Prediction levels: both shipping configurations. See :data:`MTP_LEVEL_AXIS` for why MTP7 costs
 # nothing on the wire and why K = 1 lives in test_mtp.py instead.
 @pytest.mark.parametrize("mtp_levels", MTP_LEVEL_AXIS, ids=[f"mtp{k}" for k in MTP_LEVEL_AXIS])
-# How many levels the socket provides on the LAST chunk; see PROVIDED_AXIS.
-@pytest.mark.parametrize("provided_axis", list(PROVIDED_AXIS), ids=[f"provided-{k}" for k in PROVIDED_AXIS])
+# How the request is cut into chunks, and how far it runs past them; see SCHEDULE_AXIS.
+@pytest.mark.parametrize("schedule", list(SCHEDULE_AXIS), ids=list(SCHEDULE_AXIS))
 @pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
 # Weight axis: pretrained only. There is no random 78-layer trunk -- the TTNN cache is the only
 # reason full depth fits -- and test_mtp.py keeps the checkpoint-free coverage of these modules.
@@ -301,7 +333,7 @@ def test_mtp_transformer_chunks(
     num_links,
     num_layers,
     mtp_levels,
-    provided_axis,
+    schedule,
     use_pretrained,
     mtp_cfg,
     mtp_state_dict,
@@ -309,7 +341,7 @@ def test_mtp_transformer_chunks(
     skip_pcc,
     monkeypatch,
 ):
-    """3 x 5120 tokens of GLM-5.2 MTP4 end to end: every window, every level, exact ids.
+    """GLM-5.2 MTP4/MTP7 chunked prefill end to end: every window, every level, exact ids.
 
     Four claims, most-local first: the stream the socket delivers, every level's output against the
     teacher-forced reference, row 0 of every window, and the last chunk's generated tokens.
@@ -317,15 +349,24 @@ def test_mtp_transformer_chunks(
     torch.manual_seed(42)
     # Drop the one combination that buys least: at full depth `provided-all` means the final chunk
     # generates nothing, which is the interior-chunk path every other chunk already exercised.
-    if not skip_pcc and num_layers == 78 and provided_axis == "all":
+    if not skip_pcc and num_layers == 78 and schedule == "provided-all":
         pytest.skip("pcc-layers78-provided-all adds no path the interior chunks and layers1 do not")
     # Bound here rather than threaded through every reference below: K and the socket row's width are
     # fixed for the whole test once the axis picks them, and the body reads them ~20 times.
     NUM_LEVELS = mtp_levels
     N_MTP = num_mtp_tokens(NUM_LEVELS)
-    # The request runs `provided` tokens past the chunks driven here, which is what leaves the final
-    # chunk with that many levels already supplied. TOTAL itself never changes.
-    ACTUAL_ISL = TOTAL + PROVIDED_AXIS[provided_axis](NUM_LEVELS)
+    # Every chunk this leg drives, as (actual_start, actual_isl). The cache is sized for TOTAL and
+    # the prompt for TOTAL + K regardless, so only the schedule changes across this axis.
+    CHUNKS = SCHEDULE_AXIS[schedule](NUM_LEVELS)
+    for _i, (_s, _isl) in enumerate(CHUNKS):
+        # A mid-slab resume is supported; a start that is not tile-aligned is not, and would be a
+        # silently rotated cache rather than an error.
+        assert _s % ttnn.TILE_SIZE == 0, f"chunk {_i} starts at {_s}, which is not tile-aligned"
+        assert _s < _isl <= TOTAL + NUM_LEVELS, f"chunk {_i} at {_s} declares actual_isl {_isl}"
+    for (_ps, _pisl), (_s, _isl) in zip(CHUNKS, CHUNKS[1:]):
+        assert _s in (_ps + CHUNK, _pisl), (
+            f"chunk at {_s} neither continues the chunk at {_ps} nor resumes the previous turn at " f"its end {_pisl}"
+        )
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
 
@@ -377,7 +418,7 @@ def test_mtp_transformer_chunks(
     assert hidden == mtp_cfg.hidden_size
 
     logger.info(
-        f"[mtp chunks] mesh={mesh_shape} chunks={NUM_CHUNKS}x{CHUNK} total={TOTAL} K={NUM_LEVELS} "
+        f"[mtp chunks] mesh={mesh_shape} schedule={schedule}{CHUNKS} chunk={CHUNK} K={NUM_LEVELS} "
         f"trunk_layers={num_layers} mtp_layer={layer_idx} vocab={config.vocab_size} "
         f"cache={weight_cache_path}"
     )
@@ -502,8 +543,9 @@ def test_mtp_transformer_chunks(
     # Teacher forcing hands level k the device's ``out_head_normed[k-1]`` -- H^{k-1}, matching how
     # TtMTPPredictor chains levels: shared_head.norm(h^k), not the raw block output.
 
-    # One persistent SparseMLAReference PER LEVEL, carried across all three chunks: per level so
-    # levels cannot see each other's keys, persistent so each chunk attends over the earlier ones.
+    # One persistent SparseMLAReference PER LEVEL, carried across every chunk the schedule drives:
+    # per level so levels cannot see each other's keys, persistent so each chunk attends over the
+    # earlier ones -- which is also what makes the multi-turn schedule's second turn a real resume.
     ref_mla = None if skip_pcc else [SparseMLAReference(config, mla_weights, seq_len=TOTAL) for _ in range(NUM_LEVELS)]
 
     # --- Caches ------------------------------------------------------------------------------------
@@ -532,7 +574,7 @@ def test_mtp_transformer_chunks(
 
     mesh_device.enable_program_cache()
 
-    # Drive the three chunks. h^0 -- the post-``model.norm`` trunk output the predictor is seeded
+    # Drive the schedule's chunks. h^0 -- the post-``model.norm`` trunk output the predictor is seeded
     # with -- is the one thing no production path hands back, so capture it where it is passed.
     h0_host: dict = {}
     real_run_mtp = transformer.run_mtp
@@ -565,12 +607,11 @@ def test_mtp_transformer_chunks(
     logger.info(f"N_MTP = {N_MTP}")
     logger.info(f"CHUNK = {CHUNK}")
 
-    for chunk_idx in range(NUM_CHUNKS):
-        start = chunk_idx * CHUNK
-
-        stream, real_len, provided = mtp_chunk_stream(
-            prompt, chunk_idx, CHUNK, N_MTP, NUM_LEVELS, actual_isl=ACTUAL_ISL
-        )
+    for chunk_idx, (start, actual_isl) in enumerate(CHUNKS):
+        stream, real_len, provided = mtp_chunk_stream(prompt, start, CHUNK, N_MTP, NUM_LEVELS, actual_isl=actual_isl)
+        # This chunk's real end. Past it the stream is pad, the device writes Emb(clamped pad), and
+        # nothing below compares those rows -- which is what makes a short last chunk checkable.
+        actual_end = start + real_len
         logger.info(f"Processing chunk {chunk_idx}")
         logger.info(f"Len(stream) is {len(stream)}")
         # Head and tail, not the whole 5152-id stream: the tail is where an interior chunk's
@@ -580,17 +621,16 @@ def test_mtp_transformer_chunks(
         # (1) what the socket delivers: C + n_mtp ids cut into a trunk row and a lookahead row that
         # abut, padded from the request's real end. How many levels have a token is read off that.
         assert len(stream) == CHUNK + N_MTP, f"chunk {chunk_idx} stream is {len(stream)}, expected {CHUNK + N_MTP}"
-        expected = [MTP_PAD_TOKEN_ID if start + i >= ACTUAL_ISL else prompt[start + i] for i in range(CHUNK + N_MTP)]
+        expected = [MTP_PAD_TOKEN_ID if start + i >= actual_isl else prompt[start + i] for i in range(CHUNK + N_MTP)]
         assert stream == expected, (
             f"chunk {chunk_idx}'s stream must be the prompt slice with pad at every position >= "
-            f"actual_isl={ACTUAL_ISL}; first mismatch at "
+            f"actual_isl={actual_isl}; first mismatch at "
             f"{next(i for i, (a, b) in enumerate(zip(stream, expected)) if a != b)}"
         )
         assert_socket_rows(stream, sp_factor, CHUNK, N_MTP)
 
         # The rule the runner applies to the same ids, restated independently: level k's token is at
         # global position actual_end + k, and it is provided iff that position is inside the request.
-        actual_end = start + real_len
         scanned = (
             0
             if real_len < CHUNK
@@ -611,14 +651,15 @@ def test_mtp_transformer_chunks(
         derive_gen.update(on=(provided < NUM_LEVELS and not skip_pcc), isl=real_len, first=provided)
 
         logger.info(
-            f"[mtp chunks] chunk {chunk_idx}: start={start} real_len={real_len} " f"provided={provided}/{NUM_LEVELS}"
+            f"[mtp chunks] chunk {chunk_idx}: start={start} real_len={real_len} actual_isl={actual_isl} "
+            f"provided={provided}/{NUM_LEVELS}"
         )
         transformer.forward(
             union.trunk,
             kvpe_cache,
             actual_isl=real_len,
             actual_start=start,
-            actual_end=start + real_len,
+            actual_end=actual_end,
             cache_user_id=0,
             index_kv_cache=index_kv_cache,
             mtp_union=union,
@@ -654,6 +695,9 @@ def test_mtp_transformer_chunks(
         # The ids the device MUST have generated, derived rather than observed: level k argmaxes the
         # LM head at the last real row of H^k. Levels below `provided` got theirs off the socket.
         seam_is_decisive = True
+        # Per chunk, not per test: on a multi-turn schedule every chunk generates, so a stale list
+        # from the previous chunk would build the next one's windows out of the wrong ids.
+        generated = []
         if derive_gen["on"]:
             next_token = _next_token_fn(transformer, real_len)
             generated = [
@@ -679,17 +723,17 @@ def test_mtp_transformer_chunks(
 
         # The true sequence: real ids up to the request's end, then the ids the device generated
         # for the levels the socket did not provide.
-        full_seq = prompt[:ACTUAL_ISL] + generated
-        assert len(full_seq) >= TOTAL + NUM_LEVELS - (NUM_LEVELS - provided) or generated == [], (
+        full_seq = prompt[:actual_isl] + generated
+        assert len(full_seq) >= actual_end + NUM_LEVELS, (
             f"full_seq is {len(full_seq)} ids; chunk {chunk_idx} level {NUM_LEVELS - 1} indexes up to "
-            f"{start + NUM_LEVELS - 1 + CHUNK}"
+            f"{actual_end + NUM_LEVELS - 1}"
         )
         windows.append([])
 
         # The window each level MUST embed, derived from the definition of MTP rather than observed.
         # Adjacent token embeddings are unrelated, so a shifted window fails its fused PCC outright.
-        windows[chunk_idx].extend(_expected_window(full_seq, chunk_idx, level) for level in range(NUM_LEVELS))
-        assert all(len(w) == CHUNK for w in windows[chunk_idx]), (
+        windows[chunk_idx].extend(_expected_window(full_seq, start, level, real_len) for level in range(NUM_LEVELS))
+        assert all(len(w) == real_len for w in windows[chunk_idx]), (
             f"chunk {chunk_idx}: a window came out short -- full_seq is {len(full_seq)} ids, which "
             f"does not cover this chunk's shift-{NUM_LEVELS} lookahead"
         )
@@ -698,11 +742,14 @@ def test_mtp_transformer_chunks(
 
         # H^{k-1} for the reference is the DEVICE's, never the reference's own previous output. All
         # device readbacks happen here: touching the device across the reference's host gap faults.
-        dev_x = [_from_device(res.x[k], mesh_device) for k in range(NUM_LEVELS)]
-        dev_out = [_from_device(res.out[k], mesh_device) for k in range(NUM_LEVELS)]
-        dev_normed = [_from_device(res.out_head_normed[k], mesh_device) for k in range(NUM_LEVELS)]
+        # Sliced to real_len, not C: SparseMLAReference sizes its rope slice as actual_end -
+        # actual_start, so a short chunk must hand it exactly its real rows. A no-op when the chunk
+        # is full, which is why the full-chunk legs are unchanged by it.
+        dev_x = [_from_device(res.x[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]
+        dev_out = [_from_device(res.out[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]
+        dev_normed = [_from_device(res.out_head_normed[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]
         del res
-        ref_hiddens = [h0_host["h"]] + dev_normed[:-1]
+        ref_hiddens = [h0_host["h"][:, :, :real_len]] + dev_normed[:-1]
 
         t0 = time.monotonic()
         ref_xs, ref_outs, ref_normeds, _ = glm_mtp_predictor_reference(
@@ -720,7 +767,7 @@ def test_mtp_transformer_chunks(
             hiddens=[h.squeeze(0) for h in ref_hiddens],
             mla_refs=ref_mla,
             actual_start=start,
-            actual_end=start + real_len,
+            actual_end=actual_end,
         )
         logger.info(f"[mtp chunks] chunk {chunk_idx}: CPU reference took {time.monotonic() - t0:.1f}s")
 
@@ -743,7 +790,7 @@ def test_mtp_transformer_chunks(
             if generated and level >= provided:
                 # (4) the generation seam: the last level+1 rows carry ids only the LM head can
                 # produce, and the reference got them from _expected_window, not from the device.
-                seam = CHUNK - level - 1
+                seam = real_len - level - 1
                 _, msg = assert_with_pcc(
                     ref_xs[level].unsqueeze(0)[:, :, seam:], dev_x[level][:, :, seam:], FUSED_MTP_PCC
                 )

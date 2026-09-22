@@ -246,6 +246,7 @@ class TtParallelEmbedding(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(safe_ids)
 
         logger.debug(f"Output: embeddings shape={embeddings.shape}")
         return embeddings
