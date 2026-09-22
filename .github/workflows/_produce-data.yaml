@@ -188,9 +188,22 @@ jobs:
         run: python3 .github/scripts/data_analysis/create_pipeline_json.py
       - name: Show directory to see output files
         run: ls -hal
+      - name: Check whether there is pipeline data to upload
+        id: check-pipeline-json
+        shell: bash
+        run: |
+          # create_pipeline_json.py writes no JSON when the analysed run had no jobs that
+          # started, e.g. its concurrency group cancelled it before any job ran. There is no
+          # data for that run, and the sftp batchfile would fail on the unmatched put glob.
+          if compgen -G "pipeline_*.json" > /dev/null; then
+            echo "has-data=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=no-pipeline-data::The analysed run produced no pipeline data, skipping the upload"
+            echo "has-data=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Upload cicd data
         uses: ./.github/actions/upload-data-via-sftp
-        if: ${{ github.event_name == 'workflow_run' || inputs.upload_data }}
+        if: ${{ steps.check-pipeline-json.outputs.has-data == 'true' && (github.event_name == 'workflow_run' || inputs.upload_data) }}
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt

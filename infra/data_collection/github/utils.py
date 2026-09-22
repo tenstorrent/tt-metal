@@ -29,6 +29,30 @@ def get_data_pipeline_datetime_from_datetime(requested_datetime):
     return requested_datetime.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
+def get_jobs_that_started_(github_pipeline_json, github_jobs_json):
+    """
+    The jobs of this pipeline attempt that actually started running.
+
+    A run that its concurrency group cancelled before any job started reports either no jobs at
+    all, or jobs that GitHub concluded as skipped without ever running them. Neither kind has
+    logs, timings or test reports to analyse. Jobs that started before the pipeline was submitted
+    are dropped too, because those are carried over from a previous attempt for that pipeline.
+    """
+    pipeline_submission_ts = get_datetime_from_github_datetime(github_pipeline_json["created_at"])
+
+    def job_started_(github_job):
+        # Skipped jobs get a start timestamp from GitHub, but nothing ever ran on a runner
+        # See https://github.com/tenstorrent/tt-metal/issues/24151 for an example
+        if github_job.get("conclusion") == "skipped":
+            return False
+        job_start_ts = github_job.get("started_at")
+        if not job_start_ts:
+            return False
+        return get_datetime_from_github_datetime(job_start_ts) >= pipeline_submission_ts
+
+    return list(filter(job_started_, github_jobs_json["jobs"]))
+
+
 def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json):
     github_pipeline_id = github_pipeline_json["id"]
     pipeline_submission_ts = github_pipeline_json["created_at"]
@@ -45,9 +69,11 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
         )
     )
     sorted_jobs_start_times = sorted(eligible_jobs_start_times)
+    # Callers are expected to have screened out pipelines with nothing to analyse with
+    # get_jobs_that_started_, so reaching this point means the JSON objects are malformed
     assert (
         sorted_jobs_start_times
-    ), f"It seems that this pipeline does not have any jobs that started on or after the pipeline was submitted, which should be impossible. Please directly inspect the JSON objects"
+    ), f"This pipeline does not have any jobs that started on or after the pipeline was submitted. Please directly inspect the JSON objects"
     pipeline_start_ts = get_data_pipeline_datetime_from_datetime(sorted_jobs_start_times[0])
 
     pipeline_end_ts = github_pipeline_json["updated_at"]

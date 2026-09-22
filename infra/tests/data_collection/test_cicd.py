@@ -1,3 +1,4 @@
+import json
 import pytest
 import pathlib
 from datetime import datetime
@@ -8,6 +9,7 @@ from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityE
 from infra.data_collection.github.utils import (
     get_job_failure_signature_,
     get_job_row_from_github_job,
+    get_jobs_that_started_,
     _card_type_from_job_labels,
     _generic_runner_labels,
     _load_sku_config_skus,
@@ -688,3 +690,121 @@ def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_
     ]
     assert partial_n300_jobs
     assert all(job.card_type == "wh_n300" for job in partial_n300_jobs)
+
+
+def _write_run_json(tmp_path, jobs, run_id=35744836559, conclusion="cancelled"):
+    """
+    Write the workflow.json / workflow_jobs.json pair that produce-data analyses, and return
+    the (workflow_outputs_dir, workflow_json_path, workflow_jobs_json_path) triple for it.
+    """
+    workflow_json = {
+        "id": run_id,
+        "name": "PR Gate",
+        "status": "completed",
+        "conclusion": conclusion,
+        "run_attempt": 1,
+        "created_at": "2026-09-22T15:00:00Z",
+        "updated_at": "2026-09-22T15:05:03Z",
+        "head_branch": "some-contributor/some-branch",
+        "head_sha": "d2f4e2b6a1c3e5d7f9b0a2c4e6d8f0b2a4c6e8d0",
+        "head_commit": {"author": {"name": "Some Contributor"}},
+        "html_url": f"https://github.com/tenstorrent/tt-metal/actions/runs/{run_id}",
+        "repository": {"html_url": "https://github.com/tenstorrent/tt-metal", "name": "tt-metal"},
+    }
+    workflow_jobs_json = {"total_count": len(jobs), "jobs": jobs}
+
+    workflow_json_path = tmp_path / "workflow.json"
+    workflow_json_path.write_text(json.dumps(workflow_json))
+
+    workflow_jobs_json_path = tmp_path / "workflow_jobs.json"
+    workflow_jobs_json_path.write_text(json.dumps(workflow_jobs_json))
+
+    workflow_outputs_dir = tmp_path / "generated" / "cicd"
+    workflow_outputs_dir.mkdir(parents=True)
+
+    return workflow_outputs_dir, str(workflow_json_path), str(workflow_jobs_json_path)
+
+
+def _make_cancelled_run_job(job_id, conclusion, run_id=35744836559, started_at="2026-09-22T15:02:00Z"):
+    return {
+        "id": job_id,
+        "run_id": run_id,
+        "run_attempt": 1,
+        "runner_name": "tt-ubuntu-2204-large-stable-w77km-runner-djpn9",
+        "labels": ["tt-ubuntu-2204-large-stable"],
+        "status": "completed",
+        "conclusion": conclusion,
+        "created_at": "2026-09-22T15:00:00Z",
+        "started_at": started_at,
+        "completed_at": "2026-09-22T15:05:03Z",
+        "name": "some gated job",
+        "html_url": f"https://github.com/tenstorrent/tt-metal/actions/runs/{run_id}/job/{job_id}",
+        "steps": [],
+    }
+
+
+def test_create_pipeline_json_skips_run_cancelled_before_any_job_started(workflow_run_gh_environment, tmp_path):
+    # A run that its concurrency group cancelled before any job started reports no jobs at all
+    # E.g. https://github.com/tenstorrent/tt-metal/actions/runs/35744836559
+    workflow_outputs_dir, workflow_json_path, workflow_jobs_json_path = _write_run_json(tmp_path, jobs=[])
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir,
+        workflow_run_gh_environment,
+        workflow_json_path,
+        workflow_jobs_json_path,
+    )
+
+    assert pipeline is None
+
+
+def test_create_pipeline_json_skips_run_where_every_job_was_skipped(workflow_run_gh_environment, tmp_path):
+    # Same cancellation, but GitHub reports the jobs it never ran as skipped
+    # E.g. https://github.com/tenstorrent/tt-metal/actions/runs/35716965498
+    jobs = [_make_cancelled_run_job(job_id, "skipped") for job_id in (1, 2, 3)]
+    workflow_outputs_dir, workflow_json_path, workflow_jobs_json_path = _write_run_json(tmp_path, jobs=jobs)
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir,
+        workflow_run_gh_environment,
+        workflow_json_path,
+        workflow_jobs_json_path,
+    )
+
+    assert pipeline is None
+
+
+def test_create_pipeline_json_still_fails_when_a_started_job_has_no_logs(workflow_run_gh_environment, tmp_path):
+    # A job did run, so missing logs are a data collection problem and must stay a hard error
+    run_id = 35744836559
+    jobs = [_make_cancelled_run_job(1, "skipped"), _make_cancelled_run_job(2, "cancelled")]
+    workflow_outputs_dir, workflow_json_path, workflow_jobs_json_path = _write_run_json(tmp_path, jobs=jobs)
+    (workflow_outputs_dir / str(run_id) / "logs").mkdir(parents=True)
+
+    with pytest.raises(AssertionError, match="No log files found"):
+        create_cicd_json_for_data_analysis(
+            workflow_outputs_dir,
+            workflow_run_gh_environment,
+            workflow_json_path,
+            workflow_jobs_json_path,
+        )
+
+
+def test_get_jobs_that_started_ignores_jobs_carried_over_from_a_previous_attempt():
+    workflow_json = {"created_at": "2026-09-22T15:00:00Z"}
+
+    previous_attempt_job = _make_cancelled_run_job(1, "success", started_at="2026-09-22T14:30:00Z")
+    this_attempt_job = _make_cancelled_run_job(2, "success", started_at="2026-09-22T15:02:00Z")
+
+    assert get_jobs_that_started_(workflow_json, {"jobs": [previous_attempt_job]}) == []
+    assert get_jobs_that_started_(workflow_json, {"jobs": [previous_attempt_job, this_attempt_job]}) == [
+        this_attempt_job
+    ]
+
+
+def test_create_pipeline_json_for_run_with_started_jobs_is_unaffected(workflow_run_gh_environment):
+    # The normal path must keep producing a pipeline row
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_passing_10662355710")
+
+    assert pipeline is not None
+    assert pipeline.jobs
