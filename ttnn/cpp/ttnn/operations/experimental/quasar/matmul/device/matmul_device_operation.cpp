@@ -2198,7 +2198,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         {plan.C_slice_M_tiles * in0_tile.get_height(), plan.C_slice_N_tiles * in1_tile.get_width()},
                         orientation};
                     const tt::tt_metal::MemoryConfig mem_config(
-                        plan.sharded_output_layout(), attributes.output_mem_config.buffer_type(), shard_spec);
+                        plan.sharded_output_layout, attributes.output_mem_config.buffer_type(), shard_spec);
                     return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
