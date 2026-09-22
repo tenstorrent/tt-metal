@@ -61,8 +61,17 @@ verify inputs for every configured width, fixed-capacity context projection,
 and fused programs before ordinary trace capture. Trace-enabled warmup captures
 the same decoder. `prepare_widths` rejects new widths after any width is captured.
 `_contract_covers_position` checks the actual physical verification extent and
-captured coverage before commit or reconstruction. An uncovered position returns
+captured coverage before `contract_commit` or reconstruction. An uncovered position returns
 zero drafts and continues ordinary decoding.
+
+`_contract_covers_position` also checks every target layer with
+`cache_position_modulo` set. Packed verification writes `P_v` positions starting at
+the committed anchor before attention reads target KV. The bounded ring needs
+at least `P_v - 1` positions beyond `sliding_window`, or every candidate position
+must precede the first ring wrap. An unsafe position returns zero drafts before
+`contract_commit`, reconstruction, or replay, and ordinary decoding continues. The contract
+does not enlarge the bounded KV pool. Device correctness of this fallback and
+of speculative execution with sufficient ring headroom remains unverified.
 
 `_contract_prefill_tables` clones the submitted page tables and masks unused
 columns before traced prefill or prefix reconstruction. Traced padding must not
@@ -87,6 +96,7 @@ PYTHONPATH=/path/to/vllm-tt-plugin/src python -m pytest -o addopts='' \
   models/demos/gemma4/tests/unit/test_dflash_contract_adapter.py \
   models/demos/gemma4/tests/unit/test_dflash_width_prepare.py \
   models/demos/gemma4/tests/unit/test_dflash_capture_cleanup.py \
+  models/demos/gemma4/tests/unit/test_dflash_contract_bounded.py \
   models/demos/gemma4/tests/unit/test_dflash_contract_width_config.py -q
 ```
 
@@ -101,6 +111,9 @@ width-set exhaustion, and ordinary fallback without repeated reconstruction.
 Width configuration tests execute both production decoder constructors and
 compare physical tensor extents with the admitted draft count, including an
 unset `GEMMA4_DFLASH_VERIFY` and overridden drafter block sizes.
+Bounded coverage tests check the first wrapped candidate, exact headroom
+equality, every configured layer, actual decoder width, and ordinary progress
+after a verified completion reaches the ring limit.
 
 ## Required device evidence before readiness
 
@@ -127,6 +140,9 @@ Do not use an unrelated plugin PR as an implicit dependency.
       identical request schedules. Compare token IDs, not decoded text prefixes.
 - [ ] Repeated runs confirm captured buffers, target KV, drafter context, and
       readback events remain valid. Include bounded sliding KV coverage separately.
+- [ ] Exact-window bounded rings decline proposals before unsafe candidate writes
+      and continue ordinary decoding across the ring boundary. A separate bounded
+      run with sufficient ring headroom produces real proposals across that boundary.
 - [ ] Record ordinary-reference differences at identical prefixes. Numerical
       differences are not automatically evidence of correctness.
 

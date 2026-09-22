@@ -362,6 +362,13 @@ class DFlashContractMixin:
         max_position = int(getattr(self.model_args[0], "max_seq_len", 0))
         if max_position and position + physical_width > max_position:
             return False
+        for layer in self.model[0].layers:
+            attention = layer.self_attn.config
+            ring = attention.cache_position_modulo
+            if ring is not None:
+                # Packed writes must not replace history needed by the first query.
+                if ring - attention.sliding_window < physical_width - 1 and position + physical_width > ring:
+                    return False
         if decoder is None:
             return True
         if self._spec_width_set:
