@@ -220,6 +220,14 @@ void kernel_main() {
         }
 
         dfb_partial_obj.pop_front(static_cast<uint16_t>(num_tiles_per_partial_result * block_h));
+
+        // The first-stage reduce buffer is waited as a readiness handshake before signalling the
+        // second-stage reader, and that reader has gathered from it by the time this core returns.
+        // Pop the same count that was waited, under the same conditions, to leave it balanced.
+        if constexpr (is_all_to_all_worker && use_two_stage_reduce) {
+            dfb_reduce_first_stage_obj.pop_front(
+                static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_to_read));
+        }
     };
     global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2);
     noc.async_atomic_barrier();

@@ -299,6 +299,11 @@ void kernel_main() {
                 noc.async_write_barrier();
             }
         }
+
+        // The combined-result buffer is waited before the gather and read (locally and by the other
+        // all-to-all workers) while building the global result; the multicast above is the last
+        // reader of it, so pop the waited count here to leave the buffer balanced.
+        dfb_ex_obj.pop_front(static_cast<uint16_t>(num_tiles_per_worker * num_tiles_scaler));
     };
 
     // RMSNorm has no mean to reduce, so its buffers are not declared and the call is compiled out.

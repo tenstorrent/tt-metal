@@ -266,6 +266,16 @@ void kernel_main() {
     uint32_t cb_prev_sum = cb_sum_2;
 
     // Loop through all heads assigned to core
+    // The mask buffers are generated once by the writer and kept fronted across every head and
+    // chunk that applies them (see "permanently fronted" in compute_common.hpp), so they are
+    // released once after the last use rather than at each use. Record what was actually fronted
+    // so the release matches the wait on every path, including the cores that apply no mask.
+    uint32_t causal_mask_tiles_fronted = 0;
+    uint32_t sliding_window_mask_tiles_fronted = 0;
+    // The identity scaler is likewise fronted for every reduction (see "scale_cb has 1 produced" in
+    // reduce_c) and released once below; cores with no chunks to process never front it.
+    bool identity_scale_fronted = false;
+
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
         // Reset ping-pong buffer assignments at the start of each head iteration
         cb_cur_max = cb_max_1;
@@ -363,6 +373,13 @@ void kernel_main() {
                     add_mask_fusion,
                     mask_cb_to_use,
                     cb_zero_in);
+                if (add_mask_fusion) {
+                    if (mask_cb_to_use == cb_sliding_window_mask_in) {
+                        sliding_window_mask_tiles_fronted = qk_chunk_tiles_dynamic;
+                    } else {
+                        causal_mask_tiles_fronted = qk_chunk_tiles_dynamic;
+                    }
+                }
 
                 /* QK += MASK */
                 // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.
@@ -379,6 +396,7 @@ void kernel_main() {
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                            causal_mask_tiles_fronted = qk_chunk_tiles_dynamic;
                         }
                     } else {
                         if constexpr (use_attention_mask) {
@@ -391,6 +409,7 @@ void kernel_main() {
                     if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
                         reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
                         add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
+                        sliding_window_mask_tiles_fronted = qk_chunk_tiles_dynamic;
                     }
                 }
 
@@ -412,6 +431,7 @@ void kernel_main() {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
+                identity_scale_fronted = true;
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
                 /* QK -= cb_cur_max */
@@ -660,4 +680,18 @@ void kernel_main() {
 
     // Free up cb_q_in after Q chunks
     CircularBuffer(cb_q_in).pop_front(q_chunk_tiles);
+
+    // Release the mask buffers that were left fronted above, now that no chunk reads them again.
+    if (causal_mask_tiles_fronted != 0) {
+        CircularBuffer(cb_mask_in).pop_front(causal_mask_tiles_fronted);
+    }
+    if (sliding_window_mask_tiles_fronted != 0) {
+        CircularBuffer(cb_sliding_window_mask_in).pop_front(sliding_window_mask_tiles_fronted);
+    }
+    if constexpr (has_block_padding) {
+        CircularBuffer(cb_block_pad_mask).pop_front(Sq_chunk_t * Sk_chunk_t_dynamic);
+    }
+    if (identity_scale_fronted) {
+        CircularBuffer(cb_identity_scale_in).pop_front(1);
+    }
 }

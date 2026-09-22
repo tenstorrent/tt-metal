@@ -190,6 +190,14 @@ void kernel_main() {
             lw_mask,
             q_num_chunks,
             use_zigzag_balancing);
+
+        // The identity scale and the lightweight mask palette are fronted once above and read by
+        // every chunk without being popped. Release them here, under the same conditions that
+        // gated the waits, so the buffers are not left fronted at kernel exit.
+        cb_identity_scale_in_obj.pop_front(1);
+        if constexpr ((is_causal || sliding_window_size > 0 || k_partial_col > 0) && !use_provided_mask) {
+            cb_mask_in_obj.pop_front(lw_mask_tile_count);
+        }
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);
@@ -268,6 +276,11 @@ void kernel_main() {
                 cb_out,
                 lw_mask,
                 use_zigzag_balancing);
+        }
+        if constexpr (use_lightweight_causal_mask) {
+            // The two-tile causal palette is fronted once above and read by every chunk without
+            // being popped; release it here so it is not left fronted at kernel exit.
+            cb_mask_in_obj.pop_front(2);
         }
     }
 }

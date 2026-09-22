@@ -371,4 +371,23 @@ void kernel_main() {
         dfb_beta_src_obj.pop_front(num_tiles_per_block);
     }
 #endif
+
+#ifdef IS_ALLGATHER_WORKER
+    if (enable_sqrt) {
+        // The global-reduce scaler tile is pushed once and read by tile index across the reductions
+        // above without being popped. Pop it under the same guard that gated the wait, so the buffer
+        // is left balanced on every core.
+        dfb_scaler_global_obj.pop_front(1);
+    }
+#endif
+#ifdef FUSE_GAMMA
+    // Gamma is pushed once by the reader and read by tile index across every row of the block, so it
+    // is waited once rather than per row. Pop it here to balance the buffer.
+    dfb_gamma_obj.pop_front(block_w);
+#endif
+#ifdef FUSE_BETA
+    // Beta is pushed once by the reader and read by tile index across every row of the block, so it
+    // is waited once rather than per row. Pop it here to balance the buffer.
+    dfb_beta_obj.pop_front(block_w);
+#endif
 }

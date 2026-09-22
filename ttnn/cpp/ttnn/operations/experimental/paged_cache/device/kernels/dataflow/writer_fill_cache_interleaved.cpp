@@ -264,4 +264,15 @@ void kernel_main() {
             dfb_in.pop_front(Wt);
         }
     }
+
+    // Each of these is reserved once purely as a staging slot for a NOC read that this kernel then
+    // reads through a raw pointer; there is no downstream consumer, so commit the reservations to
+    // leave the buffers balanced.
+#ifdef USE_BATCH_IDX_TENSOR
+    dfb_batch_idx.push_back(1);
+#endif
+#ifdef USE_VALID_SEQ_LEN
+    dfb_valid_seq_len.push_back(1);
+#endif
+    dfb_page_table.push_back(1);
 }

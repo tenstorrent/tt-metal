@@ -394,4 +394,8 @@ void kernel_main() {
         dfb_xmm_obj.pop_front(static_cast<uint16_t>(total_buffer_size));
 
     }  // NCHt loop
+
+    // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
+    // waited once up front rather than per iteration. Pop it here to balance the buffer.
+    dfb_eps_obj.pop_front(1);
 }

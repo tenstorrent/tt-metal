@@ -157,4 +157,21 @@ void kernel_main() {
             ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w));
     }
+#ifdef FUSED_SCALE_MASK
+    // The fused-scale scalar is a single tile pushed once by the reader and re-waited on every row
+    // of the block; pop it once here so the buffer is left balanced.
+    dfb_fused_scale_obj.pop_front(1);
+#if !defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
+    // A non-causal attention mask is one row of block_w tiles that every row of the block re-waits
+    // and reuses, so it is popped once here rather than per row. The causal paths consume a fresh
+    // mask per row and pop it inside the loop instead.
+    dfb_fused_attn_obj.pop_front(block_w);
+#endif
+#endif
+    // The reduce scalers are each a single tile pushed once by the reader and waited by every
+    // reduction over the block; pop them here so the buffers are left balanced.
+#ifdef NUMERIC_STABLE
+    DataflowBuffer(dfb_max_scaler).pop_front(1);
+#endif
+    DataflowBuffer(dfb_sum_scaler).pop_front(1);
 }

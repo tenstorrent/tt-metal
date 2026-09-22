@@ -535,7 +535,6 @@ void kernel_main() {
                 reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
                     compute_kernel_lib::ReduceInputBlockShape::single());
 
-            dfb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
@@ -826,6 +825,30 @@ void kernel_main() {
                     ckl::PushPolicy::PerTile,
                     ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
         }
+    }
+
+    // Buffers that hold a value reused for the whole core's work are waited once (or re-waited) and
+    // never popped inside the loops above; pop them here so they are left balanced. This mirrors the
+    // cleanup the Welford variant of this kernel performs.
+    DataflowBuffer(dfb_scaler_id).pop_front(1);
+    // The all-ones tile and, when pad correction composes one, the row-validity mask are each a
+    // single tile pushed once and re-waited inside the loops above. Without pad correction the
+    // row-validity name aliases the all-ones buffer, so it is popped once in that case.
+    dfb_ones.pop_front(1);
+    if constexpr (has_row_mask) {
+        dfb_rowvalid.pop_front(1);
+    }
+    if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
+        // The global-reduce scaler is waited by the two global reductions on the mcast sender only;
+        // pop it under the same guard that gated those reductions.
+        DataflowBuffer(dfb_scaler_global_id).pop_front(1);
+    }
+    dfb_eps.pop_front(1);
+    if constexpr (do_beta) {
+        dfb_beta.pop_front(per_core_N);
+    }
+    if constexpr (do_gamma) {
+        dfb_gamma.pop_front(per_core_N);
     }
 
 #ifdef UNTILIZE_OUT
