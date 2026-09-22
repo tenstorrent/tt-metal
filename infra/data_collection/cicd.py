@@ -20,7 +20,7 @@ from infra.data_collection.github.workflows import (
     get_github_job_ids_to_tt_smi_versions,
     get_tests_from_test_report_path,
 )
-from infra.data_collection.pydantic_models import Step, TTSmiReset
+from infra.data_collection.pydantic_models import Step, TTSmiReset, JitTelemetry
 
 
 def get_cicd_json_filename(pipeline):
@@ -60,7 +60,11 @@ def create_cicd_json_for_data_analysis(
         workflow_outputs_dir, github_pipeline_id, github_job_ids
     )
 
-    github_job_id_to_smi_versions, github_job_id_to_smi_resets = get_github_job_ids_to_tt_smi_versions(
+    (
+        github_job_id_to_smi_versions,
+        github_job_id_to_smi_resets,
+        github_job_id_to_jit_telemetry,
+    ) = get_github_job_ids_to_tt_smi_versions(
         workflow_outputs_dir,
         github_pipeline_id,
         workflow_attempt,
@@ -100,6 +104,7 @@ def create_cicd_json_for_data_analysis(
         raw_job = dict(raw_job)
         raw_job.pop("steps", None)
         raw_job.pop("tt_smi_reset", None)
+        raw_job.pop("jit_telemetry", None)
         raw_job.pop("workflow_attempt", None)
 
         reset_data = github_job_id_to_smi_resets.get(github_job_id)
@@ -112,10 +117,21 @@ def create_cicd_json_for_data_analysis(
                 tt_smi_reset_attempt["workflow_attempt"] = workflow_attempt
                 tt_smi_resets.append(TTSmiReset(**tt_smi_reset_attempt))
 
+        jit_telemetry_data = github_job_id_to_jit_telemetry.get(github_job_id)
+
+        jit_telemetry = None
+        if jit_telemetry_data:
+            jit_telemetry = []
+            for metric in jit_telemetry_data:
+                metric = dict(metric)
+                metric["workflow_attempt"] = workflow_attempt
+                jit_telemetry.append(JitTelemetry(**metric))
+
         job = pydantic_models.Job(
             **raw_job,
             tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
             tt_smi_reset=tt_smi_resets,
+            jit_telemetry=jit_telemetry,
             tests=tests,
             steps=steps,
         )

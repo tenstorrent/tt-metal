@@ -688,3 +688,56 @@ def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_
     ]
     assert partial_n300_jobs
     assert all(job.card_type == "wh_n300" for job in partial_n300_jobs)
+
+
+def test_search_for_jit_telemetry_parses_both_formats_and_ignores_noise(tmp_path):
+    log_file = tmp_path / "123.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                # Non-metric lines that must be ignored (no fully-formed record).
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT cache stats: 0/5660 hits (0.0%) [0 cached]",
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry: 39 registered TelemetryTokens",
+                # Current format: unit in parentheses, plain numeric values.
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry [JitBuildState::compile] (ms): "
+                "count=5660, total=6211227.967, min=438.541, max=2617.981, mean=1097.390 (build_cache_telemetry.cpp:356)",
+                # Current format, byte unit with integer values.
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry [kernel_elf_size.brisc] (B): "
+                "count=1577, total=1121896316, min=398236, max=1786228, mean=711412 (build_cache_telemetry.cpp:356)",
+                # Older format: no "(unit)", unit suffixed on each value.
+                "2026-09-03 18:49:41.712 | info | BuildKernels | JIT telemetry [jit_build]: "
+                "count=79, total=368533.488ms, min=1004.938ms, max=6393.632ms, mean=4664.981ms",
+                # Duplicate of an earlier metric: the last occurrence must win.
+                "2026-09-17 07:26:27.230 | info | BuildKernels | JIT telemetry [JitBuildState::compile] (ms): "
+                "count=5660, total=6211228.000, min=438.541, max=2617.981, mean=1097.400 (build_cache_telemetry.cpp:356)",
+            ]
+        )
+    )
+
+    metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
+
+    assert set(metrics) == {"JitBuildState::compile", "kernel_elf_size.brisc", "jit_build"}
+
+    compile_metric = metrics["JitBuildState::compile"]
+    assert compile_metric["unit"] == "ms"
+    assert compile_metric["sample_count"] == 5660
+    # Last occurrence wins.
+    assert compile_metric["total_value"] == pytest.approx(6211228.000)
+    assert compile_metric["mean_value"] == pytest.approx(1097.400)
+
+    elf_metric = metrics["kernel_elf_size.brisc"]
+    assert elf_metric["unit"] == "B"
+    assert elf_metric["total_value"] == pytest.approx(1121896316)
+
+    # Older inline-unit format still resolves the unit and the values.
+    build_metric = metrics["jit_build"]
+    assert build_metric["unit"] == "ms"
+    assert build_metric["sample_count"] == 79
+    assert build_metric["max_value"] == pytest.approx(6393.632)
+
+
+def test_search_for_jit_telemetry_returns_empty_when_absent(tmp_path):
+    log_file = tmp_path / "456.log"
+    log_file.write_text("nothing of interest here\nanother ordinary log line\n")
+
+    assert workflows.search_for_jit_telemetry_in_log_file_(log_file) == []
