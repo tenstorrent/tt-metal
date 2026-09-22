@@ -1,0 +1,3 @@
+# Runtime-downloaded long-context corpora (Frankenstein / War and Peace), fetched by
+# demo/text_demo.py on first long-ISL run and cached here. Not source; never commit.
+.context_cache/
