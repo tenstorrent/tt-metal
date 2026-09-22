@@ -114,15 +114,41 @@ PREFILL_MAX_COLS_PORTABLE = 11
 # from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
 # tenant is the op under test, so it reports a win that the full model has no room for. Any future
 # raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+#
+# The cap is also ARCH-bound, which is why this table is keyed by (arch, tp). A Wormhole n300
+# exposes 8x8 = 64 worker cores against BH P150's ~110, and ~72 KB less L1 per core (1499136 vs
+# 1572864 B). Fewer cores means per_core_N = ceil(n_tiles/cols) and per_core_M = ceil(m_tiles/rows)
+# are each ~1.3x larger, so the output block CB is ~1.7x bigger per core while the L1 it must share
+# with the resident output tensor is smaller. Measured on this box: cap=4 at TP=8 overflows in
+# test_mlp_tp_prefill with
+#   "Statically allocated circular buffers in program 78 clash with L1 buffers on core range
+#    [0-0 - 7-7]. L1 buffer allocated at 1145728 and static circular buffer region ends at 1394016"
+# i.e. ~242 KB over. cap=2 halves the in0 CB.
 _PREFILL_TUNING = {
-    4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
-    8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
+    ("bh", 4): dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
+    ("bh", 8): dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
+    ("wh", 8): dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=2),
 }
 
 
 def prefill_tuning(num_devices):
-    """Prefill matmul tuning for this TP; unknown TP falls back to the frozen TP=4 values."""
-    return _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
+    """Prefill matmul tuning for this arch + TP; unknown combos fall back to the frozen BH TP=4
+    values (the historical behavior for an unknown TP)."""
+    arch = "bh" if is_blackhole() else "wh"
+    return _PREFILL_TUNING.get((arch, num_devices)) or _PREFILL_TUNING[("bh", 4)]
+
+
+def prefill_l1_output_ok():
+    """Whether a tuned prefill matmul may keep its [seq, N] output resident in L1.
+
+    Blackhole only. There the L1 output avoids a DRAM round-trip and is the validated sweep
+    config (test_mlp_matmul_sweep_prefill *_outL1). On a Wormhole n300 that tensor plus the
+    matmul's own circular buffers do not fit: 64 cores instead of ~110 makes the per-core output
+    block ~1.7x larger while L1 is ~72 KB smaller. Measured on a T3K -- keeping the MLP gate/up
+    outputs in L1 still clashes by ~93 KB even at in0_block_w_cap=2. Falling back to DRAM costs
+    prefill bandwidth, not correctness, and mirrors what this path already does for the down-proj
+    INPUT ("keeping both down input and output in L1 at seq 2048 overflows L1")."""
+    return is_blackhole()
 
 
 def _roundup(a, b):
