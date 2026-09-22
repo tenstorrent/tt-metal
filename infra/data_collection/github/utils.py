@@ -59,16 +59,15 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
 
     repository_url = github_pipeline_json["repository"]["html_url"]
 
-    jobs = github_jobs_json["jobs"]
-    jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
-    # We filter out jobs that started before because that means they're from a previous attempt for that pipeline
-    eligible_jobs_start_times = list(
-        filter(
-            lambda job_start_time_: job_start_time_ >= get_datetime_from_github_datetime(pipeline_submission_ts),
-            jobs_start_times,
-        )
+    # get_jobs_that_started_ already drops jobs carried over from a previous attempt, jobs GitHub
+    # concluded as skipped without running them, and jobs with no start timestamp at all. Reading
+    # started_at off the raw list instead would fail on that last kind, and would let a skipped
+    # job's invalid start timestamp set the pipeline start -- the same timestamp that
+    # get_job_row_from_github_job already discards for skipped jobs further down.
+    sorted_jobs_start_times = sorted(
+        get_datetime_from_github_datetime(job_["started_at"])
+        for job_ in get_jobs_that_started_(github_pipeline_json, github_jobs_json)
     )
-    sorted_jobs_start_times = sorted(eligible_jobs_start_times)
     # Callers are expected to have screened out pipelines with nothing to analyse with
     # get_jobs_that_started_, so reaching this point means the JSON objects are malformed
     assert (
