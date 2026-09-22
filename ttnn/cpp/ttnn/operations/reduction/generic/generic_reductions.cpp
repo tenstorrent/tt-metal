@@ -769,6 +769,16 @@ Tensor min(
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode) {
+    // The flag asks for the FPU, which has no min pool at all, so there is no faster kernel for it
+    // to select: fp32 min would lower to -max(-x), an extra negate pass and inputs truncated to
+    // tf32, measured never faster than the default and up to 8.5x slower. Checked here rather than
+    // in the device op, which sees MIN both from this entry and from ttnn::max's flip below.
+    TT_FATAL(
+        !(fast_and_approximate_mode && input_tensor_arg.dtype() == DataType::FLOAT32),
+        "ttnn.min does not support fast_and_approximate_mode=True on Float32: the FPU has no min "
+        "pool, so the flag cannot select a faster kernel. Remove it — the default gives the "
+        "accurate SFPU min where one exists, and the same -max(-x) lowering where it does not.");
+
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * min(s * x) = s * max(x) when s < 0.*/
     if (scalar < 0.0f) {

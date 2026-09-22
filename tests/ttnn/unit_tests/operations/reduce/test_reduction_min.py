@@ -163,9 +163,6 @@ def test_min_fp32_accurate(device, input_shape, dim, scalar):
 # the default across H and W, and up to 8.5x slower, so the flag has no right answer here.
 @pytest.mark.parametrize("dim", [None, -1, -2])
 def test_min_fp32_fast_mode_rejected(device, dim, expect_error):
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        pytest.skip("Quasar has no SFPU min, so -max(-x) is the only min there is and the flag is honoured")
-
     torch.manual_seed(1)
     input_tensor = ttnn.from_torch(
         torch.randn((1, 1, 64, 64), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32

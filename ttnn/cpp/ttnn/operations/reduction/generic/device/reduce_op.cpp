@@ -201,20 +201,9 @@ Tensor reduce(
     // to the FPU without fp32_dest_acc_en or on Quasar (no SFPU reduce LLKs). The dense RM kernels
     // share the same SFPU fold via CT arg 6. negate=true marks the FPU's -MAX(-x) min lowering,
     // which has no SFPU fold, so MAX/MIN exclude it.
-    const bool fp32_sfpu_available =
-        input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 && arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
-    const bool fp32_sfpu_eligible = !fast_and_approximate_mode && fp32_sfpu_available;
-
-    // The flag asks for the FPU, which has no min pool at all, so it lowers min to -max(-x): an
-    // extra negate pass, inputs truncated to tf32, and no H-axis split. Measured never faster than
-    // the default and up to 8.5x slower, so the flag has no correct use here. Scoped to configs
-    // where the SFPU min is reachable at all: without fp32_dest_acc_en, and on Quasar, -max(-x) is
-    // the only min there is and the flag is honoured.
-    TT_FATAL(
-        !(fast_and_approximate_mode && reduce_math == tt::tt_metal::ReduceOpMath::MIN && fp32_sfpu_available),
-        "ttnn.min does not support fast_and_approximate_mode=True on Float32: the FPU has no min "
-        "pool, so the flag lowers the reduce to -max(-x) — an extra negate pass, inputs truncated to "
-        "tf32, and no H-axis split. Use the default (False), which is both exact and faster.");
+    const bool fp32_sfpu_eligible = !fast_and_approximate_mode &&
+                                    input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+                                    arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
 
     const bool use_sfpu_fp32_sum = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::SUM;
     const bool use_sfpu_fp32_mean = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::AVG;

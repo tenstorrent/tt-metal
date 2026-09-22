@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <string_view>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -37,9 +38,13 @@ inline std::string get_generic_reduction_doc(
     const char* output_layout_kwarg = has_output_layout ? R"doc(
             output_layout (ttnn.Layout, optional): layout of the output tensor. Defaults to `None`, which keeps the layout the chosen path produces naturally (see the Note below). `ttnn.TILE_LAYOUT` or `ttnn.ROW_MAJOR_LAYOUT` is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. `ttnn.ROW_MAJOR_LAYOUT` is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.)doc"
                                                         : "";
-    const char* fast_approx_kwarg = has_fast_approximate_mode ? R"doc(
-            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc"
-                                                              : "";
+    // ttnn.min is the exception: the FPU has no min pool, so there is no faster kernel for the flag
+    // to select and a FLOAT32 min rejects it.
+    const char* fast_approx_kwarg = !has_fast_approximate_mode           ? ""
+                                    : std::string_view(op_name) == "min" ? R"doc(
+            fast_and_approximate_mode (bool, optional): must stay `False` (the default) for FLOAT32. The FPU has no min pool, so there is no faster path to select: a FLOAT32 min with `True` is rejected rather than lowered to `-max(-x)`. No effect for non-FLOAT32 inputs.)doc"
+                                                                         : R"doc(
+            fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc";
     return fmt::format(
         R"doc(
         Computes the {0} of the input tensor :attr:`input_tensor` along the specified dimension(s) :attr:`dim`.
