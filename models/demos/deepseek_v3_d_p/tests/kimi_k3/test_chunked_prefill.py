@@ -37,7 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, TRACE_100K, resolve_checkpoint, resolve_trace
@@ -51,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates, allocate_native_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
@@ -192,6 +193,18 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             num_users=1,
         )
 
+    # The migration copy of the carries: the runner binds the engine-owned slabs at compile(), and from
+    # then on every commit also lands there. Bound here the same way, so this test also proves that
+    # what a migration reader sees after every chunk is exactly the carry the next chunk continues from.
+    slabs = None
+    if model.kda_states is not None:
+        geometry = KdaContractGeometry.from_kda_config(
+            kimi_k3_kda_config(), mesh_shape=tuple(mesh_device.shape), sp_axis=SP_AXIS, tp_axis=TP_AXIS
+        )
+        slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=model.kda_states.layer_ids, num_slots=1)
+        model.kda_states.bind_slabs(slabs)
+        slab_scratch = allocate_native_state(mesh_device, geometry)
+
     # Only the 100k trace snapshots the carry; at depth 24 the oracle is the per-layer output and the
     # cumulative KV instead, and the carry is covered by the depth-5 case.
     golden_carry = (
@@ -284,6 +297,22 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             got_carry = _compose_carry(mesh_device, model.kda_states.read(0, 0).recurrent)
             carry_pcc = float(str(comp_pcc(want_carry, got_carry, CARRY_PCC)[1]).split()[-1])
 
+        # The slab copy of every KDA layer must be the carry, bit for bit, on every chip.
+        if slabs is not None:
+            for layer_idx in slabs.layer_ids:
+                slabs.import_layer(slab_scratch, 0, layer_idx)
+                carry = model.kda_states.read(layer_idx, 0)
+                for name in ("recurrent", "convolution"):
+                    want = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(getattr(carry, name))]
+                    got = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(getattr(slab_scratch, name))]
+                    for dev, (w, g) in enumerate(zip(want, got)):
+                        if not torch.equal(
+                            w.view(torch.int32 if w.dtype == torch.float32 else torch.int16),
+                            g.view(torch.int32 if g.dtype == torch.float32 else torch.int16),
+                        ):
+                            failures.append(f"chunk {chunk} layer {layer_idx} {name} slab != carry on device {dev}")
+                            break
+
         footprints.append(_dram_bytes(mesh_device))
         logger.info(
             f"  chunk {chunk:2d} [{start:6d}:{start + CHUNK:6d}]  worst-layer {output_pcc:.6f} "
@@ -340,5 +369,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         f"  DRAM after chunk 1: {min(steady) / 2**20:.1f} MiB, "
         f"drift over {NUM_CHUNKS - 1} chunks: {growth / 2**20:.1f} MiB"
     )
+    if slabs is not None:
+        ttnn.deallocate(slab_scratch.recurrent)
+        ttnn.deallocate(slab_scratch.convolution)
+        slabs.deallocate()
     assert growth == 0, f"device DRAM grew {growth} bytes across chunks 1..{NUM_CHUNKS - 1}: {footprints}"
     assert not failures, "chunked prefill diverged from the model: " + "; ".join(failures)
