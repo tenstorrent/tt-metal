@@ -1255,7 +1255,7 @@ def warmup_gemma4_batched_prefill_traces(
                 # complete the sweep: a batch-N iteration (or an explicitly
                 # greedy-only warmup) does, otherwise the penalty/log-prob
                 # variants first-compile at runtime under live traces.
-                if greedy_only or batch_size > 1:
+                if greedy_only or warmup_users > 1:
                     sampling_parameters_sweeped = True
 
             if skip_sequence_lengths:
