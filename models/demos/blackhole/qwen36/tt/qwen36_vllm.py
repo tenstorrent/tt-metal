@@ -78,9 +78,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
     # supports_async_decode=False: async decode assumes on-device token/position continuity, which
     # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
+    # QWEN36_ASYNC_DECODE_OK=1 (lane C experiment): declare async-decode support so vLLM's async
+    # scheduling is not disabled by the platform. Safe with HOST sampling only because this model
+    # re-stages every decode trace input from the host each step (_tt_vllm_always_refresh_decode_trace_inputs),
+    # so no device-resident token/position chain is ever assumed; the plugin then overlaps only the
+    # engine's scheduling/output work with the device step (its steady-decode fast path needs device sampling).
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": False,
+        "supports_async_decode": os.environ.get("QWEN36_ASYNC_DECODE_OK", "0") == "1",
         "supports_sample_on_device": True,
     }
 
@@ -132,7 +137,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             logits_per_device = math.ceil(model.args.vocab_size / model.num_devices)
             raise RuntimeError(
                 "Qwen3.6 on-device sampling requires a certified TP topology (1x4 or 1x8) "
-                f"with at most 65536 logits/device; got mesh={mesh_shape}, "
+                f"with at most 65536 logits/device, or a (1,1) mesh with QWEN36_ONDEV_SAMPLING_TP1=1 "
+                f"(single-device chunked top-k, lane C experiment); got mesh={mesh_shape}, "
                 f"vocab={model.args.vocab_size}, logits/device={logits_per_device}. "
                 "Unset sample_on_device_mode for host sampling."
             )

@@ -118,6 +118,18 @@ class Qwen36Model:
             and args.vocab_size % self.num_devices == 0
             and (args.vocab_size // self.num_devices <= 64 * 1024)
         )
+        if mesh_shape == (1, 1) and os.environ.get("QWEN36_ONDEV_SAMPLING_TP1", "0") == "1":
+            # TP=1 mode (lane C experiment): TTSampling runs a single device's vocab as power-of-two same-device
+            # chunks of <= 64K (multi_step_reduction; 248320 -> 4 x 62080), so the 64K-per-device gate above does
+            # not apply. Gate on the same split test TTSampling itself uses; validate greedy identity before use.
+            from models.common.sampling.tt_sampling import TTSampling
+
+            padded_vocab = getattr(args, "padded_vocab_size", None) or args.vocab_size
+            self._supports_on_device_sampling = TTSampling.num_single_device_vocab_splits(padded_vocab) is not None
+            logger.info(
+                f"[sampling] TP=1 on-device sampling {'enabled' if self._supports_on_device_sampling else 'unavailable'} "
+                f"(padded vocab {padded_vocab}, splits {TTSampling.num_single_device_vocab_splits(padded_vocab)})"
+            )
         if self._supports_on_device_sampling:
             from models.common.sampling.generator import SamplingGenerator
 
