@@ -55,8 +55,8 @@ PCC_STATE = 0.99999
 #   64    4    Qwen3.5-122B-A10B, Qwen3.5-397B-A17B
 #  128    8    Qwen3.8-2.4T-A95B
 #
-# Tensor parallelism (TP) distributes both head sets, so the shape of the kernel inputs
-# are driven by (Hk/TP, HV/TP) and the GQA group.
+# Tensor parallelism (TP) distributes both head sets, so (Hk/TP, HV/TP) and the GQA group
+# drive the shape of the kernel inputs.
 # Hk = 16 caps TP at 16 for every model in the family.
 # BH = batch * HV/TP determines the amount of work per core in the scan part. In consequence,
 # the test skips a shape whose BH exceeds the grid. On an 11x10 Blackhole chip that is for
