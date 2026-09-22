@@ -100,23 +100,23 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
         }
         std::vector<uint32_t> sender_runtime_args(11 + (receiver_noc_coords.size() * 2));
         uint32_t sender_args_idx = 0;
-        sender_runtime_args[sender_args_idx++] = global_cb.config_address();         // config_addr
-        sender_runtime_args[sender_args_idx++] = 1;                                  // is_sender
-        sender_runtime_args[sender_args_idx++] = receiver_noc_coords.size();         // num_receivers
-        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();         // fifo_start_addr
-        sender_runtime_args[sender_args_idx++] = global_cb.size();                   // fifo_size
-        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();         // fifo_ptr
+        sender_runtime_args[sender_args_idx++] = global_cb.config_address();  // config_addr
+        sender_runtime_args[sender_args_idx++] = 1;                           // is_sender
+        sender_runtime_args[sender_args_idx++] = receiver_noc_coords.size();  // num_receivers
+        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();  // fifo_start_addr
+        sender_runtime_args[sender_args_idx++] = global_cb.size();            // fifo_size
+        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();  // fifo_ptr
 
         for (const auto& receiver_noc_coord : receiver_noc_coords) {
             sender_runtime_args[sender_args_idx++] = receiver_noc_coord.x;  // remote_noc_x
             sender_runtime_args[sender_args_idx++] = receiver_noc_coord.y;  // remote_noc_y
         }
-        sender_runtime_args[sender_args_idx++] = 0;                                  // aligned_pages_sent
-        sender_runtime_args[sender_args_idx++] = 0;                                  // aligned_pages_acked
-        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();         // fifo_wr_ptr
+        sender_runtime_args[sender_args_idx++] = 0;                           // aligned_pages_sent
+        sender_runtime_args[sender_args_idx++] = 0;                           // aligned_pages_acked
+        sender_runtime_args[sender_args_idx++] = global_cb.buffer_address();  // fifo_wr_ptr
         sender_runtime_args[sender_args_idx++] =
-            global_cb.buffer_address() + global_cb.size();         // fifo_limit_page_aligned
-        sender_runtime_args[sender_args_idx++] = cb_page_size;     // fifo_page_size
+            global_cb.buffer_address() + global_cb.size();      // fifo_limit_page_aligned
+        sender_runtime_args[sender_args_idx++] = cb_page_size;  // fifo_page_size
 
         std::vector<uint32_t> receiver_runtime_args = {
             global_cb.config_address(),                     // config_addr
