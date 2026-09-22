@@ -140,7 +140,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         rank-local one. See `tt/kimi_k3/layer_schedule.py`.
 
         A K3 rank can legitimately hold ZERO full-attention layers — a 1-layer bring-up run is layer
-        0, which is KDA — and then there is no KV cache to allocate; the KDA state slabs still are.
+        0, which is KDA, and then there is no KV cache to allocate; the KDA state slabs still are.
         """
         from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule

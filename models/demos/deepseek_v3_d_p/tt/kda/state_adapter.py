@@ -337,15 +337,20 @@ def deallocate_state(state: KdaState) -> None:
 # --- consolidated slabs and the per-layer adapter ---
 
 
+def _free_unless_shared(tensor: ttnn.Tensor, *keep: ttnn.Tensor) -> None:
+    """Free an intermediate unless a reshape handed back a view over the same buffer."""
+    if all(tensor.buffer_address() != other.buffer_address() for other in keep):
+        ttnn.deallocate(tensor)
+
+
 def convolution_to_slab_rows(convolution: ttnn.Tensor, geometry: KdaContractGeometry) -> ttnn.Tensor:
     """``[1, K-1, W]`` -> ``[1, SEG, (K-1)*64]``: row ``j`` is segment ``j`` in contract byte order."""
     history, width, half = geometry.conv_history, geometry.convolution_width, KDA_CONVOLUTION_HALF_WIDTH
     split = ttnn.reshape(convolution, (1, history, width // half, half))
     swapped = ttnn.permute(split, (0, 2, 1, 3))
-    ttnn.deallocate(split)
+    _free_unless_shared(split, convolution, swapped)
     rows = ttnn.reshape(swapped, (1, width // half, history * half))
-    if rows is not swapped:
-        ttnn.deallocate(swapped)
+    _free_unless_shared(swapped, rows)
     return rows
 
 
@@ -354,11 +359,9 @@ def slab_rows_to_convolution(rows: ttnn.Tensor, geometry: KdaContractGeometry) -
     history, width, half = geometry.conv_history, geometry.convolution_width, KDA_CONVOLUTION_HALF_WIDTH
     split = ttnn.reshape(rows, (1, width // half, history, half))
     swapped = ttnn.permute(split, (0, 2, 1, 3))
-    if split is not rows:
-        ttnn.deallocate(split)
+    _free_unless_shared(split, rows, swapped)
     convolution = ttnn.reshape(swapped, (1, history, width))
-    if convolution is not swapped:
-        ttnn.deallocate(swapped)
+    _free_unless_shared(swapped, convolution)
     return convolution
 
 
@@ -389,9 +392,8 @@ def import_convolution(slab: ttnn.Tensor, batch: int, destination: ttnn.Tensor, 
     rows = ttnn.slice(slab, [batch, 0, 0], [batch + 1, seg, width], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     convolution = slab_rows_to_convolution(rows, geometry)
     ttnn.copy(convolution, destination)
+    _free_unless_shared(rows, convolution)
     ttnn.deallocate(convolution)
-    if rows is not convolution:
-        ttnn.deallocate(rows)
 
 
 @dataclass

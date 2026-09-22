@@ -12,7 +12,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
@@ -80,15 +79,20 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
 
     const std::uint32_t total_logical_rows = input.logical_volume() / input.logical_shape()[-1];
 
-    // Wide, short tensors otherwise assign work by logical row and leave most cores idle. If both endpoint page
-    // boundaries share an aligned unit, distribute those units independently across the compute grid.
+    // Chosen empirically to prevent large row OOM DFB error; also caps the per-unit DFB entry below.
     constexpr std::uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536 * 4;
+    // Wide, short tensors otherwise assign work by logical row and leave most cores idle (a [1, 3, W]
+    // row-major state redistributed into 128-byte ND pages ran on three cores). When there are fewer
+    // rows than cores and both endpoint page boundaries share an aligned unit, distribute those units
+    // independently across the compute grid instead. Tall tensors keep the per-row path: one unit per
+    // NoC transaction would cost them far more round trips than the row split.
+    const std::uint32_t num_compute_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     const std::uint32_t common_page_elements = std::gcd(elements_per_input_page, elements_per_output_page);
     const std::uint32_t common_page_bytes = common_page_elements * bytes_per_element;
     const std::uint32_t required_alignment = std::max(input.buffer()->alignment(), output.buffer()->alignment());
-    const bool can_parallelize_pages = common_page_elements < elements_per_tensor_row &&
-                                       common_page_bytes <= MAX_SUBBLOCK_SIZE_BYTES &&
-                                       common_page_bytes % required_alignment == 0;
+    const bool can_parallelize_pages =
+        total_logical_rows < num_compute_cores && common_page_elements < elements_per_tensor_row &&
+        common_page_bytes <= MAX_SUBBLOCK_SIZE_BYTES && common_page_bytes % required_alignment == 0;
 
     if (can_parallelize_pages) {
         const std::uint32_t units_per_row = tt::div_up(elements_per_tensor_row, common_page_elements);
@@ -96,7 +100,6 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
         auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_units);
         std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
-        const std::uint32_t aligned_unit_bytes = tt::align(common_page_bytes, required_alignment);
 
         const m2::DFBSpecName UNIT{"unit"};
         const m2::TensorParamName INPUT{"input"};
@@ -106,7 +109,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
 
         m2::DataflowBufferSpec unit_dfb{
             .unique_id = UNIT,
-            .entry_size = aligned_unit_bytes,
+            .entry_size = common_page_bytes,
             .num_entries = 2,
             .data_format_metadata = tt::tt_metal::datatype_to_dataformat_converter(input.dtype()),
         };
