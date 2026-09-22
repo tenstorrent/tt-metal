@@ -129,10 +129,60 @@ def read_fresh_probe(stub_path):
         return None
 
 
+# Torch calls that can only prepare or marshal data for the device -- allocate, cast, reshape,
+# concatenate, draw noise, DLPack interop. None of them can produce a MATH result, so a PCC pass
+# with only these in the trace is still earned by the ttnn dispatches. This mirrors the e2e
+# contract's own allowance ("shape and dtype ops are prep"). Anything outside this list (matmul,
+# softmax, mul, ...) keeps the strict verdict: host compute is host compute.
+_PREP_ONLY_TORCH_OPS = frozenset(
+    {
+        "arange",
+        "as_tensor",
+        "cat",
+        "clone",
+        "contiguous",
+        "detach",
+        "empty",
+        "expand",
+        "flatten",
+        "float",
+        "from_numpy",
+        "full",
+        "full_like",
+        "int",
+        "long",
+        "manual_seed",
+        "no_grad",
+        "ones",
+        "ones_like",
+        "rand",
+        "randint",
+        "randn",
+        "repeat_interleave",
+        "reshape",
+        "stack",
+        "tensor",
+        "to",
+        "unsqueeze",
+        "view",
+        "zeros",
+        "zeros_like",
+        "__dlpack__",
+    }
+)
+
+
 def is_native_from_probe(result, max_torch_ops: int = 0) -> bool | None:
     """True/False from a runtime probe, or None when the probe is unusable (torch_ops=-1) so the
     caller keeps its static check. Native = dispatched ttnn device ops AND ran <= max_torch_ops torch
-    compute ops."""
+    compute ops. Torch calls over the budget are still native when every recorded op name is
+    prep/marshalling only (see _PREP_ONLY_TORCH_OPS): e.g. a sampler drawing x0 via torch.randn, or
+    DLPack input marshalling, is not host compute. A probe without op names stays strict."""
     if not result or result.get("torch_ops", -1) < 0:
         return None
-    return result.get("ttnn_dispatch", 0) > 0 and result.get("torch_ops", 0) <= max_torch_ops
+    if result.get("ttnn_dispatch", 0) <= 0:
+        return False
+    if result.get("torch_ops", 0) <= max_torch_ops:
+        return True
+    names = result.get("torch_op_names") or []
+    return bool(names) and all(name in _PREP_ONLY_TORCH_OPS for name in names)

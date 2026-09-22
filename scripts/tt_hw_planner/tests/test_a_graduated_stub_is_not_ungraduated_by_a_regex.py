@@ -33,6 +33,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_ROOT))
 
 from scripts.tt_hw_planner.bringup_loop import _stub_body_is_native  # noqa: E402
+from models.common.native_probe import is_native_from_probe  # noqa: E402
 
 
 def _stub(tmp, name, body):
@@ -130,3 +131,33 @@ def test_the_real_voxtral_stubs_read_native_without_any_probe():
     for f in sorted((demo / "_stubs").glob("*.py")):
         shutil.copy(f, tmp / f.name)  # deliberately WITHOUT the probe sidecars
         assert _stub_body_is_native(tmp / f.name) is True, f.name
+
+
+def test_prep_only_torch_ops_over_budget_still_read_native():
+    """The flow_matching_audio_transformer case: ttnn_dispatch=132 with torch_ops=4 named
+    __dlpack__/to/zeros -- DLPack marshalling and buffer prep, not compute. The report called this
+    'on CPU' though the pipeline's hot path measured 0 host aten ops."""
+    probe = {"ttnn_dispatch": 132, "torch_ops": 4, "torch_op_names": ["__dlpack__", "to", "zeros"]}
+    assert is_native_from_probe(probe) is True
+
+
+def test_a_math_op_in_the_probe_is_still_host_compute():
+    """The protection the budget exists for: softmax ran on the host, so the PCC pass is suspect."""
+    probe = {"ttnn_dispatch": 132, "torch_ops": 1, "torch_op_names": ["softmax"]}
+    assert is_native_from_probe(probe) is False
+
+
+def test_over_budget_without_op_names_stays_strict():
+    """Older probes carry no names; with no names there is nothing to judge prep by."""
+    probe = {"ttnn_dispatch": 132, "torch_ops": 3}
+    assert is_native_from_probe(probe) is False
+
+
+def test_no_dispatch_is_not_native_regardless_of_names():
+    probe = {"ttnn_dispatch": 0, "torch_ops": 1, "torch_op_names": ["zeros"]}
+    assert is_native_from_probe(probe) is False
+
+
+def test_unusable_probe_defers_to_the_static_scan():
+    assert is_native_from_probe({"ttnn_dispatch": 0, "torch_ops": -1}) is None
+    assert is_native_from_probe(None) is None
