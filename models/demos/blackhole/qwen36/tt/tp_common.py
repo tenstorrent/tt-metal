@@ -259,7 +259,12 @@ def create_prefill_matmul_program_config(
         # largest legal block rather than scaling with grid width -- see _PREFILL_TUNING.
         in0_block_w = _find_largest_divisor(k_tiles, cap)
     else:
-        in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
+        # The 2D mcast matmul kernel asserts Kt % in0_block_w == 0, but k_tiles // grid_x need not
+        # divide k_tiles -- at TP=2 (k_tiles 32, grid_x 9) it yields 3 and the op dies with
+        #   matmul_device_operation.cpp:499  Kt (32) must be divisible by in0_block_w (3)
+        # which is why TP=2 could not run at all (SP=16 x TP=2, SP=4 x TP=2). Snap DOWN to the
+        # largest divisor of k_tiles, which is always legal and never larger than the tuned value.
+        in0_block_w = _find_largest_divisor(k_tiles, min(cap, max(1, k_tiles // grid_size[0])))
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
