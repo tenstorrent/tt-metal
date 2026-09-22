@@ -253,7 +253,8 @@ public:
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
-        bool require_placement = true) const;
+        bool require_placement = true,
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {}) const;
 
     // MGD-native mesh groupings that embed on the PSD (torus wraps when the MGD uses RING dims). Pair of
     // get_valid_groupings_for_mgd; SAT placement adds these to the candidate pool only after PGD variants
@@ -261,7 +262,8 @@ public:
     ValidGroupingsMap get_mgd_placement_fallbacks_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {}) const;
 
     // Same as get_valid_groupings_for_mgd for every MGD, merged into one map. Keys are prefixed "mgd{i}_"
     // when there is more than one descriptor. per_mgd_pinnings[i] is forwarded to MGD i (local mesh ids).
@@ -352,7 +354,8 @@ private:
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
-        bool require_placement = true) const;
+        bool require_placement = true,
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {}) const;
 
     // Private helper that takes PSD pointer (used internally by public overloads)
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
@@ -428,7 +431,8 @@ public:
         PlacementSolveStats* stats,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
-        bool unique_shapes = false);
+        bool unique_shapes = false,
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
     SatPlacementEnumerationSession(const SatPlacementEnumerationSession&) = delete;
     SatPlacementEnumerationSession& operator=(const SatPlacementEnumerationSession&) = delete;

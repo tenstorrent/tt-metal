@@ -1425,7 +1425,8 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         /*stats=*/nullptr,
         session_pinnings,
         asic_id_to_mesh_rank_,
-        unique_shapes);
+        unique_shapes,
+        fabric_node_id_to_mesh_rank_);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(MultiMeshSolutionEnumerator&&) noexcept = default;

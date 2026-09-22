@@ -120,28 +120,6 @@ inline uint32_t row_major_linear_index_from_coords(
     return linear_index;
 }
 
-// Row-major chip index in device_dims -> host-partition index in host_dims. Matches MeshGraph host-rank tiling.
-inline uint32_t host_partition_index_for_row_major_chip(
-    uint32_t chip_index, const std::vector<int32_t>& device_dims, const std::vector<int32_t>& host_dims) {
-    TT_FATAL(
-        device_dims.size() == host_dims.size(),
-        "Device topology dims {} do not match host topology dims {}",
-        device_dims.size(),
-        host_dims.size());
-    const std::vector<int32_t> device_coords = row_major_coords_from_linear_index(chip_index, device_dims);
-    std::vector<int32_t> host_coords(host_dims.size());
-    for (size_t dim_idx = 0; dim_idx < device_dims.size(); ++dim_idx) {
-        TT_FATAL(
-            host_dims[dim_idx] > 0 && device_dims[dim_idx] % host_dims[dim_idx] == 0,
-            "Device dim {} is not divisible by host dim {}",
-            device_dims[dim_idx],
-            host_dims[dim_idx]);
-        const int32_t tiles_per_host = device_dims[dim_idx] / host_dims[dim_idx];
-        host_coords[dim_idx] = device_coords[dim_idx] / tiles_per_host;
-    }
-    return row_major_linear_index_from_coords(host_coords, host_dims);
-}
-
 // MeshShape axis 0 (north/south) maps to TORUS_Y; axis 1 (east/west) maps to TORUS_X.
 constexpr FabricType torus_flag_for_axis(uint32_t axis) {
     return axis == 0 ? FabricType::TORUS_Y : FabricType::TORUS_X;
