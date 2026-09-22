@@ -5,13 +5,14 @@
 #pragma once
 
 #include <cstddef>
+#include <tt_stl/assert.hpp>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
 
 // Element size in bytes of a DType. Every DistributedContext implementation validates collective
 // buffers against this table, so a call accepted by one implementation is accepted by all of them.
-constexpr std::size_t dtype_size(DType dtype) noexcept {
+constexpr std::size_t dtype_size(DType dtype) {
     switch (dtype) {
         case DType::INT8:
         case DType::UINT8:
@@ -28,7 +29,7 @@ constexpr std::size_t dtype_size(DType dtype) noexcept {
         case DType::COMPLEX_FLOAT: return 8;
         case DType::COMPLEX_DOUBLE: return 16;
     }
-    return 0;
+    TT_THROW("Unreachable");
 }
 
 }  // namespace tt::tt_metal::distributed::multihost
