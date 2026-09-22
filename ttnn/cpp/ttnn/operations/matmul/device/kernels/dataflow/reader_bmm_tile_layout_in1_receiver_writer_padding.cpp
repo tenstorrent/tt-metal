@@ -240,7 +240,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    // Output is sharded in place, so the data is already where it needs to be; the wait is only a
+    // readiness handshake. Pop to leave the buffer balanced.
+    const uint16_t out_sharded_tiles = static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    dfb_out.wait_front(out_sharded_tiles);
+    dfb_out.pop_front(out_sharded_tiles);
 #endif
 }

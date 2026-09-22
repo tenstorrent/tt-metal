@@ -167,6 +167,9 @@ void kernel_main() {
             }
             cb_in0.push_back(num_read_per_barrier);
         }
+        // The non-aligned CB is reserved once as a TRID scratchpad (no downstream consumer);
+        // commit the reservation so the CB is left balanced.
+        cb_non_aligned.push_back(num_trids);
     } else {
         for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
             cb_in0.reserve_back(num_read_per_barrier);
