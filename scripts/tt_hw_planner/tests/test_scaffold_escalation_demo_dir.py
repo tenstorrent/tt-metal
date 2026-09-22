@@ -38,21 +38,36 @@ def test_force_already_supported_scaffold_does_not_use_demo_file_as_dir():
     )
 
 
-def test_force_already_supported_scaffold_uses_slug_of_new_model():
-    """Positive guard: the fix must slug the new model id under the
-    backend's parent. Pin the exact pattern."""
+def test_escalation_branch_delegates_to_shared_demo_dir_resolver():
+    """The branch must not hand-roll its own dir derivation again.
+
+    The parent/slug logic now lives in one helper shared by all three
+    scaffold routes; pinning the delegation keeps the branch from
+    drifting back to a private copy (which is how the Phi-3.5 bug
+    reached only this branch in the first place)."""
     src = Path("scripts/tt_hw_planner/scaffold.py").read_text()
-    # Find force_already_supported block. Look for the build_bringup_plan
-    # call with force_adapt_all=True (signature of this branch).
     fa_idx = src.find("force_adapt_all=True")
     assert fa_idx >= 0, "force_already_supported branch missing — test invariant out of date"
     block = src[fa_idx : fa_idx + 1500]
-    assert "_scaffold_slug" in block or "_slug" in block, (
-        "force_already_supported scaffold branch must use a slug "
-        "function on new_model_id to derive a sibling demo dir"
+    assert "_resolve_demo_dir_rel" in block, (
+        "force_already_supported branch must derive its demo dir via the " "shared _resolve_demo_dir_rel helper"
     )
-    assert "demo_path).parent" in block, (
-        "force_already_supported branch must take .parent of the "
-        "backend's demo_path so the new model's dir is a sibling, "
-        "not a child of the backend's .py file"
-    )
+
+
+def test_resolver_returns_sibling_dir_not_the_demo_file():
+    """Behavioural guard for the Phi-3.5 [Errno 17] regression: given a
+    backend whose demo_path is a regular ``.py`` file, the resolved demo
+    dir must be a SIBLING directory of that file, never the file."""
+    from types import SimpleNamespace
+
+    from scripts.tt_hw_planner.scaffold import _resolve_demo_dir_rel
+
+    demo_file = Path("models") / "tt_transformers" / "demo" / "simple_text_demo.py"
+    backend = SimpleNamespace(demo_path=str(demo_file))
+    # An id no scaffolded demo dir can already claim, so the resolver
+    # takes the derive-a-new-dir path rather than returning an existing one.
+    resolved = _resolve_demo_dir_rel("pytest-org/pytest-nonexistent-model", backend)
+
+    assert resolved != demo_file, "resolver returned the backend's .py file as the demo DIRECTORY"
+    assert resolved.suffix != ".py", f"resolved demo dir is a file path: {resolved}"
+    assert resolved.parent == demo_file.parent, f"resolved dir is not a sibling of the demo file: {resolved}"

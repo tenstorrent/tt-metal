@@ -161,6 +161,57 @@ def _build_table_insert(file_path: Path, sibling_key: str, new_key: str) -> Opti
     )
 
 
+def _resolve_demo_dir_rel(new_model_id: str, backend) -> Path:
+    """Demo directory for ``new_model_id``, relative to ``BRINGUP_ROOT()``.
+
+    One model -> one demo dir -> one manifest. Prefer the dir that already
+    holds this model's ``bringup_status.json`` (a backend swap mid-run
+    otherwise invents a second dir and leaves two competing manifests);
+    otherwise derive a slug dir NEXT TO the backend's demo file -- never the
+    demo file itself, which is a regular file and fails ``mkdir``.
+
+    Shared by all three scaffold routes so they cannot drift apart: the
+    escalation branch and the sibling branch of :func:`plan_scaffold`, and
+    :func:`_plan_demo_folder_scaffold`.
+    """
+    from .bringup_loop import find_demo_dir as _find_demo_dir
+    from .scaffold_demo_folder import _slug as _scaffold_slug
+
+    root = BRINGUP_ROOT()
+    existing = _find_demo_dir(new_model_id, repo_root=root)
+    if existing is not None:
+        try:
+            return existing.relative_to(root)
+        except Exception:
+            return existing
+    return Path(backend.demo_path).parent / _scaffold_slug(new_model_id.split("/")[-1])
+
+
+def _bringup_plan_changes(*, plan, demo_dir_rel: Path) -> List[ScaffoldChange]:
+    """Manifest + plan files for ``plan`` as ScaffoldChanges.
+
+    ``bringup_status.json``/``BRING_UP_PLAN.md`` are rewritten each scaffold;
+    NEW-stubs are only created when missing, so hand-written stub work is
+    never clobbered.
+    """
+    out: List[ScaffoldChange] = []
+    for target_rel, content, label in collect_bringup_plan_files(
+        plan=plan,
+        new_demo_dir_rel=demo_dir_rel,
+    ):
+        out.append(
+            ScaffoldChange(
+                kind="create",
+                path=str(target_rel),
+                new_content=content,
+                source=None,
+                added_lines=content.count(b"\n"),
+                preserve_if_exists="NEW-stub" in label,
+            )
+        )
+    return out
+
+
 def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -> ScaffoldPlan:
     """Plan a scaffold for ``new_model_id``.
 
@@ -256,48 +307,8 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             repo_root=BRINGUP_ROOT(),
             force_adapt_all=True,
         )
-        # Derive a SIBLING demo directory (not the backend's demo
-        # file itself). Without the slug, this used to be
-        # `models/tt_transformers/demo/simple_text_demo.py` — a
-        # regular file — which then failed `mkdir` with
-        # `[Errno 17] File exists` when scaffold tried to put
-        # BRING_UP_PLAN.md inside it. Mirrors the non-escalation
-        # path at line ~460 below.
-        from .scaffold_demo_folder import _slug as _scaffold_slug
-
-        # 2026-06-04 Fix 6 (escalation path): prefer existing demo dir
-        # for this model_id over a freshly-computed default — see the
-        # matching Fix 6 comment further down in this function.
-        from .bringup_loop import find_demo_dir as _find_demo_dir
-
-        _be_esc_parent = Path(_be_esc.demo_path).parent
-        _esc_bringup_root = BRINGUP_ROOT()
-        _esc_existing_dir = _find_demo_dir(new_model_id, repo_root=_esc_bringup_root)
-        if _esc_existing_dir is not None:
-            try:
-                demo_dir_esc_rel = _esc_existing_dir.relative_to(_esc_bringup_root)
-            except Exception:
-                demo_dir_esc_rel = _esc_existing_dir
-        else:
-            demo_dir_esc_rel = _be_esc_parent / _scaffold_slug(new_model_id.split("/")[-1])
-        changes_esc: List[ScaffoldChange] = []
-        for target_rel, content, label in collect_bringup_plan_files(
-            plan=bplan_esc,
-            new_demo_dir_rel=demo_dir_esc_rel,
-        ):
-            # bringup_status.json/BRING_UP_PLAN.md overwrite; _stubs/
-            # only created when missing.
-            preserve = "NEW-stub" in label
-            changes_esc.append(
-                ScaffoldChange(
-                    kind="create",
-                    path=str(target_rel),
-                    new_content=content,
-                    source=None,
-                    added_lines=content.count(b"\n"),
-                    preserve_if_exists=preserve,
-                )
-            )
+        demo_dir_esc_rel = _resolve_demo_dir_rel(new_model_id, _be_esc)
+        changes_esc = _bringup_plan_changes(plan=bplan_esc, demo_dir_rel=demo_dir_esc_rel)
         c = bplan_esc.counts
         return ScaffoldPlan(
             new_model_id=new_model_id,
@@ -454,6 +465,43 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             "(closest demo) you can adapt manually."
         )
 
+    # The sibling route used to return here with NO demo dir and NO
+    # manifest: it edits the tuning tables and copies model_params, then
+    # reports success. Everything downstream, though, locates a component
+    # ONLY via a `bringup_status.json` whose `new_model_id` matches
+    # (`bringup_loop.find_demo_dir`), so Step 3 reported "scaffold has not
+    # run" and Step 4 autofill hard-failed one step after this function
+    # printed "APPLIED scaffold". The escalation branch above and
+    # `_plan_demo_folder_scaffold` both emit the manifest; this route is the
+    # only one that did not. Emit it here too, from the same helpers.
+    #
+    # Needs the routed backend to enumerate components. When none was
+    # mapped there is nothing to build a plan from, so the manifest is
+    # skipped and the reason surfaces as a warning rather than a silent gap.
+    new_demo_dir: Optional[str] = None
+    bplan: Optional[BringUpPlan] = None
+    if _be is not None:
+        try:
+            demo_dir_rel = _resolve_demo_dir_rel(new_model_id, _be)
+            bplan = build_bringup_plan(
+                new_model_id=new_model_id,
+                new_cfg=probe.raw_config or {},
+                backend=_be,
+                repo_root=BRINGUP_ROOT(),
+            )
+            changes.extend(_bringup_plan_changes(plan=bplan, demo_dir_rel=demo_dir_rel))
+            new_demo_dir = str(demo_dir_rel)
+        except Exception as exc:
+            bplan = None
+            new_demo_dir = None
+            warnings.append(f"bring-up plan generation failed: {exc}")
+    else:
+        warnings.append(
+            "no family backend mapped for this model — scaffold wrote the "
+            "tuning-table rows but no bring-up manifest, so per-component "
+            "steps cannot enumerate components for it yet"
+        )
+
     return ScaffoldPlan(
         new_model_id=new_model_id,
         new_base_name=new_base,
@@ -466,6 +514,8 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
         changes=changes,
         skipped=skipped,
         warnings=warnings,
+        new_demo_dir=new_demo_dir,
+        bringup_plan=bplan,
     )
 
 
@@ -519,29 +569,7 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
     new_tail = new_model_id.split("/")[-1]
     sibling_tail = backend.canonical_hf_id.split("/")[-1] if backend.canonical_hf_id else Path(backend.demo_path).name
 
-    backend_parent = Path(backend.demo_path).parent
-    from .scaffold_demo_folder import _slug as _scaffold_slug
-
-    # 2026-06-04 Fix 6: prefer the existing demo dir for this model_id
-    # (if any) over a freshly-computed default. Without this, a backend
-    # swap mid-run (e.g., torch-less subprocess picking the generic
-    # hf_eager backend instead of the architecture-specific one) creates
-    # a DIFFERENT demo dir, leaving two competing `bringup_status.json`
-    # files for the same model — exactly the seamless-m4t scenario where
-    # `hf_eager/.../bringup_status.json` was corrupted while the orchestrator
-    # kept reading from the original `hf_seamless_m4t_medium/...`.
-    # One model → one demo dir → one manifest.
-    from .bringup_loop import find_demo_dir as _find_demo_dir
-
-    _bringup_root = BRINGUP_ROOT()
-    _existing_dir = _find_demo_dir(new_model_id, repo_root=_bringup_root)
-    if _existing_dir is not None:
-        try:
-            new_demo_dir = str(_existing_dir.relative_to(_bringup_root))
-        except Exception:
-            new_demo_dir = str(_existing_dir)
-    else:
-        new_demo_dir = str(backend_parent / _scaffold_slug(new_tail))
+    new_demo_dir = str(_resolve_demo_dir_rel(new_model_id, backend))
 
     bplan: Optional[BringUpPlan] = None
     try:
@@ -551,21 +579,7 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
             backend=backend,
             repo_root=BRINGUP_ROOT(),
         )
-        for target_rel, content, label in collect_bringup_plan_files(
-            plan=bplan,
-            new_demo_dir_rel=Path(new_demo_dir),
-        ):
-            preserve = "NEW-stub" in label
-            changes.append(
-                ScaffoldChange(
-                    kind="create",
-                    path=str(target_rel),
-                    new_content=content,
-                    source=None,
-                    added_lines=content.count(b"\n"),
-                    preserve_if_exists=preserve,
-                )
-            )
+        changes.extend(_bringup_plan_changes(plan=bplan, demo_dir_rel=Path(new_demo_dir)))
     except Exception as exc:
         warnings.append(f"bring-up plan generation failed: {exc}")
 
