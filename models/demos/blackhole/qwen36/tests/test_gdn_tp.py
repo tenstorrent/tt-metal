@@ -549,12 +549,19 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("OUTER_CHUNK_SIZE", [512, 2048], ids=["OUTER_CHUNK_SIZE512", "OUTER_CHUNK_SIZE2048"])
+@pytest.mark.parametrize(
+    "OUTER_CHUNK_SIZE",
+    [64, 512, 2048],
+    ids=["OUTER_CHUNK_SIZE64", "OUTER_CHUNK_SIZE512", "OUTER_CHUNK_SIZE2048"],
+)
 def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure_gc):
     """GDN prefill out-projection: column-parallel AG+matmul vs the row-parallel matmul+reduce-scatter.
     Runs one forward_prefill with out-AGMM prefill enabled and disabled, and PCCs the two outputs against each other.
 
     OUTER_CHUNK_SIZE: how the prompt is split; one forward_prefill call receives one outer chunk as input;
+    64 is the smallest T on the AGMM arm (reachable: the TP paged prefill passes the raw prompt length).
+    T <= TILE_SIZE is not tested: on TP such a prefill already fails in the QKV in-proj, whose
+    S <= TILE_SIZE branch needs a full-width x while prefill hands GDN a K-sharded one.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
