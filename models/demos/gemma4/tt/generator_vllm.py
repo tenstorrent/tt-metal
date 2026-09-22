@@ -543,28 +543,31 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             )
         return super().prefill_forward_text(*args, enable_trace=enable_trace, **kwargs)
 
-    def _bounded_sliding_min_page_table_cols(self, kv_cache) -> int | None:
-        """Min page-table columns so ``cache_position_modulo`` fits the kernel check.
+    def _bounded_sliding_layer_page_table_cols(self, layer_idx, k_cache) -> int | None:
+        """Columns needed by this layer's actual paged-fill ring and cache view."""
+        attention = self.model[0].layers[layer_idx].self_attn
+        modulo = attention.config.cache_position_modulo
+        if modulo is None:
+            return None
+        from models.demos.gemma4.tt.attention.operations import effective_block_size
 
-        ``paged_fill_cache`` requires ``modulo <= effective_block_size * cols``.
-        For sliding layers the kernel's block_size is the cache's declared
-        ``shape[2]`` (typically 64) — not the HMA-scaled effective size used
-        for full-attn views. Floor at ``cdiv(sliding_window, block_size)``.
-        """
+        tp = attention.mesh_config.tp if attention.mesh_config is not None else 1
+        local_heads = 1 if attention.weights.kv_replicated else attention.config.num_key_value_heads // tp
+        block_size = effective_block_size(k_cache, attention.config.head_dim, local_heads)
+        if block_size <= 0 or int(modulo) <= 0 or int(modulo) % block_size:
+            raise ValueError("Gemma4 bounded ring must be a positive multiple of the effective cache block size")
+        return int(modulo) // block_size
+
+    def _bounded_sliding_min_page_table_cols(self, kv_cache) -> int | None:
+        """Keep enough columns for every bounded layer, including ring headroom."""
         if not self._bounded_sliding_kv_cache or kv_cache is None:
             return None
-        sliding_window = getattr(self._text_config(), "sliding_window", None)
-        if sliding_window is None:
-            return None
-        try:
-            block_size = int(kv_cache[0][0].shape[2])
-        except (TypeError, IndexError, AttributeError):
-            return None
-        if block_size <= 0:
-            return None
-        from models.tt_transformers.tt.common import num_blocks_in_seq
-
-        return num_blocks_in_seq(int(sliding_window), block_size)
+        columns = []
+        for layer_idx, layer in enumerate(self.model[0].layers):
+            if layer.self_attn.config.cache_position_modulo is None:
+                continue
+            columns.append(self._bounded_sliding_layer_page_table_cols(layer_idx, kv_cache[layer_idx][0]))
+        return max(columns, default=None)
 
     def _get_prefill_user_page_table(
         self,
@@ -600,9 +603,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         layers — same invariant the warmup ``_mock_tokens`` override
         uses — so the slice covers every layer's needs.
 
-        Bounded sliding: never slice below ``sliding_window/block_size``
-        columns (batched or not). Batched warmup at seq=128 otherwise
-        yields 2 columns and TT_FATALs ``cache_position_modulo`` (1024).
+        Bounded sliding: preserve every layer's ``cache_position_modulo``
+        extent, using that layer's effective block size. Ring headroom can
+        require more columns than the attention window, even at seq=128.
         """
         import torch
 
@@ -1767,19 +1770,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     def _pad_sliding_page_tables_for_bounded(self, page_tables_per_layer, kv_cache, authoritative=False):
         """Remap sliding-layer page tables onto the bounded physical pool.
 
-        With hybrid groups OFF, vLLM hands every layer the same full-ISL
-        block table (global IDs into ``num_blocks≈max_model_len/block_size``).
-        Bounded mode allocates only ``sliding_window/block_size * B`` physical
-        blocks per sliding layer (see :meth:`_shrink_bounded_sliding_kv_specs`),
-        so those global IDs would OOB. Rebuild each sliding row with dense
-        local IDs — same layout as ``build_hybrid_page_tables`` in the metal
-        demo: user ``u`` owns ``[u*W, (u+1)*W)`` where ``W=sliding_window/block_size``.
-
-        Tables are sized to exactly ``W`` columns so ``cache_position_modulo``
-        shape checks pass on short prompts without retaining vLLM's full-ISL
-        width (unused under modulo wrap).
-
-        Full-attention layers are left alone.
+        Each request slot owns a complete ``cache_position_modulo`` ring.
+        The ring can exceed ``sliding_window`` when headroom is configured.
+        Per-layer effective block sizes determine both table width and slot
+        stride. Full-attention tables retain their original block IDs.
         """
         if not self._bounded_sliding_kv_cache:
             return page_tables_per_layer
@@ -1787,34 +1781,24 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return page_tables_per_layer
         model = self.model[0]
         text_config = self._text_config()
-        sliding_window = getattr(text_config, "sliding_window", None)
         layer_types = getattr(text_config, "layer_types", None)
-        if sliding_window is None or layer_types is None:
+        if layer_types is None:
             return page_tables_per_layer
-
-        # Prefer a *sliding* layer's K-cache block_size (after shrink). Full
-        # layers may share the same declared block_size under UniformType.
-        block_size = None
-        sliding_idxs = self._sliding_layer_indices()
-        if kv_cache is not None and sliding_idxs:
+        ring_columns = {}
+        ring_capacities = {}
+        for layer_idx, layer_type in enumerate(layer_types):
+            if layer_type != "sliding_attention":
+                continue
             try:
-                block_size = int(kv_cache[0][sliding_idxs[0]][0].shape[2])
-            except (TypeError, IndexError, AttributeError):
-                block_size = None
-        if block_size is None and kv_cache is not None:
-            try:
-                block_size = int(kv_cache[0][0][0].shape[2])
-            except (TypeError, IndexError, AttributeError):
-                block_size = None
-        if block_size is None:
-            try:
-                block_size = int(model.layers[0].self_attn.kv_cache[0].shape[2])
+                caches = kv_cache[0][layer_idx] if kv_cache is not None else model.layers[layer_idx].self_attn.kv_cache
+                columns = self._bounded_sliding_layer_page_table_cols(layer_idx, caches[0])
+                if columns is not None:
+                    ring_columns[layer_idx] = columns
+                    ring_capacities[layer_idx] = min(int(cache.shape[0]) for cache in caches)
             except (TypeError, IndexError, AttributeError):
                 return page_tables_per_layer
-
-        if sliding_window % block_size != 0:
+        if not ring_columns:
             return page_tables_per_layer
-        target_cols = int(sliding_window) // block_size
 
         # Ring slots must follow the *request*, not its row in the current
         # page-table tensor. The plugin compacts decode rows onto the occupied
@@ -1853,6 +1837,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 pt is None
                 or i >= len(layer_types)
                 or layer_types[i] != "sliding_attention"
+                or i not in ring_columns
                 or not hasattr(pt, "shape")
                 or not isinstance(pt, torch.Tensor)
             ):
@@ -1876,13 +1861,16 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                         "derivation. Rings can diverge across layers if row identities differ."
                     )
                 slots = self._bounded_ring_slots(pt, max_slots or batch, False)
-            # Always W columns (demo layout). Keeping vLLM's full-ISL width
-            # here thrash-reallocates persistent buffers vs short prefill
-            # tables and is unused under cache_position_modulo.
+            target_cols = ring_columns[i]
             remapped = torch.zeros((batch, target_cols), dtype=torch.int32)
             for u, slot in enumerate(slots):
                 if slot is None:
                     continue  # padded gap row; its position is -1 so it is never read
+                if (slot + 1) * target_cols > ring_capacities[i]:
+                    raise ValueError(
+                        f"Gemma4 bounded ring slot {slot} needs {(slot + 1) * target_cols} blocks "
+                        f"in layer {i}, but its KV cache has {ring_capacities[i]} blocks"
+                    )
                 remapped[u] = torch.arange(slot * target_cols, (slot + 1) * target_cols, dtype=torch.int32)
             out.append(remapped)
         return out
