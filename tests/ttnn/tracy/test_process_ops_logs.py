@@ -200,3 +200,29 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+
+
+def test_enrich_ops_from_perf_csv_drops_unreplayed_trace_op():
+    # Op 1 ran and has a matching row in the C++ device perf report.
+    # Op 2 belongs to a trace that was captured but never replayed (e.g. a decode
+    # trace captured during a prefill-only run): it has a metal_trace_id but no
+    # corresponding row in device_perf_by_device, since it never executed on device.
+    host_ops_by_device = {
+        0: [
+            {"global_call_count": 1, "metal_trace_id": None},
+            {"global_call_count": 2, "metal_trace_id": 7},
+        ]
+    }
+    device_perf_by_device = {
+        0: {
+            (1, None, None): {"CORE COUNT": 4},
+        }
+    }
+
+    enriched = process_ops_logs._enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, trace_replays={})
+
+    # The unreplayed op is dropped rather than raising, and the op that did run is
+    # still enriched with its device perf row.
+    assert len(enriched[0]) == 1
+    assert enriched[0][0]["global_call_count"] == 1
+    assert enriched[0][0]["_device_perf_row"]["CORE COUNT"] == 4
