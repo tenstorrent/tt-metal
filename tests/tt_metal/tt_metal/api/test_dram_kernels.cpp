@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <vector>
 #include <chrono>
+#include <thread>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -15,6 +16,7 @@
 #include <umd/device/types/arch.hpp>
 
 #include "device_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
@@ -251,6 +253,118 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromTensixL1) {
         result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), drisc_virtual), drisc_l1_noc_addr_);
     log_info(LogTest, "DRISC L1 result: 0x{:X} (expected: 0x{:X})", result[0], kMagicValue);
     EXPECT_EQ(result[0], kMagicValue) << "DRISC should have read the value from Tensix L1";
+}
+
+TEST_F(DramKernelFixture, DriscNoc0StreamModeLifecycle) {
+    constexpr uint32_t kTransferValue = 0x51A7E000u;
+    constexpr uint32_t kReleaseValue = 0xC001CAFEu;
+    constexpr uint32_t kStatusWords = 10u;
+    constexpr auto kTransferTimeout = std::chrono::seconds(5);
+
+    const CoreCoord logical_core_drisc = mesh_device_->impl().pick_unused_dram_logical_core(0);
+    const CoreCoord logical_core_tensix{0, 0};
+    const CoreCoord drisc_virtual =
+        device_->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
+    const CoreCoord tensix_virtual =
+        device_->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
+    const tt_cxy_pair drisc_coord(mesh_device_->build_id(), drisc_virtual);
+    ASSERT_EQ((drisc_l1_base_ + 8u * sizeof(uint32_t)) % 16u, tensix_l1_base_ % 16u);
+
+    std::vector<uint32_t> zeros(kStatusWords, 0u);
+    MetalContext::instance().get_cluster().write_core(
+        zeros.data(),
+        zeros.size() * sizeof(uint32_t),
+        drisc_coord,
+        drisc_l1_noc_addr_);
+    std::vector<uint32_t> tensix_seed = {kTransferValue};
+    MetalContext::instance().get_cluster().write_core(
+        tensix_seed.data(),
+        sizeof(kTransferValue),
+        tt_cxy_pair(mesh_device_->build_id(), tensix_virtual),
+        tensix_l1_base_);
+    std::vector<uint32_t> tensix_seed_readback(1, 0u);
+    MetalContext::instance().get_cluster().read_core(
+        tensix_seed_readback.data(),
+        sizeof(kTransferValue),
+        tt_cxy_pair(mesh_device_->build_id(), tensix_virtual),
+        tensix_l1_base_);
+    ASSERT_EQ(tensix_seed_readback, tensix_seed);
+
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_noc0_stream_mode_lifecycle.cpp",
+        logical_core_drisc,
+        DramConfig{
+            .noc = NOC::NOC_0,
+            .compile_args = {
+                drisc_l1_base_,
+                tensix_virtual.x,
+                tensix_virtual.y,
+                tensix_l1_base_,
+                kReleaseValue,
+            },
+        });
+
+    tt::tt_metal::detail::CompileProgram(device_, program, /*force_slow_dispatch=*/true);
+    tt::tt_metal::detail::WriteRuntimeArgsToDevice(device_, program, /*force_slow_dispatch=*/true);
+    tt::tt_metal::detail::LaunchProgram(
+        device_, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+
+    uint32_t transferred = 0u;
+    const auto deadline = std::chrono::steady_clock::now() + kTransferTimeout;
+    do {
+        MetalContext::instance().get_cluster().read_core(
+            &transferred,
+            sizeof(transferred),
+            drisc_coord,
+            drisc_l1_base_ + 8u * sizeof(uint32_t));
+        if (transferred == kTransferValue) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+    const bool transfer_completed = transferred == kTransferValue;
+
+    std::vector<uint32_t> dram_write = {0xD4A00001u};
+    std::vector<uint32_t> dram_read;
+    const uint32_t dram_addr = device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    bool dram_write_ok = false;
+    bool dram_read_ok = false;
+    if (transfer_completed) {
+        dram_write_ok = tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, 0, dram_addr, dram_write);
+        dram_read_ok = tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
+            device_, 0, dram_addr, sizeof(uint32_t), dram_read);
+    }
+
+    MetalContext::instance().get_cluster().write_core(
+        &kReleaseValue,
+        sizeof(kReleaseValue),
+        drisc_coord,
+        drisc_l1_base_ + 9u * sizeof(uint32_t));
+    tt::tt_metal::detail::WaitProgramDone(device_, program);
+
+    std::vector<uint32_t> status(kStatusWords, 0u);
+    MetalContext::instance().get_cluster().read_core(
+        status.data(),
+        status.size() * sizeof(uint32_t),
+        drisc_coord,
+        drisc_l1_noc_addr_);
+
+    ASSERT_TRUE(transfer_completed)
+        << "DRISC NOC0 transfer was not visible during stream mode; transferred=0x" << std::hex << transferred
+        << ", post-run status[0..9]={" << status[0] << ", " << status[1] << ", " << status[2] << ", "
+        << status[3] << ", " << status[4] << ", " << status[5] << ", " << status[6] << ", " << status[7]
+        << ", " << status[8] << ", " << status[9] << "}" << std::dec;
+    ASSERT_TRUE(dram_write_ok);
+    ASSERT_TRUE(dram_read_ok);
+    ASSERT_EQ(dram_read, dram_write);
+    EXPECT_EQ(status[0], 1u);
+    EXPECT_EQ(status[1], 1u);
+    EXPECT_EQ(status[2], 1u);
+    EXPECT_EQ(status[3], 1u);
+    EXPECT_EQ(status[4], 1u);
+    EXPECT_EQ(status[5], 1u);
 }
 
 // Stress + Bandwidth test: DRISC L1 write to DRAM GDDR - all banks x N endpoints concurrently and measure aggregate BW
