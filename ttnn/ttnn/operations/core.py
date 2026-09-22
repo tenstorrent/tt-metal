@@ -703,14 +703,22 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        # The default dump mode DISTRIBUTED_GATHER all-gathers the host tensor across the whole MPI world and lets
+        # only world rank 0 write the file while every other rank waits in a barrier: right for one multi-host mesh
+        # that shares a filesystem, wrong for a job whose ranks run INDEPENDENT meshes with their own caches (a
+        # prefill/decode pair: one (1,1) mesh per rank). There the non-zero rank's cache is never written (so it
+        # converts again on every boot), and its per-tensor barriers pair up with unrelated collectives of a rank
+        # that loads warm (observed 2026-09-22: the pair wedged at its transport rendezvous). Such a launcher sets
+        # TTNN_TENSOR_CACHE_DUMP_MODE=local: every rank writes its own file, no cross-rank collective. In a
+        # single-process world the two modes write the same file.
+        _mode = ttnn._ttnn.tensor.DumpTensorMode.DISTRIBUTED_GATHER
+        if os.environ.get("TTNN_TENSOR_CACHE_DUMP_MODE", "").strip().lower() == "local":
+            _mode = ttnn._ttnn.tensor.DumpTensorMode.LOCAL
+        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor, _mode)
         if device is not None:
             # Place the freshly dumped tensor exactly as a later warm boot will (the load path below) instead of
             # `tensor.to(device, memory_config)`: a cold boot then yields the same device tensor as every warm boot
-            # and takes the same device path. Observed 2026-09-22 on a two-rank MPI job whose ranks run independent
-            # (1,1) meshes (a prefill/decode pair): the `.to()` upload of the cold path took part in a cross-rank
-            # barrier per converted tensor while the warm load path never did, so a rank with a cold cache and a
-            # rank with a warm cache paired their barriers with unrelated ones and the job wedged.
+            # and takes the same device path.
             tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
         return tensor
 
