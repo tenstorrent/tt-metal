@@ -58,7 +58,7 @@ class Gemma4Precision:
         return f"Gemma4Precision({self._overrides!r})"
 
     @classmethod
-    def load(cls, model_path):
+    def load(cls, hf_model_id):
         """Resolve module precision overrides using the model path basename."""
         try:
             with open(_PATH) as f:
@@ -68,11 +68,11 @@ class Gemma4Precision:
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ValueError(f"Invalid JSON in precision configuration {_PATH}: {exc}") from exc
 
-        model_key = os.path.basename(str(model_path).rstrip("/"))
+        model_key = os.path.basename(str(hf_model_id).rstrip("/"))
         model_entry = table.get(model_key)
         if not model_entry:
             raise ValueError(
-                f"No precision configuration for {model_path!r} (model key {model_key!r}) in {_PATH}; "
+                f"No precision configuration for {hf_model_id!r} (model key {model_key!r}) in {_PATH}; "
                 f"expected one of {sorted(table)}"
             )
 

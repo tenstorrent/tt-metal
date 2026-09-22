@@ -142,7 +142,16 @@ def _gather_kv(tt: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
 
 def run_chunked_block(
-    variant, config, mesh_device, weight_cache_path, n_chunks, layer_idx, gate_fallback_mode, num_links, topology
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    n_chunks,
+    layer_idx,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    kv_reduction_reference=None,
 ):
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
     if weight_cache_path is None:
@@ -293,6 +302,14 @@ def run_chunked_block(
             return_kv_intermediates=True,
         )
 
+        if kv_reduction_reference is not None:
+            # Compare the model's debug concat with the original unsplit reduction,
+            # before RMSNorm/RoPE, including shape and exact BF16 values.
+            assert len(kv_reduction_reference) == 1
+            torch.testing.assert_close(
+                _gather_kv(kvi["tt_kv"], mesh_device), kv_reduction_reference.pop(), rtol=0, atol=0
+            )
+
         out_flat = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
@@ -386,7 +403,18 @@ def test_ds_prefill_block_chunked(
     layer_idx,
     gate_fallback_mode,
     num_links,
+    monkeypatch,
 ):
+    kv_reduction_reference = []
+    split_reduce = ttnn.experimental.fast_reduce_nc_split
+
+    def capture_combined_kv(input_tensor, *, dim, split_output_width, **kwargs):
+        combined = ttnn.experimental.fast_reduce_nc(input_tensor, dims=[dim], **kwargs)
+        kv_reduction_reference.append(_gather_kv(combined, mesh_device))
+        ttnn.deallocate(combined)
+        return split_reduce(input_tensor, dim=dim, split_output_width=split_output_width, **kwargs)
+
+    monkeypatch.setattr(ttnn.experimental, "fast_reduce_nc_split", capture_combined_kv)
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block(
         variant,
@@ -398,6 +426,7 @@ def test_ds_prefill_block_chunked(
         gate_fallback_mode,
         num_links,
         topology,
+        kv_reduction_reference=kv_reduction_reference,
     )
 
 

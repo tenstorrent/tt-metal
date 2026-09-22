@@ -297,7 +297,6 @@ class ttMLA:
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         active_seq_len: Optional[int] = None,
         first_layer_idx: Optional[int] = None,
-        tp_shard_kv: bool = False,
         llama4_scale_cache: Optional[dict] = None,
         sparse_mla_overlap_profile: Optional[str] = None,
     ):
@@ -328,9 +327,8 @@ class ttMLA:
         assert (
             self.active_seq_len <= self.max_seq_len
         ), f"active_seq_len ({self.active_seq_len}) exceeds max_seq_len ({self.max_seq_len})"
-        # KV dedup: KVPE (and indexer key) caches sharded across SP*TP. Writes pass tp_axis, reads add a
-        # TP-inner all-gather leg before the SP gather. Sparse (DSA) path only; the dense forward asserts.
-        self.tp_shard_kv = tp_shard_kv
+        # self.tp_shard_kv (KV dedup) is DERIVED further down, once _has_indexer and tp_factor are known --
+        # it is not a constructor argument. See the note at its assignment.
         self.slot_num = slot_num
         self.layer_num = layer_num
         self.sparse_kv_cache_format = MlaKvCacheFormat(sparse_kv_cache_format or MlaKvCacheFormat.BF16_RM)
@@ -570,9 +568,30 @@ class ttMLA:
         # dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
         self._is_dsa_family = TtIndexer.matches_config(config)
         self._sparse_kv_gather_buffer = None
+
+        self.tp_shard_kv = self._has_indexer and self.tp_factor > 1
+        if self._has_indexer:
+            assert self.tp_factor > 1, (
+                f"the sparse (DSA) path requires tp_factor > 1 (got {self.tp_factor}): its KV and indexer-key "
+                "caches are deduped across SP*TP and the full-mesh gather has no TP leg to reassemble at tp=1"
+            )
+            # 2D fabric, checked HERE as well as in the gather. The deduped KVPE gather is one snake across
+            # both mesh axes, so only a 2D fabric can route it -- a narrowing introduced when the SP-only
+            # (single-axis, 1D-routable) gather was removed. The gather asserts this too, but that fires on
+            # the first chunk, which on a deep model is a long weight load later; fail at construction.
+            _fabric = ttnn.get_fabric_config()
+            assert _fabric in (
+                ttnn.FabricConfig.FABRIC_2D,
+                ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+                ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            ), (
+                f"the sparse (DSA) path requires a 2D fabric config, got {_fabric}: its only KVPE gather is "
+                "the full-mesh snake, which spans both mesh axes. Open the mesh with FABRIC_2D (or a 2D "
+                "torus variant)."
+            )
         # KV dedup shards the cache over BOTH axes, so its gather needs the scratch even at sp == 1.
-        self._kv_dedup = self.tp_shard_kv and self.tp_factor > 1
-        if self._has_indexer and not self.kv_only and (self.sp_factor > 1 or self._kv_dedup):
+        if self._has_indexer and not self.kv_only:
             kvpe_row_width = self.sparse_kv_cache_format.storage_width(self.kv_cache_geometry)
             self._sparse_kv_gather_buffer = self.tt_ccl.get_mla_sparse_kv_gather_buffer(
                 seq_len=seq_len,
@@ -633,7 +652,6 @@ class ttMLA:
                     slot_num=slot_num,
                     layer_num=self.layer_num,
                     first_layer_idx=first_layer_idx,
-                    tp_shard_kv=self.tp_shard_kv,
                     output_tp_sequence_sharded=self._needs_head_to_seq_reshard,
                 )
         else:
@@ -1111,20 +1129,12 @@ class ttMLA:
         )
         ttnn.deallocate(qr)
 
-        # convert to
-        # [batch (1), num_heads_local, seq_len_local, qk_head_dim]
-        tt_q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+        # The Q stem uses interleaved head creation. Write the two channel regions directly.
+        tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
             num_heads=num_heads_local,
-            num_kv_heads=0,
-            transpose_k_heads=False,
+            split_head_dim=self.qk_nope_head_dim,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len_local, self.qk_nope_head_dim])
-        tt_q_rope = ttnn.slice(
-            tt_q, [0, 0, 0, self.qk_nope_head_dim], [1, num_heads_local, seq_len_local, self.qk_head_dim]
         )
         ttnn.deallocate(tt_q)
 
@@ -1282,19 +1292,26 @@ class ttMLA:
                 cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
             )
-            tt_kv = ttnn.experimental.fast_reduce_nc(
-                tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+            # Reduce the TP partials directly into the two consumer tensors.
+            tt_kv_nope, tt_kv_rope = ttnn.experimental.fast_reduce_nc_split(
+                tt_kv,
+                dim=1,
+                split_output_width=self.kv_lora_rank,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             )
-
-        # Raw compressed KV (pre-norm/pre-rope, [.., 576]) for debug/PCC against golden traces.
-        kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
-
-        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
-        tt_kv_rope = ttnn.slice(
-            tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
-        )
-        ttnn.deallocate(tt_kv)
+            # tt_kv aliases model-owned gather scratch; keep that buffer alive.
+            kv_intermediates = (
+                {"tt_kv": ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)} if return_kv_intermediates else None
+            )
+        else:
+            # TP=1 has no reduction producer into which to fuse the split.
+            kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
+            tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
+            tt_kv_rope = ttnn.slice(
+                tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
+            )
+            ttnn.deallocate(tt_kv)
 
         tt_kv_nope = ttnn.rms_norm(
             tt_kv_nope,
@@ -1789,12 +1806,11 @@ class ttMLA:
         attn_out = self._sparse_mla(
             tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=None
         )
-        # high_bw_all_gather returns a fresh Python wrapper for its supplied output, so wrapper identity
-        # cannot decide this: every gather route writes the model-owned persistent scratch, and freeing
-        # that would take the buffer away from every later chunk and layer. Only the sp==1 non-dedup
-        # slice of a multi-slot cache is genuinely transient (a single-slot slice aliases the cache).
-        if not getattr(self, "_kv_dedup", False) and self.sp_factor == 1 and kvpe_cache.storage.shape[0] > 1:
-            ttnn.deallocate(kvpe_dev.storage)
+        # NOT deallocated: the full-mesh gather writes the model-owned persistent scratch, and freeing
+        # that would take the buffer away from every later chunk and layer. (high_bw_all_gather returns a
+        # fresh Python wrapper for its supplied output, so wrapper identity cannot decide this.) The old
+        # sp==1 non-dedup route did produce a genuinely transient slice; with the SP-only gather gone
+        # there is no transient buffer here any more.
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
 
@@ -1998,7 +2014,7 @@ class ttMLA:
         q: ttnn.Tensor,
         kvpe: MlaKvCache,
         indices: ttnn.Tensor,
-        block_cyclic_chunk_local: Optional[int] = None,
+        block_cyclic_chunk_local: int,
         cache_batch_idx: Optional[int] = None,
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
@@ -2014,7 +2030,7 @@ class ttMLA:
         block_cyclic_chunk_local: when set, ``kvpe`` is the KVPE cache in its native BLOCK-CYCLIC SP layout
         (not natural order) and ``indices`` are natural positions; sparse_sdpa remaps each index to its
         physical page in-kernel (invP) over the SP mesh axis, so the host reorder is eliminated. It is the
-        per-shard chunk length (chunk_size_global / sp). None → natural-order kvpe (single-shot path).
+        per-shard chunk length (chunk_size_global / sp).
 
         cache_batch_idx: when set, ``kvpe`` is the whole multi-user physical cache [B, 1, T, row_width] (B =
         num_users*num_layers user-major slots) and this selects the slot to attend — the op offsets its
@@ -2077,10 +2093,9 @@ class ttMLA:
             kv_format=kvpe.format.sparse_sdpa_format,
             scale=self.scale,
             k_chunk_size=k_chunk,
-            block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
+            block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
-            # KV dedup: _gather_kvpe_prefix returns an sp*tp-striped buffer, so decode chunk_local/tp.
-            block_cyclic_cache_tp_sharded=self.tp_shard_kv and block_cyclic_chunk_local is not None,
+            block_cyclic_cache_tp_sharded=True,
             cache_batch_idx=cache_batch_idx,
         )
         ttnn.deallocate(q_rm)
@@ -2114,114 +2129,101 @@ class ttMLA:
         metadata=None,
         overlap_resources=None,
     ) -> MlaKvCache:
-        """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
-        ND-sharded / block-cyclic across SP, in the op's format (BF16 or packed scaled FP8, ROW_MAJOR).
-        sparse_sdpa consumes it replicated and remaps the
-        natural-position indices to physical block-cyclic pages in-kernel (invP), so the buffer is
-        LEFT in block-cyclic order — no host reorder.
+        """On-device read-back of the chunked KVPE prefix for sparse attention, as ONE full-mesh snake
+        gather. The cache is ND-sharded / block-cyclic across SP*TP in the op's format (BF16 or packed
+        scaled FP8, ROW_MAJOR); sparse_sdpa consumes it replicated and remaps natural-position indices to
+        physical block-cyclic pages in-kernel (invP), so the buffer is LEFT in block-cyclic order -- no
+        host reorder.
+
+        Each device holds seq_len/(sp*tp) rows in sp*tp row-major order, which is what the snake ring
+        reassembles directly -- no TP-inner stage, no intermediate allocation, and the result lands in the
+        persistent worst-case scratch rather than being transient. Same linear chip-major buffer that
+        sparse_sdpa decodes with block_cyclic_cache_tp_sharded=True.
 
         SLOT SELECT IN THE GATHER: the persistent cache's per-chip shape is [B, 1, seq_len_local,
-        row_width], B = num_users*num_layers (user-major slots), seq_len_local = seq_len_cache / sp. The
-        all-gather offsets its input pages to the active (user, layer) cache slot and packs only that slot's
-        valid prefix into the model-owned [1, 1, max_seq_len, row_width] output scratch. It never transports
-        the other B-1 slots, avoiding the ~5 GB full-cache gather at 78 layers. The gathered KV is batch-1,
-        so sparse_sdpa needs no cache_batch_idx.
+        row_width], B = num_users*num_layers (user-major slots). The all-gather offsets its input pages to
+        the active (user, layer) cache slot and packs only that slot's valid prefix into the model-owned
+        [1, 1, max_seq_len, row_width] output scratch. It never transports the other B-1 slots, avoiding
+        the ~5 GB full-cache gather at 78 layers. The gathered KV is batch-1, so sparse_sdpa needs no
+        cache_batch_idx.
 
-        Pipeline (all on device): a selected-slot prefix SP all-gather directly from the persistent
-        ND-sharded cache into the model-owned worst-case scratch. At sp==1 a single-slot cache aliases the
-        persistent storage; only a multi-slot cache needs an on-device interleaved conversion before selecting
-        its slot. The cache is already in the op format, so there is no read-back dtype/layout conversion. The
-        prefix is rounded to a whole block-cyclic slab; sparse SDPA only dereferences current top-k indices, so
-        its unwritten suffix is never consumed."""
-
-        if getattr(self, "_kv_dedup", False):
-            # GLM-5.2 KV dedup: the cache is dim-2 sharded across BOTH mesh axes, and row-major over the
-            # mesh IS the sp*tp linearization, so one full-mesh gather rebuilds the slab in that exact order.
-            return self._gather_kvpe_prefix_full_mesh(
-                kvpe_cache,
-                cache_batch_idx,
-                populated_global,
-                block_cyclic_chunk_local=block_cyclic_chunk_local,
-                metadata=metadata,
-                overlap_resources=overlap_resources,
-            )
-
+        The prefix is rounded to a whole block-cyclic slab; sparse SDPA only dereferences current top-k
+        indices, so its unwritten suffix is never consumed."""
         storage = kvpe_cache.storage
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
         multi_slot = storage.shape[0] > 1
-        assert metadata is None or self.sp_factor > 1, (
-            "trace-safe sparse prefill requires sp_factor > 1: the sp==1 fallback selects the cache slot with a "
-            "host ttnn.slice, whose bounds a capture would freeze at the captured slot"
+        stripes = self.sp_factor * self.tp_factor
+        # Block-cyclic storage is meaningful only in whole global slabs; the slab is sp-wide because
+        # block_cyclic_chunk_local is the per-SP-ROW width (each chip holds 1/tp of it).
+        slab_global = block_cyclic_chunk_local * self.sp_factor
+        # Trace-safe extent: populated_global GROWS per chunk, so a capture would bake this chunk's value
+        # into the gather's runtime args and every replay would re-gather only the captured prefix, leaving
+        # later chunks attending an unpopulated tail. Hand over the chunk start instead and let the reader
+        # derive the extent (and its own page partition) on-device from the same closed form the host uses.
+        extent_kwargs = (
+            {"gathered_prefix_tensor": metadata[1], "gathered_slab_global": slab_global}
+            if metadata is not None
+            else {
+                "gathered_dim_size": min(
+                    storage.shape[2] * stripes,
+                    ((populated_global + slab_global - 1) // slab_global) * slab_global,
+                )
+            }
         )
-        if self.sp_factor == 1:
-            # The native high-bandwidth gather requires multiple devices. Preserve the single-device
-            # behavior, where sparse_sdpa still needs a batch-1 cache. For a multi-slot cache this
-            # slice creates owned transient storage that the caller releases; for a single-slot cache
-            # it is a no-op alias of the persistent cache and must not be released by the caller.
-            if storage.shape[0] == 1:
-                gathered = storage
-            else:
-                gathered = ttnn.slice(
-                    storage,
-                    [slot_lo, 0, 0, 0],
-                    [slot_lo + 1, 1, storage.shape[2], storage.shape[3]],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-        else:
-            # Block-cyclic storage is meaningful only in complete SP slabs. The new AG writes each
-            # rank's active local prefix into its fixed worst-case slot, retaining the allocation and
-            # the natural-to-physical stride expected by sparse SDPA for the next chunk/layer.
-            slab_global = block_cyclic_chunk_local * self.sp_factor
-            # Trace-safe: populated_global GROWS per chunk, so a capture would bake this chunk's value into
-            # the gather's runtime args and every replay would re-gather only the captured prefix, leaving
-            # later chunks attending an unpopulated tail. Hand over the chunk start instead and let the
-            # reader derive the extent (and its own page partition) on-device from the same closed form the
-            # host uses. Earlier revisions pinned this to the full cache: correct, since the output is the
-            # model-owned worst-case scratch, but it moved ~1.8x the bytes over an 11-chunk request.
-            extent_kwargs = (
-                {"gathered_prefix_tensor": metadata[1], "gathered_slab_global": slab_global}
-                if metadata is not None
-                else {
-                    "gathered_dim_size": min(
-                        storage.shape[2] * self.sp_factor,
-                        ((populated_global + slab_global - 1) // slab_global) * slab_global,
-                    )
-                }
+        assert metadata is not None or extent_kwargs["gathered_dim_size"] > 0
+        # Trace-safe slot select: hand over the 1-element slot_id (USER id) tensor instead of the host
+        # scalar, and let the reader recompose user_id * layer_num + layer_idx on-device. A host
+        # input_batch_index is re-patched per dispatch and a replay never re-runs that patch, so every
+        # replay would gather the slot that was live at capture time -- while the KV WRITE above, being
+        # metadata-driven, lands in the correct slot. Wrong-slot attention, with no error.
+        # Single-slot caches keep the scalar form: there is no slot to get wrong.
+        slot_meta_kwargs = (
+            {
+                "input_batch_index_tensor": metadata[0],
+                "batch_slot_num_layers": self.layer_num,
+                "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
+            }
+            if metadata is not None and multi_slot
+            else {"input_batch_index": slot_lo}
+        )
+        assert self._sparse_kv_gather_buffer is not None
+        # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
+        # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
+        assert self.sp_axis == 0 and self.tp_axis == 1, "full-mesh KVPE gather assumes sp_axis=0, tp_axis=1"
+        # A cache still declaring the legacy kv-head-on-TP layout reports too few stripes and would
+        # under-gather. This is the assertion that catches an allocator which forgot tp_axis.
+        assert self._declared_seq_shard_factor(storage) == stripes, (
+            f"TP-deduped KVPE cache declares {self._declared_seq_shard_factor(storage)} dim-2 stripes, "
+            f"expected sp*tp = {stripes} -- allocate the cache with tp_axis set"
+        )
+        # One snake across both mesh axes, so only Fabric2D can route it. FABRIC_1D reaches the op and
+        # fails its generic neighbor proof instead, which names the symptom rather than this cause.
+        fabric = ttnn.get_fabric_config()
+        assert fabric in (
+            ttnn.FabricConfig.FABRIC_2D,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ), f"full-mesh KVPE gather requires a 2D fabric config, got {fabric}"
+        gather_kwargs = dict(
+            dim=2,
+            output_tensor=self._sparse_kv_gather_buffer,
+            num_links=self.ccl_num_links,
+            cluster_axis=None,
+            **slot_meta_kwargs,
+            **extent_kwargs,
+        )
+        # Externally scheduled resources (#54740): when the caller is overlapping index selection with
+        # this gather, the gather runs on its own sub-device core grid and signals through the two
+        # semaphores instead of owning the whole compute rectangle. None = the standalone path.
+        if overlap_resources is not None:
+            gather_kwargs.update(
+                subdevice_id=overlap_resources.gather_subdevice_id,
+                sub_core_grids=overlap_resources.gather_core_grid,
+                ready_semaphore=overlap_resources.ready_semaphore,
+                data_valid_semaphore=overlap_resources.data_valid_semaphore,
             )
-            assert metadata is not None or extent_kwargs["gathered_dim_size"] > 0
-            assert self._sparse_kv_gather_buffer is not None
-            # Trace-safe slot select: hand over the 1-element slot_id (USER id) tensor instead of the host
-            # scalar, and let the reader recompose user_id * layer_num + layer_idx on-device. A host
-            # input_batch_index is re-patched per dispatch and a replay never re-runs that patch, so every
-            # replay would gather the slot that was live at capture time -- while the KV WRITE above, being
-            # metadata-driven, lands in the correct slot. Wrong-slot attention, with no error.
-            # Single-slot caches keep the scalar form: there is no slot to get wrong.
-            slot_meta_kwargs = (
-                {
-                    "input_batch_index_tensor": metadata[0],
-                    "batch_slot_num_layers": self.layer_num,
-                    "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
-                }
-                if metadata is not None and multi_slot
-                else {"input_batch_index": slot_lo}
-            )
-            gather_kwargs = dict(
-                dim=2,
-                output_tensor=self._sparse_kv_gather_buffer,
-                num_links=self.ccl_num_links,
-                cluster_axis=self.sp_axis,
-                **slot_meta_kwargs,
-                **extent_kwargs,
-            )
-            if overlap_resources is not None:
-                gather_kwargs.update(
-                    subdevice_id=overlap_resources.gather_subdevice_id,
-                    sub_core_grids=overlap_resources.gather_core_grid,
-                    ready_semaphore=overlap_resources.ready_semaphore,
-                    data_valid_semaphore=overlap_resources.data_valid_semaphore,
-                )
-            gathered = ttnn.experimental.high_bw_all_gather(storage, **gather_kwargs)
-
+        gathered = ttnn.experimental.high_bw_all_gather(storage, **gather_kwargs)
         return MlaKvCache(
             format=kvpe_cache.format,
             storage=gathered,
@@ -2243,92 +2245,3 @@ class ttMLA:
             if isinstance(placement, ttnn.PlacementShard) and placement.dim == 2:
                 factor *= dist_dims[axis]
         return factor
-
-    def _gather_kvpe_prefix_full_mesh(
-        self,
-        kvpe_cache: MlaKvCache,
-        cache_batch_idx,
-        populated_global: int,
-        *,
-        block_cyclic_chunk_local: int,
-        metadata=None,
-        overlap_resources=None,
-    ) -> MlaKvCache:
-        """_gather_kvpe_prefix for an SP*TP-DEDUPED cache: ONE full-mesh snake gather.
-
-        Each device holds seq_len/(sp*tp) rows in sp*tp row-major order, which is what the snake ring
-        reassembles directly -- no TP-inner stage, no intermediate allocation, and the result lands in the
-        persistent worst-case scratch rather than being transient. Same linear chip-major buffer that
-        sparse_sdpa decodes with block_cyclic_cache_tp_sharded=True."""
-        storage = kvpe_cache.storage
-        slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
-        multi_slot = storage.shape[0] > 1
-        stripes = self.sp_factor * self.tp_factor
-        # Block-cyclic storage is meaningful only in whole global slabs, as on the SP-only path; the slab
-        # is sp-wide because block_cyclic_chunk_local is the per-SP-ROW width (each chip holds 1/tp of it).
-        slab_global = block_cyclic_chunk_local * self.sp_factor
-        # Trace-safe extent and slot, for the same reasons spelled out on the SP-only path in
-        # _gather_kvpe_prefix: populated_global GROWS per chunk and the slot is re-patched per dispatch,
-        # so a capture bakes this chunk's prefix and the capture-time slot into the gather's runtime args
-        # and every replay re-gathers that. The KV WRITE is metadata-driven either way, so the symptom is
-        # a silent wrong-slot / truncated-history READ that worsens with depth, never an error. This path
-        # (KV dedup) was left on the host-scalar form when the SP-only path was made trace-safe.
-        extent_kwargs = (
-            {"gathered_prefix_tensor": metadata[1], "gathered_slab_global": slab_global}
-            if metadata is not None
-            else {
-                "gathered_dim_size": min(
-                    storage.shape[2] * stripes,
-                    ((populated_global + slab_global - 1) // slab_global) * slab_global,
-                )
-            }
-        )
-        assert metadata is not None or extent_kwargs["gathered_dim_size"] > 0
-        slot_meta_kwargs = (
-            {
-                "input_batch_index_tensor": metadata[0],
-                "batch_slot_num_layers": self.layer_num,
-                "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
-            }
-            if metadata is not None and multi_slot
-            else {"input_batch_index": slot_lo}
-        )
-        assert self._sparse_kv_gather_buffer is not None
-        # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
-        # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
-        assert self.sp_axis == 0 and self.tp_axis == 1, "full-mesh KVPE gather assumes sp_axis=0, tp_axis=1"
-        # A cache still declaring the legacy kv-head-on-TP layout reports too few stripes and would under-gather.
-        assert self._declared_seq_shard_factor(storage) == stripes, (
-            f"TP-deduped KVPE cache declares {self._declared_seq_shard_factor(storage)} dim-2 stripes, "
-            f"expected sp*tp = {stripes}"
-        )
-        # One snake across both mesh axes, so only Fabric2D can route it. FABRIC_1D reaches the op and
-        # fails its generic neighbor proof instead, which names the symptom rather than this cause.
-        fabric = ttnn.get_fabric_config()
-        assert fabric in (
-            ttnn.FabricConfig.FABRIC_2D,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        ), f"full-mesh KVPE gather requires a 2D fabric config, got {fabric}"
-        gather_kwargs = dict(
-            dim=2,
-            output_tensor=self._sparse_kv_gather_buffer,
-            num_links=self.ccl_num_links,
-            cluster_axis=None,
-            **slot_meta_kwargs,
-            **extent_kwargs,
-        )
-        if overlap_resources is not None:
-            gather_kwargs.update(
-                subdevice_id=overlap_resources.gather_subdevice_id,
-                sub_core_grids=overlap_resources.gather_core_grid,
-                ready_semaphore=overlap_resources.ready_semaphore,
-                data_valid_semaphore=overlap_resources.data_valid_semaphore,
-            )
-        gathered = ttnn.experimental.high_bw_all_gather(storage, **gather_kwargs)
-        return MlaKvCache(
-            format=kvpe_cache.format,
-            storage=gathered,
-            geometry=kvpe_cache.geometry,
-        )

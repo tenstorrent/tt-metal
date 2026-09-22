@@ -4,8 +4,9 @@
 // apply_twiddles_writer.cpp — BRISC1 / writer for the apply_twiddles op.
 //
 // For each row `r ∈ [base, base + num_rows)` this kernel waits on the
-// compute kernel's CB_B_R/CB_B_I tiles, optionally truncates them to
-// bf16, and writes them to the output DRAM buffers.  Page-size-safe
+// compute kernel's CB_B_R/CB_B_I tiles, optionally rounds them to
+// bf16 (round-to-nearest-even), and writes them to the output DRAM
+// buffers.  Page-size-safe
 // matches the allocator for ROW_MAJOR pages where page_size < tile_size.
 //
 // Runtime args:
@@ -23,6 +24,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "apply_twiddles_common.h"
+#include "batch_fft_common.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -61,12 +63,11 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_b_i.get_read_ptr());
             volatile tt_l1_ptr uint16_t* const dst_r = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_r_bf16_l1);
             volatile tt_l1_ptr uint16_t* const dst_i = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_i_bf16_l1);
-            // Truncate fp32 → bf16 (drop low 16 bits).  Matches
-            // batch_fft_writer's policy; round-to-nearest-even is a
-            // future-work knob if precision becomes a concern.
+            // Round-to-nearest-even (see fft_f32_bits_to_bf16_rne in batch_fft_common.h): plain
+            // truncation biases every stored value toward zero.
             for (uint32_t i = 0; i < N1; ++i) {
-                dst_r[i] = static_cast<uint16_t>(src_r[i] >> 16);
-                dst_i[i] = static_cast<uint16_t>(src_i[i] >> 16);
+                dst_r[i] = fft_f32_bits_to_bf16_rne(src_r[i]);
+                dst_i[i] = fft_f32_bits_to_bf16_rne(src_i[i]);
             }
             cb_out_r_bf16.push_back(1);
             cb_out_i_bf16.push_back(1);

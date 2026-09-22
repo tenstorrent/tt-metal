@@ -80,6 +80,38 @@ _VALUE_METRICS = frozenset(
     }
 )
 
+# Firmware reports a field it cannot read as all ones, so the marker is the
+# field's own width and has to be matched per metric: EthernetMetrics in
+# physical_system_descriptor.hpp makes the retrain and CRC counters uint32 and
+# the codeword counters uint64. Matching the wrong one discards live data, since
+# a uint64 counter reaches 0xFFFFFFFF legitimately. By the same rule the narrow
+# markers are absent: 255 and 65535 are counts a busy link genuinely reaches.
+_U32_UNREADABLE = frozenset({0xFFFFFFFF})
+# float64 cannot represent the 64-bit marker and rounds it up by one, so both
+# forms are listed; whether a sample arrives as int or float is the parser's call.
+_U64_UNREADABLE = frozenset({0xFFFFFFFFFFFFFFFF, float(0xFFFFFFFFFFFFFFFF)})
+
+_UNREADABLE_VALUES = {
+    # Not a width, but no clock reaches 0xFFFFFFFF MHz, so the marker is safe.
+    "tt_ai_clock_mhz": _U32_UNREADABLE,
+    "tt_ethernet_corrected_codeword_count": _U64_UNREADABLE,
+    "tt_ethernet_crc_error_count": _U32_UNREADABLE,
+    "tt_ethernet_retrain_count": _U32_UNREADABLE,
+    "tt_ethernet_uncorrected_codeword_count": _U64_UNREADABLE,
+}
+
+
+def _split_unreadable(name: str, samples: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Partition samples into ones the chip could report and ones it could not.
+
+    A metric with no marker of its own keeps every sample, so a new one is
+    reported as collected until its width is added above.
+    """
+    markers = _UNREADABLE_VALUES.get(name, frozenset())
+    readable = [s for s in samples if s["value"] not in markers]
+    unreadable = [s for s in samples if s["value"] in markers]
+    return readable, unreadable
+
 
 def collect_prometheus_metrics(port: int = SLURM_TELEMETRY_PORT) -> dict[str, list[dict]] | None:
     """Collect telemetry metrics from the local Prometheus endpoint.
@@ -139,8 +171,13 @@ def format_prometheus_metrics(metrics: dict[str, list[dict]]) -> str:
                     lines.append(f"    DOWN: {_sample_ident(s['labels'])}")
 
         elif name in _COUNTER_METRICS:
-            nonzero = [s for s in samples if s["value"] > 0]
-            lines.append(f"    non-zero={len(nonzero)}/{len(samples)}")
+            readable, unreadable = _split_unreadable(name, samples)
+            if unreadable:
+                lines.append(f"    unreadable={len(unreadable)} (excluded from total)")
+                for s in unreadable:
+                    lines.append(f"    UNREADABLE: {_sample_ident(s['labels'])}")
+            nonzero = [s for s in readable if s["value"] > 0]
+            lines.append(f"    non-zero={len(nonzero)}/{len(readable)}")
             if nonzero:
                 total = sum(s["value"] for s in nonzero)
                 max_val = max(s["value"] for s in nonzero)
@@ -179,21 +216,38 @@ def aggregate_telemetry_for_csv(metrics: dict[str, list[dict]] | None) -> dict:
     nothing was collected so the run row records ``telemetry_available=0`` rather
     than silently claiming a value. A metric that wasn't collected stays *None*
     so its column is blank instead of a fabricated 0.
+
+    Samples a chip could not report are dropped (see ``_UNREADABLE_VALUES``), so
+    a total covers the links that answered and ``unreadable_samples`` counts the
+    rest.
     """
     if not metrics:
         return {"available": False}
 
+    unreadable: list[dict] = []
+
     def _values(name: str) -> list[float]:
-        return [s["value"] for s in metrics.get(name, [])]
+        readable, dropped = _split_unreadable(name, metrics.get(name, []))
+        unreadable.extend(dropped)
+        return [s["value"] for s in readable]
 
     aiclk = _values("tt_ai_clock_mhz")
     retrain = _values("tt_ethernet_retrain_count")
     crc = _values("tt_ethernet_crc_error_count")
     uncorr = _values("tt_ethernet_uncorrected_codeword_count")
+
+    if unreadable:
+        log.warning(
+            "%d telemetry sample(s) reported as unavailable and left out of the totals: %s",
+            len(unreadable),
+            ", ".join(sorted({_sample_ident(s["labels"]) for s in unreadable})),
+        )
+
     return {
         "available": True,
         "min_aiclk_mhz": min(aiclk) if aiclk else None,
         "eth_retrain_total": int(sum(retrain)) if retrain else None,
         "eth_crc_total": int(sum(crc)) if crc else None,
         "eth_uncorr_cw_total": int(sum(uncorr)) if uncorr else None,
+        "unreadable_samples": len(unreadable),
     }

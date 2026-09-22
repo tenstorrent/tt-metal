@@ -552,9 +552,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     if (!rank_mapping.full_mesh) {
         rank_mapping = {};
     }
+    // Linear here is a full-mesh open path; the neighbour checks below adapt to it.
     TT_FATAL(
-        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring,
-        "full-mesh ring-attention all-gather requires Ring topology");
+        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring ||
+            topology == ttnn::ccl::Topology::Linear,
+        "full-mesh ring-attention all-gather requires Ring or Linear topology");
     TT_FATAL(
         !rank_mapping.full_mesh || (rank_mapping.mesh_rows > 0 && rank_mapping.mesh_cols > 0 &&
                                     rank_mapping.mesh_rows * rank_mapping.mesh_cols == ring_size),
@@ -601,13 +603,17 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             ring_index,
             target_device_coord,
             rank_from_coordinate);
-        const uint32_t lane_count = rank_mapping.orientation == ttnn::ccl::snake_ring::Orientation::Row
-                                        ? rank_mapping.mesh_rows
-                                        : rank_mapping.mesh_cols;
-        TT_FATAL(
-            lane_count % 2 == 0,
-            "full-mesh ring-attention snake closure requires an even lane count, got {}",
-            lane_count);
+        // An even lane count is what lets the walk return to rank 0; an open path never does.
+        const bool closed = topology == ttnn::ccl::Topology::Ring;
+        if (closed) {
+            const uint32_t lane_count = rank_mapping.orientation == ttnn::ccl::snake_ring::Orientation::Row
+                                            ? rank_mapping.mesh_rows
+                                            : rank_mapping.mesh_cols;
+            TT_FATAL(
+                lane_count % 2 == 0,
+                "full-mesh ring-attention snake closure requires an even lane count, got {}",
+                lane_count);
+        }
 
         const auto coordinate_for_rank = [&](uint32_t transport_rank) {
             return MeshCoordinate(
@@ -616,20 +622,37 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 ttnn::ccl::snake_ring::coordinate_col(
                     transport_rank, rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation));
         };
-        const auto expected_forward = coordinate_for_rank((ring_index + 1) % ring_size);
-        const auto expected_backward = coordinate_for_rank((ring_index + ring_size - 1) % ring_size);
-        TT_FATAL(
-            forward_device_coord.has_value() && *forward_device_coord == expected_forward,
-            "full-mesh ring-attention forward neighbor for transport rank {} must be {}, got {}",
-            ring_index,
-            expected_forward,
-            forward_device_coord);
-        TT_FATAL(
-            backward_device_coord.has_value() && *backward_device_coord == expected_backward,
-            "full-mesh ring-attention backward neighbor for transport rank {} must be {}, got {}",
-            ring_index,
-            expected_backward,
-            backward_device_coord);
+        // On an open path the end ranks are dead in one direction, exactly as on an axis line.
+        if (closed || ring_index + 1 < ring_size) {
+            const auto expected_forward = coordinate_for_rank((ring_index + 1) % ring_size);
+            TT_FATAL(
+                forward_device_coord.has_value() && *forward_device_coord == expected_forward,
+                "full-mesh ring-attention forward neighbor for transport rank {} must be {}, got {}",
+                ring_index,
+                expected_forward,
+                forward_device_coord);
+        } else {
+            TT_FATAL(
+                !forward_device_coord.has_value(),
+                "full-mesh open path must leave transport rank {} without a forward neighbor, got {}",
+                ring_index,
+                forward_device_coord);
+        }
+        if (closed || ring_index > 0) {
+            const auto expected_backward = coordinate_for_rank((ring_index + ring_size - 1) % ring_size);
+            TT_FATAL(
+                backward_device_coord.has_value() && *backward_device_coord == expected_backward,
+                "full-mesh ring-attention backward neighbor for transport rank {} must be {}, got {}",
+                ring_index,
+                expected_backward,
+                backward_device_coord);
+        } else {
+            TT_FATAL(
+                !backward_device_coord.has_value(),
+                "full-mesh open path must leave transport rank {} without a backward neighbor, got {}",
+                ring_index,
+                backward_device_coord);
+        }
     }
     [[maybe_unused]] const bool is_first_chip = ring_index == 0;
     [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;

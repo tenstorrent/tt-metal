@@ -126,6 +126,14 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
     // custom DataMovementConfigDescriptor triple (RISCV_0/NOC_0 and RISCV_1/NOC_1), matching
     // neither the reader nor the writer default, so both are replicated field-for-field here.
     const auto make_worker = [&](const char* name, DataMovementProcessor processor, NOC noc) {
+        // Gen2 has no (processor, noc, noc_mode) placement concept, so on Quasar the custom Gen1
+        // placement is replaced by a default-constructed Gen2 config (matching what the
+        // arch-agnostic reader/writer helpers do).
+        DataMovementHardwareConfig hw_config =
+            DataMovementGen1Config{.processor = processor, .noc = noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+        if (input.device()->arch() == tt::ARCH::QUASAR) {
+            hw_config = DataMovementGen2Config{};
+        }
         return KernelSpec{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kCLKernelPath),
@@ -134,8 +142,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
             .runtime_arg_schema =
                 {.runtime_arg_names = {"first_shard_id"},
                  .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
-            .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-                .processor = processor, .noc = noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}},
+            .hw_config = std::move(hw_config),
         };
     };
 
