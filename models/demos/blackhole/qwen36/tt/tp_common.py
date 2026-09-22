@@ -480,7 +480,9 @@ def agmm_disabled():
     back to a separate all_gather + matmul, which was measured e2e-neutral at TP=8
     (51.15 ms with the fusion vs 51.15 without), so this buys 2D routing at no known cost.
     """
-    return os.environ.get("QWEN36_NO_AGMM") == "1"
+    # A replicated residual has nothing to gather, so every AGMM fusion is not just useless
+    # but wrong there (it would double-gather). Fold that into this one predicate.
+    return os.environ.get("QWEN36_NO_AGMM") == "1" or repl_residual_enabled()
 
 
 def mlp_gateup_agmm_enabled(num_devices):
@@ -848,3 +850,55 @@ def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):
             shards.append(torch.cat([q_s, k_s, v_s]))
         taps.append(torch.cat(shards))
     return taps
+
+
+def repl_residual_enabled():
+    """QWEN36_REPL_RESIDUAL=1: keep the residual stream REPLICATED instead of hidden-fractured.
+
+    Today each half-layer pays three collectives: reduce_scatter (leaving the residual fractured
+    on the hidden dim) -> norm stats all_gather -> norm output all_gather. The fracture is what
+    forces the DistributedNorm, and the norm's output gather is what re-materialises the full
+    hidden dim that the next column-parallel matmul needs anyway.
+
+    Measured on 8 chips, 1024x2048 bf16, traced and in isolation:
+        reduce_scatter 117us + stats all_gather 48us + output all_gather 123us = 288us
+        fused ttnn.all_reduce                                                  = 223us
+    and collectives are a near-FIXED ~120us each regardless of bytes (an 8x larger message costs
+    the same), so cutting the COUNT from 3 to 1 is the lever, not cutting the size.
+
+    Replicating costs activation memory, which is why the fractured layout exists -- but this is
+    a 2B model on 189 MB of L1 per chip, so that tradeoff does not bind here.
+    """
+    return os.environ.get("QWEN36_REPL_RESIDUAL") == "1"
+
+
+def residual_all_reduce(x, mesh_device, tt_ccl, cluster_axis, dim, topology, memory_config=None, num_links=None):
+    """Row-parallel partial -> summed activation, as either a fused all-reduce or today's RS.
+
+    With repl_residual_enabled() this returns a REPLICATED full-hidden tensor (one collective);
+    otherwise it falls back to tt_all_reduce, which reduce-scatters and returns a tensor
+    fractured on `dim`. Callers must not assume a shape: the two differ by design, and
+    is_distributed_norm() is gated on the same predicate so the norms match the layout.
+    """
+    from models.tt_transformers.tt.ccl import tt_all_reduce
+
+    if not repl_residual_enabled():
+        return tt_all_reduce(
+            x,
+            mesh_device,
+            tt_ccl,
+            cluster_axis=cluster_axis,
+            dim=dim,
+            topology=topology,
+            memory_config=memory_config,
+        )
+    if num_links is None:
+        num_links = tt_ccl.get_num_links(cluster_axis)
+    # Axis convention differs between the two ops and getting it wrong is silent. tt_all_reduce
+    # IGNORES cluster_axis on a flat mesh (it has a `1 in mesh.shape` branch that reduces across
+    # the whole line), which is why every caller here passes cluster_axis=0 even on a (1,N)
+    # submesh -- where axis 0 has extent 1. ttnn.all_reduce does NOT ignore it and would reduce
+    # over a single device, i.e. return the unreduced partial. Pass None on a flat mesh, which is
+    # its documented "reduce across the line" form.
+    flat = 1 in list(mesh_device.shape)
+    return ttnn.all_reduce(x, cluster_axis=None if flat else cluster_axis, num_links=num_links, topology=topology)

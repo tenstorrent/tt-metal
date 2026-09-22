@@ -20,7 +20,6 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
     create_chunk_masks_seq,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
-from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 def _softplus_add(a, bias):
@@ -793,7 +792,7 @@ class TPGatedDeltaNet:
         # consulting memory_config, so skip forcing DRAM there (leave _row_proj's own output as is;
         # its DRAM force is untouched here, per the out-proj instruction above).
         _ar_mc = None if self.args.num_devices == 1 else ttnn.DRAM_MEMORY_CONFIG
-        out = tt_all_reduce(
+        out = tpc.residual_all_reduce(
             partial,
             self.mesh,
             self.tt_ccl,
@@ -1173,7 +1172,7 @@ class TPGatedDeltaNet:
         partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, B, T, partial.shape[-1]))
-        return tt_all_reduce(
+        return tpc.residual_all_reduce(
             partial,
             self.mesh,
             self.tt_ccl,
@@ -1281,7 +1280,7 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
-        out = tt_all_reduce(
+        out = tpc.residual_all_reduce(
             partial,
             self.mesh,
             self.tt_ccl,

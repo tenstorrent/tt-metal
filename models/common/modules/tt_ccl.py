@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import Optional
 
 import ttnn
@@ -176,6 +177,15 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
         "TG": (4, 4),
         "N150x4": (1, 1),
     }
+    # TT_CCL_LINKS overrides the table. The table is a hardcoded per-SKU guess, and
+    # tt-multichip-ccl-review documents a 32-chip Galaxy ring as num_links=4 while this table
+    # says BHGLX=(2,2). CCL is ~48% of the Qwen3.5 SP x TP critical path and sits at the link
+    # roofline, so if 4 links really exist between adjacent dies this doubles that bandwidth.
+    _override = os.environ.get("TT_CCL_LINKS")
+    if _override:
+        n = int(_override)
+        return n if cluster_axis is None or cluster_axis in (0, 1) else n
+
     device_links = link_dict[device_name]
     if cluster_axis is None:
         return min(device_links)

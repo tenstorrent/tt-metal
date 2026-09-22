@@ -389,8 +389,16 @@ class Qwen36ModelArgs(ModelArgs):
         dim=2048), so override unconditionally for multichip prefill instead of gating on
         moe_num_experts.
         """
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
         from models.tt_transformers.tt.common import Mode
 
+        # QWEN36_REPL_RESIDUAL keeps the residual REPLICATED (fused all-reduce), so there is no
+        # hidden fracture left for a distributed norm to reconcile: the norm is purely local and
+        # both of its all-gathers (stats + output) disappear. That is the whole point of the
+        # replicated layout, so the two must be gated on one predicate -- these gates have drifted
+        # apart before and the failure mode is a silent K mismatch in the next matmul.
+        if tpc.repl_residual_enabled():
+            return False
         if self.is_multichip and mode == Mode.PREFILL:
             return True
         return super().is_distributed_norm(mode)

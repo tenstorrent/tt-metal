@@ -224,7 +224,6 @@ class Qwen36MLP:
     def _forward_tp(self, x):
         """TP forward: replicated input; reduce-scatter output fractured on hidden dim."""
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
-        from models.tt_transformers.tt.ccl import tt_all_reduce
 
         w = self.weights
         args = self.args
@@ -366,7 +365,7 @@ class Qwen36MLP:
         # mesh (num_devices==1) and returns partial as-is without ever consulting memory_config, so
         # skip forcing DRAM there and let w2's own L1 output (mc_w2_out above) stand.
         _ar_mc = None if self.num_devices == 1 else ttnn.DRAM_MEMORY_CONFIG
-        out = tt_all_reduce(
+        out = tpc.residual_all_reduce(
             tpc.ccl_cast(partial),
             self.device,
             self.tt_ccl,
