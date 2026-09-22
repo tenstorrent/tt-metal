@@ -78,7 +78,7 @@ The lowest score is sliding V, layer 39, head 9: **0.916626**, about **0.0066** 
 
 ## Per-layer and overall metrics
 
-The canonical migration test prints a PCC, RMSE, and relative RMSE table with `pytest -s` and saves the metrics in its JSON report. It includes two views: one result per layer, pooling all its K/V heads, and one overall result pooling all 60 layers. Both cover every token and channel compared against the GPU reference. Global rotary K and V together cover each packed head once.
+The canonical migration test prints a PCC, relative RMSE, and RMSE table with `pytest -s` and saves the metrics in its JSON report. It includes two views: one result per layer, pooling all its K/V heads, and one overall result pooling all 60 layers. Both cover every token and channel compared against the GPU reference. Global rotary K and V together cover each packed head once.
 
 The table's PCC is Pearson correlation over all compared values in the layer or the entire model. The validator merges each head's means and centered sums, including differences between head means. This matches correlating the concatenated tensors; it does not average head PCCs. Higher PCC is better. The per-head minima and their regression threshold are reported separately.
 
