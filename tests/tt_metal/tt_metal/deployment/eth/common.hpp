@@ -726,7 +726,7 @@ static bool tensix_compare_dram_banks(
 static bool test_check_cores(std::span<struct core_setup> cores) {
     bool pass = true;
 
-    std::string prev = "";
+    std::string prev;
     for (const auto& cs : cores) {
         if (prev != cs.locinfo) {
             log_info(tt::LogTest, "core_check: {}", cs.locinfo);
