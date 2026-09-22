@@ -130,19 +130,23 @@ def i2v_metrics(mesh_device, height):
 def ti2v_5b_metrics(mesh_shape, height):
     """Perf targets for Wan2.2 TI2V-5B (dense single-expert) on single BH Galaxy (4x8).
 
-    Warm-traced, 81 frames, 40 steps. Targets = measured warm_traced + ~30% headroom
+    Warm-traced, 81 frames, 40 steps, CFG on. Targets = measured warm_traced + ~30% headroom
     (2x on the tiny encoder), mirroring the headroom convention used in t2v_metrics.
-    Measured on 4x8 BH ring:
-      480p (832x480):   e2e 8.71s  | denoise 6.20s | vae 2.42s | encode 0.09s
-      720p (1280x704):  e2e 16.81s | denoise 12.10s | vae 4.62s | encode 0.09s
+    Measured on 4x8 BH ring, host u13-43, 2026-09-22, mean of 3 runs at the eleven-shape swept
+    DiT matmul table (`Wan2_2_TI2V_nadim_opt.md` section 1):
+      480p (832x480):   e2e 6.34s  | denoise 5.667s  | vae 0.576s | encode 0.089s
+      720p (1280x704):  e2e 11.77s | denoise 10.701s | vae 0.959s | encode 0.092s
     (720p uses height 704 since heights must be a multiple of 32 for patch_size=2.)
+
+    The VAE gate follows the `WanDupUp3D` rewrite (4.63s -> 0.96s); the previous 6.0s bound
+    would have passed a 6x regression.
     """
     assert is_blackhole(), "TI2V-5B perf currently targets Blackhole only"
     assert tuple(mesh_shape) == (4, 8), "TI2V-5B perf currently targets single BH Galaxy (4x8)"
     if height == 480:
-        return {"encoder": 0.2, "denoising": 8.0, "vae": 3.2, "total": 11.5}
+        return {"encoder": 0.2, "denoising": 7.4, "vae": 0.75, "total": 8.2}
     if height == 704:
-        return {"encoder": 0.2, "denoising": 15.5, "vae": 6.0, "total": 21.5}
+        return {"encoder": 0.2, "denoising": 13.9, "vae": 1.25, "total": 15.3}
     assert False, f"No TI2V-5B perf targets for height={height} (expected 480 or 704)"
 
 
@@ -702,25 +706,31 @@ def test_pipeline_performance_ti2v_5b(
 def ti2v_5b_i2v_metrics(mesh_shape, height):
     """Perf targets for Wan2.2 TI2V-5B **image-to-video** on single BH Galaxy (4x8).
 
-    Warm-traced, 81 frames, 40 steps -- identical geometry to `ti2v_5b_metrics` so the two are
-    directly comparable. Kept separate on purpose: that function is the T2V gate and must not
-    move.
+    Warm-traced, 81 frames, 40 steps, CFG on -- identical geometry to `ti2v_5b_metrics` so the
+    two are directly comparable. Kept separate on purpose: that function is the T2V gate and
+    must not move.
 
     `image_encode` is the host-side torch VAE encode of the single conditioning frame. It is
     reported separately because it is the one component a TT residual-encoder port would
     remove, and because it must not be confused with `encoder` (the T5 text encoder).
 
-    PROVISIONAL: these are generous first-measurement bounds, not measured+30%. The per-token
-    timestep MLP currently runs at M = padded_N/SP on a make-it-fit blocking, and the shared
-    5B matmul tables are keyed on M values the model never asks for, so denoising here is not
-    yet a meaningful steady state. Tighten once both are fixed.
+    Targets = measured + ~30% (2x on the tiny encoder), same convention as the T2V gate.
+    Measured on 4x8 BH ring, host u13-43, 2026-09-22, mean of 3 runs at the eleven-shape swept
+    DiT matmul table, with the two-row per-token timestep path:
+      720p (1280x704):  e2e 13.96s | image_encode 1.379s | denoise 11.513s | vae 0.964s
+                        | encode 0.088s
+
+    480p is not parametrised by `test_pipeline_performance_ti2v_5b_i2v` (720p only), so that
+    row is unreachable and has never been measured; it is kept only so the two gate functions
+    stay shape-compatible. Measure before relying on it.
     """
     assert is_blackhole(), "TI2V-5B I2V perf currently targets Blackhole only"
     assert tuple(mesh_shape) == (4, 8), "TI2V-5B I2V perf currently targets single BH Galaxy (4x8)"
     if height == 480:
+        # UNMEASURED and unreachable from the current parametrisation; not a calibrated gate.
         return {"encoder": 0.3, "image_encode": 4.0, "denoising": 18.0, "vae": 3.5, "total": 26.0}
     if height == 704:
-        return {"encoder": 0.3, "image_encode": 7.0, "denoising": 32.0, "vae": 6.5, "total": 46.0}
+        return {"encoder": 0.2, "image_encode": 1.8, "denoising": 15.0, "vae": 1.25, "total": 18.1}
     assert False, f"No TI2V-5B I2V perf targets for height={height} (expected 480 or 704)"
 
 
