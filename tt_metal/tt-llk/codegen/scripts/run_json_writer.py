@@ -3264,14 +3264,22 @@ def cmd_verification_retry_context(args: argparse.Namespace) -> None:
     )
 
 
-def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
-    """Preflight the whole supported route before executing any sealed leaf."""
+def _sealed_execution_identity(
+    log_dir: Path, worktree: Path, scope: str
+) -> tuple[Path, Path, dict[str, Any], dict[str, Any], Path, dict[str, Any]] | None:
+    """Bind run, state, bootstrap, worktree and sealed manifest to one identity.
+
+    Returns ``None`` when this run has not opted into deterministic execution.
+    Shared by every deterministic executor so the functional and measurement
+    routes cannot drift apart on the checks that keep a leaf attributable to
+    exactly one candidate.
+    """
     run = _load(log_dir)
     if (
         run.get("functional_executor") != "sealed-llk-v1"
         or run.get("runner_pool") != "audit"
     ):
-        return {"supported": False, "reason": "not_opted_in_audit"}
+        return None
     log_dir, worktree = log_dir.resolve(strict=True), worktree.resolve(strict=True)
     state = json.loads((log_dir / "state.json").read_text())
     bootstrap = json.loads(
@@ -3282,16 +3290,16 @@ def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
             data.get("RUN_ID") != run["run_id"]
             or Path(data.get("LOG_DIR") or "").resolve() != log_dir
         ):
-            raise ValueError("functional execution run/bootstrap identity mismatch")
+            raise ValueError(f"{scope} execution run/bootstrap identity mismatch")
     if Path(state.get("WORKTREE_DIR") or "").resolve() != worktree or (
         run.get("worktree_dir") and Path(run["worktree_dir"]).resolve() != worktree
     ):
-        raise ValueError("functional execution worktree identity mismatch")
+        raise ValueError(f"{scope} execution worktree identity mismatch")
     if run.get("status") != "running":
-        raise ValueError("functional execution requires a running attempt")
+        raise ValueError(f"{scope} execution requires a running attempt")
     manifest_path = Path(state["REQUIRED_VERIFICATION_MANIFEST"]).resolve(strict=True)
     if not manifest_path.is_relative_to(log_dir):
-        raise ValueError("functional manifest must belong to this run")
+        raise ValueError(f"{scope} manifest must belong to this run")
     manifest = _load_required_manifest(manifest_path)
     current = run.get("required_verification") or {}
     if (
@@ -3304,9 +3312,16 @@ def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
         or state.get("REQUIRED_VERIFICATION_MANIFEST_ID") != manifest["manifest_id"]
         or state.get("REQUIRED_VERIFICATION_ATTEMPT_ID") != manifest["attempt_id"]
     ):
-        raise ValueError(
-            "functional manifest is not the current sealed run/attempt/base"
-        )
+        raise ValueError(f"{scope} manifest is not the current sealed run/attempt/base")
+    return log_dir, worktree, run, state, manifest_path, manifest
+
+
+def _functional_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
+    """Preflight the whole supported route before executing any sealed leaf."""
+    bound = _sealed_execution_identity(log_dir, worktree, "functional")
+    if bound is None:
+        return {"supported": False, "reason": "not_opted_in_audit"}
+    log_dir, worktree, run, state, manifest_path, manifest = bound
     leaves = [r for r in manifest["requirements"] if r["suite"] != "perf"]
     if (
         not leaves
@@ -3683,6 +3698,386 @@ def cmd_execute_functional(args: argparse.Namespace) -> int:
         run["functional_execution"] = record
     print(
         "functional-execution: "
+        + record["status"]
+        + (f": {stopped}" if stopped else "")
+    )
+    return 0 if record["status"] == "success" else 1
+
+
+def _measurement_execution_plan(log_dir: Path, worktree: Path) -> dict[str, Any]:
+    """Preflight every sealed current-only measurement before dispatching one."""
+    bound = _sealed_execution_identity(log_dir, worktree, "measurement")
+    if bound is None:
+        return {"supported": False, "reason": "not_opted_in_audit"}
+    log_dir, worktree, run, state, manifest_path, manifest = bound
+    perf = [r for r in manifest["requirements"] if r["suite"] == "perf"]
+    leaves = [r for r in perf if r["required_measurements"] == ["cycle_measurement"]]
+    if (
+        not leaves
+        or manifest["waivers"]
+        # A comparison owns a detached baseline tree, so its run keeps the agent
+        # rather than splitting perf ownership across two executors.
+        or len(leaves) != len(perf)
+        or manifest["version"] != 2
+        or any(
+            r["backend"] != "silicon"
+            or r["architecture"] not in {"blackhole", "wormhole"}
+            or not isinstance(r.get("measurement_contract"), dict)
+            for r in leaves
+        )
+    ):
+        return {"supported": False, "reason": "unsupported_measurement_route"}
+    dispatch = shlex.split(state.get("HW_TEST_DISPATCH_CMD") or "")
+    if not dispatch:
+        return {"supported": False, "reason": "sealed_dispatch_unavailable"}
+    llk = worktree / "tt_metal/tt-llk"
+    evaluator = Path(__file__).resolve().parent / "perf_eval.py"
+    if not evaluator.is_file():
+        return {"supported": False, "reason": "sealed_evaluator_unavailable"}
+    attempt = manifest["attempt_id"]
+    commands = []
+    for leaf in leaves:
+        identity = leaf["requirement_id"]
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", identity):
+            raise ValueError("unsafe measurement requirement identity")
+        selector = leaf["selector"]
+        test_path = (llk / "tests/python_tests" / selector["test"]).resolve()
+        if (
+            not test_path.is_relative_to(llk / "tests/python_tests")
+            or not test_path.is_file()
+            or (
+                selector["test_id"] is not None
+                and not selector["test_id"].startswith(selector["test"] + "::")
+            )
+        ):
+            raise ValueError("measurement selector is not a current contained test")
+        result = log_dir / "verification-results" / attempt / f"{identity}.json"
+        # The dispatcher derives these destinations from the same run identity;
+        # naming them here lets the preflight prove agreement before execution.
+        current = log_dir / f"perf_current_{identity}.post.csv"
+        raw = log_dir / f"perf_current_{identity}.csv"
+        commands.append(
+            {
+                "leaf": leaf,
+                "argv": dispatch
+                + ["--log-dir", str(log_dir), "--requirement-id", identity],
+                "env": {
+                    "CODEGEN_RUN_ID": run["run_id"],
+                    "CODEGEN_ATTEMPT_ID": attempt,
+                    "CODEGEN_REQUIREMENT_ID": identity,
+                    "CODEGEN_VERIFICATION_SUITE": "perf",
+                    "CODEGEN_VERIFICATION_BACKEND": "silicon",
+                    "CODEGEN_REQUIRED_VERIFICATION_MANIFEST": str(manifest_path),
+                    "CODEGEN_BASE_COMMIT": manifest["expected_base_sha"],
+                },
+                "result": str(result),
+                "current": str(current),
+                "raw": str(raw),
+                # Reuse the reviewed evaluator: it re-derives the verdict from the
+                # exact CSV bytes the receipt attests and owns normalization. It
+                # is resolved next to this deployed script, never from the
+                # candidate worktree, so a candidate cannot grade its own
+                # measurement by editing its copy of the evaluator.
+                "evaluate": [
+                    sys.executable,
+                    str(evaluator),
+                    "--goal",
+                    "measure",
+                    "--current",
+                    str(current),
+                    "--raw-current",
+                    str(raw),
+                    "--required-manifest",
+                    str(manifest_path),
+                    "--requirement-id",
+                    identity,
+                    "--verification-result",
+                    str(result),
+                    "--json-out",
+                    str(log_dir / "perf_results" / attempt / f"{identity}.json"),
+                    "--results-out",
+                    str(log_dir / "perf_result.json"),
+                ],
+            }
+        )
+    return {
+        "supported": True,
+        "run_id": run["run_id"],
+        "manifest_id": manifest["manifest_id"],
+        "attempt_id": attempt,
+        "base": manifest["expected_base_sha"],
+        "patch_sha256": _candidate_patch_digest(
+            worktree, manifest["expected_base_sha"]
+        ),
+        "manifest": str(manifest_path),
+        "commands": commands,
+        "dispatch": dispatch,
+    }
+
+
+def cmd_execute_perf(args: argparse.Namespace) -> int:
+    """Measure sealed current-only perf leaves; never a success finalizer.
+
+    Runs as soon as the functional gate is green, so an independent review no
+    longer sits between a green candidate and its hardware measurement. It does
+    not reduce all requirements, grant success, or replace review.
+    """
+    log_dir, worktree = Path(args.log_dir).resolve(), Path(args.worktree).resolve()
+    plan = _measurement_execution_plan(log_dir, worktree)
+    if not plan["supported"]:
+        print("measurement-execution fallback: " + plan["reason"])
+        return 20
+    identity = {
+        k: plan[k] for k in ("run_id", "manifest_id", "attempt_id", "patch_sha256")
+    }
+    previous = _load(log_dir).get("measurement_execution") or {}
+    if previous.get("manifest_id") == plan["manifest_id"]:
+        # Never resubmit a possibly still-running job or repeat a measured leaf.
+        if not all(previous.get(k) == v for k, v in identity.items()):
+            # Because measurement now runs before review, a review-driven code
+            # change can land under an unchanged manifest. Hand the whole leaf
+            # set back to the existing perf tester rather than guess whether a
+            # stale receipt may be replaced; a slower path is not a wrong one.
+            print(
+                "measurement-execution fallback: recorded attempt belongs to a "
+                "different candidate under this manifest"
+            )
+            return 20
+        print("measurement-execution already recorded; no leaf will be resubmitted")
+        return 0 if previous.get("status") == "success" else 1
+    for command in plan["commands"]:
+        if Path(command["result"]).exists():
+            raise ValueError(
+                "current-attempt measurement receipts already exist; inspect them without resubmitting"
+            )
+    if args.timeout <= 0 or not args.timeout < float("inf"):
+        raise ValueError("measurement timeout must be finite and positive")
+    help_result = subprocess.run(
+        plan["dispatch"] + ["--help"], capture_output=True, text=True, timeout=10
+    )
+    if help_result.returncode or any(
+        flag not in help_result.stdout
+        for flag in ("--requirement-id", "--describe", "--artifact-out")
+    ):
+        print("measurement-execution fallback: dispatcher lacks sealed interface")
+        return 20
+    for command in plan["commands"]:
+        leaf = command["leaf"]
+        try:
+            proc = subprocess.run(
+                command["argv"] + ["--describe"],
+                cwd=worktree / "tt_metal/tt-llk",
+                env={**os.environ, **command["env"]},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            if _measurement_execution_plan(log_dir, worktree) != plan:
+                raise ValueError(
+                    "measurement identity changed during preflight"
+                ) from exc
+            print(
+                f"measurement-execution preflight unavailable: {leaf['requirement_id']}: {exc}"
+            )
+            return 20
+        if _measurement_execution_plan(log_dir, worktree) != plan:
+            raise ValueError("measurement identity changed during preflight")
+        if proc.returncode:
+            print(
+                f"measurement-execution preflight failed: {leaf['requirement_id']}: {proc.stderr}"
+            )
+            return 20  # Nothing dispatched: the existing perf tester owns diagnosis.
+        document = json.loads(proc.stdout)
+        expected = {
+            "run_id": plan["run_id"],
+            "attempt_id": plan["attempt_id"],
+            "manifest_id": plan["manifest_id"],
+            "requirement_id": leaf["requirement_id"],
+            "arch": leaf["architecture"],
+            "kind": "perf",
+            "base": plan["base"],
+            "worktree": str(worktree),
+            "runner_pool": "audit",
+            "measurement": True,
+            "copy_result_json": True,
+            "test": leaf["selector"]["test_id"] or leaf["selector"]["test"],
+            "test_filter": leaf["selector"]["k"],
+            "result_json_out": command["result"],
+            "artifact_out": command["current"],
+            "raw_artifact_out": command["raw"],
+        }
+        if any(document.get(k) != v for k, v in expected.items()):
+            raise ValueError(
+                "sealed dispatcher description changed measurement identity"
+            )
+    if _measurement_execution_plan(log_dir, worktree) != plan:
+        raise ValueError("measurement identity changed during preflight")
+    record = {**identity, "status": "running", "leaves": []}
+    with _run_json_transaction(log_dir) as run:
+        if (run.get("measurement_execution") or {}).get("manifest_id") == plan[
+            "manifest_id"
+        ]:
+            raise ValueError("measurement attempt was already claimed")
+        run["measurement_execution"] = record
+    cmd_advance(
+        argparse.Namespace(
+            log_dir=str(log_dir),
+            now=None,
+            new_step="perf",
+            new_message="Measuring sealed performance requirements",
+            prev_result="success",
+            prev_message="Functional gate passed; measurement route preflight passed",
+            agent=None,
+        )
+    )
+    stopped = None
+    for command in plan["commands"]:
+        leaf = command["leaf"]
+        evidence_log = (
+            log_dir / f"measurement-{plan['attempt_id']}-{leaf['requirement_id']}.log"
+        )
+        entry = {
+            "requirement_id": leaf["requirement_id"],
+            "status": "running",
+            "log": str(evidence_log),
+            "result": command["result"],
+            "invocation_started": False,
+        }
+        try:
+            if _measurement_execution_plan(log_dir, worktree) != plan:
+                raise ValueError("measurement identity changed before next leaf")
+            record["leaves"].append(entry)
+            with _run_json_transaction(log_dir) as run:
+                run["measurement_execution"] = record
+                run["current_step_message"] = (
+                    f"Measuring sealed leaf {leaf['requirement_id']}"
+                )
+            with evidence_log.open("w") as output:
+                entry["invocation_started"] = True
+                with _run_json_transaction(log_dir) as run:
+                    run["measurement_execution"] = record
+                proc = subprocess.run(
+                    command["argv"] + ["--timeout", str(args.timeout)],
+                    cwd=worktree / "tt_metal/tt-llk",
+                    env={**os.environ, **command["env"]},
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
+            entry["returncode"] = proc.returncode
+            marker_lines = re.findall(
+                r"^HW_TEST_RESULT .*$", evidence_log.read_text(), re.MULTILINE
+            )
+            markers = [
+                dict(
+                    part.split("=", 1) for part in shlex.split(line)[1:] if "=" in part
+                )
+                for line in marker_lines
+            ]
+            marker = markers[-1] if markers else {}
+            entry["queue_job_id"] = (
+                marker.get("job") if marker.get("job") != "-" else None
+            )
+            entry["failure_stage"] = marker.get("failure_stage")
+            entry["summary"] = marker.get("summary")
+            receipt = _load_verification_result(Path(command["result"]))
+            if (
+                len(markers) != 1
+                or receipt["job_id"] != entry["queue_job_id"]
+                or marker.get("arch") != leaf["architecture"]
+            ):
+                raise ValueError("executor receipt does not match its dispatched job")
+            if (
+                any(receipt[k] != plan[k] for k in ("run_id", "attempt_id"))
+                or any(
+                    receipt[k] != leaf[k]
+                    for k in (
+                        "requirement_id",
+                        "architecture",
+                        "suite",
+                        "backend",
+                        "selector",
+                    )
+                )
+                or receipt["provenance"]["patch_sha256"] != plan["patch_sha256"]
+                or any(
+                    receipt["provenance"][k] != plan["base"]
+                    for k in ("expected_base_sha", "actual_base_sha")
+                )
+            ):
+                raise ValueError(
+                    "executor receipt does not match sealed candidate/leaf"
+                )
+            entry.update(status="executed", result_id=receipt["result_id"])
+            if proc.returncode and receipt["classification"] == "success":
+                raise ValueError("executor failed despite a success-shaped receipt")
+            if receipt["classification"] in {"infra_error", "timed_out"}:
+                stopped = "executor infrastructure failure: " + ", ".join(
+                    receipt["reason_codes"]
+                )
+                break
+            if receipt["classification"] != "success":
+                stopped = "measurement hardware execution failed: " + ", ".join(
+                    receipt["reason_codes"]
+                )
+                break
+            # Only now can the evaluator bind CSV bytes to an attested receipt.
+            evaluation = subprocess.run(
+                command["evaluate"],
+                cwd=worktree / "tt_metal/tt-llk",
+                env={**os.environ, **command["env"]},
+                capture_output=True,
+                text=True,
+            )
+            entry["evaluate_returncode"] = evaluation.returncode
+            if evaluation.returncode:
+                stopped = (
+                    f"measurement evidence rejected for {leaf['requirement_id']}: "
+                    + (evaluation.stderr or evaluation.stdout).strip()
+                )
+                entry["status"] = "unmeasured"
+                break
+            entry["status"] = "measured"
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            stopped = str(exc)
+            entry.update(status="unresolved", error=stopped)
+            if entry not in record["leaves"]:
+                record["leaves"].append(entry)
+            break
+        finally:
+            with _run_json_transaction(log_dir) as run:
+                run["measurement_execution"] = record
+    measured = [e for e in record["leaves"] if e["status"] == "measured"]
+    record["status"] = (
+        "success"
+        if not stopped and len(measured) == len(plan["commands"])
+        else "failed"
+    )
+    record["error"] = stopped
+    record["unstarted"] = [
+        c["leaf"]["requirement_id"]
+        for c in plan["commands"]
+        if not any(
+            r["requirement_id"] == c["leaf"]["requirement_id"]
+            and r["invocation_started"]
+            for r in record["leaves"]
+        )
+    ]
+    results = log_dir / "perf_result.json"
+    if record["status"] == "success" and results.is_file():
+        # Publish exactly what the evaluator wrote, so the existing all-scope
+        # reduction at finalization validates measurements it can already parse.
+        cmd_metric(
+            argparse.Namespace(
+                log_dir=str(log_dir),
+                now=None,
+                patch_json=json.dumps({"perf": json.loads(results.read_text())}),
+            )
+        )
+    with _run_json_transaction(log_dir) as run:
+        run["measurement_execution"] = record
+    print(
+        "measurement-execution: "
         + record["status"]
         + (f": {stopped}" if stopped else "")
     )
@@ -4532,6 +4927,15 @@ def _build_parser() -> argparse.ArgumentParser:
     functional.add_argument("--worktree", required=True)
     functional.add_argument("--timeout", type=float, default=1800)
     functional.set_defaults(func=cmd_execute_functional)
+
+    measurement = sub.add_parser(
+        "execute-perf",
+        help="Opt-in sealed current-only measurement; exit20 means unsupported before submission",
+    )
+    _add_common(measurement)
+    measurement.add_argument("--worktree", required=True)
+    measurement.add_argument("--timeout", type=float, default=1800)
+    measurement.set_defaults(func=cmd_execute_perf)
 
     review = sub.add_parser(
         "review", help="Prepare, record or check a candidate-bound review"

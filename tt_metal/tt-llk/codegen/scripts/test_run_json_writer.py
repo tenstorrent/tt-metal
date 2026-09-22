@@ -6349,6 +6349,454 @@ def test_sealed_functional_all_architectures_execute_in_manifest_order(
     )
 
 
+# ---------------------------------------------------------------------------
+# Sealed current-only measurement: perf leaves off the review critical path.
+# ---------------------------------------------------------------------------
+
+_CONTRACT = {
+    "primary_metric": "mean(L1_TO_L1)",
+    "marker": "TILE_LOOP",
+    "normalization": "loop_factor*tile_cnt",
+    "variants": [
+        {"mathop": "copy", "marker": "TILE_LOOP", "loop_factor": "4", "tile_cnt": "2"}
+    ],
+}
+
+
+def _measurement_requirement(index=1, **overrides):
+    return _requirement(
+        suite="perf",
+        index=index,
+        selector={"test": f"perf_copy{index}.py", "test_id": None, "k": None},
+        required_measurements=["cycle_measurement"],
+        measurement_contract=_CONTRACT,
+        **overrides,
+    )
+
+
+def _measurement_fixture(tmp_path, monkeypatch, requirements=None):
+    requirements = requirements or [_measurement_requirement()]
+    writer, args, manifest, tree = _functional_fixture(
+        tmp_path, monkeypatch, requirements
+    )
+    for leaf in requirements:
+        module = tree / "tests/python_tests" / leaf["selector"]["test"]
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text("def test_perf(): pass\n")
+    return writer, args, manifest, tree
+
+
+def _fake_measurement_dispatch(
+    monkeypatch,
+    writer,
+    args,
+    manifest,
+    *,
+    classification="success",
+    evaluate_rc=0,
+    bad_description=None,
+    job_mismatch=False,
+):
+    """Fake only the hardware transport; the real evaluator writes the evidence."""
+    real_run, calls = subprocess.run, []
+    plan = writer._measurement_execution_plan(Path(args.log_dir), Path(args.worktree))
+    commands = {c["leaf"]["requirement_id"]: c for c in plan["commands"]}
+
+    def fake(argv, **kwargs):
+        if argv[0] == "sealed-dispatch-fixture":
+            calls.append(list(argv))
+            if "--help" in argv:
+                return subprocess.CompletedProcess(
+                    argv, 0, "--requirement-id --describe --artifact-out", ""
+                )
+            identity = argv[argv.index("--requirement-id") + 1]
+            command = commands[identity]
+            leaf = command["leaf"]
+            if "--describe" in argv:
+                context = {
+                    "run_id": plan["run_id"],
+                    "attempt_id": plan["attempt_id"],
+                    "manifest_id": plan["manifest_id"],
+                    "requirement_id": identity,
+                    "arch": leaf["architecture"],
+                    "kind": "perf",
+                    "base": plan["base"],
+                    "worktree": args.worktree,
+                    "runner_pool": "audit",
+                    "measurement": True,
+                    "copy_result_json": True,
+                    "test": leaf["selector"]["test_id"] or leaf["selector"]["test"],
+                    "test_filter": leaf["selector"]["k"],
+                    "result_json_out": command["result"],
+                    "artifact_out": command["current"],
+                    "raw_artifact_out": command["raw"],
+                }
+                if bad_description:
+                    context.update(bad_description)
+                return subprocess.CompletedProcess(argv, 0, json.dumps(context), "")
+            job = "j-measure-" + identity.replace(":", "-")
+            # Publish CSVs whose per-tile values are exactly raw/(loop*tiles).
+            raw_cycles = 64.0
+            divisor = 4 * 2
+            rows = "mathop,marker,loop_factor,tile_cnt,mean(L1_TO_L1)\n"
+            Path(command["raw"]).write_text(rows + f"copy,TILE_LOOP,4,2,{raw_cycles}\n")
+            Path(command["current"]).write_text(
+                rows + f"copy,TILE_LOOP,4,2,{raw_cycles / divisor}\n"
+            )
+            # Drive the real classifier through its own inputs, never by
+            # writing a classification the counts would not produce.
+            outcome = {
+                "success": {},
+                "infra_error": {"markers": ["hang_detected"]},
+                "candidate_failure": {"failed": 1, "passed": 0, "returncode": 1},
+            }[classification]
+            receipt = _sealed_result(
+                manifest,
+                leaf,
+                job_id=job,
+                patch_sha256=plan["patch_sha256"],
+                **outcome,
+            )
+            assert receipt["classification"] == classification
+            receipt["version"] = 4
+            receipt["suite"] = "perf"
+            receipt["measurement_artifacts"] = {
+                name: {
+                    "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                    "size": Path(path).stat().st_size,
+                }
+                for name, path in (
+                    ("current", command["current"]),
+                    ("raw_current", command["raw"]),
+                )
+            }
+            receipt["result_id"] = _content_id(receipt, {"result_id"})
+            destination = Path(command["result"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(json.dumps(receipt))
+            marker_job = "j-wrong" if job_mismatch else job
+            stream = kwargs.get("stdout")
+            line = (
+                f"HW_TEST_RESULT arch={leaf['architecture']} ok=true ran=true "
+                f"passed=true job={marker_job} tests_total=1 tests_passed=1\n"
+            )
+            if stream is not None and hasattr(stream, "write"):
+                stream.write(line)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "perf_eval.py" in " ".join(str(a) for a in argv) and evaluate_rc:
+            calls.append(["evaluator-forced-failure"])
+            return subprocess.CompletedProcess(argv, evaluate_rc, "", "forced")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    return calls
+
+
+def test_sealed_measurement_dispatches_once_and_binds_real_evaluator(
+    tmp_path, monkeypatch
+):
+    """The reviewed evaluator, not an agent, derives the verdict from receipt bytes."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_perf(args) == 0
+    submitted = [a for a in calls if "--describe" not in a and "--help" not in a]
+    assert len(submitted) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    record = run["measurement_execution"]
+    assert record["status"] == "success" and record["unstarted"] == []
+    assert [leaf["status"] for leaf in record["leaves"]] == ["measured"]
+    # Published where the existing all-scope reduction already looks for it.
+    assert run["perf"]["schema"] == "tt.issue-solver.perf-results"
+    measured = run["perf"]["results"]["blackhole:perf:1"]
+    assert measured["outcome"] == "PERF_OK" and measured["measured"] is True
+    assert measured["measurements"]["cycle_measurement"]["measured"] is True
+    assert measured["variants"][0]["current_cycles"] == 8.0
+    assert measured["primary_metric"] == "mean(L1_TO_L1)"
+
+
+def test_sealed_measurement_never_resubmits_a_recorded_attempt(tmp_path, monkeypatch):
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_perf(args) == 0
+    before = len(calls)
+    assert writer.cmd_execute_perf(args) == 0 and len(calls) == before
+
+
+def test_sealed_measurement_refuses_preexisting_receipts(tmp_path, monkeypatch):
+    """An existing current-attempt receipt is inspected, never overwritten."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    plan = writer._measurement_execution_plan(Path(args.log_dir), Path(args.worktree))
+    destination = Path(plan["commands"][0]["result"])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("{}")
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    with pytest.raises(ValueError, match="already exist"):
+        writer.cmd_execute_perf(args)
+    assert not [a for a in calls if "--describe" not in a and "--help" not in a]
+
+
+@pytest.mark.parametrize(
+    "requirements,reason",
+    [
+        # A comparison owns a detached baseline tree; the agent keeps the whole run.
+        (
+            [_requirement(suite="perf", required_measurements=["cycle_comparison"])],
+            "unsupported_measurement_route",
+        ),
+        (
+            [
+                _measurement_requirement(),
+                _requirement(
+                    suite="perf", index=2, required_measurements=["cycle_comparison"]
+                ),
+            ],
+            "unsupported_measurement_route",
+        ),
+        # No perf leaf at all: nothing for this executor to own.
+        ([_requirement()], "unsupported_measurement_route"),
+    ],
+)
+def test_sealed_measurement_falls_back_before_any_dispatch(
+    tmp_path, monkeypatch, requirements, reason
+):
+    writer, args, manifest, tree = _functional_fixture(
+        tmp_path, monkeypatch, requirements
+    )
+    for leaf in requirements:
+        module = tree / "tests/python_tests" / leaf["selector"]["test"]
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text("def test_perf(): pass\n")
+    real_run = subprocess.run
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kw: (
+            pytest.fail("fallback must not reach hardware")
+            if argv and argv[0] == "sealed-dispatch-fixture"
+            else real_run(argv, **kw)
+        ),
+    )
+    assert writer.cmd_execute_perf(args) == 20
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert "measurement_execution" not in run
+
+
+@pytest.mark.parametrize("defect", ["prod", "forged"])
+def test_sealed_measurement_requires_explicit_audit_opt_in(
+    tmp_path, monkeypatch, defect
+):
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    path = Path(args.log_dir) / "run.json"
+    run = json.loads(path.read_text())
+    run["runner_pool" if defect == "prod" else "functional_executor"] = (
+        "prod" if defect == "prod" else "forged"
+    )
+    path.write_text(json.dumps(run))
+    assert writer.cmd_execute_perf(args) == 20
+
+
+@pytest.mark.parametrize(
+    "bad_description",
+    [
+        {"kind": "llk"},
+        {"measurement": False},
+        {"copy_result_json": False},
+        {"artifact_out": "/tmp/elsewhere.post.csv"},
+        {"raw_artifact_out": "/tmp/elsewhere.csv"},
+        {"runner_pool": "prod"},
+    ],
+)
+def test_sealed_measurement_rejects_changed_dispatcher_identity(
+    tmp_path, monkeypatch, bad_description
+):
+    """A dispatcher that redirects evidence must not be allowed to execute."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    calls = _fake_measurement_dispatch(
+        monkeypatch, writer, args, manifest, bad_description=bad_description
+    )
+    with pytest.raises(ValueError, match="changed measurement identity"):
+        writer.cmd_execute_perf(args)
+    assert not [a for a in calls if "--describe" not in a and "--help" not in a]
+
+
+def test_sealed_measurement_rejects_receipt_from_another_job(tmp_path, monkeypatch):
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    _fake_measurement_dispatch(monkeypatch, writer, args, manifest, job_mismatch=True)
+    assert writer.cmd_execute_perf(args) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert "does not match its dispatched job" in run["measurement_execution"]["error"]
+    assert "perf" not in run
+
+
+@pytest.mark.parametrize(
+    "classification,expected",
+    [
+        ("infra_error", "infrastructure failure"),
+        ("candidate_failure", "hardware execution failed"),
+    ],
+)
+def test_sealed_measurement_preserves_failure_without_publishing(
+    tmp_path, monkeypatch, classification, expected
+):
+    """A failed measurement keeps its evidence and never reaches run.perf."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    _fake_measurement_dispatch(
+        monkeypatch, writer, args, manifest, classification=classification
+    )
+    assert writer.cmd_execute_perf(args) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert expected in run["measurement_execution"]["error"]
+    assert "perf" not in run
+
+
+def test_sealed_measurement_rejected_evidence_is_not_success(tmp_path, monkeypatch):
+    """Evaluator rejection is recorded as unmeasured, not quietly dropped."""
+    writer, args, manifest, _ = _measurement_fixture(tmp_path, monkeypatch)
+    _fake_measurement_dispatch(monkeypatch, writer, args, manifest, evaluate_rc=2)
+    assert writer.cmd_execute_perf(args) == 1
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    record = run["measurement_execution"]
+    assert record["status"] == "failed"
+    assert [leaf["status"] for leaf in record["leaves"]] == ["unmeasured"]
+    assert "perf" not in run
+
+
+def test_sealed_measurement_evaluator_is_deployed_not_candidate_owned(
+    tmp_path, monkeypatch
+):
+    """A candidate must not be able to grade its own measurement.
+
+    The evaluator is resolved next to the deployed writer, so editing the
+    worktree's copy of perf_eval.py cannot change the verdict.
+    """
+    writer, args, manifest, tree = _measurement_fixture(tmp_path, monkeypatch)
+    hostile = tree / "codegen/scripts/perf_eval.py"
+    hostile.parent.mkdir(parents=True, exist_ok=True)
+    hostile.write_text("import sys\nsys.exit(0)\n")
+    plan = writer._measurement_execution_plan(Path(args.log_dir), Path(args.worktree))
+    evaluator = Path(plan["commands"][0]["evaluate"][1])
+    assert evaluator == Path(writer.__file__).resolve().parent / "perf_eval.py"
+    assert not evaluator.is_relative_to(tree)
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_perf(args) == 0
+    # The real evaluator still produced bound evidence, not the stub's silence.
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert run["perf"]["results"]["blackhole:perf:1"]["measured"] is True
+
+
+@pytest.mark.parametrize(
+    "run,expected",
+    [
+        (
+            {
+                "required_verification": {"manifest_id": "m1", "attempt_id": "a1"},
+                "measurement_execution": {
+                    "status": "success",
+                    "manifest_id": "m1",
+                    "attempt_id": "a1",
+                },
+            },
+            "1",
+        ),
+        # Every other shape must fail closed, so the perf tester still runs.
+        (
+            {
+                "required_verification": {"manifest_id": "m2", "attempt_id": "a1"},
+                "measurement_execution": {
+                    "status": "success",
+                    "manifest_id": "m1",
+                    "attempt_id": "a1",
+                },
+            },
+            "0",
+        ),
+        (
+            {
+                "required_verification": {"manifest_id": "m1", "attempt_id": "a2"},
+                "measurement_execution": {
+                    "status": "success",
+                    "manifest_id": "m1",
+                    "attempt_id": "a1",
+                },
+            },
+            "0",
+        ),
+        (
+            {
+                "required_verification": {"manifest_id": "m1", "attempt_id": "a1"},
+                "measurement_execution": {
+                    "status": "failed",
+                    "manifest_id": "m1",
+                    "attempt_id": "a1",
+                },
+            },
+            "0",
+        ),
+        ({"required_verification": {"manifest_id": "m1", "attempt_id": "a1"}}, "0"),
+        ({}, "0"),
+    ],
+)
+def test_sealed_measurement_gate_only_skips_an_exact_candidate_match(
+    tmp_path, run, expected
+):
+    """The gate decides whether a perf tester is spawned, so it fails closed."""
+    (tmp_path / "run.json").write_text(json.dumps(run))
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; _LOG(){ printf "%s" "$D"; }; '
+            "execute_step_sealed_measurement_done",
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=ORCHESTRATOR_STEPS.parents[2],
+        env={**os.environ, "D": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == expected
+
+
+def test_sealed_measurement_gate_fails_closed_on_unreadable_run(tmp_path):
+    (tmp_path / "run.json").write_text("not json")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; _LOG(){ printf "%s" "$D"; }; '
+            "execute_step_sealed_measurement_done",
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=ORCHESTRATOR_STEPS.parents[2],
+        env={**os.environ, "D": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0 and result.stdout.strip() == "0"
+
+
+def test_sealed_measurement_executes_every_leaf_in_manifest_order(
+    tmp_path, monkeypatch
+):
+    requirements = [_measurement_requirement(1), _measurement_requirement(2)]
+    writer, args, manifest, _ = _measurement_fixture(
+        tmp_path, monkeypatch, requirements
+    )
+    calls = _fake_measurement_dispatch(monkeypatch, writer, args, manifest)
+    assert writer.cmd_execute_perf(args) == 0
+    submitted = [a for a in calls if "--describe" not in a and "--help" not in a]
+    assert [a[a.index("--requirement-id") + 1] for a in submitted] == [
+        r["requirement_id"] for r in requirements
+    ]
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert set(run["perf"]["results"]) == {r["requirement_id"] for r in requirements}
+
+
 def test_sealed_functional_host_only_checks_run_worktree_pointer(tmp_path, monkeypatch):
     host = _requirement(
         backend="host", selector={"test": "test_host.py", "test_id": None, "k": None}

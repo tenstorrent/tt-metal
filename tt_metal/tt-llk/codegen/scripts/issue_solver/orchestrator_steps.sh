@@ -1060,6 +1060,35 @@ execute_step_run_sealed_functional() {
     rj execute-functional --worktree "$(_wt)"
 }
 
+# Opt-in measurement of sealed current-only perf leaves, run as soon as the
+# functional gate is green so review no longer sits between a green candidate
+# and its hardware measurement. 0 = measured, 20 = unsupported before any
+# submission (use the existing perf tester), other = preserve evidence.
+execute_step_run_sealed_measurement() {
+    local _L; _L="$(_LOG)"
+    rj execute-perf --worktree "$(_wt)"
+}
+
+# Has the current candidate already been measured deterministically? Prints 1
+# when the recorded measurement belongs to exactly this manifest and patch.
+execute_step_sealed_measurement_done() {
+    local _L; _L="$(_LOG)"
+    python - "$_L" <<'PY'
+import json, sys
+from pathlib import Path
+log = Path(sys.argv[1])
+try:
+    run = json.loads((log / "run.json").read_text())
+except (OSError, ValueError):
+    print("0"); raise SystemExit(0)
+record = run.get("measurement_execution") or {}
+current = run.get("required_verification") or {}
+print("1" if record.get("status") == "success"
+      and record.get("manifest_id") == current.get("manifest_id")
+      and record.get("attempt_id") == current.get("attempt_id") else "0")
+PY
+}
+
 execute_step_combine_verification_results() {
     local _L; _L="$(_LOG)"
     local route arches patch pool manifest

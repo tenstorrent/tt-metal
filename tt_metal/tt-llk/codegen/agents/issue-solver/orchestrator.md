@@ -275,6 +275,29 @@ Retry only while `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
 budget is exhausted while a repairable failure remains, call
 `execute_step_mark_status failed` and finalize.
 
+## 4a. Sealed measurement, before review
+
+Run this immediately after the functional gate is green and before spawning the
+reviewer. It is opt-in and applies only when every sealed perf leaf is a
+predeclared current-only `cycle_measurement`:
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_run_sealed_measurement; rc=$?
+```
+
+| `rc` | Meaning | Action |
+|---|---|---|
+| `0` | Every measurement leaf measured and bound to this candidate | continue to review; section 6 will skip the perf tester |
+| `20` | Unsupported before any submission, or a stale record for another candidate | continue to review; section 6 runs the existing perf tester unchanged |
+| other | Hardware or evidence failure, evidence preserved | continue to review; section 6 owns the retry through its existing classes |
+
+This never grants success, reduces all requirements, or replaces review. A
+non-zero result is not a functional failure and must not be turned into one: the
+functional verdict already stands on its own evidence. Do not skip review
+because a measurement succeeded, and do not skip the measurement because review
+is pending — they are independent reads of the same frozen candidate.
+
 ## 5. Review
 
 Run review when a fix diff exists and functional verification has no terminal
@@ -320,16 +343,28 @@ return to functional verification. Do not reuse the earlier review.
 
 ## 6. Performance
 
-Run only after the current diff has completed the review loop.
+A comparison runs only after the current diff has completed the review loop,
+because a changed diff invalidates the measurement it would compare.
+
+A **sealed current-only measurement is different**: it takes one worktree, no
+baseline, and its verdict comes from a deterministic evaluator rather than an
+agent. Waiting for review to finish before measuring it adds the entire review
+duration to the critical path for no evidentiary gain, so section 4a measures it
+as soon as the functional gate is green. When that already succeeded for exactly
+this candidate, do not spawn a perf tester for it:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
+[ "$(execute_step_sealed_measurement_done)" = 1 ] && echo "measurement already bound"
 PERF_ARCHES="$(execute_step_perf_arches)"
 ```
 
-If empty, call `execute_step_perf_not_measured` and finalize. Otherwise call
-`execute_step_advance_perf`, spawn `perf-tester.md` for `TARGET_ARCH`, and call
-`execute_step_record_perf`.
+If the measurement is already bound to this candidate, continue to finalize; its
+evidence is in `run.json` under `perf` and the all-scope reduction validates it.
+
+Otherwise, if `PERF_ARCHES` is empty, call `execute_step_perf_not_measured` and
+finalize. Otherwise call `execute_step_advance_perf`, spawn `perf-tester.md` for
+`TARGET_ARCH`, and call `execute_step_record_perf`.
 
 | Outcome | Action |
 |---|---|
