@@ -79,9 +79,9 @@ constexpr uint32_t kPollIterations = 70000;
 constexpr uint32_t kSilenceIterations = 8000;
 
 std::vector<CoreCoord> all_dispatch_engine_cores(distributed::MeshDevice& mesh_device) {
-    const ChipId chip_id = mesh_device.get_device_ids()[0];
+    const auto device_id = mesh_device.get_device_ids()[0];
     return detail::get_quasar_soc_dispatch_engine_logical_cores(
-        MetalContext::instance().get_cluster().get_soc_desc(chip_id));
+        MetalContext::instance().get_cluster().get_soc_desc(device_id));
 }
 
 std::string fds_tests_skip_reason(const distributed::MeshDevice& mesh_device) {
@@ -141,9 +141,10 @@ std::vector<uint32_t> read_status(
     uint32_t addr,
     uint32_t num_words,
     CoreType core_type) {
-    const ChipId chip_id = mesh_device.get_device_ids()[0];
+    const auto device_id = mesh_device.get_device_ids()[0];
     const CoreCoord virtual_core = mesh_device.virtual_core_from_logical_core(core, core_type);
-    return MetalContext::instance().get_cluster().read_core(chip_id, virtual_core, addr, num_words * sizeof(uint32_t));
+    return MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core, addr, num_words * sizeof(uint32_t));
 }
 
 struct CoreStatus {
@@ -216,8 +217,8 @@ FdsProgramResult run_fds_program(distributed::MeshDevice& mesh_device, FdsProgra
     }
 
     LaunchProgram(mesh_device, std::move(program));
-    const ChipId chip_id = mesh_device.get_device_ids()[0];
-    MetalContext::instance().get_cluster().l1_barrier(chip_id);
+    const auto device_id = mesh_device.get_device_ids()[0];
+    MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     FdsProgramResult result;
     for (const CoreCoord& core : spec.dispatch_cores) {

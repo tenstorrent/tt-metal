@@ -81,11 +81,12 @@ void RunTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    auto* device = mesh_device->get_devices()[0];
 
     // Depending on riscv type, choose one core to run the test on
     // and set up the kernel on the correct risc
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
+    bool is_quasar = device->arch() == tt::ARCH::QUASAR;
     // Push past capacity so the oldest entries are overwritten, whatever the buffer size.
     uint32_t num_pushes = hal.get_ring_buffer_capacity() + 12;
     constexpr const char* kernel_legacy = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp";
@@ -96,7 +97,7 @@ void RunTest(
     switch (processor.core_type) {
         case HalProgrammableCoreType::TENSIX: {
             logical_core = CoreCoord{0, 0};
-            virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
+            virtual_core = device->worker_core_from_logical_core(logical_core);
             // ETH/DRAM below stay on the legacy host API; it has no Metal 2.0 equivalent.
             experimental::KernelSpec kernel_spec{.unique_id = kRingbufKernelName, .source = kernel_metal2};
             switch (processor.processor_class) {
@@ -139,12 +140,12 @@ void RunTest(
             break;
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
-            if (mesh_device->get_devices()[0]->get_active_ethernet_cores(true).empty()) {
+            if (device->get_active_ethernet_cores(true).empty()) {
                 log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
                 GTEST_SKIP();
             }
-            logical_core = *(mesh_device->get_devices()[0]->get_active_ethernet_cores(true).begin());
-            virtual_core = mesh_device->ethernet_core_from_logical_core(logical_core);
+            logical_core = *(device->get_active_ethernet_cores(true).begin());
+            virtual_core = device->ethernet_core_from_logical_core(logical_core);
             CreateKernel(
                 program,
                 kernel_legacy,
@@ -152,12 +153,12 @@ void RunTest(
                 EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {num_pushes}});
             break;
         case HalProgrammableCoreType::IDLE_ETH:
-            if (mesh_device->get_devices()[0]->get_inactive_ethernet_cores().empty()) {
+            if (device->get_inactive_ethernet_cores().empty()) {
                 log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
                 GTEST_SKIP();
             }
-            logical_core = *(mesh_device->get_devices()[0]->get_inactive_ethernet_cores().begin());
-            virtual_core = mesh_device->ethernet_core_from_logical_core(logical_core);
+            logical_core = *(device->get_inactive_ethernet_cores().begin());
+            virtual_core = device->ethernet_core_from_logical_core(logical_core);
             CreateKernel(
                 program,
                 kernel_legacy,
@@ -171,7 +172,7 @@ void RunTest(
             }
             // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
             logical_core = CoreCoord{0, 1};
-            virtual_core = mesh_device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+            virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
             CreateKernel(
                 program,
                 kernel_legacy,
@@ -189,12 +190,7 @@ void RunTest(
         }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported core type");
     }
-    log_info(
-        LogTest,
-        "Running test on device {} core {}[{}]...",
-        mesh_device->get_device_ids()[0],
-        logical_core,
-        virtual_core);
+    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
     workload.add_program(device_range, std::move(program));
 
     // Run the program
