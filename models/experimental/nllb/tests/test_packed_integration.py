@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import torch
 
+from models.experimental.nllb.tests.process_runner import run_task
 from models.experimental.nllb.tt import backend
 from models.experimental.nllb.tt import trace_decode
 from models.experimental.nllb.tests.test_runtime_integration import load_runtime
@@ -261,7 +262,6 @@ def test_portable_packed_native(nllb_device_id, tmp_path):
     """Opt-in native observer; CPU fault matrix above remains independent."""
     import os
     from pathlib import Path
-    import subprocess
     import json
 
     checkpoint = os.environ.get("NLLB_TEST_CHECKPOINT")
@@ -270,25 +270,16 @@ def test_portable_packed_native(nllb_device_id, tmp_path):
     if not all((checkpoint, config, tokenizer)):
         pytest.skip("set checkpoint, config and tokenizer for native packed observation")
     output = Path(os.environ.get("NLLB_PACKED_OUTPUT", str(tmp_path / "packed")))
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "models.experimental.nllb.tests.probe_packed_integration",
-            "--checkpoint",
-            checkpoint,
-            "--config",
-            config,
-            "--tokenizer-directory",
-            tokenizer,
-            "--device",
-            str(nllb_device_id),
-            "--output",
-            str(output),
-        ],
+    result = run_task(
+        "packed",
+        dict(
+            checkpoint=checkpoint,
+            config=config,
+            tokenizer_directory=tokenizer,
+            device=nllb_device_id,
+            output=str(output),
+        ),
         timeout=240,
-        text=True,
-        capture_output=True,
     )
     print(result.stdout)
     assert result.returncode == 0, result.stderr

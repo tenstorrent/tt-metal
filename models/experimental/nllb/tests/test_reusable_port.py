@@ -9,19 +9,19 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import time
 import numpy as np
 import torch
 import ttnn
 
+from models.experimental.nllb.tests.process_runner import run_task
 from models.experimental.nllb.tt import backend
 from models.experimental.nllb.demo.translate import load_text_inputs
 from models.experimental.nllb.tt.nllb_validation import validate_config
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--config")
@@ -34,7 +34,7 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=4)
     parser.add_argument("--cli-timeout", type=float, default=180)
     parser.add_argument("--public-inputs", help="Optional public smoke NPZ for tokenizer parity")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     root = Path(args.checkpoint)
     config_path = Path(args.config) if args.config else (root if root.is_dir() else root.parent) / "config.json"
     config = validate_config(json.loads(config_path.read_text()))
@@ -57,35 +57,23 @@ def main():
     # does not destroy the process-global UMD cluster or release its chip lock.
     with tempfile.TemporaryDirectory() as tmp:
         output = Path(tmp) / "translation.json"
-        command = [
-            sys.executable,
-            "-m",
-            "models.experimental.nllb.demo.translate",
-            "--checkpoint",
-            str(root),
-            "--config",
-            str(config_path),
-            "--device",
-            str(args.device),
-            "--source-language",
-            args.source_language,
-            "--target-language",
-            args.target_language,
-            "--text",
-            args.text,
-            "--max-new-tokens",
-            str(args.max_new_tokens),
-            "--precision",
-            args.precision,
-            "--output",
-            str(output),
-        ]
+        options = dict(
+            checkpoint=str(root),
+            config=str(config_path),
+            device=args.device,
+            source_language=args.source_language,
+            target_language=args.target_language,
+            text=args.text,
+            max_new_tokens=args.max_new_tokens,
+            precision=args.precision,
+            output=str(output),
+        )
         if args.tokenizer_directory:
-            command.extend(["--tokenizer-directory", args.tokenizer_directory])
+            options["tokenizer_directory"] = args.tokenizer_directory
         started = time.perf_counter()
         print("PHASE standalone_child_start", flush=True)
         try:
-            child = subprocess.run(command, capture_output=True, text=True, timeout=args.cli_timeout, check=True)
+            child = run_task("translate", options, timeout=args.cli_timeout, check=True)
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
             print("CHILD_FAILURE", repr(error), flush=True)
             print("CHILD_STDOUT", error.stdout, flush=True)
@@ -167,23 +155,11 @@ def test_standalone_cli_and_token_api(tmp_path, nllb_device_id):
     checkpoint = os.environ.get("NLLB_TEST_CHECKPOINT")
     if not checkpoint:
         pytest.skip("set NLLB_TEST_CHECKPOINT for actual standalone model inference")
-    command = [
-        sys.executable,
-        "-m",
-        "models.experimental.nllb.tests.test_reusable_port",
-        "--checkpoint",
-        checkpoint,
-        "--device",
-        str(nllb_device_id),
-        "--precision",
-        precision,
-    ]
-    for variable, option in (("NLLB_TEST_CONFIG", "--config"), ("NLLB_TEST_TOKENIZER", "--tokenizer-directory")):
+    options = dict(checkpoint=checkpoint, device=nllb_device_id, precision=precision)
+    for variable, option in (("NLLB_TEST_CONFIG", "config"), ("NLLB_TEST_TOKENIZER", "tokenizer_directory")):
         if os.environ.get(variable):
-            command.extend([option, os.environ[variable]])
-    result = subprocess.run(
-        command, cwd=Path(__file__).resolve().parents[4], capture_output=True, text=True, timeout=240
-    )
+            options[option] = os.environ[variable]
+    result = run_task("reusable", options, timeout=240)
     assert result.returncode == 0, result.stdout + result.stderr
     print(result.stdout)
 

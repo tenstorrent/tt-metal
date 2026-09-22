@@ -173,7 +173,14 @@ def test_native_cleanup_failure_is_sticky_and_preserves_primary(harness, phase, 
     b, s = harness
     cleanup = RuntimeError("native " + phase)
     primary = RuntimeError("body")
-    setattr(s, phase + "_error", cleanup)
+    if phase == "begin":
+        s.begin_error = cleanup
+    elif phase == "end":
+        s.end_error = cleanup
+    elif phase == "release":
+        s.release_error = cleanup
+    else:
+        raise AssertionError("unknown failure phase")
     s.body_error = primary if body_fails else None
     with pytest.raises(RuntimeError) as caught:  # allow-pytest.raises: CPU-only check.
         b.generate(*inputs(), 4, 3)
@@ -372,11 +379,19 @@ def test_failed_warmup_never_commits_and_preserves_exact_exception(warming, phas
     b, s = warming
     sentinel = RuntimeError("warm " + phase)
     with b.last_warmup_reuse() as scope:
-        setattr(s, phase + "_error", sentinel)
+        if phase == "project":
+            s.project_error = sentinel
+        elif phase == "sync":
+            s.sync_error = sentinel
+        else:
+            raise AssertionError("unknown failure phase")
         with pytest.raises(RuntimeError) as caught:  # allow-pytest.raises: CPU-only check.
             scope.warm(SpecBuffer(), 32, SpecBuffer())
         assert caught.value is sentinel and not scope.variants
-        setattr(s, phase + "_error", None)
+        if phase == "project":
+            s.project_error = None
+        else:
+            s.sync_error = None
         s.projects.clear()
         scope.warm(SpecBuffer(), 32, SpecBuffer())
         assert s.projects == list(range(1, 33)) and len(scope.variants) == 32
@@ -450,7 +465,14 @@ def test_scope_exit_preserves_native_primary_and_cleanup_diagnostics(warming, mo
     monkeypatch.setattr(trace_decode.DecoderTrace, "body", body)
     native = RuntimeError("native scope " + phase)
     primary = RuntimeError("scope body")
-    setattr(s, phase + "_error", native)
+    if phase == "begin":
+        s.begin_error = native
+    elif phase == "end":
+        s.end_error = native
+    elif phase == "release":
+        s.release_error = native
+    else:
+        raise AssertionError("unknown failure phase")
     s.body_error = primary if body_fails else None
     ids, mask = inputs()
     originals = ids.copy(), mask.copy()
@@ -666,7 +688,14 @@ def test_projected_exact_failure_and_ownership(projected, monkeypatch, phase):
         raise sentinel
 
     if phase in ("begin", "end", "release"):
-        setattr(s, phase + "_error", sentinel)
+        if phase == "begin":
+            s.begin_error = sentinel
+        elif phase == "end":
+            s.end_error = sentinel
+        elif phase == "release":
+            s.release_error = sentinel
+        else:
+            raise AssertionError("unknown failure phase")
     elif phase == "body":
         s.body_error = sentinel
     elif phase == "warm":
@@ -916,17 +945,8 @@ def test_persistent_transfers_use_same_layout_copy(packed_harness, monkeypatch, 
 
 
 def test_observer_trace_id_is_json_safe_without_mutating_native_ownership():
-    # Load only this pure observer helper: CPU tests must not import native TT.
-    import ast
     import json
-    from pathlib import Path
-
-    source = Path(__file__).with_name("probe_packed_integration.py").read_text()
-    tree = ast.parse(source)
-    helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "observer_trace_id")
-    namespace = {}
-    exec(compile(ast.Module(body=[helper], type_ignores=[]), "<observer>", "exec"), namespace)
-    snapshot = namespace["observer_trace_id"]
+    from models.experimental.nllb.tests.probe_packed_integration import observer_trace_id as snapshot
 
     class MeshTraceId:
         def __str__(self):

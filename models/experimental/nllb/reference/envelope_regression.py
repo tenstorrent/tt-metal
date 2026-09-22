@@ -360,8 +360,8 @@ def finalize(report, path, device, close_device, checks_passed, writer=write_rep
         # The atomic writer leaves the earlier failed-marked record intact.
 
 
-def main():
-    args = argument_parser().parse_args()
+def main(argv=None):
+    args = argument_parser().parse_args(argv)
     if not 1 <= args.timeout <= 1180:
         raise ValueError("--timeout must be between 1 and 1180 seconds")
     deadline = time.monotonic() + args.timeout

@@ -139,7 +139,7 @@ def check(device):
 
 
 def test_fused_attention(nllb_component_runner):
-    nllb_component_runner(__file__)
+    nllb_component_runner("fused_attention")
 
 
 if __name__ == "__main__":

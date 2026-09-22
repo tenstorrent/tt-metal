@@ -96,13 +96,13 @@
     },
     {
       "path": "reference/envelope_regression.py",
-      "bytes": 20041,
-      "sha256": "004fbe1329430a20a1c99e2e2c93213a9346ecc703ba076c2ba1370736e52ba2"
+      "bytes": 20054,
+      "sha256": "fe4dccc800dd915f0964a76a85c0c095f6bfc6286950557390961d272bd00630"
     },
     {
       "path": "reference/generate_reference.py",
       "bytes": 18909,
-      "sha256": "f1ac16d52718709a751be3061970f9c0c87e0dc838190b65ec944d9ed3e22a11"
+      "sha256": "801cd5a5d989934c6bb73353bcb52610d3ece6c3cfb18f3787ab2c2b799241dd"
     },
     {
       "path": "reference/official-assets.json",
@@ -116,13 +116,18 @@
     },
     {
       "path": "tests/conftest.py",
-      "bytes": 1509,
-      "sha256": "ebd0b6bff0ec8e25107155f91d2638cfbb7f9e58b76d98b3d2fce824376919ff"
+      "bytes": 918,
+      "sha256": "5dee0de819d39872512d2fcf37b3795cdff5e8b27aeef9d7f1f17e183f68423b"
     },
     {
       "path": "tests/probe_packed_integration.py",
       "bytes": 16330,
       "sha256": "a5c7aac000045a18e031796978d413856a0076ef2143944eb94f7ddda2228ac6"
+    },
+    {
+      "path": "tests/process_runner.py",
+      "bytes": 5580,
+      "sha256": "173a8b84677750509621d7deaa7e4f274095ec8ddd8893d0fbed2c46f3bff475"
     },
     {
       "path": "tests/test_benchmark_cases.py",
@@ -161,8 +166,8 @@
     },
     {
       "path": "tests/test_fused_attention.py",
-      "bytes": 5145,
-      "sha256": "bee9b53842794cf2b2c916f903dae9902d3bf85d532425958da72ae1afa8acb6"
+      "bytes": 5154,
+      "sha256": "a0abc134085df31ac566509cccee75779c0cd0bbd54204d70ce8156067471ab9"
     },
     {
       "path": "tests/test_generate_reference.py",
@@ -176,13 +181,13 @@
     },
     {
       "path": "tests/test_generation_envelope.py",
-      "bytes": 1822,
-      "sha256": "26984111d52a7017e5854ce8b07e010d412da1c4029216e5b2b0a10a2d13d58e"
+      "bytes": 1563,
+      "sha256": "785c53a8903c7d18378059bb66aa4b0ee9367baa40f17177aa5ccb07f8670c65"
     },
     {
       "path": "tests/test_generation_projection.py",
-      "bytes": 1668,
-      "sha256": "e13138fdd4df12fd6c917d63bd4e4ffc88b56a81fbeff9c53cf2481ef9adc47f"
+      "bytes": 1683,
+      "sha256": "614bba7d25397d533ed3ba0296017acc2615e0de6f999075edaa1a809a5373ad"
     },
     {
       "path": "tests/test_loader_hardening.py",
@@ -201,8 +206,8 @@
     },
     {
       "path": "tests/test_packed_integration.py",
-      "bytes": 14245,
-      "sha256": "a9752dfc38f6362aa01c7c82d3f8ca2006aef1f38a87fc1709cea609586197a7"
+      "bytes": 14051,
+      "sha256": "49ae57bb603b20322dff872eafa666721d6dc5450c1a5e91e9dbd08ef2cf94bd"
     },
     {
       "path": "tests/test_padding_memory.py",
@@ -211,18 +216,23 @@
     },
     {
       "path": "tests/test_precision_storage.py",
-      "bytes": 4518,
-      "sha256": "76dc40bc049823eec9c689b01c30fca5c828f8b9dca5e5176ddc4f11eab9cf06"
+      "bytes": 4529,
+      "sha256": "b793bd49e3dc763d1d3a5e9996e9f5e024a38d39c3c2fbf4779c78e4e9a824ae"
+    },
+    {
+      "path": "tests/test_process_runner.py",
+      "bytes": 8613,
+      "sha256": "6abd33e6717bb875087ccab9deac488c96d6ee6c2202aaa8065254c4c3bf7e59"
     },
     {
       "path": "tests/test_reusable_port.py",
-      "bytes": 8201,
-      "sha256": "4b5b44ac80c57a26d3799b8757f384ccd72222d937342374236e1a9339288e1c"
+      "bytes": 7712,
+      "sha256": "55b7447cda10256de72107ce26bdc395c315bf4d0f76b558e07ed7e3fdde36d8"
     },
     {
       "path": "tests/test_runtime_integration.py",
-      "bytes": 26045,
-      "sha256": "944e856d7c81464c743dca243e8d9b2c902e192b74e91b22ad20d0fcc1e646a6"
+      "bytes": 25853,
+      "sha256": "1c5a56cb56cc53ec2cd68a528af6ffb56b6ec480c719018e566023f86c30a0b2"
     },
     {
       "path": "tests/test_tokenizer_assets.py",
@@ -231,13 +241,13 @@
     },
     {
       "path": "tests/test_trace_decode.py",
-      "bytes": 44548,
-      "sha256": "c7e12494a9e8e73f2c779bfaa6a4981f195ad215e172c2a2594f8e99c00f683c"
+      "bytes": 44984,
+      "sha256": "a9ffad0b5df3c2b807eec25e5a8dc3c1eb0cba581b52991f2b37134dc8d66a53"
     },
     {
       "path": "tests/test_trained_masks_recovery.py",
-      "bytes": 12414,
-      "sha256": "44444e81a376f29aa275883ac9a2946b21ed1447ee7e2247e1a45a81bec4b1af"
+      "bytes": 12171,
+      "sha256": "a669ac765a37dce8d12c086d4c2b305fec9374e777acb46113a813547d4555be"
     },
     {
       "path": "tt/__init__.py",

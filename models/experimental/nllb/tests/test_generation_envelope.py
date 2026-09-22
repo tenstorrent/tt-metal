@@ -6,11 +6,9 @@
 
 import json
 import os
-from pathlib import Path
-import subprocess
-import sys
 
 import pytest
+from models.experimental.nllb.tests.process_runner import run_task
 
 
 def test_trained_generation_envelope(nllb_device_id, tmp_path):
@@ -20,32 +18,22 @@ def test_trained_generation_envelope(nllb_device_id, tmp_path):
     report = tmp_path / "generation-envelope.json"
     timeout = int(os.environ.get("NLLB_TEST_TIMEOUT", "300"))
     assert 30 <= timeout <= 1200, "NLLB_TEST_TIMEOUT must be between 30 and 1200 seconds"
-    command = [
-        sys.executable,
-        "-m",
-        "models.experimental.nllb.reference.envelope_regression",
-        "--checkpoint",
-        checkpoint,
-        "--device",
-        str(nllb_device_id),
-        "--output",
-        str(report),
-        "--precision",
-        os.environ.get("NLLB_TEST_PRECISION", "bf16"),
-        "--timeout",
-        str(timeout - 20),
-    ]
+    options = dict(
+        checkpoint=checkpoint,
+        device=nllb_device_id,
+        output=str(report),
+        precision=os.environ.get("NLLB_TEST_PRECISION", "bf16"),
+        timeout=timeout - 20,
+    )
     for variable, option in [
-        ("NLLB_TEST_CONFIG", "--config"),
-        ("NLLB_TEST_TOKENIZER", "--tokenizer-directory"),
-        ("NLLB_TEST_FP32_ENVELOPE", "--oracle"),
-        ("NLLB_TEST_FP32_ENVELOPE_SHA256", "--oracle-sha256"),
+        ("NLLB_TEST_CONFIG", "config"),
+        ("NLLB_TEST_TOKENIZER", "tokenizer_directory"),
+        ("NLLB_TEST_FP32_ENVELOPE", "oracle"),
+        ("NLLB_TEST_FP32_ENVELOPE_SHA256", "oracle_sha256"),
     ]:
         if os.environ.get(variable):
-            command.extend([option, os.environ[variable]])
-    child = subprocess.run(
-        command, cwd=Path(__file__).resolve().parents[4], capture_output=True, text=True, timeout=timeout
-    )
+            options[option] = os.environ[variable]
+    child = run_task("envelope", options, timeout=timeout)
     assert child.returncode == 0, child.stdout + child.stderr
     result = json.loads(report.read_text())
     assert result["passed"] and result["same_tt_passed"] and all(result["checks"].values())

@@ -8,12 +8,11 @@ import argparse
 import json
 import os
 from pathlib import Path
-import subprocess
-import sys
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from models.experimental.nllb.tests.process_runner import run_task
 
 
 def mask_cases(ids, mask, pad):
@@ -118,7 +117,7 @@ def exercise(model, inputs, target, sync, calls, tensor_check, mode):
         np.testing.assert_array_equal(request(base), baseline)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("masks", "recovery"), required=True)
     parser.add_argument("--checkpoint", required=True)
@@ -126,7 +125,7 @@ def main():
     parser.add_argument("--tokenizer-directory")
     parser.add_argument("--device", required=True, type=int)
     parser.add_argument("--precision", choices=("bf16", "bfp8_b"), default="bf16")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     import torch
     import ttnn
 
@@ -190,27 +189,13 @@ def test_trained_masks_and_recovery(mode, nllb_device_id, tmp_path):
         pytest.skip("set NLLB_TEST_CHECKPOINT for trained model tests")
     precision = os.environ.get("NLLB_TEST_PRECISION", "bf16")
     assert precision in ("bf16", "bfp8_b")
-    command = [
-        sys.executable,
-        "-m",
-        "models.experimental.nllb.tests.test_trained_masks_recovery",
-        "--mode",
-        mode,
-        "--checkpoint",
-        checkpoint,
-        "--device",
-        str(nllb_device_id),
-        "--precision",
-        precision,
-    ]
-    for variable, option in (("NLLB_TEST_CONFIG", "--config"), ("NLLB_TEST_TOKENIZER", "--tokenizer-directory")):
+    options = dict(mode=mode, checkpoint=checkpoint, device=nllb_device_id, precision=precision)
+    for variable, option in (("NLLB_TEST_CONFIG", "config"), ("NLLB_TEST_TOKENIZER", "tokenizer_directory")):
         if os.environ.get(variable):
-            command.extend([option, os.environ[variable]])
+            options[option] = os.environ[variable]
     timeout = int(os.environ.get("NLLB_TEST_TIMEOUT", "280"))
     assert 30 <= timeout <= 1200, "NLLB_TEST_TIMEOUT must be between 30 and 1200 seconds"
-    child = subprocess.run(
-        command, cwd=Path(__file__).resolve().parents[4], capture_output=True, text=True, timeout=timeout
-    )
+    child = run_task("trained", options, timeout=timeout)
     assert child.returncode == 0, child.stdout + child.stderr
     print(child.stdout)
 

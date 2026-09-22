@@ -19,7 +19,7 @@ import time
 import numpy as np
 
 MANIFEST_SHA256 = "6e84dc434749506886c1720312df3c7dcebb3b6cab2b3acdeb96abdcc9d842cf"
-HELPER_SHA256 = "004fbe1329430a20a1c99e2e2c93213a9346ecc703ba076c2ba1370736e52ba2"
+HELPER_SHA256 = "fe4dccc800dd915f0964a76a85c0c095f6bfc6286950557390961d272bd00630"
 TOKENIZER_FILES = {"tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "sentencepiece.bpe.model"}
 
 

@@ -40,7 +40,7 @@ def check(device):
 
 
 def test_projection(nllb_component_runner):
-    nllb_component_runner(__file__)
+    nllb_component_runner("generation_projection")
 
 
 if __name__ == "__main__":

@@ -211,9 +211,10 @@ class RuntimeIntegrationTests(unittest.TestCase):
             if isinstance(node, ast.Assign)
             and any(isinstance(t, ast.Name) and t.id == "DEVICE_OPTIONS" for t in node.targets)
         )
-        # Evaluate the isolated constant arithmetic, never import the backend.
-        options = eval(compile(ast.Expression(assignment.value), "<options>", "eval"), {"__builtins__": {}})
-        self.assertEqual(options, {"trace_region_size": 67108864})
+        # Check the exact constant expression without executing parsed source.
+        expected = ast.parse('{"trace_region_size": 64 * 1024 * 1024}', mode="eval").body
+        self.assertEqual(ast.dump(assignment.value), ast.dump(expected))
+        options = {"trace_region_size": 67108864}
         sys.modules["models.experimental.nllb.tt.backend"].DEVICE_OPTIONS = options
         with self.runtime.RuntimeOwner() as owner:
             owner.open(7)
@@ -255,13 +256,13 @@ class RuntimeIntegrationTests(unittest.TestCase):
         self.assertNotIn(("close", self.device), self.events)
 
     def test_bound_source96_unresolved_owner_survives_cleared_registry_slot(self):
-        # Use the exact source96 close method, with only its native release mocked.
-        tree = ast.parse((ROOT / "tt/trace_decode.py").read_text())
-        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DecoderTrace")
-        namespace = {"ttnn": self.ttnn}
-        exec(compile(ast.Module(body=[cls], type_ignores=[]), "<source96 DecoderTrace>", "exec"), namespace)
+        from models.experimental.nllb.tt import trace_decode
+
+        native = patch.object(trace_decode, "ttnn", self.ttnn)
+        native.start()
+        self.addCleanup(native.stop)
         model = types.SimpleNamespace(_trace_failures=[], _decode_trace=None, _last_warmup_owners=set())
-        trace = namespace["DecoderTrace"].__new__(namespace["DecoderTrace"])
+        trace = trace_decode.DecoderTrace.__new__(trace_decode.DecoderTrace)
         trace.model, trace.device = model, self.device
         trace.trace_id, trace.unresolved = 123, False
         trace.events, trace.inputs = [], [object()]

@@ -116,7 +116,7 @@ def check(device):
 
 
 def test_precision_storage(nllb_component_runner):
-    nllb_component_runner(__file__)
+    nllb_component_runner("precision_storage")
 
 
 if __name__ == "__main__":
