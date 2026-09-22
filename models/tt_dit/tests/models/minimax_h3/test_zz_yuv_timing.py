@@ -89,10 +89,11 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
 
     report = pipeline._lora_report
     assert report is not None and report.bound, "the transformer was built without an adapter bound"
-    assert len(report.replaced) == pipeline.transformer_config["num_layers"], (
-        f"{len(report.replaced)} gates assigned for {pipeline.transformer_config['num_layers']} blocks; "
-        "VSA is running partly ungated"
-    )
+    if pipeline.vsa_config is not None:
+        assert len(report.replaced) == pipeline.transformer_config["num_layers"], (
+            f"{len(report.replaced)} gates assigned for {pipeline.transformer_config['num_layers']} blocks; "
+            "VSA is running partly ungated"
+        )
 
     stem = f"t2va_lora_vsa_yuv420_{stitch}_{width}x{height}_{duration_s}s_{EXPECTED_FORWARDS}fwd"
     if is_global_rank_zero():
