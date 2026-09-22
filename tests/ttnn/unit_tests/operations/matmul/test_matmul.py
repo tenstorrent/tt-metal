@@ -1772,6 +1772,7 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
     (3, 4, 4),
 ])
 # fmt: on
+@pytest.mark.merge_gate
 def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
@@ -1833,6 +1834,7 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("w", [(4), (2)])
 def test_matmul_does_dot_product(device, w):
     torch.manual_seed(0)
@@ -1872,6 +1874,7 @@ def test_matmul_does_dot_product(device, w):
     (3, 1, 4, 2),
     ])
 # fmt: on
+@pytest.mark.merge_gate
 def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand((n_size, c, h, w), dtype=torch.bfloat16)
@@ -1956,6 +1959,7 @@ def test_matmul_same_shape_but_invalid(device, input_a, input_b, expect_error):
         ttnn.matmul(input_tensor_a, input_tensor_b)
 
 
+@pytest.mark.merge_gate
 def test_tutorial_matmul(device):
     torch.manual_seed(0)
 
@@ -2048,6 +2052,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "batch_size_0, batch_size_1, m_size, k_size, n_size, bcast_batch, input_a_sharded_memory_config_args, input_b_sharded_memory_config_args",
     [
@@ -2314,6 +2319,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "n_size, c, m, k, n",
     [
@@ -2883,6 +2889,7 @@ def test_interleaved_input_sharded_output_matmul(device):
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "n_size, c, m, k, n",
     [
@@ -2914,6 +2921,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
     assert_with_pcc(output, optional_output_tensor, 0.999)
 
 
+@pytest.mark.merge_gate
 def test_small_matmul_pcc(device):
     torch.manual_seed(0)
     pcc = 0.99
