@@ -39,9 +39,10 @@ checkpoint at revision `0e9e39f249a16976918f6564b8830bc894c89659`, or set
 offline. Compiled kernels are cached beneath `TT_METAL_CACHE`.
 
 The plugin changes are in [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116).
-Until that dependency merges, both scheduled and manual workflow runs and the
-registry command default to `yieldthought/llama31-qb2-serving`. The workflow's
-plugin-ref input or `VLLM_TT_PLUGIN_REF` can select another branch or tag.
+That dependency is merged. Scheduled and manual workflow runs and the registry
+command default to merged plugin revision `7250ddfaa988cc7417f518266dce52e425745472`.
+The workflow's plugin-ref input or `VLLM_TT_PLUGIN_REF` can select another commit,
+branch or tag. The test log records the resolved plugin commit.
 
 ```bash
 export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
