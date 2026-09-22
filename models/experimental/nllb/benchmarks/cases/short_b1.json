@@ -1,0 +1,29 @@
+{
+  "name": "short_b1",
+  "input_ids": [
+    [
+      256047,
+      94124,
+      15697,
+      248075,
+      2
+    ]
+  ],
+  "attention_mask": [
+    [
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  ],
+  "target_id": 256057,
+  "max_new_tokens": 8,
+  "workload_note": "unchanged public bringup request",
+  "config_sha256_by_model": {
+    "600m": "a5e74be5b35cb8fc2146942e3898d3187a630616d8cdf541def60b117b36402a",
+    "1.3b-distilled": "ada13f5da975ae6a87cd8b4d17f9c013b5aa19afdd9dddb8b3ea7f972f7797bf",
+    "3.3b": "ef59022b513e69a2d3b342b643f9b2c701e5d12ec80eb3a05212fae220aadecc"
+  }
+}
