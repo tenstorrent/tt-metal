@@ -117,8 +117,8 @@ ALWI void sdpa_stream_reconfig_srcb(Args... args) {
 }
 
 #ifdef SDPA_RECIPE_FP32
-#ifdef TRISC_PACK
 static sdpa::streaming::Fp32PackConfig sdpa_pack;
+#ifdef TRISC_PACK
 ALWI void sdpa_cached_pack_format(uint32_t cb) {
     if (sdpa_pack.format_cb == INVALID_CB || pack_src_format[sdpa_pack.format_cb] != pack_src_format[cb] ||
         pack_dst_format[sdpa_pack.format_cb] != pack_dst_format[cb]) {
