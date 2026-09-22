@@ -22,7 +22,7 @@
     do {                                                                                      \
         double delta_ms = std::chrono::duration<double, std::milli>(NOW() - (start)).count(); \
         log_info(tt::LogTest, "      {} done in {} ms", (s), delta_ms);                       \
-        start = NOW();                                                                        \
+        (start) = NOW();                                                                      \
     } while (0)
 
 namespace tt::tt_metal {

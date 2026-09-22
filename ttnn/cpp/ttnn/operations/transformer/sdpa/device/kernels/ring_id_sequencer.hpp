@@ -29,12 +29,7 @@ struct RingIdSequencer {
     RingIdSequencer() = default;
 
     RingIdSequencer(uint32_t ring_index_, uint32_t ring_size_, uint32_t backward_expected, uint32_t forward_expected) :
-        ring_index(ring_index_),
-        ring_size(ring_size_),
-        received{0, 0},
-        expected{backward_expected, forward_expected},
-        curr_dir(0),
-        transfer_idx(0) {}
+        ring_index(ring_index_), ring_size(ring_size_), received{0, 0}, expected{backward_expected, forward_expected} {}
 
     /**
      * Compute the next ring_id and advance the state machine.
