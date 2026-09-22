@@ -567,6 +567,15 @@ int main() {
                             ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
                             ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
                             ASSERT(ncrisc_noc_packet_tags_cleared(noc), DebugAssertNCriscNOCPacketTagClearedTripped);
+#ifdef ARCH_BLACKHOLE
+                            // dynamic_noc_init only re-zeros MID on a noc mode change, so PCIe routing left
+                            // by one dynamic kernel reaches the next one. Every RISC has finished here, so
+                            // no command buffer should still hold it. Buffers alias in this mode, hence all
+                            // four rather than a per-RISC subset.
+                            for (uint32_t cmd_buf = 0; cmd_buf < NUM_NOC_CMD_BUFS; cmd_buf++) {
+                                ASSERT(noc_cmd_buf_mid_clear(noc, cmd_buf), DebugAssertNocMidNotClearedTripped);
+                            }
+#endif
                         }
                         WAYPOINT("NKFD");
                     }

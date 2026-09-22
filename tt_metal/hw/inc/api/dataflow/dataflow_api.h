@@ -1312,6 +1312,19 @@ inline void noc_async_write_clear_pcie_state(uint8_t noc = noc_index, uint8_t cm
 #endif
 }
 
+// True when none of this RISC's command buffers still hold PCIe routing. Asserted where a batch should
+// already have been closed, so an unclosed one is attributed to the code that left it rather than to
+// whichever unrelated transaction inherits it later.
+inline bool noc_cmd_bufs_mid_clear([[maybe_unused]] uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    return noc_cmd_buf_mid_clear(noc, read_cmd_buf) && noc_cmd_buf_mid_clear(noc, write_cmd_buf) &&
+           noc_cmd_buf_mid_clear(noc, write_reg_cmd_buf) && noc_cmd_buf_mid_clear(noc, write_at_cmd_buf);
+#else
+    // Wormhole aliases NOC_TARG_ADDR_MID onto the coordinate register, so there is no MID to leak.
+    return true;
+#endif
+}
+
 // clang-format off
 /**
  * Same as \a noc_async_write, but for a dst_noc_addr routed through the PCIe core. This sets up PCIe
