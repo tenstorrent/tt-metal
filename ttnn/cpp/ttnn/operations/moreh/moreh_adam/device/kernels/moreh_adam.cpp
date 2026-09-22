@@ -21,11 +21,7 @@
 
 void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
-    union {
-        float f;
-        uint32_t u;
-    } step_f;
-    step_f.f = static_cast<float>(step);
+    const uint32_t step_bits = __builtin_bit_cast(uint32_t, static_cast<float>(step));
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
     constexpr auto cb_param_in = tt::CBIndex::c_0;
@@ -152,7 +148,7 @@ void kernel_main() {
         copy_tile_init_with_dt(dfb_scalar_args_obj);
         copy_tile(cb_scalar_args, beta2_tile, dst0);
         power_tile_init();
-        power_tile(dst0, step_f.u);
+        power_tile(dst0, step_bits);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -261,7 +257,7 @@ void kernel_main() {
         copy_tile_init_with_dt(dfb_scalar_args_obj);
         copy_tile(cb_scalar_args, beta1_tile, dst0);
         power_tile_init();
-        power_tile(dst0, step_f.u);
+        power_tile(dst0, step_bits);
         tile_regs_commit();
 
         tile_regs_wait();
