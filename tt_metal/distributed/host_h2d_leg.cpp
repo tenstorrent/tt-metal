@@ -61,10 +61,7 @@ struct H2DLeg::Impl {
     }
 };
 
-using H2DLegImpl = H2DLeg::Impl
-
-H2DLeg::H2DLeg() :
-    impl_(std::make_unique<H2DLegImpl>()) {}
+H2DLeg::H2DLeg() : impl_(std::make_unique<Impl>()) {}
 H2DLeg::~H2DLeg() = default;
 
 std::unique_ptr<H2DLeg> H2DLeg::create(
@@ -76,7 +73,7 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
     }
 
     std::unique_ptr<H2DLeg> leg(new H2DLeg());
-    H2DLegImpl& im = *leg->impl_;
+    Impl& im = *leg->impl_;
     im.cfg = cfg;
     im.fifo_bytes = cfg.ring_pages * cfg.page_bytes;
     im.device_id = static_cast<uint32_t>(mesh->get_devices()[0]->id());
@@ -131,7 +128,7 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
 // than assumed: a field inserted ahead of it would advance the wrong word silently.
 bool H2DLeg::publish(const DeliverTask& task) {
     // static_assert(offsetof(receiver_socket_md, bytes_sent) == 0, "bytes_sent moved within receiver_socket_md");
-    H2DLegImpl& im = *impl_;
+    Impl& im = *impl_;
     const uint32_t c = task.core;
     if (c >= im.cfg.cores) {
         im.fail("h2d: core index out of range");
@@ -164,7 +161,7 @@ bool H2DLeg::publish(const DeliverTask& task) {
 // bytes_acked wraps at 2^32 and page_bytes need not divide it, so the division to pages
 // happens on an unwrapped total built from 32-bit deltas.
 uint32_t H2DLeg::drained(uint32_t core) {
-    H2DLegImpl& im = *impl_;
+    Impl& im = *impl_;
     if (core >= im.cfg.cores || im.core[core].bytes_acked == nullptr) {
         return 0;
     }
