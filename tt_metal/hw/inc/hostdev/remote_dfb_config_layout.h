@@ -31,8 +31,7 @@
 //   │     word[6]  noc_xy_offset         // page-relative → after header
 //   │     word[7]  pages_sent_offset
 //   │     word[8]  pages_acked_offset
-//   │     word[9]  peer_counter_offset   // 0 unless the peer's page sits at a different
-//   │                                    // address than this one (DRAM sender); see below
+//   │     word[9]  peer_counter_offset   // page-relative offset of the peer's counters; see below
 //   ├── NOC XY table
 //   ├── pad → PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN
 //   ├── SENT block   (word[7]) — one L1_ALIGNMENT slot per (receiver, lane)
@@ -86,16 +85,16 @@ inline constexpr uint32_t PREFETCHER_PIPE_CFG_NOC_XY_OFFSET = 6;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET = 7;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET = 8;
 
-// Page-relative offset (uint32, may wrap) from this page's own address to the base of the peer's
-// mirror counters, for the one case where the peer's config page does not sit at this page's
-// address: a DRAM-sender pipe, whose sender page lives in the programmable DRAM core's L1 arena
-// rather than in the receivers' persistent L1. Zero means the peer page shares this page's
-// address -- every worker-sender pipe -- and then word[7] / word[8] already address both ends.
+// Page-relative offset (uint32, may wrap) from this page's own address to the peer's mirror
+// counters, taken at the peer core. Every page carries it. For a worker-sender pipe the peer's page
+// sits at this page's address, so the offset equals word[7] / word[8]; a DRAM-sender pipe's sender
+// page lives in the programmable DRAM core's L1 arena rather than the receivers' persistent L1, so
+// there it is the delta between the two addresses (any value, including 0).
 //
-// On a receiver page it is the delta to this receiver's acked slot on the sender page, the target
-// of its ack atomic. On a DRAM sender's page it is the delta to the receivers' SENT block base;
-// only the DRISC sender helpers read that one (internal/prefetcher_pipe_dram_sender.h), since the
-// device PrefetcherPipe class never runs on a DRAM core.
+// On a receiver page it addresses this receiver's acked slot on the sender page, the target of its
+// ack atomic. On a sender page it addresses the receivers' SENT block base; only the DRISC sender
+// helpers read that one (internal/prefetcher_pipe_dram_sender.h) -- a worker sender reaches its
+// receivers through word[7], the same offset on their pages.
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET = 9;
 
 // Quasar: config pages reserve this many lane (sent,acked) slots per receiver so

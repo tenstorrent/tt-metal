@@ -1763,12 +1763,17 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming
         EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);  // reserved, not yet bound
         m2::SetProgramRunArgs(receiver_program, pipe_run_args(pipe));
         EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
-        // P is not in the persistent page (word[9] stays reserved); it travels in the program's
-        // kernel-config slot, packed above relay_dfb_id, on sender and receiver cores alike.
+        // P is not in the persistent page; it travels in the program's kernel-config slot, packed
+        // above relay_dfb_id, on sender and receiver cores alike. word[9] keeps the peer counter
+        // offset, which for a worker sender is the same slot offset on the peer's page.
         Program sender_program = make_sender_program(*mesh_device, pipe, {.entry_size = 256});
-        for (const CoreCoord core : {sender_core, receiver_core}) {
-            EXPECT_EQ(pipe.impl().config_page(core)[9], 0u);
-        }
+        const auto& sender_page = pipe.impl().config_page(sender_core);
+        const auto& receiver_page = pipe.impl().config_page(receiver_core);
+        EXPECT_EQ(
+            sender_page[PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET], sender_page[PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET]);
+        EXPECT_EQ(
+            receiver_page[PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET],
+            receiver_page[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET]);
         const uint32_t recv_word = slot_relay_word(receiver_program, receiver_core);
         EXPECT_EQ(prefetcher_pipe_slot_credit_lanes(recv_word), 2u);
         EXPECT_EQ(prefetcher_pipe_slot_relay_id(recv_word), std::numeric_limits<uint8_t>::max());

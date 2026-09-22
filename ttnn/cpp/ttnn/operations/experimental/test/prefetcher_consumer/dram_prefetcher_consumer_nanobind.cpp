@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/vector.h>
 
@@ -124,7 +125,9 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                 num_layers (int): number of layers the prefetcher will push.
                 print_stride (int): DPRINT every Nth iter; first/last always logged. 0 = first/last only.
                 prefetcher_pipes (List[PrefetcherPipe]): the DRAM-sender pipes being pushed into,
-                    from create_prefetcher_pipes_for_tensor_prefetcher.
+                    from create_prefetcher_pipes_for_tensor_prefetcher, in any order.
+                bank_to_receivers (List[Tuple[int, CoreRangeSet]]): the bank_to_receivers those
+                    pipes were created from; it fixes which slab each receiver expects.
                 streaming (bool): when True, expect the streaming prefetcher's ring-rotated
                     delivery (entry at FIFO position p is physical block (lead_block + p) mod
                     num_blocks). Must match the streaming flag passed to the prefetcher.
@@ -140,6 +143,7 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
         nb::arg("print_stride"),
         nb::kw_only(),
         nb::arg("prefetcher_pipes"),
+        nb::arg("bank_to_receivers"),
         nb::arg("streaming") = false,
         nb::arg("rotation") = std::vector<uint32_t>{});
 }

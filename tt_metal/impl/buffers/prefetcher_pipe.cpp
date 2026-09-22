@@ -399,20 +399,28 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
     for (const CoreCoord& sender : dram_senders) {
         TT_FATAL(distinct.insert(sender).second, "set_dram_sender_cores: duplicate DRAM sender {}", sender.str());
     }
-    if (!dram_sender_allocations_.empty()) {
-        TT_FATAL(
-            distinct.size() == dram_sender_allocations_.size() &&
-                std::all_of(
-                    distinct.begin(),
-                    distinct.end(),
-                    [&](const CoreCoord& sender) { return dram_sender_allocations_.contains(sender); }),
-            "set_dram_sender_cores: this space is already reserved for a different DRAM sender set");
+    // Senders reserved by an earlier call keep their state; only the new ones are reserved here,
+    // so a re-carve for another layout reuses every sender the two layouts share.
+    std::vector<CoreCoord> new_senders;
+    for (const CoreCoord& sender : dram_senders) {
+        if (!dram_sender_allocations_.contains(sender)) {
+            new_senders.push_back(sender);
+        }
+    }
+    if (new_senders.empty()) {
         return;
     }
+    TT_FATAL(
+        dram_sender_allocations_.size() + new_senders.size() <= config_.num_dram_senders,
+        "set_dram_sender_cores: {} DRAM senders are already reserved and {} more were requested, exceeding the "
+        "space capacity {}. Size num_dram_senders for every sender any layout carved from this space uses.",
+        dram_sender_allocations_.size(),
+        new_senders.size(),
+        config_.num_dram_senders);
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_mapping;
-    sender_mapping.reserve(dram_senders.size());
-    for (const CoreCoord& sender : dram_senders) {
+    sender_mapping.reserve(new_senders.size());
+    for (const CoreCoord& sender : new_senders) {
         sender_mapping.emplace_back(sender, CoreRangeSet{});
     }
     validate_dram_senders_across_mesh(device_, sender_mapping);
@@ -423,13 +431,15 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
         "set_dram_sender_cores requires programmable DRAM cores");
     const uint32_t alignment = std::max(l1_alignment_for(device_), PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN);
 
-    // Allocate the complete sender-state capacity before any consumer Program is built or a pipe
-    // is carved. A later carve only stamps/reuses this storage, so destroy/recarve is allocation-free.
+    // Reserve each sender's state before a pipe on it is carved. A later carve on that sender only
+    // stamps/reuses this storage, so destroy/recarve is allocation-free. The DRISC sender-state zone
+    // is fixed, so reserving another sender later does not move any co-resident kernel's layout.
+    // Allocate into a local map first so a full zone leaves the reservations as they were.
     std::unordered_map<CoreCoord, std::shared_ptr<DriscL1Allocation>> allocations;
-    for (const CoreCoord& sender : dram_senders) {
+    for (const CoreCoord& sender : new_senders) {
         allocations.emplace(sender, device_->impl().drisc_l1_arena().allocate_on(sender, layout_.page_size, alignment));
     }
-    dram_sender_allocations_ = std::move(allocations);
+    dram_sender_allocations_.merge(allocations);
 }
 
 // The checks a DRAM carve shares with every other DRAM carve, single-pipe or batched. The
@@ -472,19 +482,18 @@ void PrefetcherPipeSpaceImpl::validate_dram_carves(std::span<const std::pair<Cor
         config_.num_dram_senders);
     std::unordered_set<CoreCoord> pending_senders;
     std::unordered_set<CoreCoord> pending_receivers;
+    size_t num_unreserved_senders = 0;
     for (const auto& [sender, receivers] : pipes) {
         TT_FATAL(
             pending_senders.insert(sender).second,
             "DRAM sender {} appears in more than one pipe of the batch",
             sender.str());
-        // Unlike the single-pipe form, a batch may be validated before set_dram_sender_cores has
-        // reserved anything — that is the order CreatePrefetcherPipesForTensorPrefetcher uses, so
-        // that every check passes before the space is mutated.
-        if (!dram_sender_allocations_.empty()) {
-            TT_FATAL(
-                dram_sender_allocations_.contains(sender),
-                "DRAM sender {} is not reserved by this space",
-                sender.str());
+        // Unlike the single-pipe form, a batch is validated before set_dram_sender_cores reserves
+        // its new senders -- that is the order CreatePrefetcherPipesForTensorPrefetcher uses, so
+        // that every check passes before the space is mutated. The capacity check below mirrors
+        // the one set_dram_sender_cores applies.
+        if (!dram_sender_allocations_.contains(sender)) {
+            ++num_unreserved_senders;
         }
         validate_dram_pipe_geometry(sender, receivers);
         for (const CoreCoord& receiver : corerange_to_cores(receivers)) {
@@ -494,6 +503,13 @@ void PrefetcherPipeSpaceImpl::validate_dram_carves(std::span<const std::pair<Cor
                 receiver.str());
         }
     }
+    TT_FATAL(
+        dram_sender_allocations_.size() + num_unreserved_senders <= config_.num_dram_senders,
+        "DRAM pipe batch needs {} DRAM senders this space has not reserved, but {} of its capacity {} are already "
+        "reserved. Size num_dram_senders for every sender any layout carved from this space uses.",
+        num_unreserved_senders,
+        dram_sender_allocations_.size(),
+        config_.num_dram_senders);
 }
 
 PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
@@ -615,7 +631,7 @@ void PrefetcherPipeImpl::build_config_pages() {
     sender_page[si++] = layout.noc_xy_offset;
     sender_page[si++] = layout.sent_offset;   // word[7]: local sent/wr block; same offset is the remote sent base
     sender_page[si++] = layout.acked_offset;  // word[8]: local acked block (receivers' NoC atomics land here)
-    sender_page[si++] = 0;                    // word[9]: reserved (P is per program, in the kernel-config slot)
+    sender_page[si++] = layout.sent_offset;   // word[9]: receivers' SENT block; their pages share this address
     for (uint32_t ri = 0; ri < num_recv; ++ri) {
         auto phys = device->worker_core_from_logical_core(receiver_vec[ri]);
         sender_page[si++] = static_cast<uint32_t>(phys.x);
@@ -640,7 +656,7 @@ void PrefetcherPipeImpl::build_config_pages() {
         const uint32_t slot = ri * credit_lane_capacity * l1_alignment;
         receiver_page[rci++] = layout.sent_offset + slot;   // word[7]: sender's NoC atomics land here
         receiver_page[rci++] = layout.acked_offset + slot;  // word[8]: local acked (cached stores)
-        receiver_page[rci++] = 0;                           // word[9]: reserved
+        receiver_page[rci++] = layout.acked_offset + slot;  // word[9]: ack target, same offset on the sender page
         receiver_page[rci++] = static_cast<uint32_t>(sender_phys.x);
         receiver_page[rci++] = static_cast<uint32_t>(sender_phys.y);
         config_pages_[receiver_vec[ri]] = std::move(receiver_page);
