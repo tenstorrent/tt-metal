@@ -37,7 +37,20 @@ class Qwen36ModelArgs(ModelArgs):
             from huggingface_hub import snapshot_download
 
             offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
-            os.environ["HF_MODEL"] = snapshot_download(hf_model, local_files_only=offline)
+            _snap = snapshot_download(hf_model, local_files_only=offline)
+            os.environ["HF_MODEL"] = _snap
+            # ModelArgs takes model_name from HF_MODEL's BASENAME, which the line above just turned
+            # into an opaque snapshot hash ("c202236235..."), not "Qwen3.5-9B". Everything that keys
+            # off the hub name then misses -- notably the dummy_weights=True path, whose
+            # LOCAL_HF_PARAMS[model_name] lookup raised KeyError and took out every vision test that
+            # builds from dummy weights (test_vision_block, test_wrapped_model: 4 failures on both
+            # the 9B and the 27B). Alias the hash to whatever the friendly name already maps to, so
+            # the rewrite stays invisible to those lookups. Additive and idempotent: it only ever
+            # adds a key for a snapshot this process resolved, and never rebinds an existing one.
+            _friendly = hf_model.strip("/").split("/")[-1]
+            _params = ModelArgs.LOCAL_HF_PARAMS.get(_friendly)
+            if _params is not None:
+                ModelArgs.LOCAL_HF_PARAMS.setdefault(os.path.basename(_snap.rstrip("/")), _params)
         super().__init__(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, **kwargs)
         if mesh_device is not None:
             self.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"] = True
