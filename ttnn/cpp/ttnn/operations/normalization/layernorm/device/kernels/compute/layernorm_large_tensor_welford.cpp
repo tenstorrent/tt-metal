@@ -508,6 +508,7 @@ void kernel_main() {
 
         dfb_ex2pe_obj.reserve_back(onetile);
         tile_regs_wait();
+        pack_reconfig_data_format(dfb_ex2pe);
         pack_tile(dst0, dfb_ex2pe);
         tile_regs_release();
         dfb_ex2pe_obj.push_back(onetile);
@@ -516,9 +517,7 @@ void kernel_main() {
         dfb_ex2pe_obj.wait_front(onetile);
         tile_regs_acquire();
         reconfig_data_format_srca(dfb_ex2pe);
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(dfb_ex2pe, dfb_ex2pe);
+        reconfig_data_format_srcb(dfb_ex2pe);
         unary_bcast_init<BroadcastType::COL>(dfb_ex2pe);
         unary_bcast<BroadcastType::COL>(dfb_ex2pe, 0, dst0);
         dfb_ex2pe_obj.pop_front(onetile);
