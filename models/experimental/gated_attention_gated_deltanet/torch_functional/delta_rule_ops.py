@@ -2,14 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compatibility exports for the pure-torch gated-delta references.
+"""
+Pure-torch implementations of the gated delta rule.
 
-The canonical implementations are owned by
-``ttnn.operations.transformer_golden`` so comparison mode and the model use
-the same mathematical reference. This module preserves the pre-existing model
-import path.
-
-The implementations were extracted from FLA (Flash Linear Attention):
+Extracted from FLA (Flash Linear Attention) library:
   https://github.com/fla-org/flash-linear-attention/blob/main/fla/ops/gated_delta_rule/naive.py
 
 These are reference implementations with no CUDA/Triton dependencies.

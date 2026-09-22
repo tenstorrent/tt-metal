@@ -65,10 +65,15 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 
 TIMEOUT = 300
 
-# Paged decode now has a production-owned golden in
-# ttnn.operations.transformer_golden. The mesh-specific helpers below retain
-# the sweep's per-chip reconciliation and validate the same paged-cache,
-# GQA/MQA, and sliding-window semantics.
+# NOTE:
+# -----
+# For most ops, the model_traced suite uses real traced configurations from
+# production models plus a PyTorch/TTNN golden.  For paged SDPA decode the
+# correctness oracle is substantially more complex (see
+# tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention_decode.py),
+# and we do not yet have a lightweight reference that matches all traced cases.
+# Until such a golden is implemented, we deliberately *do not* enable the
+# model_traced suite for this op to avoid claiming coverage we do not have.
 #
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
