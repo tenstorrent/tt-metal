@@ -15,6 +15,7 @@ import os
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.common.weight_cache import (
     build_cached_state_dict,
     checkpoint_name,
@@ -23,8 +24,9 @@ from models.common.weight_cache import (
 )
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
-from models.demos.gemma4.tt.ccl import CCLManager, effective_pinned_ccl_topology
+from models.demos.gemma4.tt.ccl import LINEAR_PIN_MIN_SEQ_LEN, CCLManager, effective_pinned_ccl_topology
 from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target
+from models.demos.gemma4.tt.generator_trace import normalize_gemma4_model_key
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
@@ -88,6 +90,20 @@ def create_tt_model(
 
     if num_layers is not None:
         model_args.num_hidden_layers = num_layers
+
+    # The swept decode matmul table loops 31B's 128k answer into a repetition
+    # collapse (quote A, then ``la'`` to the token limit) while main is clean at
+    # the same length and the same Linear topology. precision_overrides.json
+    # records both halves of the pair -- "Linear+sweep DEGENERATES (546 chars,
+    # 39x loop)" -- and ``ccl_topology`` only fixes the Ring half. Scoped to the
+    # measured configuration: 31B, Wormhole, at or above the same 128k threshold
+    # the Linear pin uses. 12B keeps the table at every length.
+    model_args.gemma4_swept_decode_disabled = bool(
+        not is_blackhole()
+        and normalize_gemma4_model_key(model_path) == "31B"
+        and max_seq_len is not None
+        and int(max_seq_len) >= LINEAR_PIN_MIN_SEQ_LEN
+    )
 
     if mesh_config is None:
         is_mesh = hasattr(mesh_device, "shape")

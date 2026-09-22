@@ -34,6 +34,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_linear_above_cutoff,
     should_prefill_long_2d,
     single_tile_matmul_ckc,
+    swept_decode_enabled,
     wh_t3k_decode_progcfg,
 )
 from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
@@ -168,8 +169,9 @@ class SharedMLP:
         is_moe = bool(getattr(hf_config, "enable_moe_block", False))
         dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
         self._tuned_prefill = is_t3k_dense_target(mesh_device, hf_config)
-        # Same gate for the tuned decode matmuls; see ``_linear``.
-        self._tuned_decode = self._tuned_prefill
+        # Same gate for the tuned decode matmuls (see ``_linear``), except where
+        # the swept table loops 31B's 128k answer -- prefill is unaffected.
+        self._tuned_decode = swept_decode_enabled(mesh_device, hf_config)
         self._single_tile_dest_acc = resolve_single_tile_dest_acc(single_tile_dest_acc)
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):

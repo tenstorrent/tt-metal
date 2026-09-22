@@ -21,7 +21,7 @@ from models.demos.gemma4.tt.ccl import (
     default_ccl_topology,
     effective_pinned_ccl_topology,
 )
-from models.demos.gemma4.tt.dram_sharded import can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import can_dram_shard, swept_decode_enabled
 
 
 @pytest.mark.parametrize(
@@ -354,3 +354,29 @@ def test_weight_cache_path_ro_mount_falls_back_writable(tmp_path, monkeypatch):
     assert "gemma4_tt_cache" in p4.parts
     # Sanity: helper used by resolve path.
     assert mc._ensure_cache_dir(ro_root / "nested").is_dir()
+
+
+# --- the 31B 128k swept-decode gate ------------------------------------------
+# Found by reading generated text on a real WH T3K: the demo reports PASSED in
+# the degenerate case, so its verdict cannot catch this.
+
+
+class _DenseCfg:
+    """Dense 12B/31B: not MoE, no per-layer inputs."""
+
+    enable_moe_block = False
+    hidden_size_per_layer_input = 0
+
+
+def test_swept_decode_disabled_flag_is_honoured(monkeypatch):
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
+    cfg = _DenseCfg()
+    assert swept_decode_enabled(_FakeMesh(8), cfg) is True
+    cfg.gemma4_swept_decode_disabled = True
+    assert swept_decode_enabled(_FakeMesh(8), cfg) is False
+
+
+def test_swept_decode_still_off_wherever_the_dense_gate_is(monkeypatch):
+    """The new flag narrows the gate; it must never widen it."""
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
+    assert swept_decode_enabled(_FakeMesh(8), _DenseCfg()) is False

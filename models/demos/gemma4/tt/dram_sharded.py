@@ -376,6 +376,31 @@ def is_t3k_dense_target(mesh_device, config) -> bool:
     return is_t3k_mesh(mesh_device)
 
 
+def swept_decode_enabled(mesh_device, config) -> bool:
+    """``is_t3k_dense_target``, minus the case where the swept decode table loops.
+
+    Measured on a real WH T3K (1x8, real weights), text_demo_v2
+    long-context-128k, reading the generated text rather than the pytest
+    verdict: main is CLEAN (three quotes, 972 chars, all three verbatim in the
+    source) while this branch emits quote A and then repeats ``la'`` to the
+    token limit. Both arms ran Topology.Linear, so this is the swept decode
+    matmul table, not the CCL topology.
+
+    precision_overrides.json already records the pair independently:
+    "Linear+no-sweep is CLEAN (718 chars) ... Linear+sweep DEGENERATES (546
+    chars, 39x loop)". The ``ccl_topology`` pin fixes the Ring half; this fixes
+    the sweep half. Note the demo still reports PASSED either way -- it does not
+    gate on coherence -- so this cannot be caught by the test verdict.
+
+    Scoped by ``common.create_tt_model`` to 31B at ``max_seq_len >= 128k`` on
+    Wormhole. 12B is unaffected at every length (its 128k answer is clean and
+    15% faster), and prefill keeps the tuned configs -- TTFT is unchanged.
+    """
+    if not is_t3k_dense_target(mesh_device, config):
+        return False
+    return not bool(getattr(config, "gemma4_swept_decode_disabled", False))
+
+
 def single_tile_matmul_ckc(m, dest_acc):
     """Fidelity/accumulation for the m<=32 matmuls every tuned config declines.
 

@@ -24,7 +24,7 @@ from tracy import signpost
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
-from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target, linear_l1_safe, lm_head_decode_config
+from models.demos.gemma4.tt.dram_sharded import linear_l1_safe, lm_head_decode_config, swept_decode_enabled
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -288,8 +288,9 @@ class Gemma4Model:
         self.hf_config = hf_config
         self.mesh_config = mesh_config
         # Dense 12B/31B on a full Wormhole T3K: the one target the tuned decode
-        # configs were measured on. See dram_sharded.is_t3k_dense_target.
-        self._tuned_decode = is_t3k_dense_target(mesh_device, hf_config)
+        # configs were measured on, minus 31B at 128k where the swept table
+        # loops the answer. See dram_sharded.swept_decode_enabled.
+        self._tuned_decode = swept_decode_enabled(mesh_device, hf_config)
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
         self.final_logit_softcapping = hf_config.final_logit_softcapping

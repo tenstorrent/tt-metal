@@ -26,7 +26,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     DramShardedLinear,
     can_dram_shard,
     decode_1d_matmul_config,
-    is_t3k_dense_target,
+    swept_decode_enabled,
 )
 from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -239,7 +239,7 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    tuned_target = is_t3k_dense_target(mesh_device, config)
+    tuned_target = swept_decode_enabled(mesh_device, config)
     dest_acc = resolve_single_tile_dest_acc(single_tile_dest_acc)
     qkv_decode_config = (
         None
