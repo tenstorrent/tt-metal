@@ -137,8 +137,7 @@ CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const tt::tt_metal::MemoryConfig& memory_config_actual) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Unary: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
@@ -193,22 +192,8 @@ CoreRangeSet get_worker_grid(
         }
     }
 
-    if (output_tensor.has_value() || memory_config.has_value()) {
-        log_debug(tt::LogOp, "Unary: Using all worker cores (output or memory config not sharded)");
-        auto* device = input_tensor.device();
-        return device->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
-    }
-
-    if (input_tensor.is_sharded() && is_native_L1_sharding(input_tensor.tensor_spec(), memory_config_actual)) {
-        if (const auto grid = shard_grid_of(input_tensor.memory_config())) {
-            if (const auto workers = sub_device_workers_for(*grid, input_tensor.device())) {
-                log_debug(tt::LogOp, "Unary: Native L1 sharding using input tensor grid {}", grid->str());
-                return *workers;
-            }
-        }
-    }
-
+    // No branch on the input's own grid: native L1 sharding needs both sides on one grid, so the
+    // memory_config branch above already returned it.
     log_debug(tt::LogOp, "Unary: Using all worker cores of the device");
     auto* device = input_tensor.device();
     return device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
