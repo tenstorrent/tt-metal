@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 18:46 UTC. **Complete four-chip, batch-one token-to-logits
+Updated 2026-09-22 18:57 UTC. **Complete four-chip, batch-one token-to-logits
 prototype works at contexts 128, 2048 and 8192; it is slower than baseline.**
 Embedding, one decoder body repeated through 32 weight/KV table rows, and final
 all-gather/norm/head execute in one mesh program. Prefill and native sampling
@@ -136,9 +136,10 @@ incomplete captures are invalidated; the expected-payload gate rejects the latte
 ## Remaining work and limits
 
 Device/model/build work is finished. Final full connectivity and four-chip
-ring mesh open/close passed18:43:59. Complete the final source checkpoint,
-REPORT/manifest audit and durable mirror; no more hardware runs are needed.
-Keep parent checkpoint current. B1 only; contexts128/2048/8192 and greedy sampling
+ring mesh open/close passed18:43:59. Final source checkpoint, REPORT/manifest audit and the full durable mirror
+are complete. No more hardware runs are needed. The exact final transfer HEAD
+and verified bundle are in artifact PARENT_CHECKPOINT.md; parent handles the
+authorized final push. All experiment device/build processes are stopped. B1 only; contexts128/2048/8192 and greedy sampling
 qualified. No serving/vLLM, non-greedy, broad accuracy or persistent multi-token
 qualification. KV allocation addresses stay fixed while bound; page mappings
 remain mutable device inputs. No measured whole-model DRAM bus or peak-memory
