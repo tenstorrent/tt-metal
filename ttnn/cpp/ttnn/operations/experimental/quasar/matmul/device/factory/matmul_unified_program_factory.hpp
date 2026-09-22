@@ -27,6 +27,13 @@ struct UnifiedMatmulPlan {
     uint32_t B_batch_stride_tiles = 0;
 
     // Blocking, after the config's auto fields are resolved.
+    // The C slices of one batch are walked across N then down M; C_slices_across_N is the walk's row
+    // length, which the factory's per-core start positions and the sharded output layout both follow.
+    uint32_t C_slices_across_N = 0;
+    // Valid element columns in A's last K tile; 0 when K is a tile multiple (reader zeroes the rest).
+    uint32_t A_last_K_tile_valid_columns = 0;
+    // DST capacity (and the unpack modes the factory programs) assumed this accumulation mode.
+    bool fp32_dest_acc_en = false;
     uint32_t C_slice_M_tiles = 0;
     uint32_t C_slice_N_tiles = 0;
     uint32_t K_chunk_tiles = 0;

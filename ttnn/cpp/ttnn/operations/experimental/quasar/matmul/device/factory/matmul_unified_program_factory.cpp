@@ -209,6 +209,7 @@ UnifiedMatmulPlan plan_unified_matmul(
     plan.C_slice_N_tiles = config.C_slice_N_tiles;
     // The C slices of one batch, walked across N then down M; every core produces its C slices for all batches.
     const uint32_t C_slices_across_N = tt::div_up(plan.N_tiles, plan.C_slice_N_tiles);
+    plan.C_slices_across_N = C_slices_across_N;
     const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, plan.C_slice_M_tiles);
     plan.C_slices_per_batch = C_slices_down_M * C_slices_across_N;
     plan.sharded_output_layout = C_slices_across_N == 1 ? tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED
@@ -232,6 +233,7 @@ UnifiedMatmulPlan plan_unified_matmul(
 
     // ---- Subblock: the C slice's tiles accumulated in DST at once ----
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
+    plan.fp32_dest_acc_en = fp32_dest_acc_en;
     const bool packer_l1_acc =
         std::get<3>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
@@ -261,6 +263,7 @@ UnifiedMatmulPlan plan_unified_matmul(
     };
     const bool one_C_slice_per_core_no_batch = plan.batch_size == 1 && plan.C_slices_per_batch == plan.cores.size();
     const uint32_t A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
+    plan.A_last_K_tile_valid_columns = A_last_K_tile_valid_columns;
     // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy path
     // zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
     const bool A_shard_borrowable =
@@ -428,14 +431,6 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     std::vector<ttnn::Tensor>& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    TT_FATAL(
-        tensor_args.optional_input_tensors.empty() || !tensor_args.optional_input_tensors[0].has_value(),
-        "MatmulUnifiedProgramConfig does not fuse bias; the op applies it as a separate add");
-    TT_FATAL(
-        operation_attributes.program_config.has_value() &&
-            std::holds_alternative<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
-                operation_attributes.program_config.value()),
-        "MatmulUnifiedProgramFactory needs a MatmulUnifiedProgramConfig");
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config =
         std::get<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
             operation_attributes.program_config.value());
@@ -535,7 +530,6 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     }
 
     // ---- Reader ----
-    const uint32_t A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
     KernelSpec reader{
         .unique_id = READER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_reader.cpp"),
@@ -559,7 +553,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
                 {"K_chunk_tiles", plan.K_chunk_tiles},
                 {"num_K_chunks", plan.num_K_chunks},
-                {"A_last_K_tile_valid_columns", A_last_K_tile_valid_columns},
+                {"A_last_K_tile_valid_columns", plan.A_last_K_tile_valid_columns},
                 {"A_borrowed", plan.borrow_A ? 1u : 0u},
                 {"B_borrowed", plan.borrow_B ? 1u : 0u},
             },
@@ -594,7 +588,6 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     };
 
     // ---- Compute ----
-    const bool fp32_dest_acc_en = get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
     std::map<std::string, std::string> compute_defines_map;  // throttle / stagger only
     const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
@@ -606,7 +599,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
 
     ComputeHardwareConfig compute_hw_config =
         ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
-    if (fp32_dest_acc_en) {
+    if (plan.fp32_dest_acc_en) {
         // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode. The partials are
         // reloaded with a data copy into DST, so unpack them straight to DST and keep fp32 precision;
         // fp32 operands feed the FPU and go through SrcA/SrcB.
@@ -662,23 +655,21 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .target_nodes = active_cores,
     }};
 
-    // ---- Per-core runtime args: where each core's run of C slices starts and how long it is ----
-    // Each active core takes a contiguous run of the walk, the first (C_slices_per_batch % cores) cores
-    // one C slice longer. A core's start is in tile coordinates so the kernels only ever step it by
-    // C_slice_M_tiles / C_slice_N_tiles.
+    // ---- Per-core runtime args ----
+    // Each core takes a contiguous run of the C slice walk, the first (C_slices_per_batch % cores)
+    // cores one slice longer; starts are in tile coordinates, which is what the kernels step in.
     ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER_KERNEL};
     ProgramRunArgs::KernelRunArgs compute_run_args{.kernel = COMPUTE_KERNEL};
     ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER_KERNEL};
     const uint32_t num_active_cores = plan.cores.size();
-    const uint32_t C_slices_across_N = tt::div_up(plan.N_tiles, plan.C_slice_N_tiles);
     const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / num_active_cores;
     const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active_cores;
     uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
     for (uint32_t core = 0; core < num_active_cores; ++core) {
         const uint32_t num_C_slices = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
         const std::initializer_list<std::pair<std::string, uint32_t>> run_start = {
-            {"C_slice_first_M_tile", (next_C_slice / C_slices_across_N) * plan.C_slice_M_tiles},
-            {"C_slice_first_N_tile", (next_C_slice % C_slices_across_N) * plan.C_slice_N_tiles},
+            {"C_slice_first_M_tile", (next_C_slice / plan.C_slices_across_N) * plan.C_slice_M_tiles},
+            {"C_slice_first_N_tile", (next_C_slice % plan.C_slices_across_N) * plan.C_slice_N_tiles},
             {"num_C_slices", num_C_slices}};
         next_C_slice += num_C_slices;
         AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, plan.cores[core], run_start);
