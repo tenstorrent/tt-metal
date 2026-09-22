@@ -35,6 +35,7 @@ on:
         default: yieldthought/llama31-qb2-serving
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -77,6 +78,7 @@ jobs:
           selected=$(jq -c --arg model "$MODEL" --arg tier "$TIER" --arg plugin_ref "$VLLM_TT_PLUGIN_REF" '
             [.[] | select(($model == "all" or .model == $model) and
                           ($tier == "all" or (.tier | tostring) == $tier))
+                 | .runs_on += ["qb2-120-p02t09"]
                  | .cmd = ("export VLLM_TT_PLUGIN_REF=" + ($plugin_ref | @sh) + "\n" + .cmd)]
           ' <<< "$MATRIX")
           if [ "$selected" = '[]' ]; then
@@ -95,6 +97,10 @@ jobs:
       build-type: Release
       build-inplace-wheel: true
       platform: Ubuntu 22.04
+      ref: 5244263c854d7bb13187f13876374d3adbf5d08b
+      use-artifacts-from-run: "35715250794"
+      ci-build-docker-image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:b6f3803f926567e235f8bd6c12e136f22a266146
+      dev-docker-image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:6dd332cc73c251ef7eb48e877d6b7b90e9f244b5
 
   model-tests:
     needs: [build-artifact, select-tests]

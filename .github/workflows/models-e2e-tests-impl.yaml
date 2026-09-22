@@ -213,6 +213,12 @@ jobs:
           submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
           sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
+          ref: 5244263c854d7bb13187f13876374d3adbf5d08b
+      - name: Verify exact-host validation identity
+        shell: bash
+        run: |
+          [[ "${RUNNER_NAME:?}" == "qb2-120-p02t09" ]]
+          [[ "$(git rev-parse HEAD)" == "5244263c854d7bb13187f13876374d3adbf5d08b" ]]
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
@@ -231,6 +237,32 @@ jobs:
             # step below; the in-test checks are warning-only, so the tests write
             # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
+      - name: Record exact-host validation provenance
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import importlib.metadata as metadata
+          import json, os, platform, subprocess
+          from pathlib import Path
+          root = Path("generated/test_reports/llama31_8b_qb2")
+          root.mkdir(parents=True, exist_ok=True)
+          plugin = Path("generated/llama31_8b_qb2/vllm-tt-plugin")
+          plugin_commit = subprocess.check_output(["git", "-C", str(plugin), "rev-parse", "HEAD"], text=True).strip()
+          data = {
+              "runner": os.environ["RUNNER_NAME"],
+              "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "reused_build_run": "35715250794",
+              "workflow_commit": os.environ["GITHUB_SHA"],
+              "python": platform.python_version(),
+              "plugin_commit": plugin_commit,
+              "vllm_source": "PyPI sdist vllm==0.26.0, built with VLLM_TARGET_DEVICE=empty; no git checkout",
+              "vllm_git_commit": None,
+              "packages": {name: metadata.version(name) for name in ("ttnn", "torch", "vllm", "vllm-tt-plugin", "transformers")},
+          }
+          (root / "runtime-identity.json").write_text(json.dumps(data, indent=2) + "\n")
+          print(json.dumps(data, indent=2))
+          PY
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}
