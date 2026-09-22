@@ -57,10 +57,21 @@ PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 # #46478 added and #51157 removed.
 PERF_RESET="${PERF_RESET:-1}"
 
+# Record what boards this runner actually has, once, before anything runs. Without
+# this the logs never enumerate devices, so a reset cannot be shown to have hit the
+# board under test.
+echo "[experiment] tt-smi board inventory:"
+tt-smi -ls 2>&1 | sed 's/^/[experiment]   /' || echo "[experiment]   WARNING: tt-smi -ls failed"
+echo "[experiment] /dev/tenstorrent:"
+ls -la /dev/tenstorrent/ 2>&1 | sed 's/^/[experiment]   /' || true
+
 maybe_reset() {
     [ "$PERF_RESET" = "1" ] || return 0
-    echo "[experiment] tt-smi -r 0 before $1"
-    tt-smi -r 0 || echo "[experiment] WARNING: tt-smi reset failed; continuing"
+    # `tt-smi -r 0` targets UMD logical ID 0, which is not necessarily the board this
+    # job is measuring if the host exposes more than one. `-r all` resets every device,
+    # which is correct regardless of how many boards are attached.
+    echo "[experiment] tt-smi -r all before $1"
+    tt-smi -r all || echo "[experiment] WARNING: tt-smi reset failed; continuing"
 }
 
 # Enumerate perf test FILES from the full collection (not this shard's slice), so
