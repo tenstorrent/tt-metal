@@ -526,6 +526,30 @@ TEST_F(PrefetcherPipeDramSenderFixture, DroppedPipesRecarveSameSpaceWithoutAlloc
     EXPECT_NE(replacement[0]->identity(), first_identity);
 }
 
+TEST_F(PrefetcherPipeDramSenderFixture, RecarveSwitchesBetweenOneAndTwoSendersPerBank) {
+    const CoreRangeSet receivers(CoreRange({0, 0}, {1, 0}));
+    auto set = make_pipe_set(*mesh_device_, {{0, receivers}}, /*dual_senders_per_bank=*/false);
+    ASSERT_EQ(set.pipes.size(), 1u);
+    const CoreCoord primary_sender = set.pipes[0]->sender_core();
+    const DeviceAddr primary_state_address = experimental::sender_state_drisc_l1_base(*set.pipes[0]);
+
+    // Growing to both of the bank's senders reserves only the second one.
+    set.pipes.clear();
+    auto dual = experimental::CreatePrefetcherPipesForTensorPrefetcher(
+        *set.space, {{0, receivers}}, /*support_multi_receiver_shards=*/false);
+    ASSERT_EQ(dual.size(), 2u);
+    EXPECT_EQ(dual[0]->sender_core(), primary_sender);
+    EXPECT_EQ(experimental::sender_state_drisc_l1_base(*dual[0]), primary_state_address);
+
+    // Shrinking back to a subset of the reserved senders reuses the primary's state.
+    dual.clear();
+    auto single = experimental::CreatePrefetcherPipesForTensorPrefetcher(
+        *set.space, {{0, receivers}}, /*support_multi_receiver_shards=*/true);
+    ASSERT_EQ(single.size(), 1u);
+    EXPECT_EQ(single[0]->sender_core(), primary_sender);
+    EXPECT_EQ(experimental::sender_state_drisc_l1_base(*single[0]), primary_state_address);
+}
+
 TEST_F(PrefetcherPipeDramSenderFixture, BindingAcceptsAnyEntrySizeTheRingHolds) {
     // An entry size the ring does not divide is legal: the remainder is a trailing gap holding no
     // entry, which both endpoints credit as padding at the wrap. Only a size the ring cannot hold

@@ -40,9 +40,6 @@ constexpr uint32_t kValidatorScratchCBId = 30;
 // copies of that derivation could drift apart and start agreeing with a bug.
 struct ValidatorReceiverPlan {
     CoreCoord core;
-    // Index into the sender/receiver mapping, which is also the pipe index for a PrefetcherPipe
-    // target.
-    uint32_t sender_index;
     uint32_t bank_id;
     uint32_t bank_local_recv;
     uint32_t ring_pos;
@@ -59,19 +56,55 @@ struct ValidatorGeometry {
     std::vector<ValidatorReceiverPlan> receivers;
 };
 
-ValidatorGeometry compute_validator_geometry(
-    const ttnn::Tensor& source_tensor, const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sr_mapping) {
+// Each bank's receivers in bank-local slab order: receiver i of a bank reads slab i. `num_senders`
+// is how many DRAM senders drive the ring (one or two per bank).
+struct ValidatorBankPlan {
+    std::vector<std::pair<uint32_t, std::vector<CoreCoord>>> bank_receivers;
+    uint32_t num_senders = 0;
+};
+
+// A GlobalCircularBuffer's mapping is in factory order (a bank's senders adjacent, primary first),
+// so a bank's slab order is its senders' receivers concatenated in mapping order.
+ValidatorBankPlan bank_plan_from_factory_order_mapping(
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sr_mapping) {
+    ValidatorBankPlan plan;
+    plan.num_senders = static_cast<uint32_t>(sr_mapping.size());
+    std::unordered_map<uint32_t, size_t> index_of_bank;
+    for (const auto& [sender_logical, receivers] : sr_mapping) {
+        const auto bank_id = static_cast<uint32_t>(sender_logical.x);
+        auto [it, inserted] = index_of_bank.try_emplace(bank_id, plan.bank_receivers.size());
+        if (inserted) {
+            plan.bank_receivers.emplace_back(bank_id, std::vector<CoreCoord>{});
+        }
+        auto& cores = plan.bank_receivers[it->second].second;
+        const auto sender_cores = corerange_to_cores(receivers, std::nullopt, /*row_wise=*/true);
+        cores.insert(cores.end(), sender_cores.begin(), sender_cores.end());
+    }
+    return plan;
+}
+
+// The bank_to_receivers a set of pipes was created from: the factory splits each bank's receivers,
+// in row-major order, across that bank's senders, so that order is the bank's slab order whatever
+// order the pipes are passed in.
+ValidatorBankPlan bank_plan_from_bank_to_receivers(
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers, uint32_t num_senders) {
+    ValidatorBankPlan plan;
+    plan.num_senders = num_senders;
+    for (const auto& [bank_id, receivers] : bank_to_receivers) {
+        plan.bank_receivers.emplace_back(bank_id, corerange_to_cores(receivers, std::nullopt, /*row_wise=*/true));
+    }
+    return plan;
+}
+
+ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, const ValidatorBankPlan& plan) {
     using namespace tt::tt_metal;
     ValidatorGeometry geom;
 
-    // Ring topology. Both a GlobalCircularBuffer and a set of PrefetcherPipes expose this same
-    // mapping with sender.x == bank id, and both DRAM-sender factories place senders identically.
-    geom.num_senders = static_cast<uint32_t>(sr_mapping.size());
+    geom.num_senders = plan.num_senders;
     uint32_t max_bank_id = 0;
-    for (const auto& [sender_logical, receivers] : sr_mapping) {
-        const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
+    for (const auto& [bank_id, receivers] : plan.bank_receivers) {
         max_bank_id = bank_id > max_bank_id ? bank_id : max_bank_id;
-        geom.num_blocks += receivers.num_cores();
+        geom.num_blocks += static_cast<uint32_t>(receivers.size());
     }
     const uint32_t num_dram_banks = max_bank_id + 1;
     TT_FATAL(
@@ -136,29 +169,19 @@ ValidatorGeometry compute_validator_geometry(
                               ShardDistributionStrategy::CONTIGUOUS_1D;
     const bool strided_pairing = is_recv_contig && !is_shard_contiguous_recv_contig;
 
-    // Per-receiver plan. Receiver enumeration within a sender's CoreRangeSet must match the order
-    // the sender addresses them in its NOC XY table (row-major).
-    std::unordered_map<uint32_t, uint32_t> receivers_seen_by_bank;
-    for (uint32_t s = 0; s < geom.num_senders; ++s) {
-        const auto& [sender_logical, receivers_set] = sr_mapping[s];
-        const uint32_t bank_id = sender_logical.x;
-        const auto recv_cores = corerange_to_cores(receivers_set, std::nullopt, /*row_wise=*/true);
-        const uint32_t recv_index_base = receivers_seen_by_bank[bank_id];
-        receivers_seen_by_bank[bank_id] = recv_index_base + static_cast<uint32_t>(recv_cores.size());
-        for (uint32_t r = 0; r < recv_cores.size(); ++r) {
-            const uint32_t bank_local_recv = recv_index_base + r;
-            TT_FATAL(
-                bank_local_recv < receivers_per_bank,
-                "Sender {} on bank {} maps receiver {} past receivers_per_bank {}",
-                s,
-                bank_id,
-                bank_local_recv,
-                receivers_per_bank);
+    // Per-receiver plan.
+    for (const auto& [bank_id, receivers] : plan.bank_receivers) {
+        TT_FATAL(
+            receivers.size() == receivers_per_bank,
+            "Validator: bank {} has {} receivers, but every bank needs receivers_per_bank {}",
+            bank_id,
+            receivers.size(),
+            receivers_per_bank);
+        for (uint32_t bank_local_recv = 0; bank_local_recv < receivers.size(); ++bank_local_recv) {
             const uint32_t ring_pos = strided_pairing ? (bank_id + bank_local_recv * num_dram_banks)
                                                       : (bank_id * receivers_per_bank + bank_local_recv);
             geom.receivers.push_back(ValidatorReceiverPlan{
-                .core = recv_cores[r],
-                .sender_index = s,
+                .core = receivers[bank_local_recv],
                 .bank_id = bank_id,
                 .bank_local_recv = bank_local_recv,
                 .ring_pos = ring_pos});
@@ -253,7 +276,8 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     const auto& source_tensor = tensor_args.source_tensor;
     const auto& global_cb = operation_attributes.global_cb.value();
 
-    const ValidatorGeometry geom = compute_validator_geometry(source_tensor, global_cb.sender_receiver_core_mapping());
+    const ValidatorGeometry geom = compute_validator_geometry(
+        source_tensor, bank_plan_from_factory_order_mapping(global_cb.sender_receiver_core_mapping()));
     Buffer* tensor_buffer = source_tensor.buffer();
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
@@ -342,6 +366,7 @@ void test_tensor_prefetcher_pipe_validator(
     uint32_t num_layers,
     uint32_t print_stride,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
     const std::vector<uint32_t>& rotation) {
     using namespace tt::tt_metal;
@@ -352,11 +377,25 @@ void test_tensor_prefetcher_pipe_validator(
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
 
-    const auto sr_mapping = metal_exp::prefetcher_pipe_sender_receiver_mapping(prefetcher_pipes);
     const CoreRangeSet receiver_cores = metal_exp::prefetcher_pipe_receiver_cores(prefetcher_pipes);
     TT_FATAL(receiver_cores.num_cores() > 0, "The PrefetcherPipes have no receiver cores");
 
-    const ValidatorGeometry geom = compute_validator_geometry(source_tensor, sr_mapping);
+    // Slab order comes from the plan the pipes were created from, so the pipes may be passed in
+    // any order.
+    CoreRangeSet planned_receivers;
+    for (const auto& [_bank_id, receivers] : bank_to_receivers) {
+        planned_receivers = planned_receivers.merge(receivers);
+    }
+    TT_FATAL(
+        planned_receivers.num_cores() == receiver_cores.num_cores() &&
+            planned_receivers.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
+        "bank_to_receivers covers receivers {}, but the PrefetcherPipes' receivers are {}; pass the bank_to_receivers "
+        "the pipes were created from",
+        planned_receivers.str(),
+        receiver_cores.str());
+    const ValidatorGeometry geom = compute_validator_geometry(
+        source_tensor,
+        bank_plan_from_bank_to_receivers(bank_to_receivers, static_cast<uint32_t>(prefetcher_pipes.size())));
 
     std::vector<metal_exp::PrefetcherPipeParamName> names;
     std::vector<metal_exp::PrefetcherPipeParameter> parameters;
