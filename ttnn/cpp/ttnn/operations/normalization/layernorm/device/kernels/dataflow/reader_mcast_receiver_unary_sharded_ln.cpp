@@ -264,6 +264,22 @@ void kernel_main() {
         // during the combine; by here all those reads have completed, so pop it to leave the buffer
         // balanced.
         dfb_partial_obj.pop_front(static_cast<uint16_t>(block_h * num_tiles_scaler));
+
+        // The all-to-all workers wait on the combined-result buffer as a readiness handshake before
+        // signalling the sender, and the sender has finished gathering from it by the time the
+        // multicast received above arrives. Pop the same count that was waited, in the same branch,
+        // to leave the buffer balanced.
+        if constexpr (is_all_to_all_worker) {
+            if constexpr (use_two_stage_reduce) {
+                if (is_second_stage_reader) {
+                    dfb_ex_obj.pop_front(static_cast<uint16_t>(num_tiles_to_read * num_tiles_scaler));
+                } else {
+                    dfb_reduce_first_stage_obj.pop_front(static_cast<uint16_t>(num_tiles_to_read * num_tiles_scaler));
+                }
+            } else {
+                dfb_ex_obj.pop_front(static_cast<uint16_t>(num_tiles_to_read * num_tiles_scaler));
+            }
+        }
     };
 
     // RMSNorm has no mean to reduce, so its buffers are not declared and the call is compiled out.
