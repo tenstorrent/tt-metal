@@ -73,7 +73,7 @@ inline constexpr uint32_t kReaderSemaphoreArgBase = 27;
 // Reader args after the semaphore addresses: ring_size, ring_index, direction, then the
 // split-head forwarding dedup descriptor (dedup_role, buddy_injector_x, buddy_injector_y).
 inline constexpr uint32_t kReaderTrailingArgCount = 6;
-inline constexpr uint32_t reader_arg_count(uint32_t num_links) {
+constexpr uint32_t reader_arg_count(uint32_t num_links) {
     return kReaderSemaphoreArgBase + num_links + kReaderTrailingArgCount;
 }
 // Per-core fabric-writer runtime-arg slot of out_ready_sem_addr (= args.semaphore[link].address()).
