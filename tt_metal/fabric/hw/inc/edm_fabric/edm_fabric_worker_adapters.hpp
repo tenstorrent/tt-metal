@@ -24,25 +24,6 @@
 
 namespace tt::tt_fabric {
 
-// How a worker's teardown and buffer-index runtime args resolve to L1 addresses. Passed as a
-// policy to build_from_args, so one kernel may mix both and the resolution is written once
-// rather than branched per argument.
-struct SemaphoreIdArg {
-    template <ProgrammableCoreType core_type>
-    static uintptr_t resolve(uint32_t arg) {
-        return get_semaphore<core_type>(arg);
-    }
-};
-
-// For workers that keep these two semaphores outside the program semaphore table and pass the
-// addresses directly.
-struct L1AddressArg {
-    template <ProgrammableCoreType>
-    static uintptr_t resolve(uint32_t arg) {
-        return static_cast<uintptr_t>(arg);
-    }
-};
-
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0, uint8_t VC_ID = 0>
 struct WorkerToFabricEdmSenderBase;
 
@@ -106,7 +87,11 @@ struct WorkerToFabricEdmSenderBase {
 
     WorkerToFabricEdmSenderBase() = default;
 
-    template <ProgrammableCoreType my_core_type, typename WorkerSemArg = SemaphoreIdArg>
+    // sem_args_are_l1_addresses: the teardown and buffer-index runtime args are the addresses
+    // themselves, for workers keeping these two semaphores outside the program semaphore
+    // table. Default false resolves them as program semaphore ids. Chosen per call, so one
+    // kernel may mix both.
+    template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
     static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
         uint8_t direction;
@@ -171,10 +156,15 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        const uintptr_t teardown_address =
-            WorkerSemArg::template resolve<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
-        const uintptr_t buffer_index_address =
-            WorkerSemArg::template resolve<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+        const auto resolve_sem_arg = [](uint32_t arg) -> uintptr_t {
+            if constexpr (sem_args_are_l1_addresses) {
+                return static_cast<uintptr_t>(arg);
+            } else {
+                return get_semaphore<my_core_type>(arg);
+            }
+        };
+        const uintptr_t teardown_address = resolve_sem_arg(get_arg_val<uint32_t>(arg_idx++));
+        const uintptr_t buffer_index_address = resolve_sem_arg(get_arg_val<uint32_t>(arg_idx++));
         auto worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t* const>(teardown_address);
         const auto worker_buffer_index_semaphore_addr = buffer_index_address;
         return WorkerToFabricEdmSenderBase(

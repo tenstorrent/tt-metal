@@ -740,8 +740,8 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const std::vector<uint32_t>& connection_link_indices,
     const std::vector<uint32_t>& teardown_sem_ids,
     const std::vector<uint32_t>& buffer_index_sem_ids,
-    WorkerSemArgs kind) {
-    if (kind == WorkerSemArgs::L1Addresses) {
+    bool sem_args_are_l1_addresses) {
+    if (sem_args_are_l1_addresses) {
         // The EDM remotely increments the teardown flag and block-reads a 16 B
         // SenderChannelProducerCursor into the buffer-index address, so both must own an aligned
         // granule. Catch a stray id here rather than in a kernel dereferencing a small integer.

@@ -38,18 +38,11 @@ namespace tt::tt_metal::internal {
 std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
-// What the caller's two per-connection semaphore values are, and therefore which policy the
-// kernel must build those connections with.
-enum class WorkerSemArgs : uint8_t {
-    Ids,          // program semaphore ids; kernel uses SemaphoreIdArg (its default)
-    L1Addresses,  // raw L1 addresses, for callers keeping these outside the program semaphore
-                  // table; kernel uses L1AddressArg. Both must be 16 B aligned.
-};
-
 // Compute fabric connection RT args without any PD mutation.
 // Pure computation — resolves routing + assembles RT args from the caller's semaphore values,
-// which are copied through verbatim; `kind` says what they are, so the values are validated
-// here and the kernel's policy is what actually reads them.
+// which are copied through verbatim. sem_args_are_l1_addresses says they are raw L1 addresses
+// rather than program semaphore ids, so they can be validated here; the kernel must then build
+// those connections with the matching build_from_args parameter.
 // Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
@@ -57,7 +50,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const std::vector<uint32_t>& connection_link_indices,
     const std::vector<uint32_t>& teardown_sem_args,
     const std::vector<uint32_t>& buffer_index_sem_args,
-    WorkerSemArgs kind = WorkerSemArgs::Ids);
+    bool sem_args_are_l1_addresses = false);
 
 // Like append_routing_plane_connection_manager_rt_args but does NOT inject kernel defines.
 // Use with get_fabric_kernel_defines() when defines must be set before kernel compilation

@@ -441,15 +441,13 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | WORKER_HANDSHAKE_NOC                  | Template parameter: NoC for open        | uint8_t                                        | False    |
- * | WorkerSemArg                          | Template parameter: sem arg resolution policy | SemaphoreIdArg / L1AddressArg            | False    |
+ * | sem_args_are_l1_addresses             | Template parameter: sem args are addresses, not ids | bool                               | False    |
  * | connection_manager                    | Connection manager to build and open    | RoutingPlaneConnectionManager&                 | True     |
  * | num_connections_to_build              | Number of connections to build/open     | uint32_t                                       | True     |
  * | rt_arg_idx                            | Runtime-args cursor (advanced as parsed)| size_t&                                        | True     |
  */
 // clang-format on
-template <
-    uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc(),
-    typename WorkerSemArg = tt::tt_fabric::SemaphoreIdArg>
+template <uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc(), bool sem_args_are_l1_addresses = false>
 FORCE_INLINE void open_connections(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
@@ -457,7 +455,7 @@ FORCE_INLINE void open_connections(
     connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
         tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION,
         WORKER_HANDSHAKE_NOC,
-        WorkerSemArg>(rt_arg_idx, num_connections_to_build);
+        sem_args_are_l1_addresses>(rt_arg_idx, num_connections_to_build);
 }
 
 // clang-format off
