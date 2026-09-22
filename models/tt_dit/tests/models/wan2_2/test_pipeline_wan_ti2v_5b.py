@@ -3,7 +3,7 @@
 
 """Manual bring-up hook for Wan2.2 TI2V-5B on single BH Galaxy.
 
-    pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_ti2v_5b.py -k bh_4x8
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_ti2v_5b.py -k bh_4x8
 """
 
 import os
@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.pipelines.events import log_event_section
 from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b import WanTI2V5BPipeline
+from models.tt_dit.pipelines.wan.quant_config import set_quant_config_from_env
 from models.tt_dit.utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
 
 
@@ -102,10 +103,14 @@ def test_pipeline_ti2v_5b_generate(mesh_device, mesh_shape, topology):
         run_warmup=True,
         config_overrides=config_overrides,
     )
+    # Opt-in precision preset (WAN5B_QUANT_CONFIG); the eager warmup is repeated only when the
+    # run is traced, since that is the only path that cannot compile programs on the fly.
+    quant_config_name = set_quant_config_from_env(pipeline, rewarm=traced)
 
     logger.info(
         f"Wan2.2 TI2V-5B generate: {height}x{width}, {num_frames} frames, " f"{num_inference_steps} steps, seed={seed}"
     )
+    logger.info(f"Quant config: {quant_config_name or 'none (bf16 / HiFi2 baseline)'}")
     logger.info(f"Prompt: {prompt!r}")
 
     import collections

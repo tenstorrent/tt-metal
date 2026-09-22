@@ -18,7 +18,7 @@ from models.tt_dit.pipelines.events import profiler_event_callback
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b import WanTI2V5BPipeline
-from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
+from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config, set_quant_config_from_env
 from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import (
@@ -582,6 +582,10 @@ def test_pipeline_performance_ti2v_5b(
         num_frames=num_frames,
         run_warmup=True,
     )
+    # Opt-in precision preset (WAN5B_QUANT_CONFIG=all_weights_bf8 | all_lofi | all_bf8_lofi).
+    # Applied before the traced warmup, with a second eager warmup, so the trace captures the
+    # quantized programs. Unset means the bf16 / HiFi2 baseline the gates are calibrated for.
+    quant_config_name = set_quant_config_from_env(pipeline)
 
     # Warmup run (traced trace-capture, not timed).
     logger.info("Running warmup iteration...")
@@ -629,6 +633,7 @@ def test_pipeline_performance_ti2v_5b(
     print("WAN2.2 TI2V-5B PERFORMANCE RESULTS")
     print("=" * 80)
     print(f"Image Size: {width}x{height}")
+    print(f"Quant Config: {quant_config_name or 'none (bf16 / HiFi2 baseline)'}")
     print(f"Inference Steps: {num_inference_steps}")
     print(f"Num Frames: {num_frames}")
     print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")
@@ -804,6 +809,8 @@ def test_pipeline_performance_ti2v_5b_i2v(
         num_frames=num_frames,
         run_warmup=True,
     )
+    # Same opt-in precision preset as the T2V test; see there.
+    quant_config_name = set_quant_config_from_env(pipeline)
 
     logger.info("Running warmup iteration...")
     with benchmark_profiler("run", iteration=0):
@@ -848,6 +855,7 @@ def test_pipeline_performance_ti2v_5b_i2v(
     print("WAN2.2 TI2V-5B **I2V** PERFORMANCE RESULTS")
     print("=" * 80)
     print(f"Image Size: {width}x{height}")
+    print(f"Quant Config: {quant_config_name or 'none (bf16 / HiFi2 baseline)'}")
     print(f"Inference Steps: {num_inference_steps}")
     print(f"Num Frames: {num_frames}")
     print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")
