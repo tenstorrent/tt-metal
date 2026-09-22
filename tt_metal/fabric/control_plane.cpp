@@ -61,6 +61,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_fabric {
 
@@ -2540,6 +2541,8 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
 }
 
 void ControlPlane::write_routing_tables_to_all_chips() const {
+    TTZoneScopedDN(FABRIC_INIT, "ControlPlane::write_routing_tables_to_all_chips");
+    
     // Configure the routing tables on the chips
     TT_ASSERT(
         this->intra_mesh_routing_tables_.size() == this->inter_mesh_routing_tables_.size(),

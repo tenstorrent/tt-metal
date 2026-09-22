@@ -7,6 +7,7 @@
 #include <numa.h>
 #include <pthread.h>
 #include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 
 #include <tt_stl/assert.hpp>
@@ -470,6 +471,8 @@ void DeviceManager::initialize_profiler() {
 }
 
 void DeviceManager::initialize_fabric_and_dispatch_fw() {
+    TTZoneScopedDN(FABRIC_INIT, "DeviceManager::initialize_fabric_and_dispatch_fw");
+    
     if (using_fast_dispatch_ && env_impl_.get_cluster().is_galaxy_cluster()) {
         log_info(
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
