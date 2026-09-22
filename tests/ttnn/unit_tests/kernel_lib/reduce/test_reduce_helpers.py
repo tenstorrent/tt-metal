@@ -569,8 +569,9 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
             for call in plan.calls
             for requirement in call.plan.cb_requirements
         )
-    elif case.family == "empty-then-zero":
-        assert not plan.calls[0].plan.auxiliary_tiles
+    elif case.family == "shared-zero":
+        assert len(plan.calls[0].plan.auxiliary_tiles) == 1
+        assert plan.calls[0].auxiliary_tile_offset == plan.calls[1].auxiliary_tile_offset
         assert len(plan.calls[1].plan.auxiliary_tiles) == 1
         assert plan.calls[1].plan.reload_mode == _PLANNER.AccumulateReloadMode.COPY_SEED_ZERO_PAIR
         assert plan.auxiliary.tiles[0].type == _PLANNER.ReduceAuxiliaryTileType.ZERO
@@ -591,7 +592,12 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
     for index, (call, input_cb_id) in enumerate(zip(plan.calls, input_cb_ids)):
         assert call.input_cb_id == input_cb_id
         assert call.auxiliary_cb_id == (CB_SCALER if call.plan.auxiliary_tiles else _PLANNER.NO_CB_ID)
-        assert call.plan.input_policy == _INPUT_POLICY[case.input_mode]
+        expected_policy = (
+            _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE
+            if case.input_mode == "chunked" and case.expected_algorithm == "ACCUMULATE_VIA_ADD"
+            else _INPUT_POLICY[case.input_mode]
+        )
+        assert call.plan.input_policy == expected_policy
         assert call.plan.algorithm == _ALGORITHM[case.expected_algorithm]
         assert call.plan.partial_mode == expected_partial
         assert call.plan.Ht == case.rows
@@ -1267,11 +1273,15 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
         ("AVG", "REDUCE_TILE"),
         ("SUM", "ACCUMULATE_VIA_ADD"),
         ("AVG", "ACCUMULATE_VIA_ADD"),
+        ("SUM", "AUTO"),
     ),
 )
 @pytest.mark.parametrize("fp32_input", (False, True))
-@pytest.mark.parametrize("input_policy", ("chunked", "per_tile", "bulk"))
-def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_input, input_policy):
+@pytest.mark.parametrize(
+    "input_policy,capacity_multiplier",
+    (("chunked", 1), ("chunked", 4), ("per_tile", 1), ("per_tile", 4), ("bulk", 1), ("bulk", 2)),
+)
+def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_input, input_policy, capacity_multiplier):
     """Full and tail overrides use the same compiled kernels through repeated FIFO wraps."""
     policy = {
         "chunked": _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
@@ -1281,7 +1291,7 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
     if input_policy == "per_tile" and dim == "REDUCE_COL":
         algorithm = "REDUCE_TILE"
     input_dtype = ttnn.float32 if fp32_input else ttnn.bfloat16
-    for height, width, batches in ((135, 135, 2), (64, 64, 1), (1, 17, 2)):
+    for height, width, batches in ((135, 135, 2), (160, 160, 2), (192, 192, 2), (64, 64, 1), (1, 17, 2)):
         block = _PLANNER.ReduceBlockSpec(
             256,
             256,
@@ -1312,13 +1322,20 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                 fp32_dest_acc_en=True,
                 dst_full_sync_en=False,
             ),
-            algorithm=_ALGORITHM[algorithm],
+            algorithm=None if algorithm == "AUTO" else _ALGORITHM[algorithm],
         )
         plan = sequence.calls[0].plan
-        assert plan.input_policy == policy
+        expected_policy = (
+            _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE
+            if input_policy == "chunked" and plan.algorithm == _ALGORITHM["ACCUMULATE_VIA_ADD"]
+            else policy
+        )
+        assert plan.input_policy == expected_policy
         input_pages = next(cb.page_count for cb in plan.cb_requirements if cb.role == _PLANNER.ReduceCbRole.INPUT)
         if input_policy != "bulk":
-            assert input_pages == (2 if input_policy == "chunked" else 1)
+            assert input_pages == (
+                2 if input_policy == "chunked" or plan.algorithm == _ALGORITHM["ACCUMULATE_VIA_ADD"] else 1
+            )
         else:
             assert input_pages % plan.chunk.input_tiles == 0
             assert input_pages % plan.tail_plan.chunk.input_tiles == 0
@@ -1348,7 +1365,9 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                         for a in range(axis):
                             for o in range(group):
                                 h, w = (out + o, base + a) if dim == "REDUCE_ROW" else (base + a, out + o)
-                                if input_policy != "chunked" and (h >= ht or w >= wt):
+                                if expected_policy != _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP and (
+                                    h >= ht or w >= wt
+                                ):
                                     continue
                                 tiles.append(
                                     padded[batch, h * TILE : (h + 1) * TILE, w * TILE : (w + 1) * TILE]
@@ -1397,7 +1416,7 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                     cbs=[
                         ttnn.cb_descriptor_from_sharded_tensor(3, source),
                         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
-                        _scratch_cb(CB_INPUT, input_dtype, input_pages),
+                        _scratch_cb(CB_INPUT, input_dtype, input_pages * capacity_multiplier),
                         _scratch_cb(CB_SCALER, input_dtype, len(sequence.auxiliary.tiles)),
                     ],
                 ),
@@ -1756,14 +1775,12 @@ def test_reduce_plan_sequence_repeated_input_cb(device):
     torch.testing.assert_close(actual, torch.full_like(actual, 2.0 * input_shape[1]), rtol=0, atol=0)
 
 
-@pytest.mark.parametrize(
-    "dtype,fp32_mode,pool", (("bf16", "Fast", "SUM"), ("int32", "Fast", "MAX"), ("fp32", "Accurate", "SUM"))
-)
+@pytest.mark.parametrize("dtype,fp32_mode,pool", (("int32", "Fast", "MAX"), ("fp32", "Accurate", "SUM")))
 @pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
 @pytest.mark.parametrize("calls", (1, 2))
 def test_reduce_helpers_empty_auxiliary(device, dtype, fp32_mode, pool, dim, calls):
     if "QUASAR" in str(device.arch()).upper():
-        pytest.skip("The planner's auxiliary-free additive and SFPU backends are not enabled on Quasar")
+        pytest.skip("The planner's auxiliary-free SFPU backends are not enabled on Quasar")
     case = ReduceCase(
         name=f"empty-aux-{dtype}-{dim}-{calls}",
         family="empty-auxiliary",
@@ -1793,7 +1810,9 @@ def test_reduce_helpers_empty_auxiliary_with_existing_cb(device):
         rows=2,
         cols=8,
         input_mode="alias",
+        input_dtype="fp32",
         output_dtype="fp32",
+        fp32_mode="Accurate",
         allow_empty_auxiliary=True,
     )
     actual, expected = _run_case(device, case, keep_empty_auxiliary_cb=True)
@@ -1801,12 +1820,12 @@ def test_reduce_helpers_empty_auxiliary_with_existing_cb(device):
 
 
 @pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
-def test_reduce_helpers_empty_auxiliary_then_zero_pair(device, dim):
+def test_reduce_helpers_shared_zero_pair(device, dim):
     if "QUASAR" in str(device.arch()).upper():
         pytest.skip("AccumulateViaAdd is not enabled on Quasar")
     case = ReduceCase(
-        name=f"empty-then-zero-{dim}",
-        family="empty-then-zero",
+        name=f"shared-zero-{dim}",
+        family="shared-zero",
         dim=dim,
         rows=9 if dim == "REDUCE_COL" else 2,
         cols=9 if dim == "REDUCE_ROW" else 3,

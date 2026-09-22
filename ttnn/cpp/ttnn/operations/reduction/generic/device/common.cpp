@@ -89,7 +89,8 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
     if (row_major) {
         for (auto& call : sequence.calls) {
             auto& plan = call.plan;
-            if (dim == ReduceOpDim::H) {
+            if (dim == ReduceOpDim::H &&
+                plan.input_policy == compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop) {
                 // The producer emits one column in fixed packets of up to eight
                 // rows. The helper owns wait/pop, including unused tail slots.
                 plan.chunk = {.reduce_axis_tiles = chunk_tiles, .output_tiles = 1, .buffers = 1, .padded = true};

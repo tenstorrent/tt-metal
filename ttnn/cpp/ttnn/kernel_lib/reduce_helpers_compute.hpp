@@ -140,7 +140,8 @@ namespace compute_kernel_lib {
  *
  * Controls when to wait for input tiles and whether to pop them after processing:
  *
- * - WaitAndPopPerTile: Wait/process/pop one tile at a time (streaming, safe for any CB size).
+ * - WaitAndPopPerTile: Stream input; AccumulateViaAdd consumes pairs and requires an even capacity of at least two
+ * tiles.
  *
  * - BulkWaitBulkPop: Wait for bulk, process all with indexed access, pop bulk.
  *   Bulk size depends on reduce dimension:
@@ -185,16 +186,17 @@ namespace compute_kernel_lib {
  *       cross-chunk, sharded, and uneven means all use the same reduce<AVG> entry point. MAX/MIN are not
  *       expressible via additive accumulate,
  *     - float only (no Int32),
- *     - all input policies except WaitAndPopPerTile + COL. WaitAndPopPerTile streams contiguous ROW/SCALAR;
- *       ChunkedWaitChunkedPop also supports COL by retaining an output-column group in DEST while row chunks
- *       arrive (the reduction-axis chunk must contain at least two tiles),
+ *     - WaitAndPopPerTile streams one output at a time, with two input slots available. COL input must
+ *       arrive one complete column at a time (output group = 1). The host downgrades requested
+ *       ChunkedWaitChunkedPop to WaitAndPopPerTile when selecting AccumulateViaAdd.
+ *       Explicit AccumulateViaAdd + ChunkedWaitChunkedPop calls fail a static assertion,
  *   PARTIAL (non-tile-aligned) reduce dims are supported standalone (NoAccumulation), ROW/COL only. The last
  *   reduce-dim tile is folded in with a masked accumulating broadcast-mul so padding contributes 0. The scaler
- *   CB is otherwise unused. For partial AVG, reduce_factor is the true element count:
+ *   CB also supplies zero for unpaired tiles. For partial AVG, reduce_factor is the true element count:
  *   full_tiles*32 + valid_elems_in_last_tile.
  *   Cross-call Accumulate (CB accumulator across reduce() calls) IS supported: the accumulator CB holds the
  *   RAW partial-sum tile (not a reduced tile), each later call copy-seeds or folds it into DEST, and sfpu_reduce
- *   finalizes only on the last call (Accumulate::at_last). Resident and streamed/chunked input are supported.
+ *   finalizes only on the last call (Accumulate::at_last). Resident, bulk, and per-tile streamed input are supported.
  *   PARTIAL (ROW/COL) composes with Accumulate — the masked last tile folds into each chunk's sum via
  *   fold_partial_last. CopySeedZeroPair may be used at the same time: the zero tile immediately follows the
  *   partial mask/scaler representation in the auxiliary CB. A cross-chunk AVG uses the GRAND-TOTAL
@@ -232,13 +234,10 @@ namespace compute_kernel_lib {
  * to skip (asserted).
  */
 /*
- * SUMMING TILES THAT ARE ALREADY REDUCED (the cross-core combine) — two ways, NEITHER of which
- * needs a tile of zeros.
- *
- * The situation: each core produced a partial with reduce<SUM, REDUCE_ROW> (so it is column-0-valid),
- * the partials have been gathered, and you now want their sum. It is tempting to reach for a BinaryFpu
- * whose B operand is a zero tile, because BinaryFpu takes TWO CB inputs and you only have one stream.
- * Do not — the zero tile has to be filled, and that fill is never free.
+ * SUMMING TILES THAT ARE ALREADY REDUCED (the cross-core combine):
+ * Each core produced a column-0-valid partial with reduce<SUM, REDUCE_ROW>.
+ * AccumulateViaAdd pairs input tiles and uses its required auxiliary zero for
+ * unpaired tiles, without repeating the within-tile collapse.
  *
  * (1) THIS HELPER. `reduce<SUM, ..., ReduceAlgorithm::AccumulateViaAdd, ..., ReduceWithinTile::Skip>`
  *     sums the tiles and skips the within-tile collapse they do not need. Prefer this when the shape
@@ -284,8 +283,8 @@ namespace compute_kernel_lib {
  *
  * - FoldViaAdd: fold the accumulator as an add_tiles SRCB operand (no dest reload). Fastest; Default-acc only.
  * - CopySeedPairs: reload the accumulator into DST via copy_tile, then add the new tiles — pairwise add_tiles
- *   for the bulk (2 tiles/op) + one DEST-reuse add for an odd leftover. Safe for any accumulator CB.
- * - CopySeedUniform: reload via copy_tile, then add every new tile via a DEST-reuse add (1 tile/op). Safe;
+ *   for the bulk (2 tiles/op) + one input/zero add for an odd leftover. Safe for any accumulator CB.
+ * - CopySeedUniform: reload via copy_tile, then add every new tile with zero (1 tile/op). Safe;
  *   simplest; slower bulk. (Kept mainly for the bake-off; CopySeedPairs dominates it.)
  * - CopySeedSfpuAdd: sum the new tiles into DST[0] with pure pairwise add_tiles (fresh DST, full fp32, no
  *   DEST-reuse truncation), reload the accumulator into DST[1] via copy_tile, then SFPU-add DST[0] += DST[1].
@@ -293,8 +292,8 @@ namespace compute_kernel_lib {
  *   output. WH/BH only (add_binary_tile is not available on Quasar).
  * - CopySeedZeroPair: copy_tile-reload the accumulator into DST[0], then add the new tiles in pairs; the odd
  *   leftover is paired with a ZERO tile (in scaler_dfb) via an acc_to_dest add_tiles, which keeps the running
- *   sum in fp32 DST (no DEST-reuse TF32 truncation) with NO SFPU op. Aims for CopySeedSfpuAdd accuracy at
- *   CopySeedPairs speed. With no partial, the zero is scaler_dfb[0]. With a partial mask/scaler representation,
+ *   sum in fp32 DST (no DEST-reuse TF32 truncation) with NO SFPU op. CopySeedPairs now uses the same
+ *   zero-pair fold. With no partial, the zero is scaler_dfb[0]. With a partial mask/scaler representation,
  *   the zero immediately follows it (for AccumulateViaAdd's mask-only layout: mask[0], zero[1]).
  */
 // =============================================================================
@@ -429,7 +428,7 @@ struct Accumulate {
     AccumulationConfig config;
     // AccumulateViaAdd: how a later call folds the accumulator with its new tiles. Default is safe for any
     // accumulator CB, including UnpackToDestFp32. Indexed input supports every mode; streamed/grouped input
-    // uses its safe copy seed and additionally honors CopySeedZeroPair for odd tiles after DEST is seeded.
+    // copy-seeds the accumulator and pairs every unpaired input tile with the auxiliary zero.
     AccumulateReloadMode reload = AccumulateReloadMode::CopySeedPairs;
     std::uint32_t iteration = 0;
     // AccumulateViaAdd only: marks the LAST chunk. The accumulator CB holds the RAW partial-sum tile, so the
@@ -579,7 +578,8 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
  * @param auxiliary_tile_offset Start of this call's recipe in an auxiliary CB
  *        (default: 0 for standalone calls). The planner supplies this through
- *        Call::auxiliary_tile_offset for the planned overload.
+ *        Call::auxiliary_tile_offset for the planned overload. AccumulateViaAdd
+ *        requires a zero tile here, or immediately after the partial-axis mask.
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
