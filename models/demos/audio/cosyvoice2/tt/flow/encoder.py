@@ -74,7 +74,7 @@ import torch.nn.functional as F
 
 import ttnn
 
-from ..hifigan.conv import accurate_compute_config, config_tensors_in_dram, safe_compute_config
+from ..hifigan.conv import TtConv1d
 
 # The real checkpoint's verified encoder config (cosyvoice2.yaml's flow.encoder).
 D_MODEL = 512
@@ -485,17 +485,21 @@ class TtConformerEncoderLayer:
         return ttnn.add(x, h)
 
 
-class TtPaddedConv1d:
+class TtPaddedConv1d(TtConv1d):
     """A `ttnn.conv1d` with an explicit, possibly-asymmetric `(pad_left, pad_right)`
     -- confirmed from `ttnn.conv1d`'s own docstring to accept a `[pad_left,
-    pad_right]` tuple directly (see tt/flow/decoder.py's `TtCausalConv1d` for the
-    same confirmation). Self-contained here rather than reusing `TtCausalConv1d`
-    from decoder.py: this module needs a RIGHT-padded conv too
-    (`PreLookaheadLayer.conv1`, a genuine look-ahead, not causal), so a single
-    general class covers all three convs this file needs (look-ahead, causal x2)
-    without special-casing `TtCausalConv1d`'s left-only contract. Same
-    `accurate_compute_config`/`safe_compute_config` verify-and-fallback discipline
-    as every other conv in this package.
+    pad_right]` tuple directly. This module needs a RIGHT-padded conv too
+    (`PreLookaheadLayer.conv1`, a genuine look-ahead, not causal), which is why the
+    `pad` tuple is a constructor argument rather than always `(k-1, 0)` the way
+    `tt/flow/decoder.py`'s `TtCausalConv1d` fixes it.
+
+    A thin subclass of `hifigan.conv.TtConv1d` (ported 2026-09-22, same change and
+    for the same reason as `TtCausalConv1d`): `TtConv1d` already generalizes to
+    asymmetric `padding` tuples, so this class only carries the `pad` argument
+    through and restores the single-tensor return every call site here expects.
+    Inherits prepared, per-geometry-cached weights and the relative-L2,
+    float64-arbitrated resolver in place of the old absolute `max|out|`-within-2%
+    check.
     """
 
     def __init__(
@@ -507,67 +511,26 @@ class TtPaddedConv1d:
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
     ):
-        assert weight.dim() == 3
-        self.device = device
-        self.out_channels, self.in_channels, self.kernel_size = weight.shape
-        self.pad = pad
-        self.dtype = dtype
-        self._weight_4d = ttnn.from_torch(
-            weight.detach().float().unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        self._bias = ttnn.from_torch(
-            bias.detach().float().reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        self.conv_config = ttnn.Conv1dConfig(
+        super().__init__(
+            device,
+            weight,
+            bias,
+            stride=1,
+            padding=tuple(pad),
+            dilation=1,
+            groups=1,
+            dtype=dtype,
             weights_dtype=weights_dtype,
-            deallocate_activation=False,
-            config_tensors_in_dram=config_tensors_in_dram(),
+            high_fidelity=True,
         )
-        self._accurate = accurate_compute_config(device)
-        self._safe = safe_compute_config(device)
-        self._verified: dict = {}
 
     @classmethod
     def from_module(cls, device, module: nn.Conv1d, pad: tuple[int, int], dtype=ttnn.bfloat16):
         return cls(device, module.weight, module.bias, pad, dtype=dtype)
 
-    def _conv(self, x, input_length: int, batch_size: int, compute_config):
-        return ttnn.conv1d(
-            input_tensor=x,
-            weight_tensor=self._weight_4d,
-            bias_tensor=self._bias,
-            device=self.device,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            batch_size=batch_size,
-            input_length=input_length,
-            kernel_size=self.kernel_size,
-            stride=1,
-            padding=self.pad,
-            dilation=1,
-            groups=1,
-            conv_config=self.conv_config,
-            compute_config=compute_config,
-            dtype=self.dtype,
-            return_output_dim=True,
-        )
-
     def __call__(self, x, input_length: int, batch_size: int = 1):
-        key = (input_length, batch_size)
-        cfg = self._verified.get(key, self._accurate)
-        out, out_length = self._conv(x, input_length, batch_size, cfg)
-        if key not in self._verified:
-            ref, _ = self._conv(x, input_length, batch_size, self._safe)
-            a = float(ttnn.to_torch(out).float().abs().max())
-            b = float(ttnn.to_torch(ref).float().abs().max())
-            if a == a and abs(a - b) <= 0.02 * max(b, 1e-9):
-                self._verified[key] = self._accurate
-                ttnn.deallocate(ref)
-            else:
-                self._verified[key] = self._safe
-                ttnn.deallocate(out)
-                out = ref
-        return ttnn.reshape(out, (batch_size, out_length, self.out_channels))
+        out, _ = super().__call__(x, input_length, batch_size)
+        return out
 
 
 class TtLinearNoSubsampling:

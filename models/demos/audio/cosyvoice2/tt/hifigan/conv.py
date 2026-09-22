@@ -169,7 +169,7 @@ class TtConv1d:
         weight,  # [out_ch, in_ch/groups, k]
         bias,
         stride: int = 1,
-        padding: int = 0,
+        padding: int | tuple[int, int] = 0,
         dilation: int = 1,
         groups: int = 1,
         dtype=ttnn.bfloat16,
@@ -238,6 +238,12 @@ class TtConv1d:
         key = (input_length, batch_size)
         if key in self._prep_cache:
             return self._prep_cache[key]
+        # `prepare_conv_weights`/`prepare_conv_bias` are conv2d-level ops, so unlike `ttnn.conv1d` itself
+        # (which accepts a conv1d-shaped `int` or `(pad_left, pad_right)` and does this translation
+        # internally -- see `conv1d.cpp`) they need the conv2d padding spelled out: `(pad_height, pad_width)`
+        # for symmetric, `(pad_top, pad_bottom, pad_left, pad_right)` for asymmetric. `pad_height` is always
+        # 0 (conv1d is conv2d at H=1).
+        pad2d = (0, self.padding) if isinstance(self.padding, int) else (0, 0, *self.padding)
         kw = dict(
             input_memory_config=x.memory_config(),
             input_layout=x.layout,
@@ -248,7 +254,7 @@ class TtConv1d:
             input_width=input_length,
             kernel_size=(1, self.kernel_size),
             stride=(1, self.stride),
-            padding=(0, self.padding),
+            padding=pad2d,
             dilation=(1, self.dilation),
             groups=self.groups,
             device=self.device,
@@ -289,8 +295,12 @@ class TtConv1d:
             return_output_dim=True,
         )
 
+    def _pad_pair(self) -> tuple[int, int]:
+        return (self.padding, self.padding) if isinstance(self.padding, int) else tuple(self.padding)
+
     def _out_length(self, input_length: int) -> int:
-        return (input_length + 2 * self.padding - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
+        pad_left, pad_right = self._pad_pair()
+        return (input_length + pad_left + pad_right - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
 
     def _to_host(self, t, batch_size: int, out_length: int):
         return ttnn.to_torch(t).float().reshape(batch_size, out_length, self.out_channels).double()
@@ -300,12 +310,17 @@ class TtConv1d:
         `[B, L_out, C_out]`. Only ever run to arbitrate a disagreement."""
         x_cf = ttnn.to_torch(x).float().reshape(batch_size, input_length, self.in_channels).transpose(1, 2).double()
         bias = self._host_bias.double() if self._host_bias is not None else None
+        pad_left, pad_right = self._pad_pair()
+        if pad_left == pad_right:
+            x_pad, conv_padding = x_cf, pad_left  # torch.nn.functional.conv1d's own padding covers this case
+        else:
+            x_pad, conv_padding = torch.nn.functional.pad(x_cf, (pad_left, pad_right)), 0
         ref = torch.nn.functional.conv1d(
-            x_cf,
+            x_pad,
             self._host_weight.double(),
             bias,
             stride=self.stride,
-            padding=self.padding,
+            padding=conv_padding,
             dilation=self.dilation,
             groups=self.groups,
         )

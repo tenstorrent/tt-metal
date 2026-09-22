@@ -79,7 +79,7 @@ import torch.nn.functional as F
 
 import ttnn
 
-from ..hifigan.conv import accurate_compute_config, config_tensors_in_dram, safe_compute_config
+from ..hifigan.conv import TtConv1d, accurate_compute_config
 
 # The real checkpoint's verified estimator config (cosyvoice2.yaml's
 # flow.decoder.estimator) -- see module docstring for why this is hardcoded rather
@@ -493,82 +493,48 @@ def _bias(device, bias: torch.Tensor, dtype):
     return ttnn.from_torch(bias.detach().float().reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-class TtCausalConv1d:
+class TtCausalConv1d(TtConv1d):
     """`CausalConv1dRef` on device: `ttnn.conv1d` with asymmetric `padding=(k-1, 0)`
     -- confirmed from `ttnn.conv1d`'s own docstring that `padding` accepts a
     `[pad_left, pad_right]` tuple directly, so this needs no manual pad step (which
     would hit `ttnn.pad`'s documented "front padding on device not supported in
-    tile layout" restriction). Not `prepare_conv_weights`-cached (unlike
-    `hifigan.conv.TtConv1d`) -- correctness first, matching this bring-up's
-    consistent priority; still verified against `safe_compute_config` per geometry
-    (see `accurate_compute_config`'s docstring for the measured, silent-corruption
-    reason this matters), reusing the exact same two configs the vocoder already
-    validated rather than re-deriving them.
+    tile layout" restriction).
+
+    A thin subclass of `hifigan.conv.TtConv1d` (ported 2026-09-22; used to be a
+    self-contained, unprepared-weight class with its own `max|out|`-within-2%
+    verification). `TtConv1d` already generalizes to asymmetric `padding` tuples --
+    see its `_pad_pair`/`_prepared`/`_host_reference` -- so this class only fixes
+    the padding this module always uses and restores the single-tensor return
+    every call site here expects (`TtConv1d.__call__` returns `(out, out_length)`).
+    Inherits prepared, per-geometry-cached weights (a trace no longer rejects this
+    conv) and the relative-L2, float64-arbitrated resolver (`_verify_and_resolve`)
+    in place of the old absolute `max|out|`-within-2% check, which could not tell a
+    corruption that scales the whole output from one that doesn't.
     """
 
     def __init__(
         self, device, weight: torch.Tensor, bias: torch.Tensor, dtype=ttnn.bfloat16, weights_dtype=ttnn.bfloat16
     ):
-        assert weight.dim() == 3
-        self.device = device
-        self.out_channels, self.in_channels, self.kernel_size = weight.shape
-        self.dtype = dtype
-        self._weight_4d = ttnn.from_torch(
-            weight.detach().float().unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        self._bias = ttnn.from_torch(
-            bias.detach().float().reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        self.conv_config = ttnn.Conv1dConfig(
+        kernel_size = weight.shape[-1]
+        super().__init__(
+            device,
+            weight,
+            bias,
+            stride=1,
+            padding=(kernel_size - 1, 0),
+            dilation=1,
+            groups=1,
+            dtype=dtype,
             weights_dtype=weights_dtype,
-            deallocate_activation=False,
-            config_tensors_in_dram=config_tensors_in_dram(),
+            high_fidelity=True,
         )
-        self._accurate = accurate_compute_config(device)
-        self._safe = safe_compute_config(device)
-        self._verified: dict = {}
 
     @classmethod
     def from_module(cls, device, module: CausalConv1dRef, dtype=ttnn.bfloat16):
         return cls(device, module.weight, module.bias, dtype=dtype)
 
-    def _conv(self, x, input_length: int, batch_size: int, compute_config):
-        return ttnn.conv1d(
-            input_tensor=x,
-            weight_tensor=self._weight_4d,
-            bias_tensor=self._bias,
-            device=self.device,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            batch_size=batch_size,
-            input_length=input_length,
-            kernel_size=self.kernel_size,
-            stride=1,
-            padding=(self.kernel_size - 1, 0),
-            dilation=1,
-            groups=1,
-            conv_config=self.conv_config,
-            compute_config=compute_config,
-            dtype=self.dtype,
-            return_output_dim=True,
-        )
-
     def __call__(self, x, input_length: int, batch_size: int = 1):
-        key = (input_length, batch_size)
-        cfg = self._verified.get(key, self._accurate)
-        out, out_length = self._conv(x, input_length, batch_size, cfg)
-        if key not in self._verified:
-            ref, _ = self._conv(x, input_length, batch_size, self._safe)
-            a = float(ttnn.to_torch(out).float().abs().max())
-            b = float(ttnn.to_torch(ref).float().abs().max())
-            if a == a and abs(a - b) <= 0.02 * max(b, 1e-9):
-                self._verified[key] = self._accurate
-                ttnn.deallocate(ref)
-            else:
-                self._verified[key] = self._safe
-                ttnn.deallocate(out)
-                out = ref
-        out = ttnn.reshape(out, (batch_size, out_length, self.out_channels))
+        out, _ = super().__call__(x, input_length, batch_size)
         return out
 
 
@@ -710,7 +676,13 @@ class TtBasicTransformerBlock:
         if dt != ttnn.bfloat16:
             q, k, v = (ttnn.typecast(x, ttnn.bfloat16) for x in (q, k, v))
         out = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, is_causal=False, scale=self.scale, program_config=self.sdpa_program_config, compute_kernel_config=self.cc
+            q,
+            k,
+            v,
+            is_causal=False,
+            scale=self.scale,
+            program_config=self.sdpa_program_config,
+            compute_kernel_config=self.cc,
         )
         return out if dt == ttnn.bfloat16 else ttnn.typecast(out, dt)
 
@@ -720,7 +692,9 @@ class TtBasicTransformerBlock:
         if self.fused_qkv:
             # The explicit chain wants K pre-transposed ([B, heads, head_dim, T]); SDPA wants it as [B, heads, T, head_dim].
             q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-                ttnn.linear(h, self.wqkv, compute_kernel_config=self.cc), num_heads=self.num_heads, transpose_key=not self.fused_sdpa
+                ttnn.linear(h, self.wqkv, compute_kernel_config=self.cc),
+                num_heads=self.num_heads,
+                transpose_key=not self.fused_sdpa,
             )
         else:
             q = self._heads(ttnn.linear(h, self.wq, compute_kernel_config=self.cc), b, t)
@@ -796,7 +770,9 @@ class TtCausalConditionalDecoder:
         temb = self._sinusoidal_pos_emb(t)  # [2B, 1, time_embeddings_dim]
         temb = ttnn.linear(temb, self.time_mlp_w1, bias=self.time_mlp_b1, compute_kernel_config=self.cc)
         temb = ttnn.silu(temb)
-        temb = ttnn.linear(temb, self.time_mlp_w2, bias=self.time_mlp_b2, compute_kernel_config=self.cc)  # [2B, 1, time_embed_dim]
+        temb = ttnn.linear(
+            temb, self.time_mlp_w2, bias=self.time_mlp_b2, compute_kernel_config=self.cc
+        )  # [2B, 1, time_embed_dim]
 
         h = ttnn.concat([x, mu], dim=-1)
         # spks arrives pre-shaped [2B, 1, spk_dim] (see TtCausalConditionalCFM --
@@ -827,7 +803,9 @@ class TtCausalConditionalDecoder:
         h = self.up_conv(ttnn.multiply(h, mask), length, batch_size)
 
         h = self.final_block(h, mask, length, batch_size)
-        out = ttnn.linear(ttnn.multiply(h, mask), self.final_weight, bias=self.final_bias, compute_kernel_config=self.cc)
+        out = ttnn.linear(
+            ttnn.multiply(h, mask), self.final_weight, bias=self.final_bias, compute_kernel_config=self.cc
+        )
         return ttnn.multiply(out, mask)
 
 
