@@ -623,6 +623,12 @@ def _num_model_configs(table) -> int:
     return sum(1 for name in _config_names(table) if name.isdigit())
 
 
+def _has_index_config(table) -> bool:
+    """Whether config 1 is a DSA indexer key cache. Asked of the adapter, not inferred from the count:
+    Kimi-K3 publishes three decimal configs (kvpe + two KDA state configs) and none is an index."""
+    return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
+
+
 def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode):
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
@@ -1142,7 +1148,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     mins = {"kvpe": min_pcc}
     if mtp_min is not None:
         mins["mtp"] = mtp_min
-    if _num_model_configs(table) > 1:
+    if _has_index_config(table):
         if first_pos + skip_rows != 0 or cmp_len != real_len:
             # The window flags move the KVPE read only; the loop below still walks from 0 and asks
             # the golden for [0,real_len). Half-windowing one gate is worse than refusing: both
