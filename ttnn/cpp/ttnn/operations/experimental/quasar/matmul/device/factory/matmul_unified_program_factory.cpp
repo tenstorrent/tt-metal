@@ -88,8 +88,7 @@ struct DfbSizes {
     }
 };
 
-// Maximize subblock size regardless of divisibility (Borys's request on GH#41910, the SDPA
-// approach): pick the max-volume DST-filling subblock; the C slice is rounded up to subblock
+// Max-volume DST-filling subblock, no divisibility required: the C slice is rounded up to subblock
 // multiples and the overshoot is clipped on write. Ties prefer the least padding waste.
 std::pair<uint32_t, uint32_t> maximize_subblock_size(
     uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, uint32_t dst_capacity_tiles) {
