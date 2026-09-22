@@ -1281,10 +1281,10 @@ def recurrent_gated_delta_rule(
     beta,
     g,
     scale: float = None,
-    initial_state = None,
+    initial_state=None,
     output_final_state: bool = False,
     use_qk_l2norm: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
+):
     """
     Token-by-token recurrent gated delta rule. Used for decode (T=1).
 
@@ -1367,10 +1367,10 @@ def chunk_gated_delta_rule(
     beta,
     chunk_size: int = 64,
     scale: float = None,
-    initial_state = None,
+    initial_state=None,
     output_final_state: bool = False,
     use_qk_l2norm: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
+):
     """
     Chunked gated delta rule. Used for prefill (processing full sequences).
 
