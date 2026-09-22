@@ -18,10 +18,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-#ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#endif
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 
 void kernel_main() {
     // Runtime arg: number of independent column-reductions this core must perform.
@@ -35,18 +34,13 @@ void kernel_main() {
     constexpr auto H = get_arg(args::H);
     // Number of elements per tile in the H dimension (typically 32).
     constexpr auto tile_height = get_arg(args::tile_height);
-#ifdef WELFORD_POST_MUL
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
-    constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
-#endif
+    const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
     constexpr bool is_std = get_arg(args::is_std) != 0;
-#ifdef WELFORD_POST_MUL
-    constexpr bool materialize_padding = true;
-#else
-    constexpr bool materialize_padding = is_std;
-#endif
+    const bool materialize_padding = is_std || apply_post_mul;
     constexpr auto two_pass_mean_reciprocal = get_arg(args::two_pass_mean_reciprocal);
     constexpr auto two_pass_variance_reciprocal = get_arg(args::two_pass_variance_reciprocal);
 
@@ -75,7 +69,7 @@ void kernel_main() {
     for (uint32_t ncwt = 0; ncwt < NCWt; ncwt++) {
         copy_init(dfb::in);
         tile_regs_acquire();
-        if constexpr (materialize_padding) {
+        if (materialize_padding) {
             // The variance finaliser writes only the result rows. sqrt_tile
             // and the optional scalar multiply read every physical DST row,
             // ignoring lazy zero flags, so their padding must be cleared too.
@@ -136,10 +130,10 @@ void kernel_main() {
             sqrt_tile_init();
             sqrt_tile(var_dst);
         }
-#ifdef WELFORD_POST_MUL
-        binop_with_scalar_tile_init();
-        mul_unary_tile(var_dst, post_mul_scaler_bits);
-#endif
+        if (apply_post_mul) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(var_dst, post_mul_scaler_bits);
+        }
         tile_regs_commit();
 
         // Pack variance/std directly to output -- no transpose needed for H reduction

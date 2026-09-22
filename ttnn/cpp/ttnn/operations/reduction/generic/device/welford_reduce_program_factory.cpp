@@ -54,10 +54,10 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     plan.is_std = operation_attributes.math_op == ReduceOpMath::STD;
     const float post_mul_scaler =
         plan.is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
-    plan.use_post_mul = post_mul_scaler != 1.0f;
     plan.post_mul_scaler_bits = std::bit_cast<std::uint32_t>(post_mul_scaler);
-    plan.narrow_scratch_to_bf16 = !plan.is_std && !plan.use_post_mul && plan.output_format == DataFormat::Float16_b;
-    plan.combined_format = plan.narrow_scratch_to_bf16 ? DataFormat::Float16_b : DataFormat::Float32;
+    // Scalars can change on a cache hit. Keep HW scratch in FP32 even for BF16
+    // variance so a later non-identity multiplier runs before output rounding.
+    plan.combined_format = DataFormat::Float32;
     const auto arch = tensor_arg.device()->arch();
     // Compact SFPU combining handles full-width tiles. A partial final tile keeps
     // per-column statistics; the writer accumulates only its valid columns into
@@ -159,9 +159,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     const auto dst_cb_data_format = plan.output_format;
     const auto dst_single_tile_size = plan.output_tile_size;
     const auto is_std = plan.is_std;
-    const auto use_post_mul = plan.use_post_mul;
     const auto post_mul_scaler_bits = plan.post_mul_scaler_bits;
-    const auto narrow_scratch_to_bf16 = plan.narrow_scratch_to_bf16;
+    const bool narrow_scratch_to_bf16 = plan.combined_format == DataFormat::Float16_b;
 
     tt_metal::IDevice* device = &input.mutable_device();
 
@@ -293,7 +292,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         // The compute kernel reads this tile, applies sqrt_tile for std, and
         // re-packs it to the output buffer in the correct output data format (the packer
         // hardware is required for BFLOAT8_B conversion).
-        // Float32 unless we can safely narrow to bf16.
+        // Keep FP32 until the runtime post-multiplier has been applied.
         combined_cb_data_format = plan.combined_format;
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = COMBINED_DFB,
@@ -313,12 +312,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     reduce_defines["DST_SYNC_FULL"] = compact_hw_single_buffer || dst_full_sync_en ? "1" : "0";
     reduce_defines["WELFORD_TWO_PASS"] = "1";
     reduce_defines["WELFORD_TWO_PASS_STREAMING_CB_TILES"] = std::to_string(two_pass_streaming_cb_tiles);
-    // Enables the SFPU post-multiplication of the reduced output by the user scalar in the
-    // compute kernel (see post_mul_scaler above). Only the compute kernel reads this; the
-    // reader/writer ignore it.
-    if (use_post_mul) {
-        reduce_defines["WELFORD_POST_MUL"] = "1";
-    }
     if (two_pass_l1_replay) {
         reduce_defines["WELFORD_TWO_PASS_L1_REPLAY"] = "1";
     }
@@ -471,6 +464,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     std::string compute_kernel;
     KernelSpec::CompileTimeArgs compute_ct_args;
     std::string compute_rta_name;
+    const Group<std::string> compute_common_rta_names = {"post_mul_scaler_bits"};
 
     if (reduce_hw) {
         compute_ct_args = {
@@ -480,7 +474,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"Wt", Wt},
             {"W", W},
             {"tile_width", tile_width},
-            {"post_mul_scaler_bits", post_mul_scaler_bits},
             {"reduce_batch_size", reduce_batch_size},
             {"is_std", static_cast<uint32_t>(is_std)},
             {"two_pass_mean_reciprocal", two_pass_mean_reciprocal},
@@ -493,7 +486,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {reduce_w ? "Wt" : "Ht", reduce_w ? Wt : Ht},
             {reduce_w ? "W" : "H", reduce_w ? W : H},
             {reduce_w ? "tile_width" : "tile_height", reduce_w ? tile_width : tile_height},
-            {"post_mul_scaler_bits", post_mul_scaler_bits},
             {"is_std", static_cast<uint32_t>(is_std)},
             {"two_pass_mean_reciprocal", two_pass_mean_reciprocal},
             {"two_pass_variance_reciprocal", two_pass_variance_reciprocal},
@@ -589,7 +581,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
                  .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(dfb_bindings),
             .compile_time_args = compute_ct_args,
-            .runtime_arg_schema = {.runtime_arg_names = {compute_rta_name}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {compute_rta_name}, .common_runtime_arg_names = compute_common_rta_names},
             .hw_config = compute_hw,
         };
     };
@@ -737,6 +730,10 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         }
     }
 
+    const KernelRunArgs::CommonRuntimeArgValues compute_common_args{{"post_mul_scaler_bits", post_mul_scaler_bits}};
+    compute_g1_run_args.common_runtime_arg_values = compute_common_args;
+    compute_g2_run_args.common_runtime_arg_values = compute_common_args;
+
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));
     run_args.kernel_run_args.push_back(std::move(compute_g1_run_args));
@@ -748,6 +745,45 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     run_args.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs
+WelfordReduceDeviceOperation::WelfordReduceProgramFactory::override_runtime_arguments(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_arg,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
+    const auto& input = tensor_arg.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
+
+    // Names must match create_program_artifacts.
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    const bool is_std = operation_attributes.math_op == ReduceOpMath::STD;
+    const float post_mul_scaler =
+        is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
+
+    // compute_program_hash excludes the scalar, so a cache hit must re-apply it.
+    ProgramRunArgs params;
+
+    const KernelRunArgs::CommonRuntimeArgValues compute_common_args{
+        {"post_mul_scaler_bits", std::bit_cast<uint32_t>(post_mul_scaler)}};
+    params.kernel_run_args.push_back(
+        KernelRunArgs{.kernel = COMPUTE_G1, .common_runtime_arg_values = compute_common_args});
+    const auto plan = select_plan(operation_attributes, tensor_arg);
+    if (!plan.core_group_2.ranges().empty()) {
+        params.kernel_run_args.push_back(
+            KernelRunArgs{.kernel = COMPUTE_G2, .common_runtime_arg_values = compute_common_args});
+    }
+
+    params.tensor_args.emplace(INPUT_TENSOR, TensorArgument{input});
+    params.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
+    return params;
 }
 
 }  // namespace ttnn::prim

@@ -271,7 +271,8 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     plan.gamma_tiles = plan.width_block_tiles;
     plan.beta_tiles = plan.width_block_tiles;
     plan.residual_value_tiles = residual.has_value() ? plan.width_block_tiles : block_size * 2;
-    if (residual.has_value()) {
+    // Small row-major kernels tilize the whole row before starting pre-add.
+    if (residual.has_value() && !input_is_row_major) {
         plan.input_tiles = 2 * block_size;
     }
 

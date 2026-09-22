@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr auto HtWt = get_arg(args::HtWt);
 
 #ifndef WELFORD_TWO_PASS
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    const auto scaler_bits = get_arg(args::scaler_bits);
 #endif
     constexpr bool sfpu_two_pass = get_arg(args::use_welford) != 0;
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;

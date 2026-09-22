@@ -28,10 +28,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-#ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#endif
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 
 void kernel_main() {
     // Runtime arg: total number of NC slices this core must process.
@@ -46,11 +45,10 @@ void kernel_main() {
     constexpr auto W = get_arg(args::W);
     constexpr auto tile_width = get_arg(args::tile_width);
 #endif
-#ifdef WELFORD_POST_MUL
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
-    constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
-#endif
+    const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
     constexpr auto reduce_batch_size = get_arg(args::reduce_batch_size);
     constexpr bool is_std = get_arg(args::is_std) != 0;
     constexpr auto two_pass_mean_reciprocal = get_arg(args::two_pass_mean_reciprocal);
@@ -180,12 +178,12 @@ void kernel_main() {
             sqrt_tile_init();
             sqrt_tile(input_dst);
         }
-#ifdef WELFORD_POST_MUL
         // Apply the user scalar to the reduced output: var(s*x)=s^2 var(x), std(s*x)=|s| std(x).
         // mul_unary_tile is an SFPU op on DEST at full fp32 precision (issue #45222).
-        binop_with_scalar_tile_init();
-        mul_unary_tile(input_dst, post_mul_scaler_bits);
-#endif
+        if (apply_post_mul) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(input_dst, post_mul_scaler_bits);
+        }
         tile_regs_commit();
         dfb_combined.pop_front(onetile);
 

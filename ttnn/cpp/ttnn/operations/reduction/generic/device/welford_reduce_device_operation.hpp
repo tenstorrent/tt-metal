@@ -46,8 +46,6 @@ struct WelfordReducePlan {
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
     bool is_std = false;
-    bool use_post_mul = false;
-    bool narrow_scratch_to_bf16 = false;
     bool use_sfpu_leaf_combine = false;
     bool use_l1_replay = false;
 };
@@ -66,6 +64,13 @@ struct WelfordReduceDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        // Cache-hit hook: re-applies the scalar that compute_program_hash excludes.
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<WelfordReduceProgramFactory>;
