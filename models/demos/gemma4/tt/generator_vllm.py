@@ -2741,6 +2741,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 kv_layers,
                 scratch_pt,
                 verify_count=getattr(self, "_SPEC_CONTRACT_K", None),
+                rotate_ring_reads=getattr(self, "_SPEC_ROTATE_RING_READS", False),
             )
             self._spec_decoder = dec
             self._spec_width_ladder = ladder
@@ -3022,7 +3023,12 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             # them in __init__ (see _spec_release_decoder's drop_page_tables).
             self._spec_release_decoder(drop_page_tables=False)
             dec = DFlashFusedDecoder(
-                model0, self._spec_get_drafter(), kv_layers, pt, verify_count=getattr(self, "_SPEC_CONTRACT_K", None)
+                model0,
+                self._spec_get_drafter(),
+                kv_layers,
+                pt,
+                verify_count=getattr(self, "_SPEC_CONTRACT_K", None),
+                rotate_ring_reads=getattr(self, "_SPEC_ROTATE_RING_READS", False),
             )
             dec.prefill_ingest(taps, n)
             dec.capture(int(anchor_id), int(start), max_new=horizon)
@@ -3094,6 +3100,17 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                     t.deallocate(True)
                 except Exception:
                     pass
+        read_tables = {
+            id(table): table
+            for record in (getattr(dec, "_pv_widths", None) or {}).values()
+            for table in (record.get("read_cache_by_type") or {}).values()
+            if table is not None
+        }
+        for table in read_tables.values():
+            try:
+                table.deallocate(True)
+            except Exception:
+                pass
         for _rec in (getattr(dec, "_pv_widths", None) or {}).values():
             for _t in (_rec.get("pv_iota"), *(_rec.get("cache_by_type") or {}).values()):
                 if _t is not None:
@@ -3388,6 +3405,7 @@ class Gemma4DFlashContractForCausalLM(DFlashContractMixin, Gemma4DFlashForCausal
     request, anchor, position, and candidate tokens, even when a peer joins.
     """
 
+    _SPEC_ROTATE_RING_READS = True
     _SPEC_CONTRACT_K = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
     _SPEC_V = _SPEC_CONTRACT_K
     _SPEC_N = _SPEC_V + 1

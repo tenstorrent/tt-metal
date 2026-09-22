@@ -1058,6 +1058,11 @@ class Gemma4Model:
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": _hot,
+                    "read_page_table": (
+                        packed["read_page_tables_per_layer"][i]
+                        if packed.get("read_page_tables_per_layer") is not None
+                        else None
+                    ),
                 }
 
             hidden_states = layer(
@@ -1415,6 +1420,7 @@ class Gemma4Model:
         hot_pt_full=None,
         hot_pt_sliding=None,
         page_tables_per_layer=None,
+        read_page_tables_per_layer=None,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
 
@@ -1438,6 +1444,8 @@ class Gemma4Model:
             embed_idx_full / embed_idx_sliding: [1, nkv_local*S2] uint32 merge
                 gather indices (loop-free staging path; nkv differs per type).
             hot_pt: [1, PV_HOT_BLOCKS] int32 physical fill pages (-1 = skip).
+            read_page_tables_per_layer: optional persistent device tables for
+                SDPA reads only, ordered with the corresponding attention mask.
 
         Returns:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
@@ -1471,6 +1479,7 @@ class Gemma4Model:
             # to the shared ``hot_pt`` when unset (unbounded callers).
             "hot_pt_full": hot_pt_full,
             "hot_pt_sliding": hot_pt_sliding,
+            "read_page_tables_per_layer": read_page_tables_per_layer,
         }
 
         # Same per-layer page-table contract as ttnn_verify_forward: bounded

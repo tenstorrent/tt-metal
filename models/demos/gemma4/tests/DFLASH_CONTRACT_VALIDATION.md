@@ -138,8 +138,8 @@ The fused batch-1 RoPE path and natural batch-1/batch-32 selection are unchanged
 `Gemma4ForCausalLM` and `Gemma4DFlashForCausalLM` retain the existing arithmetic
 by default. Their ordinary multiplication and SDPA calls omit these optional
 keywords; their packed SDPA retains its existing conditional limit of 16 or 8.
-Each attention layer owns its `Gemma4AttentionConfig` instance, so the contract
-constructor does not modify another adapter's configuration.
+Normal adapter initialization constructs separate targets, so selecting the
+contract policy leaves independently constructed adapters unchanged.
 
 Controlled P150x8 experiments with fixed ordinary batch 32 and these arithmetic
 settings match all 704 completed output tokens across four sync/async schedules.
@@ -149,6 +149,37 @@ some proposal histories differ despite equal completed outputs. Synthetic
 operator checks establish consistency on their tested operands, not improved
 FP64-reference accuracy. Current-source natural-batch validation and performance
 remain unverified. Both async capability defaults remain false.
+
+## Contract packed ring read order
+
+`Gemma4DFlashContractForCausalLM` selects `rotate_ring_reads=True` for its fused
+`DFlashFusedDecoder`. Ordinary attention and the legacy dFlash adapter retain
+their existing page-table behavior. Packed bounded sliding attention reads a
+separate persistent page table; all KV writes retain the natural ring table.
+
+1. `_pv_width_install` records the natural host page row with `clone()` and
+   allocates a separate sliding read table for every prepared width before
+   ordinary or fused trace capture. Full-attention read overrides remain `None`.
+2. `refresh_page_tables` copies the current request's natural page rows into
+   the write buffers and replaces the active width's cloned host rows.
+3. `_pv_upload(start)` rotates the sliding read table and sliding mask together
+   by the first query's oldest live 64-token chunk. `_pv_upload` copies both
+   inputs into their persistent buffers before `contract_replay` submits the
+   trace. Each packed query retains exactly the same physical K/V membership.
+4. `ttnn_packed_verify_forward` passes the persistent read tables through each
+   layer's packed inputs. `packed_decode_forward` uses `read_page_table` only
+   for `_packed_verify_sdpa`; fallback writes still use `page_table`, and staging
+   writes still use `hot_pt`.
+5. `_spec_release_decoder` retains read buffers across request sessions. Final
+   teardown releases traces first and then each owned read buffer once.
+
+The common six-row read table starts at the first query's oldest live chunk.
+When later queries cross a 64-token window boundary, later queries can mask an
+entire leading chunk. Host tests establish exact physical membership across
+these boundaries; full-model numerical parity remains unverified. Synthetic
+P150x8 checks show that the paired table/mask rotation can match ordinary SDPA
+on the tested post-wrap operands. The additional host-to-device page-row copy
+and full-model performance remain unverified. Both async defaults remain false.
 
 ## Host regression command
 
@@ -171,6 +202,7 @@ PYTHONPATH=/path/to/vllm-tt-plugin/src python -m pytest -o addopts='' \
   models/demos/gemma4/tests/unit/test_dflash_contract_prefill_continuation.py \
   models/demos/gemma4/tests/unit/test_dflash_contract_reconstruction.py \
   models/demos/gemma4/tests/unit/test_dflash_contract_width_config.py \
+  models/demos/gemma4/tests/unit/test_dflash_ring_read_order.py \
   models/demos/gemma4/tests/unit/test_dflash_width_prepare.py -q
 ```
 

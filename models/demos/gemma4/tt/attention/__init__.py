@@ -315,6 +315,7 @@ class Gemma4Attention:
                 kv_staging=self.kv_staging,
                 embed_idx=packed.get("embed_idx"),
                 hot_pt=packed.get("hot_pt"),
+                read_page_table=packed.get("read_page_table"),
             )
 
         if is_decode:

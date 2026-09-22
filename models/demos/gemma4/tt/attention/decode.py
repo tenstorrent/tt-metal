@@ -606,6 +606,7 @@ def packed_decode_forward(
     kv_staging=None,
     embed_idx=None,
     hot_pt=None,
+    read_page_table=None,
 ):
     """Packed multi-token decode attention — P query positions/slot in one pass.
 
@@ -632,6 +633,8 @@ def packed_decode_forward(
             buffers (loop-free write path; see _packed_fill_kv_loopfree_embed).
         embed_idx: [1, nkv_local*S2] uint32 merge gather index (loop-free path).
         hot_pt: [1, max_batch*PV_HOT_BLOCKS] int32 physical fill pages, -1=skip.
+        read_page_table: optional SDPA-only table ordered with attn_mask;
+            page_table and hot_pt retain the natural KV-write mapping.
 
     Returns:
         [1, 1, B*P, hidden_size] — attention output for every packed position.
@@ -844,7 +847,7 @@ def packed_decode_forward(
         q_packed,
         k_cache_use,
         v_cache_use,
-        page_table,
+        read_page_table if read_page_table is not None else page_table,
         attn_mask,
         1.0,
         sdpa_program_config,

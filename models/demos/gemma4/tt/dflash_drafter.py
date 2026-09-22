@@ -898,8 +898,19 @@ class DFlashFusedDecoder:
     v1: B=1, greedy, single ctx bucket (ctx_len + block must stay <= ctx_cap).
     """
 
-    def __init__(self, target_model, drafter, kv_layers, page_table_torch, ctx_cap=2048, *, verify_count=None):
+    def __init__(
+        self,
+        target_model,
+        drafter,
+        kv_layers,
+        page_table_torch,
+        ctx_cap=2048,
+        *,
+        verify_count=None,
+        rotate_ring_reads=False,
+    ):
         self.target = target_model
+        self.rotate_ring_reads = bool(rotate_ring_reads)
         self.drafter = drafter
         self.kv_layers = kv_layers
         self.page_table_torch = page_table_torch
@@ -946,6 +957,9 @@ class DFlashFusedDecoder:
         self.pv_mask_slide = None
         self.pv_tables = None
         self._pv_cache_by_type = None
+        self.pv_read_tables = None
+        self._pv_read_cache_by_type = {}
+        self._pv_host_rows = {}
         # Persistent OUTPUT slots (lazy first-use clone on the compile pass,
         # then ttnn.copy per body run). The body's fresh draft_ids/vidx are
         # created MID-GRAPH; ops after them (the whole packed verify) can
@@ -1278,6 +1292,7 @@ class DFlashFusedDecoder:
                 kv_cache=self.kv_layers,
                 kv_write_idxs=widx,
                 page_tables_per_layer=self.pv_tables,
+                read_page_tables_per_layer=self.pv_read_tables,
             )
             m_full.deallocate(True)
             m_slide.deallocate(True)
@@ -1501,6 +1516,7 @@ class DFlashFusedDecoder:
         P_v = self.P_v
         rec = self._pv_widths.get(pv_sk)
         if rec is not None:
+            self._pv_read_tables_install(rec)
             self._pv_width_activate(rec)
             return rec
         self.pv_sk = pv_sk
@@ -1517,6 +1533,7 @@ class DFlashFusedDecoder:
         bs = 64
         self.pv_tables = []
         cache_by_type = {}
+        host_rows = {}
         for i in range(len(t.layers)):
             lt = t.hf_config.layer_types[i]
             if lt not in cache_by_type:
@@ -1534,8 +1551,9 @@ class DFlashFusedDecoder:
                 # table, silently reading the null block past the clamp.
                 if int(row.shape[0]) < width:
                     row = torch.cat([row, torch.zeros(width - int(row.shape[0]), dtype=row.dtype)])
+                host_rows[lt] = row[:width].to(torch.int32).reshape(1, width).clone()
                 cache_by_type[lt] = ttnn.from_torch(
-                    row[:width].to(torch.int32).reshape(1, width),
+                    host_rows[lt],
                     device=self.mesh_device,
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1586,13 +1604,39 @@ class DFlashFusedDecoder:
             "pv_iota": pv_iota,
             "pv_tables": self.pv_tables,
             "cache_by_type": cache_by_type,
+            "host_rows": host_rows,
+            "read_cache_by_type": {},
+            "read_tables": None,
             "pv_ssl": pv_ssl,
             "pv_mask_slide": pv_mask_slide,
             "trace": None,
         }
         self._pv_widths[pv_sk] = rec
+        self._pv_read_tables_install(rec)
         self._pv_width_activate(rec)
         return rec
+
+    def _pv_read_tables_install(self, rec):
+        """Own SDPA read tables separately so ring writes keep natural indices."""
+        if not self.rotate_ring_reads or not self.pv_ring.get("sliding_attention"):
+            return
+        lt = "sliding_attention"
+        if lt not in rec["read_cache_by_type"]:
+            # The width record owns each allocation before another operation can fail.
+            rec["read_cache_by_type"][lt] = ttnn.from_torch(
+                rec["host_rows"][lt],
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._mapper,
+            )
+        rec["read_tables"] = [rec["read_cache_by_type"].get(lt) for lt in self.target.hf_config.layer_types]
+
+    def _pv_ring_read_rotation(self, start):
+        if not self.rotate_ring_reads or not self.pv_slide_ring:
+            return 0
+        first = max(0, int(start) - int(self.target.hf_config.sliding_window) + 1)
+        return (first // 64) % (self.pv_slide_ring // 64)
 
     def _pv_width_activate(self, rec):
         """Point the per-iteration uploads and the next replay at one width."""
@@ -1600,6 +1644,9 @@ class DFlashFusedDecoder:
         self.pv_iota = rec["pv_iota"]
         self.pv_tables = rec["pv_tables"]
         self._pv_cache_by_type = rec["cache_by_type"]
+        self._pv_host_rows = rec["host_rows"]
+        self._pv_read_cache_by_type = rec["read_cache_by_type"]
+        self.pv_read_tables = rec["read_tables"]
         self.pv_ssl = rec["pv_ssl"]
         self.pv_mask_slide = rec["pv_mask_slide"]
         self.trace = rec["trace"]
@@ -1631,6 +1678,8 @@ class DFlashFusedDecoder:
             for pi in range(P_v):
                 up = start + pi
                 ms[pi] = torch.where((j <= up) & (j > up - W), 0.0, NEG)
+        if ring:
+            ms = torch.roll(ms, -64 * self._pv_ring_read_rotation(start), dims=-1)
         return (
             mf.reshape(1, 1, P_v, -1).to(torch.bfloat16),
             ms.reshape(1, 1, P_v, -1).to(torch.bfloat16),
@@ -1653,22 +1702,37 @@ class DFlashFusedDecoder:
                 lo = P_v - 1 - pi
                 ok = (d >= lo) & (d < lo + W) & (d <= top)
                 ms[pi] = torch.where(ok, 0.0, NEG)
+            rotation = self._pv_ring_read_rotation(start)
+            # The first query's oldest live chunk starts the shared read order.
+            # Rotating both columns preserves every packed query's visible keys.
+            ms = torch.roll(ms, -64 * rotation, dims=-1)
+            for lt, buf in self._pv_read_cache_by_type.items():
+                row = torch.roll(self._pv_host_rows[lt], -rotation, dims=-1)
+                h = ttnn.from_torch(row, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
+                try:
+                    ttnn.copy_host_to_device_tensor(h, buf)
+                finally:
+                    h.deallocate(True)
             h = ttnn.from_torch(
                 ms.reshape(1, 1, P_v, ring).to(torch.bfloat16),
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
                 mesh_mapper=self._mapper,
             )
-            ttnn.copy_host_to_device_tensor(h, self.pv_mask_slide)
-            h.deallocate(True)
+            try:
+                ttnn.copy_host_to_device_tensor(h, self.pv_mask_slide)
+            finally:
+                h.deallocate(True)
         h = ttnn.from_torch(
             torch.arange(start, start + P_v, dtype=torch.int32),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.int32,
             mesh_mapper=self._mapper,
         )
-        ttnn.copy_host_to_device_tensor(h, self.pv_widx_all)
-        h.deallocate(True)
+        try:
+            ttnn.copy_host_to_device_tensor(h, self.pv_widx_all)
+        finally:
+            h.deallocate(True)
 
     def capture(self, anchor_id, start, max_new=256):
         """Compile-run then capture the fused body at the first-iteration inputs."""
@@ -1908,8 +1972,11 @@ class DFlashFusedDecoder:
                 r = src if p2 <= 0 else torch.cat([src, torch.zeros(p2, dtype=src.dtype)])
                 row = r[:pw].to(torch.int32).reshape(1, pw)
                 h = ttnn.from_torch(row, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
-                ttnn.copy_host_to_device_tensor(h, buf)
-                h.deallocate(True)
+                try:
+                    ttnn.copy_host_to_device_tensor(h, buf)
+                finally:
+                    h.deallocate(True)
+                self._pv_host_rows[lt] = row.clone()
         elif getattr(self, "pv_tables", None):
             seen = set()
             for buf in self.pv_tables:

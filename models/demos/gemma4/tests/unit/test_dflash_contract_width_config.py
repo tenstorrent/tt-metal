@@ -102,6 +102,7 @@ def test_admitted_count_matches_real_decoder_constructor(width_config, construct
         model._spec_pending = ([], 3)
         model._spec_bootstrap(17, 3, torch.zeros(1, 64, dtype=torch.int32), object())
     decoder = model._spec_decoder
+    assert decoder.rotate_ring_reads is True
     assert decoder.V == plan.effective_k
     assert decoder.P_v == plan.effective_k + 1
     assert decoder.fc_prev.shape[2] == decoder.P_v
@@ -170,6 +171,7 @@ def test_standalone_decoder_preserves_unset_environment_default(width_config):
         torch.zeros(1, 64, dtype=torch.int32),
         ctx_cap=32,
     )
+    assert decoder.rotate_ring_reads is False
     assert decoder.V == width_config.drafter.block_size - 1
     assert decoder.P_v == width_config.drafter.block_size
 
@@ -190,6 +192,7 @@ def test_legacy_block_decoder_preserves_nonpacked_fresh_construction(width_confi
     model._bounded_sliding_kv_cache = False
     model._spec_get_drafter = lambda: width_config.drafter
     model._spec_bootstrap(17, 3, torch.zeros(1, 64, dtype=torch.int32), object())
+    assert model._spec_decoder.rotate_ring_reads is False
     assert model._spec_decoder.P_v == width_config.drafter.block_size
 
 

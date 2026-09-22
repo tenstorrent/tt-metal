@@ -147,6 +147,8 @@ def production(monkeypatch):
                 decoder.tap_bufs[index] = runtime.from_torch(torch.zeros(1, 1, 6, 8), device=runtime)
         return decoder.out_ids, decoder.fc_prev
 
+    real_pv_upload = module.DFlashFusedDecoder._pv_upload
+    real_upload_iter_inputs = module.DFlashFusedDecoder._upload_iter_inputs
     monkeypatch.setattr(module.DFlashFusedDecoder, "_body", body)
     monkeypatch.setattr(
         module.DFlashFusedDecoder,
@@ -158,7 +160,13 @@ def production(monkeypatch):
         "_upload_iter_inputs",
         lambda decoder, anchor, start: runtime.events.append(("inputs", decoder.pv_sk, anchor, start)),
     )
-    yield SimpleNamespace(module=module, runtime=runtime, tt=tt)
+    yield SimpleNamespace(
+        module=module,
+        runtime=runtime,
+        tt=tt,
+        real_pv_upload=real_pv_upload,
+        real_upload_iter_inputs=real_upload_iter_inputs,
+    )
     sys.modules.pop(name, None)
 
 
