@@ -609,7 +609,7 @@ def sfpu_binary(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 
@@ -1609,7 +1609,7 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 
@@ -1795,5 +1795,5 @@ def test_eltwise_binary_sfpu_bcast(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"

@@ -176,7 +176,7 @@ def _run_sfpu_ternary(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
 
 
