@@ -27,8 +27,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
-#include "impl/dataflow_buffer/dataflow_buffer.hpp"
-#include "impl/host_api/temp_quasar_api.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -756,7 +754,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
     const experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(IN0_DFB, "in0"), experimental::ProducerOf(IN1_DFB, "in1")},
         .runtime_arg_schema =
@@ -1191,21 +1189,33 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreComputeMatmulNo
 }
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "single_tile_matmul test is not supported on Quasar";
+    }
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(device));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileComputeMatmul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "single_block_matmul test is not supported on Quasar";
+    }
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 1, 1, 1));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulationComputeMatmul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "single_block_matmul test is not supported on Quasar";
+    }
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 1, 2, 1));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "single_block_matmul test is not supported on Quasar";
+    }
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 2, 1, 2));
     }

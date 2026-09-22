@@ -27,8 +27,6 @@ constexpr std::uint32_t VALUES_PER_THREAD = 5;
 constexpr int RESULT_SLOT_NONE = -1;
 
 void kernel_main() {
-    // The DFB is bound by name (Metal 2.0) rather than passed as a compile-time id; get_id() is
-    // what the cb_api entry points below still take.
     DataflowBuffer dfb_in(dfb::in);
     const std::uint32_t buf_id = dfb_in.get_id();
 
