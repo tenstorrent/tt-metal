@@ -517,12 +517,6 @@
   budget_type: unit
   category: cpp_lab_examples
 
-# --- Models team: disaggregated-prefill op tests ---
-# Owned by the models team (charges to models.e2e, not ttnn.unit). Runs under
-# the shared ops-unit-tests job via `category: dp_op_unit_tests` — pass that
-# tag in `additional_test_categories` on workflow_dispatch to select the
-# suite; scheduled runs pick it up via l2-nightly's category list.
-
 - name: Disaggregated prefill op unit tests (LB)
   cmd: |
     exit_code=0
