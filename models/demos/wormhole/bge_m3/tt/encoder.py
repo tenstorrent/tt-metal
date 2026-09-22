@@ -142,14 +142,10 @@ def _attention_score_dtype(
     max_batch_size: int | None,
 ) -> ttnn.DataType:
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if max_seq_len == 512 and max_batch == 1:
-        return dtype
-    if max_seq_len == 512 and max_batch == 32:
-        return dtype
-    if max_seq_len == 512 and max_batch == 16:
-        # B16: bf8 score (= qkv_dtype bf8) like B32 — halves SDPA Q/K/V bandwidth,
-        # no typecasts. PCC 0.9469 (passes). NOTE: B8 full-bf8 SDPA drops PCC to
-        # 0.9249 (< 0.94 gate) — B8 has less headroom, so B8 keeps bf16 score.
+    # Every S512 shape scores in the model dtype, so SDPA reads bf8 Q/K/V and no
+    # cast sits between the head split and SDPA. B8 measures PCC 0.9330 against
+    # the 0.93 gate.
+    if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         return dtype
     # N300 B12/S8192: bf8 score (= qkv_dtype bf8) kills the 3 bf8->bf16 typecasts
     # per layer (72 ops) AND halves SDPA Q/K/V read bandwidth. batch-12 averaging
@@ -160,16 +156,8 @@ def _attention_score_dtype(
 
 
 def _attention_qkv_dtype(dtype, max_seq_len, max_batch_size):
-    # B8/S512: produce Q/K/V directly in bf16 (= score_dtype) so the 3 bf8->bf16
-    # typecasts per layer (72 ops, ~2.7ms) are eliminated, while SDPA still runs
-    # at accurate bf16. B1/B32 keep dtype (their score_dtype = dtype = bf8, no
-    # cast). Other shapes: model dtype.
-    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
-    if max_seq_len == 512 and max_batch == 8:
-        # B8: qkv bf16 (score_dtype bf16) — full bf8 SDPA drops PCC below 0.94.
-        return ttnn.bfloat16
-    # B16: qkv stays bf8 (= score_dtype bf8) so SDPA reads half the bytes
-    # with no typecasts (like B32).
+    # Every S512 shape emits Q/K/V in the model dtype, which matches score_dtype,
+    # so there is no cast before SDPA.
     return dtype
 
 
