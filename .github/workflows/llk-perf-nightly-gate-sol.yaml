@@ -1,6 +1,11 @@
 name: "LLK perf nightly gate (speed of light)"
 
 on:
+  # Trial only: workflow_dispatch cannot reach a workflow that is not on
+  # the default branch, so pushing this branch is how it gets run.
+  push:
+    branches:
+      - "perf-trial/**"
   schedule:
     - cron: '0 7 * * *'
   workflow_dispatch:
