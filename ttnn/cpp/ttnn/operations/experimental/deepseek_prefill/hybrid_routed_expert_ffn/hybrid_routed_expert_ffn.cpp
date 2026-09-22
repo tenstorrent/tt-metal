@@ -104,6 +104,15 @@ ttnn::Tensor hybrid_routed_expert_moe(
     // It also pins x to ROW_MAJOR. A tiled x is bf8, and the unified half only tolerates an
     // output dtype different from x's on the row-major path, so a bf16 output over a tiled x
     // would be rejected there instead -- with a message about dtypes rather than about overlap.
+    // Both halves have to be carried for the overlap: the shared arena is only laid under the
+    // routed expert's circular buffers by the merge, and with no threshold the unified half keeps
+    // statically placed ones that collide with the arena combine binds into. Rejected here rather
+    // than left to surface as a circular-buffer clash naming addresses and no cause.
+    TT_FATAL(
+        !overlap_combine || hybrid_token_threshold > 0,
+        "overlap_combine needs hybrid_token_threshold > 0: the routed expert's circular buffers only move "
+        "into the shared L1 arena when both halves are merged, and combine's untilizer needs that arena");
+
     TT_FATAL(
         !overlap_combine || x_is_row_major,
         "overlap_combine needs a ROW_MAJOR dispatched_buffer: the combine half requires a bf16 output, which "
@@ -173,26 +182,29 @@ ttnn::Tensor hybrid_routed_expert_moe(
     if (fused_half_runs || overlap_combine) {
         auto* device = dispatched_buffer.device();
 
-        // Combine also hand-places a ring and control tables on its stream-worker cores, which
-        // carry no circular buffers and so are invisible to every framework check. The arena has
-        // to start above them, and above where its ring semaphores will land.
-        // One 64-byte block per ring semaphore -- the coarsest alignment the L1 allocator applies,
-        // not l1_alignment, which under-reserves and lands the semaphores inside combine's ring.
-        // At the MAX untilizer count so the reservation does not move with
-        // CMBF2D_UNTILIZERS_PER_GROUP. A shortfall is caught by combine's own sem_floor check.
+        // Only combine's ring semaphores stay outside the arena -- everything else it places is
+        // bound into it. One 64-byte block each, the coarsest alignment the L1 allocator applies,
+        // at the MAX untilizer count so the reservation does not move with
+        // CMBF2D_UNTILIZERS_PER_GROUP.
         constexpr uint32_t kSemaphoreBlock = 64;
-        const uint32_t semaphore_bytes = (3 + combine::MAX_UNTILIZERS_PER_GROUP + num_links) * kSemaphoreBlock;
-        const uint32_t floor = overlap_combine ? hybrid_combine_l1_floor(attributes, tensors, semaphore_bytes) : 0;
+        const uint32_t floor =
+            overlap_combine ? (3 + combine::MAX_UNTILIZERS_PER_GROUP + num_links) * kSemaphoreBlock : 0;
         const uint32_t arena_bytes = hybrid_l1_arena_bytes(device) - floor;
         const uint32_t cols = arena_bytes / 2;  // bfloat16 elements
 
+        // Overlapping spans the WHOLE compute grid, not just the routed expert's rectangle:
+        // combine's cores are chosen by its own placement, from wherever sits closest to each
+        // ethernet core, so nothing here can assume they fall inside kGridX by kGridY.
+        const auto compute_grid = device->compute_with_storage_grid_size();
+        const uint32_t grid_w = overlap_combine ? compute_grid.x : kGridX;
         const uint32_t origin_y = overlap_combine ? 0 : kOriginY;
-        const uint32_t rows = kOriginY + kGridY - origin_y;
-        const tt::tt_metal::CoreRangeSet grid(tt::tt_metal::CoreRange(
-            tt::tt_metal::CoreCoord{0, origin_y}, tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1}));
+        const uint32_t last_y = overlap_combine ? compute_grid.y - 1 : kOriginY + kGridY - 1;
+        const uint32_t rows = last_y - origin_y + 1;
+        const tt::tt_metal::CoreRangeSet grid(
+            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, origin_y}, tt::tt_metal::CoreCoord{grid_w - 1, last_y}));
 
         tensors.l1_arena = ttnn::empty(
-            ttnn::Shape({kGridX * rows, cols}),
+            ttnn::Shape({grid_w * rows, cols}),
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::Layout::ROW_MAJOR,
             device,

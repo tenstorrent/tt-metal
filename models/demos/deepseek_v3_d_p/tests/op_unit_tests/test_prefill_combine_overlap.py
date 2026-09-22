@@ -89,7 +89,7 @@ def _proxy_params():
         # control tables one expert-row of num_routed_experts*4 bytes at a time, straight into L1
         # at row_bytes strides, and a DRAM read needs a 64-byte-aligned L1 destination. At 8
         # experts the rows are 32 bytes and every odd one is misaligned.
-        num_routed_experts = 32
+        num_routed_experts = int(os.environ.get("TT_OVERLAP_EXPERTS", "32"))
         assert num_routed_experts % num_chips == 0 and num_routed_experts % 16 == 0
         for seq_len_per_chip, capacity_factor in _SCENARIOS:
             params.append(

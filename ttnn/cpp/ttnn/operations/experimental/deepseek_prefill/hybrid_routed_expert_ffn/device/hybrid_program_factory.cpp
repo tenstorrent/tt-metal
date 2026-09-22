@@ -3330,11 +3330,6 @@ void wire_expert_ready(
 
 }  // namespace
 
-uint32_t hybrid_combine_l1_floor(
-    const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, uint32_t semaphore_bytes) {
-    return combine::stream_worker_l1_bytes(combine_attributes(op, t.x.device()), combine_inputs(t)) + semaphore_bytes;
-}
-
 tt::tt_metal::WorkloadDescriptor HybridRoutedExpertFfnProgramFactory::create_workload_descriptor(
     const HybridRoutedExpertFfnParams& op,
     const HybridRoutedExpertFfnInputs& t,

@@ -30,12 +30,6 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
 // because only a WorkloadDescriptor has somewhere to park combine's GlobalSemaphores so they
 // outlive the cached workload. With the combine half off this still emits one program per
 // coordinate RANGE, so a mesh-wide op is a single entry exactly as before.
-// L1 above the allocator base that the shared arena must leave alone when combine is overlapped:
-// its stream-worker cores hand-place a ring and control tables there and carry no circular
-// buffers, so nothing else would catch an arena that descended into them.
-uint32_t hybrid_combine_l1_floor(
-    const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, uint32_t semaphore_bytes);
-
 struct HybridRoutedExpertFfnProgramFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const HybridRoutedExpertFfnParams& operation_attributes,

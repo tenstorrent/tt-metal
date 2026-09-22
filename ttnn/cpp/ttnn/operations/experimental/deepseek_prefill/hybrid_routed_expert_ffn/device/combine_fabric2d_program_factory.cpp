@@ -105,7 +105,6 @@ uint32_t stream_worker_l1_bytes_impl(const CombineFabric2dParams& args, const Co
 }
 
 L1Layout compute_l1_layout(
-    ttnn::MeshDevice* mesh,
     const CombineFabric2dInputs& tensor_args,
     uint32_t num_l1_slots,
     uint32_t token_size_bytes,
@@ -113,12 +112,16 @@ L1Layout compute_l1_layout(
     uint32_t sem_floor,
     uint32_t arena_addr,
     uint32_t arena_bytes_per_core) {
-    const uint32_t base =
-        static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    // EVERY region is arena-relative. The stream-worker cores carry no circular buffers, so
+    // hand-placing their ring at the allocator base looked free -- but the arena then had to
+    // reserve a hole beneath itself to stay clear, and that hole grows with the expert count
+    // (combine's control table is 4 B per expert per ring hop). At 128 experts it had eaten the
+    // margin the unified half needs. Inside the arena the two share one allocation and the hole
+    // disappears.
     L1Layout l;
-    l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
-    l.drain_sink = base + DRAIN_SINK_OFF;
-    l.ring = base + PROD_BUF_OFF;
+    l.pkt_hdr_drain = arena_addr + PKT_HDR_DRAIN_OFF;
+    l.drain_sink = arena_addr + DRAIN_SINK_OFF;
+    l.ring = arena_addr + PROD_BUF_OFF;
     // One prebuilt header per ring slot, past the ring itself. A slot is the token plus its metadata tail.
     l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + hyb_cmbf2d::FORWARDING_METADATA_SIZE);
     const uint32_t hdr_ring_bytes =
@@ -144,15 +147,17 @@ L1Layout compute_l1_layout(
             untilizer_cb_span(token_size_bytes, tensor_args) + control_bytes,
             arena_bytes_per_core);
     }
-    // Only the stream-worker region is measured against the semaphores now; the untilizer's is in
-    // the arena, which the allocator placed and so cannot collide with them.
+    // Measured against the arena a core owns, not against the semaphores: both regions are now
+    // inside an allocator-placed buffer, and the allocator is what keeps them off the semaphores.
+    // Stream-worker and untilizer cores are disjoint, so each region is checked on its own rather
+    // than summed.
+    (void)sem_floor;
     TT_FATAL(
-        end <= sem_floor,
-        "combine_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at "
-        "0x{:x}. Reduce num_l1_slots ({}) or the token page ({} B).",
-        end - base,
-        end,
-        sem_floor,
+        end - arena_addr <= arena_bytes_per_core,
+        "combine_fabric2d: the stream-worker ring needs {} B of the shared arena but a core owns only {}. "
+        "Reduce num_l1_slots ({}) or the token page ({} B).",
+        end - arena_addr,
+        arena_bytes_per_core,
         num_l1_slots,
         token_size_bytes);
     return l;
@@ -570,7 +575,6 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     const auto sems =
         allocate_ring_semaphores(mesh_device, semaphore_cores(placement), operation_attributes.num_links, per_group);
     const auto l1 = compute_l1_layout(
-        mesh_device,
         tensor_args,
         hyb_cmbf2d::NUM_L1_SLOTS,
         token_size_bytes(tensor_args),
