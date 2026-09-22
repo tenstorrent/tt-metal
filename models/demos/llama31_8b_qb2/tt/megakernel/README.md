@@ -56,7 +56,8 @@ all-gather borrows the last reduction's completed output and open connections;
 it preserves that reduction's counters. The final norm reuses the layer norm
 scratch. Sampling remains the native traced boundary. The earlier modes retain
 their native terminal operators. No persistent multi-token loop or vLLM
-integration is implemented. Negative/inactive positions are not supported. Cache allocations cannot change while a loop/trace references
+integration is implemented. Position -1 skips KV access for native inactive warmup; this new path still
+requires hardware validation. Batches above one and serving are unqualified. Cache allocations cannot change while a loop/trace references
 their address table; page-table contents and positions remain device inputs.
 
 After health/ownership verification, run these **serially with bounded commands**:
@@ -129,3 +130,14 @@ preserving old captures' low-byte/posted-bit positions. Use matching rebuilt
 host and device profiler code; old analysis binaries do not understand the new
 high bits. Host wire-format boundary tests and SFPI profiling builds pass;
 this measurement fix still needs real device validation.
+
+The full-layer path reads metadata and RoPE rows into scratch whose low six
+address bits match the DRAM source. Page entries remain individual4B reads,
+including short page tables; RoPE rows are tiled by local copies after a256B
+read. This fixes violations of Blackhole's64B read-congruence rule found during
+review. A CPU address/face-layout audit and matching-grid compilation pass;
+physical validation remains pending. Generator warmup deliberately uses position
+-1. Cache compute receives that flag on a separate CB with mailbox forwarding to
+all three TRISCs, avoiding divergent branches; the native cache arithmetic runs
+only for active positions. Inactive attention scratch is zeroed and existing KV
+pages remain the test's required invariant. This is not a serving qualification.

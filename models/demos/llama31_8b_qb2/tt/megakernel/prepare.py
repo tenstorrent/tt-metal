@@ -54,10 +54,30 @@ class FusedPreparation:
     def append(self, program, layer_index, cache_inputs):
         k_cache, v_cache, position, page_table, rotary_position = cache_inputs
         for cache in (k_cache, v_cache):
-            if tuple(cache.shape)[1:] != (2, 128, 128) or cache.dtype != ttnn.bfloat8_b or cache.is_sharded():
+            if (
+                tuple(cache.shape)[1:] != (2, 128, 128)
+                or cache.dtype != ttnn.bfloat8_b
+                or cache.layout != ttnn.TILE_LAYOUT
+                or cache.is_sharded()
+            ):
                 raise ValueError("Expected native interleaved BFP8 paged cache [pages,2,128,128]")
-        if page_table.is_sharded() or page_table.dtype != ttnn.int32 or page_table.shape[0] != 1:
-            raise ValueError("Expected the native batch-one int32 DRAM page table")
+        for tensor in (position, rotary_position):
+            if (
+                tuple(tensor.shape) != (1,)
+                or tensor.dtype != ttnn.int32
+                or tensor.layout != ttnn.ROW_MAJOR_LAYOUT
+                or tensor.is_sharded()
+            ):
+                raise ValueError("Expected one interleaved row-major int32 position")
+        if (
+            page_table.is_sharded()
+            or page_table.dtype != ttnn.int32
+            or page_table.layout != ttnn.ROW_MAJOR_LAYOUT
+            or len(page_table.shape) != 2
+            or page_table.shape[0] != 1
+            or page_table.shape[1] < 1
+        ):
+            raise ValueError("Expected the native batch-one row-major int32 page table")
         program = self.normalizer.append(program, self.body.gather_output, self.projection_cores, wait_for_gather=True)
         program.semaphores = [
             *program.semaphores,
@@ -185,6 +205,7 @@ class FusedPreparation:
                 ([8], 4, ttnn.bfloat8_b),
                 ([16], 4, ttnn.bfloat16),
                 ([24, 25], 4, ttnn.bfloat16),
+                ([30], 1, ttnn.uint32),
                 ([31], 1, ttnn.uint32),
             ):
                 cb(indices, count, dtype, [core])

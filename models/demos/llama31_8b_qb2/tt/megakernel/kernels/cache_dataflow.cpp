@@ -5,6 +5,7 @@
 #endif
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "read_alignment.hpp"
 constexpr auto input_args = TensorAccessorArgs<0>();
 constexpr auto cache_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto pos_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
@@ -19,14 +20,19 @@ void QB2_ENTRY() {
     const auto pages = TensorAccessor(page_args, get_arg_val<uint32_t>(3), PAGE_BYTES);
     cb_reserve_back(31, 1);
     const uint32_t metadata = get_write_ptr(31);
-    noc_async_read(position.get_noc_addr(0), metadata, 4);
-    noc_async_read_barrier();
+    const uint32_t pos = read_scalar_u32(position.get_noc_addr(0), metadata + 128);
+    const uint32_t physical = pos == UINT32_MAX ? 0 :
+        read_scalar_u32(pages.get_noc_addr(0) + (pos / 128) * 4, metadata + 128);
     auto* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata);
-    const uint32_t pos = meta[0];
-    noc_async_read(pages.get_noc_addr(0) + (pos / 128) * 4, metadata + 4, 4);
-    noc_async_read_barrier();
-    const uint32_t physical = meta[1];
+    meta[0] = pos;
+    meta[1] = physical;
     cb_push_back(31, 1);
+    // Compute and writer own separate position CBs. read_tile_value forwards
+    // this flag through mailboxes so every TRISC takes the same inactive path.
+    cb_reserve_back(30, 1);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(30)) = pos;
+    cb_push_back(30, 1);
+    if (pos == UINT32_MAX) { return; }
     cb_reserve_back(1, 4);
 #ifdef VALUE
     auto* zeros = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(1));
@@ -55,6 +61,12 @@ void QB2_ENTRY() {
     cb_wait_front(31, 1);
     auto* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(31));
     const uint32_t pos = meta[0], physical = meta[1];
+    if (pos == UINT32_MAX) {
+        cb_pop_front(31, 1);
+        noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(5), get_semaphore(1)), 1);
+        noc_async_atomic_barrier();
+        return;
+    }
     cb_wait_front(16, 4);
     DeviceZoneScopedN("PAGED-KV-UPDATE");
     for (uint32_t h = 0; h < 2; ++h) {

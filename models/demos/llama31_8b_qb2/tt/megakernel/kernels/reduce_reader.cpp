@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_direct/device/kernels/reduce_scatter_minimal_direct_reader.cpp"
 #undef kernel_main
 #include "tools/profiler/kernel_profiler.hpp"
+#include "read_alignment.hpp"
 
 void QB2_ENTRY() {
 #ifdef FUSE_OUTPUT
@@ -32,13 +33,13 @@ void QB2_ENTRY() {
         const auto embedding = TensorAccessor(embedding_args, get_arg_val<uint32_t>(EMBED_RT_OFFSET), 2048);
         const auto token = TensorAccessor(token_args, get_arg_val<uint32_t>(EMBED_RT_OFFSET + 1));
         const uint32_t scratch = get_write_ptr(31);
-        noc_async_read(token.get_noc_addr(0), scratch, 4);
-        noc_async_read_barrier();
-        const uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-        noc_async_read(embedding.get_noc_addr(token_id) + get_arg_val<uint32_t>(5) * 64, scratch + 64, 1024);
+        const uint32_t token_id = read_scalar_u32(token.get_noc_addr(0), scratch);
+        const uint64_t embedding_row = embedding.get_noc_addr(token_id) + get_arg_val<uint32_t>(5) * 64;
+        const uint32_t row_scratch = aligned_read_destination(scratch + 128, embedding_row);
+        noc_async_read(embedding_row, row_scratch, 1024);
         noc_async_read_barrier();
         auto* target = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(2));
-        const auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 64);
+        const auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_scratch);
         for (uint32_t i = 0; i < 16 * 2048 / 4; ++i) { target[i] = 0; }
         for (uint32_t t = 0; t < 16; ++t) {
             for (uint32_t word = 0; word < 8; ++word) {

@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 16:31 UTC. **Verified partial prototype; full decode megakernel incomplete.**
+Updated 2026-09-22 16:46 UTC. **Verified partial prototype; full decode megakernel incomplete.**
 
 Base origin/main: `b8915544692d8f9feb2c890afbc2f22791560cd2`.
 Branch: `codex/llama31-qb2-megakernel`. Last hardware-qualified checkpoint:
@@ -21,7 +21,7 @@ to have its owner release the hardware. Do not kill/reset underneath it.
 Our blocked mesh-opening process was terminated only after preserving evidence.
 `artifacts/OWNERSHIP_BLOCKED` guards the serialized runner and reset script.
 Check `/proc/*/status` NSpid when interpreting a container PID; fuser without
-root cannot enumerate all another user's FDs. Latest check16:26 still live.
+root cannot enumerate all another user's FDs. Latest check16:45 still live.
 
 Mark permits unlimited device resets during this allocation; no further reset
 approval is needed after ownership is clear. Last reset13:44 passed all4-device
@@ -227,3 +227,33 @@ hardware traffic and physical validation of this profiler change remain pending.
 Logs: `noc-event-metadata-before.log`, `noc-event-metadata-cmake-v2-test.log`,
 `build-noc-metadata-v2.log`, `compile-mock-head-noc-v2.log`,
 `compile-mock-token-noc.log`, `traffic-analyzer-host-check.log`.
+
+## 16:46 alignment and inactive warmup review fixes
+
+Current code fixes two defects in the previously compiler-only full-layer path:
+page-table scalar reads and second RoPE half-face reads could violate Blackhole
+DRAM source/destination low6-bit congruence. New scratch helper preserves that
+alignment; page entries remain4B reads rather than reading beyond short tables.
+RoPE loads each256B row into scratch then copies halves locally. CPU audit1042
+address cases and64word face-layout roundtrip pass; SFPI11x10 model-entry/cache
+reuse passes. No physical DMA/numerical validation is implied.
+
+The current generator explicitly warms decode at position-1 after prefill. The
+full layer now handles that sentinel without page-table/KV access: a separate
+UINT32 CB30 and read_tile_value mailbox synchronization give every TRISC the
+same branch, then active paths call the original cache untilize/update/tilize
+body. Both inactive cache writers still signal attention readiness. Native SDPA
+skips the inactive query; its wrapper emits zero concatenated scratch for the
+ignored warmup logits. RoPE maps the inactive rotary sentinel tozero. Native
+sampling restores saved state afterward. This supersedes the earlier statement
+that negative positions are wholly unsupported; only sentinel-1 warmup is now
+implemented, still hardware-unqualified. Other negative values/serving unsupported.
+
+Input metadata layout/dtype and native head block4/two-reader geometry are now
+checked explicitly. Real loop test preserves prefilled KV across3 inactive
+warmups and saves failure tensors before active replay/remapping tests. Compiler
+max code/config54,240B, local CB peak unchanged. Logs:
+`compile-mock-token-alignment.log`, `compile-mock-token-contract.log`,
+`compile-mock-token-inactive.log`, `read-alignment-audit.json`.
+Use pytest --timeout=0 under the bounded device runner so its triage runs before
+terminating a hung experiment, rather than the inner pytest timeout intervening.

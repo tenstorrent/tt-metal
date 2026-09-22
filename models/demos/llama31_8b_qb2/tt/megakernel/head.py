@@ -21,6 +21,11 @@ class FusedHead:
             or policy["logits_dtype"] != "bfloat16"
         ):
             raise ValueError("Fused head requires the original HiFi2/BF16 accumulation policy")
+        if any(
+            policy["lm_head_geometry"][key] != value
+            for key, value in {"cores": 8, "block": 4, "readers": 2, "splits": 1}.items()
+        ):
+            raise ValueError("Fused head requires the selected native block4/two-reader geometry")
         model.lm_head.load_device_weights()
         if len(model.lm_head.output_weights) != 1:
             raise ValueError("Fused head requires one native weight split")

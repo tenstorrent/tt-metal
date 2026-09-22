@@ -11,6 +11,9 @@
 void QB2_ENTRY() {
     native_attention_writer();
     if (get_arg_val<uint32_t>(3) == 0) { return; }  // Only the two KV-head reducers write output.
+    // Native writer consumed its capacity-one position CB before returning;
+    // the pointer has wrapped and the value remains until the layer boundary.
+    const bool inactive = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(8)) == UINT32_MAX;
     const uint32_t cx = get_arg_val<uint32_t>(CONCAT_RT_OFFSET + 1);
     const uint32_t cy = get_arg_val<uint32_t>(CONCAT_RT_OFFSET + 2);
     noc_semaphore_inc(get_noc_addr(cx, cy, get_semaphore(3)), 1);
@@ -29,7 +32,7 @@ void QB2_ENTRY() {
     const uint32_t scratch = get_write_ptr(32);
     auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     for (uint32_t i = 0; i < 32 * 2048 / 4; ++i) { words[i] = 0; }
-    for (uint32_t head = 0; head < 8; ++head) {
+    for (uint32_t head = 0; !inactive && head < 8; ++head) {
         for (uint32_t column = 0; column < 4; ++column) {
             const uint32_t destination = scratch + (head * 4 + column) * 2048;
             const uint64_t origin = source.get_noc_addr(column) + head * 32;

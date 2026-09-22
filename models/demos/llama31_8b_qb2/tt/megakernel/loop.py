@@ -85,8 +85,16 @@ class DecoderLoop:
 
     def append(self, program, tokens=None):
         if self.embedding_weight is not None:
-            if tokens is None or tokens.dtype != ttnn.uint32:
-                raise ValueError("Embedding fusion requires the device uint32 token tensor")
+            from math import prod
+
+            if (
+                tokens is None
+                or tokens.dtype != ttnn.uint32
+                or tokens.layout != ttnn.ROW_MAJOR_LAYOUT
+                or tokens.is_sharded()
+                or prod(tuple(tokens.shape)) != 32
+            ):
+                raise ValueError("Embedding fusion requires the native interleaved row-major uint32 token row")
             kernels = list(program.kernels)
             for kernel in kernels:
                 if Path(kernel.kernel_source).name != "reduce_reader.cpp":

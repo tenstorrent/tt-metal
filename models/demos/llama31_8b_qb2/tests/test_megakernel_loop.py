@@ -62,13 +62,33 @@ def test_device_layer_loop_real_weights(qb2_mesh, count):
             value = layer.decode_forward(value, current_pos=position, page_table=table, kv_cache=cache)
         return value
 
+    # The real generator compiles with position -1 after prefill. This must
+    # preserve every existing physical cache page, including unused sentinels.
+    folder = Path(os.environ.get("QB2_MEGAKERNEL_ARTIFACT_DIR", "/tmp/qb2-megakernel-loop"))
+    folder.mkdir(parents=True, exist_ok=True)
+    saved_cache = [[to_host(t).clone() for t in pair] for pair in loop_cache]
+    rotary_zero = to_device(torch.tensor([0], dtype=torch.int32), mesh)
+    copy_to(torch.tensor([-1], dtype=torch.int32), position, mesh)
+    for _ in range(3):
+        loop(x, position, table, rotary_zero)
+    ttnn.synchronize_device(mesh)
+    try:
+        for pair, saved in zip(loop_cache, saved_cache):
+            for tensor, original in zip(pair, saved):
+                torch.testing.assert_close(to_host(tensor), original, rtol=0, atol=0)
+    except AssertionError:
+        torch.save(
+            {"before": saved_cache, "after": [[to_host(t) for t in pair] for pair in loop_cache]},
+            folder / f"loop-{count}-inactive-failure.pt",
+        )
+        raise
+    copy_to(torch.tensor([127], dtype=torch.int32), position, mesh)
+
     calls = (baseline, lambda: loop(x, position, table))
     for call in calls:
         call()
     ttnn.synchronize_device(mesh)
     traces, outputs, results = [], [], []
-    folder = Path(os.environ.get("QB2_MEGAKERNEL_ARTIFACT_DIR", "/tmp/qb2-megakernel-loop"))
-    folder.mkdir(parents=True, exist_ok=True)
     try:
         for call in calls:
             trace = ttnn.begin_trace_capture(mesh, cq_id=0)
@@ -131,5 +151,7 @@ def test_device_layer_loop_real_weights(qb2_mesh, count):
     finally:
         for trace in traces:
             ttnn.release_trace(mesh, trace)
-        (folder / f"loop-{count}.json").write_text(json.dumps({"layers": [0, 31][:count], "checks": results}, indent=2))
+        (folder / f"loop-{count}.json").write_text(
+            json.dumps({"layers": [0, 31][:count], "inactive_warmup_kv_exact": True, "checks": results}, indent=2)
+        )
     print(json.dumps(results, indent=2), flush=True)
