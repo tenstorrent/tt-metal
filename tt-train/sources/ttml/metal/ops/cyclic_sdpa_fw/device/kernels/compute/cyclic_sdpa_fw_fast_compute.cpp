@@ -150,6 +150,10 @@ constexpr uint32_t cb_out_out = tt::CBIndex::c_17;
 constexpr uint32_t cb_output = tt::CBIndex::c_21;
 constexpr uint32_t cb_lse = tt::CBIndex::c_22;
 constexpr uint32_t cb_slot_release = tt::CBIndex::c_7;
+// A forwarded row's state goes to the reader one query tile at a time when the
+// head dimension is two tiles or fewer, whole otherwise (see hand_over_tile);
+// the relay reader keys on the same rule.
+constexpr bool kStatePerTile = (qWt <= 2u);
 
 // Math fidelity per matmul, measured on the forward: the scores lose (lse
 // 4.7e-4 -> 1.15e-3) below HiFi3; the output matmul, P^T's 19 bits in SrcA,
@@ -1003,8 +1007,15 @@ void kernel_main() {
             // the packs above are then relative to the advanced write
             // pointers. A finished row (final) is repacked below in place, so
             // its state is handed over whole afterwards, at the slot's base.
+            // Per tile only at d <= 64 (measured on the ring of eight: -8% on
+            // the 4-head forward step at d = 64, +7.5% at d = 128). At d = 64
+            // the whole state's forward outlasts the next timestep's scores
+            // and maxima, so the early writes remove a wait; at d = 128 those
+            // stages already cover the forward, and the early writes only
+            // compete with the unpackers for L1 under the last columns.
+            const bool whole = final || !kStatePerTile;
             const auto hand_over_tile = [&]() {
-                if (!final) {
+                if (!whole) {
                     cb_push_back(cb_max_out, 1);
                     cb_push_back(cb_sum_out, 1);
                     cb_push_back(cb_out_out, qWt);
@@ -1030,7 +1041,7 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_reconfig_data_format(cb_sum_out);
-                    pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, final ? a : 0u);
+                    pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, whole ? a : 0u);
                     tile_regs_release();
                     for (uint32_t k0 = 0; k0 < qWt; k0 += kOutGroup) {
                         const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
@@ -1061,7 +1072,7 @@ void kernel_main() {
                             if (i >= nk) {
                                 break;
                             }
-                            pack_tile</* out_of_order */ true>(i, cb_out_out, (final ? a * qWt : 0u) + k0 + i);
+                            pack_tile</* out_of_order */ true>(i, cb_out_out, (whole ? a * qWt : 0u) + k0 + i);
                         }
                         tile_regs_release();
                     }
@@ -1080,9 +1091,9 @@ void kernel_main() {
                 if (accumulate) {
                     pack_reconfig_l1_acc(true);
                 }
-                pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, final ? a : 0u);
+                pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, whole ? a : 0u);
                 for (uint32_t i = 0; i < kFirstGroup; ++i) {
-                    pack_tile</* out_of_order */ true>(kSumReg + 1 + i, cb_out_out, (final ? a * qWt : 0u) + i);
+                    pack_tile</* out_of_order */ true>(kSumReg + 1 + i, cb_out_out, (whole ? a * qWt : 0u) + i);
                 }
                 if (accumulate) {
                     pack_reconfig_l1_acc(false);
@@ -1102,7 +1113,7 @@ void kernel_main() {
                         if (i >= nk) {
                             break;
                         }
-                        pack_tile</* out_of_order */ true>(i, cb_out_out, (final ? a * qWt : 0u) + k0 + i);
+                        pack_tile</* out_of_order */ true>(i, cb_out_out, (whole ? a * qWt : 0u) + k0 + i);
                     }
                     if (accumulate) {
                         pack_reconfig_l1_acc(false);
@@ -1246,7 +1257,7 @@ void kernel_main() {
 
         // ---- hand the updated state to the reader (a forwarded row's went
         // tile by tile above), pop the slot, release it.
-        if (final) {
+        if (final || !kStatePerTile) {
             cb_push_back(cb_max_out, Bt);
             cb_push_back(cb_sum_out, Bt);
             cb_push_back(cb_out_out, Bt * qWt);
