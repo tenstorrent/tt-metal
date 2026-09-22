@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7f4">
+  <title>Inside Top-K · Blackhole Kernel Lab</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%231c4c3d'/%3E%3Cpath d='M10 12h20M20 12v18M13 23l7 7 7-7' stroke='%23d7f5bd' stroke-width='3' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="./" aria-label="Kernel Lab home"><span class="brand-mark">k<span>↗</span></span><span>kernel<span class="brand-light">lab</span><small>SEE WHAT THE SILICON DOES</small></span></a>
+    <div class="nav-label">LEARNING PATH</div>
+    <nav id="side-chapters" aria-label="Learning chapters"></nav>
+    <div class="sidebar-divider"></div>
+    <div class="nav-label">UNDER THE HOOD</div>
+    <button class="side-link" data-dialog="lanes"><span>⊞</span> How lanes work <span class="arrow">↗</span></button>
+    <button class="side-link" data-dialog="map"><span>⌘</span> Kernel map <span class="arrow">↗</span></button>
+    <button class="side-link" data-dialog="scope"><span>ⓘ</span> Scope & sources <span class="arrow">↗</span></button>
+    <div class="sidebar-note"><span class="status-dot"></span> BLACKHOLE<br><strong>Every position.<br>Every lane.</strong><p>Follow values from a DEST face into all 32 lanes of each register.</p><div class="tiny-chip">Non-stable · largest first</div></div>
+    <div class="sidebar-foot">TT-METAL / TT-LLK <span>↗</span></div>
+  </aside>
+
+  <main>
+    <header class="topbar"><div><span class="crumb">Kernel explorations</span><span class="slash">/</span><strong>Top-K</strong></div><button class="text-button" data-dialog="scope">Based on your local C++ <span>↗</span></button></header>
+    <section class="hero">
+      <div><div class="eyebrow"><span></span> AN INTERACTIVE KERNEL WALKTHROUGH</div><h1>Inside Top-K<span>.</span></h1><p>From a matrix row to its largest values. Follow every load, shuffle, and swap.</p></div>
+      <div class="hero-meta"><span class="architecture">BLACKHOLE SFPU</span><div><strong>64</strong> candidates <span>→</span> <strong>32</strong> winners per row</div><small>Full DEST faces · all 32 SFPU lanes</small></div>
+    </section>
+    <nav id="chapter-rail" class="chapter-rail" aria-label="Jump to stage"></nav>
+
+    <div class="work-header"><div class="workspace-title"><span class="live-dot"></span> THE WORKBENCH <span id="phase-label">L1 → DEST → SFPU</span></div><div class="data-controls"><label for="preset">Input</label><select id="preset"><option value="coordinates">Numbered matrix (r × 64 + c)</option><option value="mixed">Shuffled values</option><option value="negative">Positive + negative</option><option value="descending">Already descending</option></select><button id="shuffle" title="Generate another shuffled input" aria-label="Generate another input">↻</button></div></div>
+
+    <div class="work-layout">
+      <section class="board" aria-label="Animated kernel data flow">
+        <div class="memory-head"><div><span class="section-number">01</span><h2 id="memory-title">Input tile in L1</h2><span class="subtle" id="memory-subtitle">before unpack</span></div><button id="original-button" class="text-button">Original matrix ↗</button></div>
+        <div class="dest-controls"><label for="focus-row">Follow original row <select id="focus-row" aria-label="Original matrix row to follow"></select></label><label class="follow-control"><input id="follow-load" type="checkbox" checked> Follow load address</label></div>
+        <p id="row-scope" class="row-scope"></p>
+        <div class="memory-context"><span id="memory-description">Each numbered cell is one datum. Green cells belong to the original row in focus.</span></div>
+        <div id="dest-overview" class="dest-overview" aria-label="Tile and face selection"></div>
+        <p class="face-layout-note">Face positions in each tile: <strong>F0 · F1</strong> on the top row, <strong>F2 · F3</strong> on the bottom row.</p>
+        <div class="dest-face-heading"><strong id="dest-face-title">Tile 0 · Face 0</strong><span id="dest-face-origin"></span></div>
+        <div class="dest-face-scroll"><div id="dest-face" class="dest-face" aria-label="Complete 16 by 16 face"></div></div>
+        <div class="dest-legend"><span><i class="legend-box active-legend"></i> original row in focus</span><span><i class="legend-box load-legend"></i> 32 positions read by the selected load</span><strong>1 cell = 1 datum</strong></div>
+        <div id="load-mapping" class="load-mapping"></div>
+
+        <div class="transfer-channel"><div class="channel-line"></div><span id="transfer-label">SFPLOAD ↓ <span>values + indices</span> ↑ SFPSTORE</span><div class="channel-line"></div></div>
+
+        <div class="sfpu-head"><div><span class="section-number">02</span><h2>SFPU value registers</h2></div><span class="lane-badge">32 lanes per LREG · all shown</span></div>
+        <div id="sfpu-description" class="sfpu-description"></div>
+        <div class="register-layout full-register-layout">
+          <div id="registers" class="full-registers"></div>
+          <div class="operation-card"><div class="micro-label">CURRENT OPERATION</div><div id="operation-icon">↓</div><strong id="operation-name">Ready to load</strong><p id="operation-description">Press play to follow the data.</p><div id="operation-detail" class="operation-detail">Index tracking ON</div></div>
+        </div>
+        <div class="register-legend"><span><i class="legend-box value-legend"></i> number = one datum</span><span>small L number = lane ID</span><span>Green values belong to the original row in focus.</span><button class="text-button" data-dialog="lanes">Read the lane layout ↗</button></div>
+        <div id="comparison-panel" class="comparison-panel"></div>
+        <svg id="movement-overlay" class="movement-overlay" aria-hidden="true"></svg>
+      </section>
+
+      <aside class="explanation" aria-label="Explanation and source code">
+        <div class="explanation-top"><span id="event-type" class="event-type">START HERE</span><span id="event-number">01</span></div>
+        <h2 id="event-title"></h2><p id="event-text"></p>
+        <div class="why-box"><div><span>✳</span> THE IDEA</div><p id="event-why"></p></div>
+        <div id="skip-note" class="skip-note" hidden></div>
+        <div class="source-head"><span>IN THE KERNEL</span><button id="source-button" class="text-button">View source ↗</button></div>
+        <div class="function-box"><span class="function-prefix">ƒ</span><code id="function-name"></code></div>
+        <pre id="code-preview"></pre>
+        <div id="source-location" class="source-location"></div>
+        <div id="value-inspector" class="value-inspector"><span class="micro-label">TRACE A NUMBER</span><p>Click any number to follow its value and original index through the network.</p></div>
+      </aside>
+    </div>
+
+    <section class="transport" aria-label="Animation controls">
+      <div class="transport-main"><button id="reset" class="icon-button" title="Back to beginning (Home)" aria-label="Back to beginning">↶</button><button id="previous" class="icon-button" title="Previous step (←)" aria-label="Previous step">❮</button><button id="play" class="play-button" aria-label="Play animation"><span id="play-icon">▶</span><span id="play-label">Play walkthrough</span></button><button id="next" class="icon-button" title="Next step (→)" aria-label="Next step">❯</button><div class="transport-divider"></div><label class="speed-control" for="speed">Speed <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label><div class="trace-toggle" role="group" aria-label="Trace detail"><button id="guided" class="selected" aria-pressed="true">Guided</button><button id="full" aria-pressed="false">Every step</button></div><button id="checkpoint" class="text-button">Next milestone →</button></div>
+      <div class="timeline-row"><span id="progress-label">Step 1</span><input id="timeline" type="range" min="0" max="1" value="0" aria-label="Walkthrough position"><span id="progress-total"></span></div>
+      <div class="transport-foot"><span id="mode-note">Guided mode expands the first working sets; repeated loads are summarized.</span><span><kbd>space</kbd> play / pause <kbd>←</kbd><kbd>→</kbd> step</span></div>
+    </section>
+    <section id="result-section" class="result-section" hidden>
+      <div class="result-heading"><div><div class="eyebrow">32 INDEPENDENT ROW RESULTS</div><h2 id="result-title"></h2></div><label for="result-row">Original row <select id="result-row" aria-label="Result for original matrix row"></select></label></div>
+      <p id="result-description"></p>
+      <div id="result-values" class="result-values"></div>
+      <div class="verified"><span id="verification-icon">✓</span><span id="verification-text"></span><button id="export" class="text-button">Export trace JSON ↓</button></div>
+      <details class="output-matrix"><summary>View the complete output: 32 rows × 32 values</summary><p>Rows correspond to original input rows. Columns show descending rank within that row. Click a value to follow its original coordinate.</p><div id="output-matrix" class="original-matrix-scroll"></div></details>
+    </section>
+    <footer><span>ckernel_sfpu_topk.h <span class="footer-separator">·</span> non-stable, unfused, K = 32</span><button data-dialog="scope" class="text-button">Model boundaries & source references ↗</button></footer>
+  </main>
+  <dialog id="info-dialog"><div class="dialog-head"><span class="eyebrow">KERNEL LAB / REFERENCE</span><button id="close-dialog" class="icon-button" aria-label="Close dialog">✕</button></div><div id="dialog-content"></div></dialog>
+</body>
+</html>
