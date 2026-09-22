@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _ETH_COMMON_HPP
-#define _ETH_COMMON_HPP
+#ifndef ETH_COMMON_HPP
+#define ETH_COMMON_HPP
 
 #include <algorithm>
 #include <chrono>
@@ -936,4 +936,4 @@ static bool ensure_links(std::span<std::shared_ptr<distributed::MeshDevice>> dev
 
 }  // namespace tt::tt_metal
 
-#endif /* _ETH_COMMON_HPP */
+#endif /* ETH_COMMON_HPP */
