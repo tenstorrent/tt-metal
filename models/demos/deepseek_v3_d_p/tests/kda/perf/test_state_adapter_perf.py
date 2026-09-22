@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Real Kimi-K3 correctness and performance ablation for cache adapters."""
+"""Real Kimi-K3 correctness and cost of the KDA state migration adapter.
+
+Two paths are measured against the layer they follow: the production per-layer slab export/import
+(`KdaStates.export_layer` / `import_layer`, what `KdaStateCache.commit` runs inside the trace) and the
+whole-tensor native <-> single-layer contract conversion. Both must round-trip bit-identically.
+"""
 
 from __future__ import annotations
 
@@ -16,19 +21,6 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
-from models.demos.deepseek_v3_d_p.tests.kda.cache_adapters import (
-    KDA_CONV_SEGMENT_BYTES,
-    KDA_S_SEGMENT_BYTES,
-    KdaCacheGeometry,
-    allocate_contract_state,
-    allocate_native_state,
-    contract_memory_configs,
-    deallocate_state,
-    export_convolution,
-    export_recurrent,
-    import_convolution,
-    import_recurrent,
-)
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _PCC_THRESHOLD, _trace_wall_samples_ms
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
@@ -36,7 +28,17 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_kimi_k3_device_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
+    KdaContractGeometry,
+    KdaStates,
+    allocate_contract_state,
+    allocate_native_state,
+    contract_memory_configs,
+    deallocate_state,
+    export_state,
+    import_state,
+)
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytest_plugins = ("models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf",)
 
@@ -63,6 +65,7 @@ _SEQUENCE = 5120
 _TIMING_SAMPLES = int(os.getenv("KDA_ADAPTER_TIMING_SAMPLES", "20"))
 _TIMING_REPETITIONS = int(os.getenv("KDA_ADAPTER_TIMING_REPS", "100"))
 _LAYER_REPETITIONS = int(os.getenv("PERF_REPS", "10"))
+_LAYER_IDX = 1
 
 
 def _summary(samples_ms: list[float]) -> dict[str, float | list[float]]:
@@ -111,7 +114,7 @@ def _assert_mesh_equal(expected: ttnn.Tensor, actual: ttnn.Tensor, *, name: str)
         assert_bit_identical(*pair, name=f"{name} device {index}")
 
 
-def _patterned_state(mesh_device: ttnn.MeshDevice, geometry: KdaCacheGeometry) -> KdaState:
+def _patterned_state(mesh_device: ttnn.MeshDevice, geometry: KdaContractGeometry) -> KdaState:
     recurrent = torch.arange(torch.tensor(geometry.recurrent_shape).prod().item(), dtype=torch.float32).reshape(
         geometry.recurrent_shape
     )
@@ -142,23 +145,25 @@ def _patterned_state(mesh_device: ttnn.MeshDevice, geometry: KdaCacheGeometry) -
     )
 
 
-def _physical_contract(state: KdaState, geometry: KdaCacheGeometry) -> dict[str, object]:
-    configs = contract_memory_configs(state.recurrent.device())
+def _physical_contract(state: KdaState, slabs: KdaStates, geometry: KdaContractGeometry) -> dict[str, object]:
+    configs = contract_memory_configs(state.recurrent.device(), geometry)
     assert state.recurrent.memory_config() == configs.recurrent
     assert state.convolution.memory_config() == configs.convolution
-    recurrent_pages = [tensor.buffer_aligned_page_size() for tensor in ttnn.get_device_tensors(state.recurrent)]
-    convolution_pages = [tensor.buffer_aligned_page_size() for tensor in ttnn.get_device_tensors(state.convolution)]
-    assert set(recurrent_pages) == {4096}
-    assert set(convolution_pages) == {128}
+    recurrent_pages = {tensor.buffer_aligned_page_size() for tensor in ttnn.get_device_tensors(state.recurrent)}
+    convolution_pages = {tensor.buffer_aligned_page_size() for tensor in ttnn.get_device_tensors(state.convolution)}
+    assert recurrent_pages == {4096}
+    assert convolution_pages == {128}
+    assert slabs.convolution.buffer_aligned_page_size() == geometry.convolution_segment_bytes
     return {
-        "recurrent_nd_shard_shape": [1, 1, 128, 32],
-        "convolution_nd_shard_shape": [1, 3, 64],
-        "recurrent_page_bytes": recurrent_pages[0],
-        "convolution_page_bytes": convolution_pages[0],
-        "recurrent_pages_per_segment": KDA_S_SEGMENT_BYTES // recurrent_pages[0],
-        "convolution_pages_per_segment": KDA_CONV_SEGMENT_BYTES // convolution_pages[0],
-        "recurrent_segments_per_device": geometry.recurrent_segments_per_device,
-        "convolution_segments_per_device": geometry.convolution_segments_per_device,
+        "recurrent_nd_shard_shape": [1, 1, geometry.head_dim, 32],
+        "convolution_nd_shard_shape": [1, geometry.conv_history, 64],
+        "recurrent_page_bytes": 4096,
+        "convolution_page_bytes": 128,
+        "convolution_slab_page_bytes": slabs.convolution.buffer_aligned_page_size(),
+        "recurrent_pages_per_segment": geometry.recurrent_segment_bytes // 4096,
+        "convolution_pages_per_segment": geometry.convolution_segment_bytes // 128,
+        "recurrent_segments_per_device": geometry.recurrent_shards_per_layer,
+        "convolution_segments_per_device": geometry.convolution_shards_per_layer,
     }
 
 
@@ -168,24 +173,26 @@ def _physical_contract(state: KdaState, geometry: KdaCacheGeometry) -> dict[str,
     indirect=["mesh_device"],
     ids=["SP1xTP8", "SP2xTP4", "SP4xTP2"],
 )
-def test_kimi_k3_cache_adapter_ablation(
+def test_kimi_k3_state_adapter_cost(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     kimi_k3_production_reference: Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]],
 ) -> None:
     case, golden_output, golden_state, _ = kimi_k3_production_reference()
     layer, hidden = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=tensor_parallel_axis)
-    mesh_shape = tuple(mesh_device.shape)
     sp_axis = 1 - tensor_parallel_axis
-    geometry = KdaCacheGeometry(mesh_shape[sp_axis], mesh_shape[tensor_parallel_axis])
+    geometry = KdaContractGeometry.from_kda_config(
+        case.config, mesh_shape=tuple(mesh_device.shape), sp_axis=sp_axis, tp_axis=tensor_parallel_axis
+    )
     layout = f"SP{geometry.sequence_parallel_size}xTP{geometry.tensor_parallel_size}"
 
+    actual_start = make_actual_start(mesh_device)
     initial_state = layer.allocate_state(batch_size=1)
-    output, real_state = layer.forward(hidden, initial_state)
+    output, real_state = layer.forward(hidden, initial_state, actual_start)
     ttnn.synchronize_device(mesh_device)
     try:
         pcc = check_kimi_k3_accuracy(
-            f"Kimi-K3 cache adapter T={_SEQUENCE} {layout}",
+            f"Kimi-K3 state adapter T={_SEQUENCE} {layout}",
             case,
             golden_output,
             golden_state,
@@ -199,71 +206,61 @@ def test_kimi_k3_cache_adapter_ablation(
         ttnn.deallocate(output)
 
     allocation_start = time.perf_counter()
+    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(_LAYER_IDX,), num_slots=1)
     contract = allocate_contract_state(mesh_device, geometry)
     imported = allocate_native_state(mesh_device, geometry)
     ttnn.synchronize_device(mesh_device)
     allocation_ms = (time.perf_counter() - allocation_start) * 1e3
-    physical = _physical_contract(contract, geometry)
+    physical = _physical_contract(contract, slabs, geometry)
 
+    # Production path, cold: one export at the layer's commit and one import back.
     cold = {
-        "export_s": _eager_ms(mesh_device, lambda: export_recurrent(real_state.recurrent, contract.recurrent)),
-        "export_convolution": _eager_ms(
-            mesh_device, lambda: export_convolution(real_state.convolution, contract.convolution)
-        ),
-        "import_s": _eager_ms(mesh_device, lambda: import_recurrent(contract.recurrent, imported.recurrent)),
-        "import_convolution": _eager_ms(
-            mesh_device, lambda: import_convolution(contract.convolution, imported.convolution)
-        ),
+        "slab_export": _eager_ms(mesh_device, lambda: slabs.export_layer(real_state, 0, _LAYER_IDX)),
+        "slab_import": _eager_ms(mesh_device, lambda: slabs.import_layer(imported, 0, _LAYER_IDX)),
+        "contract_export": _eager_ms(mesh_device, lambda: export_state(real_state, contract, geometry)),
+        "contract_import": _eager_ms(mesh_device, lambda: import_state(contract, imported, geometry)),
     }
-    _assert_mesh_equal(real_state.recurrent, imported.recurrent, name=f"{layout} real S round trip")
-    _assert_mesh_equal(real_state.convolution, imported.convolution, name=f"{layout} real conv round trip")
+    slabs.import_layer(imported, 0, _LAYER_IDX)
+    ttnn.synchronize_device(mesh_device)
+    _assert_mesh_equal(real_state.recurrent, imported.recurrent, name=f"{layout} slab S round trip")
+    _assert_mesh_equal(real_state.convolution, imported.convolution, name=f"{layout} slab conv round trip")
+    import_state(contract, imported, geometry)
+    ttnn.synchronize_device(mesh_device)
+    _assert_mesh_equal(real_state.recurrent, imported.recurrent, name=f"{layout} contract S round trip")
+    _assert_mesh_equal(real_state.convolution, imported.convolution, name=f"{layout} contract conv round trip")
 
     patterned = _patterned_state(mesh_device, geometry)
-    export_recurrent(patterned.recurrent, contract.recurrent)
-    export_convolution(patterned.convolution, contract.convolution)
-    import_recurrent(contract.recurrent, imported.recurrent)
-    import_convolution(contract.convolution, imported.convolution)
+    slabs.export_layer(patterned, 0, _LAYER_IDX)
+    slabs.import_layer(imported, 0, _LAYER_IDX)
     ttnn.synchronize_device(mesh_device)
-    _assert_mesh_equal(patterned.recurrent, imported.recurrent, name=f"{layout} patterned S")
-    _assert_mesh_equal(patterned.convolution, imported.convolution, name=f"{layout} patterned conv")
+    _assert_mesh_equal(patterned.recurrent, imported.recurrent, name=f"{layout} patterned slab S")
+    _assert_mesh_equal(patterned.convolution, imported.convolution, name=f"{layout} patterned slab conv")
 
-    export_recurrent(real_state.recurrent, contract.recurrent)
-    export_convolution(real_state.convolution, contract.convolution)
+    slabs.export_layer(real_state, 0, _LAYER_IDX)
+    export_state(real_state, contract, geometry)
     operations = {
-        "export_s": lambda: export_recurrent(real_state.recurrent, contract.recurrent),
-        "export_convolution": lambda: export_convolution(real_state.convolution, contract.convolution),
-        "export_combined": lambda: (
-            export_recurrent(real_state.recurrent, contract.recurrent),
-            export_convolution(real_state.convolution, contract.convolution),
-        ),
-        "import_s": lambda: import_recurrent(contract.recurrent, imported.recurrent),
-        "import_convolution": lambda: import_convolution(contract.convolution, imported.convolution),
-        "import_combined": lambda: (
-            import_recurrent(contract.recurrent, imported.recurrent),
-            import_convolution(contract.convolution, imported.convolution),
-        ),
+        "slab_export": lambda: slabs.export_layer(real_state, 0, _LAYER_IDX),
+        "slab_import": lambda: slabs.import_layer(imported, 0, _LAYER_IDX),
+        "contract_export": lambda: export_state(real_state, contract, geometry),
+        "contract_import": lambda: import_state(contract, imported, geometry),
     }
     timing = {name: _summary(_trace_samples_ms(mesh_device, operation)) for name, operation in operations.items()}
     layer_samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden, _LAYER_REPETITIONS)
     layer_timing = _summary(layer_samples_ms)
     layer_median_ms = float(layer_timing["median_ms"])
-    for direction in ("export", "import"):
-        combined = timing[f"{direction}_combined"]
-        combined["layer_overhead_pct"] = 100.0 * float(combined["median_ms"]) / layer_median_ms
+    for name, entry in timing.items():
+        entry["layer_overhead_pct"] = 100.0 * float(entry["median_ms"]) / layer_median_ms
 
     result = {
         "layout": layout,
         "sequence": _SEQUENCE,
         "fabric_config": ttnn.get_fabric_config().name,
         "pcc": pcc,
-        "bit_identical_real_round_trip": True,
-        "bit_identical_patterned_round_trip": True,
+        "bit_identical_round_trips": True,
         "geometry": {
             "local_heads": geometry.local_heads,
-            "unique_recurrent_segments": geometry.unique_recurrent_segments,
-            "unique_convolution_segments": geometry.unique_convolution_segments,
-            "physical_recurrent_bytes": geometry.physical_recurrent_bytes,
-            "physical_convolution_bytes": geometry.physical_convolution_bytes,
+            "unique_recurrent_segments": geometry.recurrent_segments_per_layer,
+            "unique_convolution_segments": geometry.convolution_segments_per_layer,
             **physical,
         },
         "allocation_ms": allocation_ms,
@@ -272,17 +269,13 @@ def test_kimi_k3_cache_adapter_ablation(
         "timing_sample_count": _TIMING_SAMPLES,
         "timing": timing,
         "layer_trace_wall": layer_timing,
-        "direct_layout": {
-            "recurrent_producer": "unsupported: recurrent scan output must be interleaved",
-            "recurrent_consumer": "unsupported: recurrent scan input must be interleaved",
-            "convolution_consumer": "unsupported: qkv causal convolution input must be interleaved",
-            "convolution_final_tail_producer": "operator path accepts contract output layout; not end-to-end",
-        },
     }
-    print("KDA_CACHE_ADAPTER_ABLATION=" + json.dumps(result, sort_keys=True))
+    print("KDA_STATE_ADAPTER_PERF=" + json.dumps(result, sort_keys=True))
 
     deallocate_state(patterned)
     deallocate_state(contract)
     deallocate_state(imported)
     deallocate_state(initial_state)
     deallocate_state(real_state)
+    slabs.deallocate()
+    ttnn.deallocate(actual_start)
