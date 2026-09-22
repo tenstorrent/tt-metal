@@ -81,8 +81,9 @@ inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, 
 namespace model {
 constexpr uint32_t kRingSamples = 512;  // raw samples kept, ~0.3 us apart: ~150 us deep (kEthRingBytes on the host)
 constexpr uint32_t kConfirm = 4;        // consecutive off-line samples that make a step
-// A sample's wall read sits midway between refclk reads ~9 cycles apart, so its pairing error is under 5 cycles;
-// the thresholds below sit above that. Off the line by kOffTicks is off: a 1/8 step gets there in ~1 us.
+// A sample sits at the centre of the pair of refclk reads that caught its advance, within half a cycle or a cycle
+// and a half (kernel_main); the thresholds below sit well above that. Off the line by kOffTicks is off: a 1/8 step
+// gets there in ~1 us.
 constexpr int64_t kOffTicks = 6;
 // The intercept follows the samples: once this many are behind the line it moves by 1/2^kEmaShift of each residue
 // (the mean is kept scaled by 2^kEmaShift so sub-tick residues are not lost to the shift), so the phase's wander and
@@ -105,20 +106,21 @@ constexpr uint32_t kCountMax = 1u << 22;  // the residue sum stops here, and it 
 // A point lies this far behind the newest sample (164 us): a departure is confirmed within ~25 us of samples, and
 // a sweep can hold sampling for ~100 us, so no point ever lands on a step the model has not yet seen.
 constexpr uint32_t kPointLagTicks = 8192;
-constexpr uint64_t kReanchorTicks = 1ull << 30;  // multiple of 8: the anchor moves along the exact line
-static_assert((kRingSamples & (kRingSamples - 1)) == 0 && kReanchorTicks % 8 == 0);
+constexpr uint64_t kReanchorTicks = 1ull << 30;
+static_assert((kRingSamples & (kRingSamples - 1)) == 0);
 
+// A sample: its refclk and the wall clock at it in eighths of a cycle, the unit of every wall quantity below.
 struct Raw {
-    uint32_t r_lo, r_hi, w_lo, w_hi;
+    uint32_t r_lo, r_hi, w8_lo, w8_hi;
 };
 inline volatile tt_l1_ptr Raw* ring() { return reinterpret_cast<volatile tt_l1_ptr Raw*>(kRingAddr); }
 inline uint64_t raw_r(const volatile tt_l1_ptr Raw& e) { return (static_cast<uint64_t>(e.r_hi) << 32) | e.r_lo; }
-inline uint64_t raw_w(const volatile tt_l1_ptr Raw& e) { return (static_cast<uint64_t>(e.w_hi) << 32) | e.w_lo; }
+inline uint64_t raw_w8(const volatile tt_l1_ptr Raw& e) { return (static_cast<uint64_t>(e.w8_hi) << 32) | e.w8_lo; }
 
 struct Model {
     uint32_t k8 = 0;          // wall ticks per refclk tick in eighths; 0 while a slope is being acquired
-    uint64_t ra = 0, wa = 0;  // anchor: the line passes 8*wa + c8 eighths at ra
-    int32_t sum = 0;          // residues 8*(w - wa) - k8*(r - ra) summed over the counted samples
+    uint64_t ra = 0, wa8 = 0;  // anchor: the line passes wa8 + c8 at ra
+    int32_t sum = 0;           // residues (w8 - wa8) - k8*(r - ra) summed over the counted samples
     uint32_t n = 0;
     int32_t c8 = 0;          // the residues' running mean: sum / n until 2^kEmaShift samples, then ema >> kEmaShift
     int32_t ema = 0;         // that mean times 2^kEmaShift
@@ -138,30 +140,31 @@ struct Model {
     int32_t lo_n = 0, lo_d = 1, hi_n = 0, hi_d = 1;  // 32-bit: a seam's spans stay under 2^31; the products are 64
     bool cone = false;
     // The last kWin samples, in this RISC's local memory (the L1 ring above is for the lock test; reading it back
-    // costs an L1 miss per word). A raw instant is the mean of the last kRawMean of them, taken every kRawStride:
-    // one sample's pairing error is wider than kRawEpsTicks and would break the cone at every one, the mean over
-    // ~1 us bends by under a cycle in any glide seen, and the stride keeps the instants ~0.6 us apart (one a sample
-    // doubled the records in a seam and the tail with them). A mean must not span a hole in the samples (it would
-    // average across the glide's bend): win_from is the first sample after the last one.
+    // costs an L1 miss per word). A raw instant is the mean of the last kRawMean of them, taken every kRawStride.
+    // The mean of samples spread over a bending stretch sits above the curve by the curvature times the spread's
+    // variance over two: four samples over ~1.8 us put every seam instant ~0.6 cycles off, two over ~0.5 us a tenth
+    // of that, and their noise (a sample is within half a cycle or a cycle and a half of the truth) is what the
+    // cone's eps is sized for. A mean must not span a hole in the samples (it would average across the glide's
+    // bend): win_from is the first sample after the last one.
     static constexpr uint32_t kWin = 16;
-    uint64_t win_r[kWin] = {}, win_w[kWin] = {};
+    uint64_t win_r[kWin] = {}, win_w8[kWin] = {};
     uint32_t win_n = 0;     // samples pushed; the newest is win_r[(win_n - 1) & (kWin - 1)]
     uint32_t win_from = 0;  // the first sample a mean may include
     uint32_t onset = 0;     // means still to send as they form: a seam's first, where the glide is steepest
 };
 
-inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint64_t w) {
+inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint64_t w8) {
     volatile tt_l1_ptr Raw& e = ring()[m.ring_n & (kRingSamples - 1)];
     e.r_lo = static_cast<uint32_t>(r);
     e.r_hi = static_cast<uint32_t>(r >> 32);
-    e.w_lo = static_cast<uint32_t>(w);
-    e.w_hi = static_cast<uint32_t>(w >> 32);
+    e.w8_lo = static_cast<uint32_t>(w8);
+    e.w8_hi = static_cast<uint32_t>(w8 >> 32);
     m.ring_n++;
 }
 
-// The line's wall at refclk r, in eighths of a tick.
+// The line's wall at refclk r.
 inline int64_t line_w8(const Model& m, uint64_t r) {
-    return 8 * static_cast<int64_t>(m.wa) + m.c8 + static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
+    return static_cast<int64_t>(m.wa8) + m.c8 + static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
 }
 
 // A point of the line at refclk r, in eighths of a tick, never before the segment's own start: the host keeps
@@ -174,23 +177,24 @@ inline void write_point(Model& m, uint64_t r, uint32_t role) {
     m.max_d8 = 0;
 }
 
-// A sample as a point, in eighths of a tick: k8 0 tells the host it is an instant of the wall clock, on no line.
-inline void write_raw_point(Model& m, uint64_t r, uint64_t w) {
+// A sample as a point: k8 0 tells the host it is an instant of the wall clock, on no line.
+inline void write_raw_point(Model& m, uint64_t r, uint64_t w8) {
     m.r_last_point = r;
-    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w << 3, 8u * static_cast<uint32_t>(kRawEpsTicks));
+    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w8, 8u * static_cast<uint32_t>(kRawEpsTicks));
 }
 // One acquisition sample: the seam's first becomes a point and the anchor; then the cone narrows with each sample,
 // and the sample that empties it makes the previous one the next point and anchor.
-__attribute__((noinline)) void raw_feed(Model& m, uint64_t r, uint64_t w) {
+constexpr int32_t kRawEps8 = 8 * static_cast<int32_t>(kRawEpsTicks);
+__attribute__((noinline)) void raw_feed(Model& m, uint64_t r, uint64_t w8) {
     if (m.raw_r0 == 0) {
-        write_raw_point(m, r, w);
+        write_raw_point(m, r, w8);
         m.raw_r0 = m.raw_rp = r;
-        m.raw_w0 = m.raw_wp = w;
+        m.raw_w0 = m.raw_wp = w8;
         m.cone = false;
         return;
     }
-    const int32_t dr = static_cast<int32_t>(r - m.raw_r0), dw = static_cast<int32_t>(w - m.raw_w0);
-    const int32_t lo = dw - kRawEpsTicks, hi = dw + kRawEpsTicks;
+    const int32_t dr = static_cast<int32_t>(r - m.raw_r0), dw = static_cast<int32_t>(w8 - m.raw_w0);
+    const int32_t lo = dw - kRawEps8, hi = dw + kRawEps8;
     if (!m.cone) {
         m.lo_n = lo;
         m.hi_n = hi;
@@ -209,14 +213,14 @@ __attribute__((noinline)) void raw_feed(Model& m, uint64_t r, uint64_t w) {
             write_raw_point(m, m.raw_rp, m.raw_wp);
             m.raw_r0 = m.raw_rp;
             m.raw_w0 = m.raw_wp;
-            const int32_t dr2 = static_cast<int32_t>(r - m.raw_r0), dw2 = static_cast<int32_t>(w - m.raw_w0);
-            m.lo_n = dw2 - kRawEpsTicks;
-            m.hi_n = dw2 + kRawEpsTicks;
+            const int32_t dr2 = static_cast<int32_t>(r - m.raw_r0), dw2 = static_cast<int32_t>(w8 - m.raw_w0);
+            m.lo_n = dw2 - kRawEps8;
+            m.hi_n = dw2 + kRawEps8;
             m.lo_d = m.hi_d = dr2;
         }
     }
     m.raw_rp = r;
-    m.raw_wp = w;
+    m.raw_wp = w8;
 }
 inline void begin_acquire(Model& m, uint64_t r_from) {
     m.k8 = 0;
@@ -228,33 +232,34 @@ inline void begin_acquire(Model& m, uint64_t r_from) {
     m.cone = false;
     m.win_i = m.ring_n;
 }
-constexpr uint32_t kRawMean = 4;
-constexpr uint32_t kRawStride = 2;
-constexpr uint32_t kTightCycles = 8;      // the wall reads either side of a bracket four back-to-back loads apart
+constexpr uint32_t kRawMean = 2;
+constexpr uint32_t kRawStride = 1;
 constexpr uint32_t kGroupGapTicks = 125;  // 2.5 us
-static_assert(kRawMean == 4 && (kRawMean % kRawStride) == 0);
-inline __attribute__((always_inline)) void win_push(Model& m, uint64_t r, uint64_t w) {
+static_assert((kRawMean & (kRawMean - 1)) == 0 && (kRawMean % kRawStride) == 0);
+constexpr uint32_t kRawMeanShift = __builtin_ctz(kRawMean);
+inline __attribute__((always_inline)) void win_push(Model& m, uint64_t r, uint64_t w8) {
     if (m.win_n != 0 && r - m.win_r[(m.win_n - 1) & (Model::kWin - 1)] > kGroupGapTicks) {
         m.win_from = m.win_n;
     }
     m.win_r[m.win_n & (Model::kWin - 1)] = r;
-    m.win_w[m.win_n & (Model::kWin - 1)] = w;
+    m.win_w8[m.win_n & (Model::kWin - 1)] = w8;
     m.win_n++;
 }
-// The mean of the kRawMean samples ending at (exclusive) window index `end`.
-inline void win_mean(const Model& m, uint32_t end, uint64_t& mr, uint64_t& mw) {
+// The mean of the kRawMean samples ending at (exclusive) window index `end`: the refclk exact (the ERISC sees the
+// count move in fours), the wall rounded to its eighth.
+inline void win_mean(const Model& m, uint32_t end, uint64_t& mr, uint64_t& mw8) {
     uint64_t sr = 0, sw = 0;
     for (uint32_t i = end - kRawMean; i < end; i++) {
         sr += m.win_r[i & (Model::kWin - 1)];
-        sw += m.win_w[i & (Model::kWin - 1)];
+        sw += m.win_w8[i & (Model::kWin - 1)];
     }
-    mr = sr >> 2;
-    mw = sw >> 2;
+    mr = sr >> kRawMeanShift;
+    mw8 = (sw + (kRawMean / 2)) >> kRawMeanShift;
 }
-inline void send_onset_mean(Model& m, uint64_t mr, uint64_t mw) {
-    write_raw_point(m, mr, mw);
+inline void send_onset_mean(Model& m, uint64_t mr, uint64_t mw8) {
+    write_raw_point(m, mr, mw8);
     m.raw_r0 = m.raw_rp = mr;
-    m.raw_w0 = m.raw_wp = mw;
+    m.raw_w0 = m.raw_wp = mw8;
     m.cone = false;
 }
 __attribute__((noinline)) void raw_sample(Model& m) {
@@ -291,18 +296,18 @@ __attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
     }
     const volatile tt_l1_ptr Raw& oldest = ring()[m.win_i & (kRingSamples - 1)];
     const volatile tt_l1_ptr Raw& newest = ring()[(m.ring_n - 1) & (kRingSamples - 1)];
-    const uint64_t r_old = raw_r(oldest), w_old = raw_w(oldest);
+    const uint64_t r_old = raw_r(oldest), w_old8 = raw_w8(oldest);
     const uint32_t dr = static_cast<uint32_t>(raw_r(newest) - r_old);
-    const uint32_t dw = static_cast<uint32_t>(raw_w(newest) - w_old);
+    const uint32_t dw8 = static_cast<uint32_t>(raw_w8(newest) - w_old8);
     if (dr < kWinTicks / 2) {
         return false;
     }
-    const uint32_t k8 = (8u * dw + dr / 2u) / dr;
+    const uint32_t k8 = (dw8 + dr / 2u) / dr;
     int32_t lo = 0, hi = 0, sum = 0;
     uint32_t n = 0;
     for (uint32_t i = m.win_i; i < m.ring_n; i += kLockStride, n++) {
         const volatile tt_l1_ptr Raw& e = ring()[i & (kRingSamples - 1)];
-        const int32_t res = 8 * static_cast<int32_t>(static_cast<uint32_t>(raw_w(e) - w_old)) -
+        const int32_t res = static_cast<int32_t>(static_cast<uint32_t>(raw_w8(e) - w_old8)) -
                             static_cast<int32_t>(k8 * static_cast<uint32_t>(raw_r(e) - r_old));
         lo = n == 0 || res < lo ? res : lo;
         hi = n == 0 || res > hi ? res : hi;
@@ -313,7 +318,7 @@ __attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
     }
     m.k8 = k8;
     m.ra = r_old;
-    m.wa = w_old;
+    m.wa8 = w_old8;
     m.r_lock = r_old;
     m.n = n;
     m.sum = sum;
@@ -349,9 +354,9 @@ __attribute__((noinline, cold)) void step(Model& m) {
     m.onset = kOnsetMeans;
 }
 
-inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w) {
-    ring_push(m, r, w);
-    win_push(m, r, w);
+inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w8) {
+    ring_push(m, r, w8);
+    win_push(m, r, w8);
     if (m.k8 == 0) {
         advance_window(m, r);
         if (r - m.r_acq0 >= kAcqTicks && ++m.acq_count >= kAcqTestEvery) {
@@ -363,7 +368,7 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
         raw_sample(m);
         return;
     }
-    const int64_t e = 8 * static_cast<int64_t>(w - m.wa) - static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
+    const int64_t e = static_cast<int64_t>(w8 - m.wa8) - static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
     const int64_t d = e - m.c8;
     if (d > 8 * kOffTicks || d < -8 * kOffTicks) {
         if (m.off++ == 0) {
@@ -400,12 +405,89 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
     }
     if (r - m.ra >= kReanchorTicks) {
         m.ra += kReanchorTicks;
-        m.wa += static_cast<uint64_t>(m.k8) * (kReanchorTicks / 8u);
+        m.wa8 += static_cast<uint64_t>(m.k8) * kReanchorTicks;
     }
 }
 }  // namespace model
 
 #endif
+
+// The cycle at which load p of a back-to-back group issues: the load unit takes four in consecutive cycles, then
+// idles two (kernel_main). centre8(i) is the centre of the issue cycles of loads i and i+1, in eighths.
+constexpr uint32_t issue_cycle(uint32_t p) { return 6u * (p / 4u) + (p % 4u); }
+constexpr uint32_t centre8(uint32_t i) { return 4u * (issue_cycle(i) + issue_cycle(i + 1)); }
+constexpr uint32_t kGroupCycles = issue_cycle(17);
+
+// Both clocks' high words and the low words they were last seen at.
+struct Carry {
+    uint32_t r_hi, w_hi, prev_r_lo, prev_w_lo;
+};
+// A caught advance: the new count and the wall at the catching pair's centre, in eighths, go to the model.
+__attribute__((noinline)) void sample(model::Model& m, Carry& c, uint32_t rb_lo, uint32_t w0, uint32_t c8) {
+    c.r_hi += rb_lo < c.prev_r_lo;
+    c.w_hi += w0 < c.prev_w_lo;
+    c.prev_r_lo = rb_lo;
+    c.prev_w_lo = w0;
+    model::feed(
+        m, (static_cast<uint64_t>(c.r_hi) << 32) | rb_lo, (((static_cast<uint64_t>(c.w_hi) << 32) | w0) << 3) + c8);
+}
+// A landed group: when its rhythm held and an advance fell between two of its refclk reads, that is a sample.
+inline __attribute__((always_inline)) void take(
+    model::Model& m,
+    Carry& c,
+    uint32_t w0,
+    uint32_t r0,
+    uint32_t r1,
+    uint32_t r2,
+    uint32_t r3,
+    uint32_t r4,
+    uint32_t r5,
+    uint32_t r6,
+    uint32_t r7,
+    uint32_t r8,
+    uint32_t r9,
+    uint32_t r10,
+    uint32_t r11,
+    uint32_t r12,
+    uint32_t r13,
+    uint32_t r14,
+    uint32_t r15,
+    uint32_t w1) {
+    if (r15 == r0 || w1 - w0 != kGroupCycles) {
+        return;
+    }
+    uint32_t rb_lo = r15, c8 = centre8(15);
+    if (r1 != r0) {
+        rb_lo = r1, c8 = centre8(1);
+    } else if (r2 != r1) {
+        rb_lo = r2, c8 = centre8(2);
+    } else if (r3 != r2) {
+        rb_lo = r3, c8 = centre8(3);
+    } else if (r4 != r3) {
+        rb_lo = r4, c8 = centre8(4);
+    } else if (r5 != r4) {
+        rb_lo = r5, c8 = centre8(5);
+    } else if (r6 != r5) {
+        rb_lo = r6, c8 = centre8(6);
+    } else if (r7 != r6) {
+        rb_lo = r7, c8 = centre8(7);
+    } else if (r8 != r7) {
+        rb_lo = r8, c8 = centre8(8);
+    } else if (r9 != r8) {
+        rb_lo = r9, c8 = centre8(9);
+    } else if (r10 != r9) {
+        rb_lo = r10, c8 = centre8(10);
+    } else if (r11 != r10) {
+        rb_lo = r11, c8 = centre8(11);
+    } else if (r12 != r11) {
+        rb_lo = r12, c8 = centre8(12);
+    } else if (r13 != r12) {
+        rb_lo = r13, c8 = centre8(13);
+    } else if (r14 != r13) {
+        rb_lo = r14, c8 = centre8(14);
+    }
+    sample(m, c, rb_lo, w0, c8);
+}
 
 void kernel_main() {
 #if defined(PROFILE_KERNEL)
@@ -424,17 +506,23 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
-    // Each iteration is a group of eight brackets, r0 w1 r1 w2 r2 ... w8 r8: seventeen loads issued back to back with
-    // nothing between them (stores or compares in the group widen it), one ~35-cycle window in which a refclk advance
-    // is caught by the bracket it fell in -- at most one fits, advances being 64-108 cycles apart -- with the wall
-    // read midway between the two refclk reads that saw it; the wall reads either side of that bracket time it,
-    // and only a tight one (loads that issued back to back) is kept. About one iteration in three samples. Each
-    // iteration is padded by 0-3 pseudo-random cycles so the advance's phase against the loop walks instead of
-    // locking. Both clocks' high words are carried from the low words' wraps, which at this rate no sweep can hide
-    // (86 s and 3.2 s periods).
+    // Each iteration is a group of eighteen loads issued back to back with nothing between them, one asm block: the
+    // wall clock, sixteen refclk reads, the wall clock. The load unit takes four loads in four consecutive cycles and
+    // then idles two, so load p issues at issue_cycle(p) from the first and the last wall read lands kGroupCycles
+    // after it unless something stalled the group, which drops it. A refclk advance that fell between two of the
+    // refclk reads -- at most one fits, advances being 64-108 cycles apart -- is placed at the centre of that pair's
+    // issue cycles: within half a cycle inside a run of four, a cycle and a half across the idle pair. (The rhythm
+    // from tagging 18 million brackets of a wall/refclk alternation: the wall reads either side of every bracket six
+    // cycles apart, the even brackets catching twice as often as the odd, and the last pair eight apart; it also put
+    // that alternation's even wall reads a cycle past their bracket's centre.) The group's values are first read
+    // after all its loads issued: a register move the compiler slipped between two loads copied the register before
+    // its load had returned, and issuing the next group while this one's loads were still queued (to hide their
+    // latency) broke the rhythm of most groups and caught fewer advances, not more. Each iteration is padded by 0-3
+    // pseudo-random cycles so the advance's phase against the loop walks instead of locking. Both clocks' high words
+    // are carried from the low words' wraps, which at this rate no sweep can hide (86 s and 3.2 s periods).
     const eth_ptp::Instant start = eth_ptp::read_instant();
-    uint32_t r_hi = static_cast<uint32_t>(start.refclk >> 32), prev_r_lo = static_cast<uint32_t>(start.refclk);
-    uint32_t w_hi = start.wall_hi, prev_w_lo = start.wall_lo;
+    Carry carry{
+        static_cast<uint32_t>(start.refclk >> 32), start.wall_hi, static_cast<uint32_t>(start.refclk), start.wall_lo};
     model::Model m;
     model::begin_acquire(m, start.refclk);
     uint32_t iter = 0, walk = start.wall_lo | 1u;
@@ -443,52 +531,32 @@ void kernel_main() {
         for (uint32_t d = walk >> 30; d != 0; d--) {
             asm volatile("nop");
         }
-        // All loads ahead of every compare: a compare waiting on an early load would hold the later loads.
-        uint32_t w0 = eth_ptp::rd(eth_ptp::kWallClockLo), r0 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        uint32_t w1 = eth_ptp::rd(eth_ptp::kWallClockLo), r1 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        uint32_t w2 = eth_ptp::rd(eth_ptp::kWallClockLo), r2 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        uint32_t w3 = eth_ptp::rd(eth_ptp::kWallClockLo), r3 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        uint32_t w4 = eth_ptp::rd(eth_ptp::kWallClockLo), r4 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        uint32_t w5 = eth_ptp::rd(eth_ptp::kWallClockLo), r5 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        uint32_t w6 = eth_ptp::rd(eth_ptp::kWallClockLo), r6 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        uint32_t w7 = eth_ptp::rd(eth_ptp::kWallClockLo), r7 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        uint32_t w8 = eth_ptp::rd(eth_ptp::kWallClockLo), r8 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        asm volatile("" : "+r"(w0), "+r"(r0), "+r"(w1), "+r"(r1), "+r"(w2), "+r"(r2), "+r"(w3), "+r"(r3), "+r"(w4));
-        asm volatile("" : "+r"(r4), "+r"(w5), "+r"(r5), "+r"(w6), "+r"(r6), "+r"(w7), "+r"(r7), "+r"(w8), "+r"(r8));
-        uint32_t rb_lo = r8, w_lo = w8;
-        // The wall reads either side of the bracket that caught the advance time the bracket itself: the loads
-        // issue back to back while the load queue takes them (the group's first few) and at its drain rate after,
-        // so brackets range from a cycle to ~20 wide, and the width is the pairing error a sample carries.
-        uint32_t width = 2u * (w8 - w7);
-        if (r8 == r0) {
-            goto housekeeping;
-        }
-        if (r1 != r0) {
-            rb_lo = r1, w_lo = w1, width = w2 - w0;
-        } else if (r2 != r1) {
-            rb_lo = r2, w_lo = w2, width = w3 - w1;
-        } else if (r3 != r2) {
-            rb_lo = r3, w_lo = w3, width = w4 - w2;
-        } else if (r4 != r3) {
-            rb_lo = r4, w_lo = w4, width = w5 - w3;
-        } else if (r5 != r4) {
-            rb_lo = r5, w_lo = w5, width = w6 - w4;
-        } else if (r6 != r5) {
-            rb_lo = r6, w_lo = w6, width = w7 - w5;
-        } else if (r7 != r6) {
-            rb_lo = r7, w_lo = w7, width = w8 - w6;
-        }
-        // Only the tight brackets are samples: a wide one pairs the wall read with the advance at an offset of its
-        // own, and mixing them biases whatever averages over them.
-        if (width > model::kTightCycles) {
-            goto housekeeping;
-        }
-        r_hi += rb_lo < prev_r_lo;
-        w_hi += w_lo < prev_w_lo;
-        prev_r_lo = rb_lo;
-        prev_w_lo = w_lo;
-        model::feed(m, (static_cast<uint64_t>(r_hi) << 32) | rb_lo, (static_cast<uint64_t>(w_hi) << 32) | w_lo);
-    housekeeping:
+        uint32_t w0, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, w1;
+        asm volatile(
+            "lw %0, 0(%18)\n\tlw %1, 0(%19)\n\tlw %2, 0(%19)\n\tlw %3, 0(%19)\n\tlw %4, 0(%19)\n\tlw %5, 0(%19)\n\t"
+            "lw %6, 0(%19)\n\tlw %7, 0(%19)\n\tlw %8, 0(%19)\n\tlw %9, 0(%19)\n\tlw %10, 0(%19)\n\tlw %11, 0(%19)\n\t"
+            "lw %12, 0(%19)\n\tlw %13, 0(%19)\n\tlw %14, 0(%19)\n\tlw %15, 0(%19)\n\tlw %16, 0(%19)\n\tlw %17, 0(%18)"
+            : "=&r"(w0),
+              "=&r"(r0),
+              "=&r"(r1),
+              "=&r"(r2),
+              "=&r"(r3),
+              "=&r"(r4),
+              "=&r"(r5),
+              "=&r"(r6),
+              "=&r"(r7),
+              "=&r"(r8),
+              "=&r"(r9),
+              "=&r"(r10),
+              "=&r"(r11),
+              "=&r"(r12),
+              "=&r"(r13),
+              "=&r"(r14),
+              "=&r"(r15),
+              "=&r"(w1)
+            : "r"(eth_ptp::kWallClockLo), "r"(eth_ptp::kPtpCfrLo)
+            : "memory");
+        take(m, carry, w0, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, w1);
         if ((++iter & 255u) != 0u) {
             continue;
         }
