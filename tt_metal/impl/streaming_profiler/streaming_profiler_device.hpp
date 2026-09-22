@@ -101,7 +101,8 @@ private:
         HalProgrammableCoreType core_type;
         uint32_t cfg = 0;       // the socket config
         uint32_t sync_cfg = 0;  // the pusher's sync socket config; 0 = one socket
-        uint32_t fifo_bytes = 0;
+        uint32_t fifo_bytes = 0;       // the frames socket's host FIFO
+        uint32_t sync_fifo_bytes = 0;  // the sync socket's
     };
     // A 5-lane core in the decode roster and the L1 base of its control vector. A blocking producer is armed for the
     // capture and waits on a full ring for its drainer; the pusher's linked routers are left non-blocking and

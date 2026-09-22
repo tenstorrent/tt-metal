@@ -64,10 +64,13 @@ constexpr uint32_t kCfgReserve = 8 * 1024;
 constexpr uint32_t kMiscBytes = 1024;  // done(64) + stop(64), with headroom
 constexpr uint32_t kPageSize = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
-// Idle-eth pushers: two sockets per idle-eth core, the linked cores' profiler frames and the sync's records. A few
-// 32 B sync records per ms, and the routers' own zones, are well under 1 MB/s, so 1 MiB of host FIFO each (a single
-// 2 MiB-aligned carve of the host channel) is generous; the relays' budget is untouched.
+// Idle-eth drainers: two sockets per drainer, the linked cores' profiler frames and the sync's records. The routers'
+// own zones are well under 1 MB/s, so 1 MiB of host FIFO (a single 2 MiB-aligned carve of the host channel) is
+// generous for the frames. The sync records come ~0.5 us apart through a glide, 32 B each, ~70 MB/s at the peak,
+// and while the host's sync thread is away nothing drains and the pusher's 512-record ring overflows; that thread
+// has been seen away for 75 ms at a stretch, so the sync FIFO holds a quarter second of the peak.
 constexpr uint32_t kEthFifoBytes = 1u << 20;
+constexpr uint32_t kEthSyncFifoBytes = 16u << 20;
 constexpr uint32_t kEthRingBytes = 8192;  // model::kRingSamples raw samples of 16 B (eth_clock_pusher.cpp)
 constexpr uint32_t kEthSyncRingBytes = kernel_profiler::kSyncRingBytes;
 // A drainer's control block: done and heartbeat words, then the stop word one stride up.
@@ -769,7 +772,8 @@ bool Devices::launch_eth_pusher(
                 .core_type = HalProgrammableCoreType::IDLE_ETH,
                 .cfg = eth_l1_.cfg,
                 .sync_cfg = eth_l1_.sync_cfg,
-                .fifo_bytes = kEthFifoBytes},
+                .fifo_bytes = kEthFifoBytes,
+                .sync_fifo_bytes = kEthSyncFifoBytes},
             std::move(dprogram),
             "idle-eth drainer")) {
         return false;
@@ -803,7 +807,7 @@ bool Devices::launch_drainer(
             socket = make_socket(mesh_device, coord, d.core.phys, l1.fifo_bytes, l1.cfg, l1.core_type);
         }
         if (l1.sync_cfg != 0) {
-            sync_socket = make_socket(mesh_device, coord, d.core.phys, l1.fifo_bytes, l1.sync_cfg, l1.core_type);
+            sync_socket = make_socket(mesh_device, coord, d.core.phys, l1.sync_fifo_bytes, l1.sync_cfg, l1.core_type);
         }
         // A stale done, heartbeat or stop word from the previous run reads as this run's live state (teardown leaves
         // stop at 1 or 2, and the drainer loop exits on nonzero stop).
