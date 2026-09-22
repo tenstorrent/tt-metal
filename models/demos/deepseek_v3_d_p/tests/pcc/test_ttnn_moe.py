@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_ep_mesh_composer,
     get_gate_outputs,
+    get_max_payload_size,
     get_sp_mesh_composer,
     get_tp_mesh_composer,
 )
@@ -536,9 +537,18 @@ def run_model(
         # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
         # fused-only sentinel for K2.7, 1792 for GLM 5.1/5.2, absent (single-op) everywhere else,
         # K3 included: its crossover is measured but parked until the split is enabled for it.
-        routed_expert_hybrid_token_threshold=getattr(
-            variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
+        # The variant's own constant, unless overridden. The override exists because the meshes
+        # that carry a threshold (kimi, kimi_k3) need more chips than the meshes combine's ring can
+        # run on, so on a smaller box there is otherwise no case where both halves are carried.
+        routed_expert_hybrid_token_threshold=(
+            int(os.environ["TT_MOE_HYBRID_THRESHOLD"])
+            if "TT_MOE_HYBRID_THRESHOLD" in os.environ
+            else getattr(variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None)
         ),
+        # Opt-in: collapses the two routed-expert dispatches and combine into one, and swaps
+        # combine onto fabric2d's ring transport. Off unless asked for -- it is a different
+        # transport from the one this model otherwise runs.
+        overlap_routed_expert_combine=os.environ.get("TT_MOE_OVERLAP_COMBINE") is not None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
@@ -893,7 +903,21 @@ def _ci_unsupported_param_combos_ds_moe(**params):
         # its non-TP ops on the assumption that this slot is an SP=8 run.
         pytest.param(
             (8, 1),
-            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            torus_y_device_params(
+                # FABRIC_PAYLOAD_SIZE is EMB_SIZE -- one byte per element, sized for the bf8 tokens
+                # the sequential combine carries. The overlapped combine needs bf16, so a token is
+                # twice that and no packet ever fits; get_max_payload_size() is the same figure the
+                # standalone combine test provisions, and includes the routing tail.
+                fabric_payload_size=(
+                    get_max_payload_size()
+                    if os.environ.get("TT_MOE_OVERLAP_COMBINE") is not None
+                    else DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                # Shrinking the worker allocation raises the allocator base by the same bytes and
+                # so widens the kernel-config ring below it, which is the only way to fit watcher
+                # instrumentation alongside the merged routed-expert + combine program.
+                **({"worker_l1_size": int(os.environ["TT_MOE_WORKER_L1"])} if "TT_MOE_WORKER_L1" in os.environ else {}),
+            ),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="torus-y-8x1",

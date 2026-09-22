@@ -209,6 +209,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
+        overlap_routed_expert_combine: bool = False,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -322,6 +323,24 @@ class TtMoe(LightweightModule):
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
+        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
+        # One dispatch for the routed experts AND combine, instead of three: the two routed-expert
+        # halves plus a separate combine. The merged op runs combine on grid rows 0-1 while the
+        # experts keep rows 2-9, ordered by a per-expert semaphore rather than by the dispatch
+        # boundary. Off by default -- it also swaps combine's transport from the direct op to
+        # fabric2d's ring, which this model has not otherwise run.
+        # The merged op only lays the routed expert's circular buffers into the shared arena when
+        # BOTH halves are carried; with no threshold the unified half keeps statically placed
+        # buffers, which collide with the arena combine needs. Fall back rather than reject: the
+        # threshold comes from the variant's config and not every variant has one.
+        if overlap_routed_expert_combine and not routed_expert_hybrid_token_threshold:
+            logger.warning(
+                "overlap_routed_expert_combine requested but this variant has no "
+                "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD; running the routed experts and combine "
+                "sequentially instead."
+            )
+            overlap_routed_expert_combine = False
+        self.overlap_routed_expert_combine = overlap_routed_expert_combine
         self.shared_hidden_dim = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
         self.use_latent_moe = self.routed_emb_dim != emb_dim
 
@@ -412,6 +431,7 @@ class TtMoe(LightweightModule):
             num_links=gate_config.ccl_config["NUM_LINKS"],
             experts_per_chip=experts_per_chip,
             use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+            replicate_offsets=self.overlap_routed_expert_combine,
         )
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
@@ -709,7 +729,13 @@ class TtMoe(LightweightModule):
             input_ids=input_ids,
         )
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+        (
+            tt_expert_offsets,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            _,
+            tt_replicated_offsets,
+        ) = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,
@@ -849,30 +875,77 @@ class TtMoe(LightweightModule):
         # tiles it internally for the extract loop. Either way the ROW_MAJOR input
         # is independent of the result and can be freed here, unless the PCC check
         # needs it to compare against the bfloat16 torch reference.
-        squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
-        if not return_intermediates:
-            dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
+        if self.overlap_routed_expert_combine:
+            # Steps 3 and 4 in ONE dispatch. The merged op takes the flat dispatch buffer, runs
+            # both routed-expert halves on grid rows 2-9 and combine on rows 0-1, and writes the
+            # combined result into a buffer the caller owns -- combine is an input here, not a
+            # returned tensor, because the op cannot allocate something that outlives its program.
+            signpost(header="HybridRoutedExpertCombine")
+            rex = self.routed_expert
+            flat_dispatch = ttnn.reshape(dispatched_buffer, (self.max_dispatch_buffer_token_size, self.routed_emb_dim))
+            # bf16 ROW_MAJOR, one page per (token, top-k slot): the spec combine would have
+            # produced for itself, and what the op validates this against.
+            combined_output = ttnn.zeros(
+                ttnn.Shape([1, 1, self.seq_len_per_chip, self.num_experts_per_tok, self.routed_emb_dim]),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+            )
+            expert_outputs = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
+                flat_dispatch,
+                tt_expert_region_offsets,
+                tt_expert_token_counts,
+                rex.global_expert_idx_table,
+                rex.gate_projs,
+                rex.up_projs,
+                rex.down_projs,
+                max_dispatched_tokens_per_expert=rex.max_tokens,
+                # None means "every expert on the unified half"; the op spells that 0.
+                hybrid_token_threshold=rex.hybrid_token_threshold or 0,
+                compute_kernel_config=rex.compute_kernel_config,
+                activation=rex.activation,
+                gate_biases=rex.gate_biases,
+                up_biases=rex.up_biases,
+                down_biases=rex.down_biases,
+                overlap_combine=True,
+                dispatched_metadata=metadata,
+                # Replicated along the ring axis: combine needs every origin chip's run
+                # boundaries, not just this chip's row.
+                expert_offsets=tt_replicated_offsets,
+                combine_output=combined_output,
+                num_experts_per_tok=self.num_experts_per_tok,
+                seq_len_per_chip=self.seq_len_per_chip,
+                cluster_axis=0,
+                num_links=self.row_num_links,
+                topology=self.row_topology,
+            )
+            if not return_intermediates:
+                dispatched_buffer = ttnn.deallocate(dispatched_buffer)
+        else:
+            squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
+            expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
+            if not return_intermediates:
+                dispatched_buffer = ttnn.deallocate(dispatched_buffer)
+            logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
-        # Add back the batch dimensions for combine
-        # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+            # Add back the batch dimensions for combine
+            # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
+            expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
+            expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
+            logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
 
-        # ========================================
-        # Step 4: Combine (enabled)
-        # ========================================
-        # Combine expects TILE_LAYOUT input
-        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
+            # ========================================
+            # Step 4: Combine (enabled)
+            # ========================================
+            # Combine expects TILE_LAYOUT input
+            logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
 
-        combined_output = self.combine_module(
-            expert_outputs,
-            metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-        )
+            combined_output = self.combine_module(
+                expert_outputs,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 
         # ========================================

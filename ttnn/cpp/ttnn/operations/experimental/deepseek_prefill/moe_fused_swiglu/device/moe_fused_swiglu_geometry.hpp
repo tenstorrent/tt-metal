@@ -135,7 +135,18 @@ public:
         bool x_is_rm_,
         // Defaulted so the bias-free callers -- every one of them today -- are unchanged, and so
         // the constructor's L1-budget tuning sees the bias CBs like any other.
-        bool fuse_bias_ = false);
+        bool fuse_bias_ = false,
+        // The granularity the consumer will round each circular buffer up to when it lays them
+        // out. Defaulted to 1 -- no rounding -- for callers whose allocator absorbs the padding
+        // itself; a caller packing these buffers into its own arena must pass the real alignment,
+        // or the budget tuning below stops shrinking while the laid-out total still overflows.
+        uint32_t l1_alignment_ = 1,
+        // The page sizes the caller will actually lay these buffers out with. Defaulted to the
+        // minimum so existing callers are unchanged; a caller whose index/counts tensors page
+        // larger must pass the real values, or the budget tuning models buffers smaller than the
+        // ones it goes on to allocate.
+        uint32_t budget_idx_page_ = 64,
+        uint32_t budget_counts_page_ = 64);
 
     std::vector<CbView> cb_layout(
         bool input_is_rm, uint32_t requested_out_tile, uint32_t idx_page, uint32_t counts_page) const;
@@ -200,6 +211,9 @@ public:
     bool enable_phase_alias;
     bool x_is_rm;
     uint32_t l1_budget;
+    uint32_t l1_alignment;
+    uint32_t budget_idx_page;
+    uint32_t budget_counts_page;
     bool wd_resident;
     uint32_t depth_wd;
     bool wd_packed;

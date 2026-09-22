@@ -4,6 +4,8 @@
 
 #include "hybrid_routed_expert_ffn.hpp"
 
+#include <cstdlib>
+
 #include "device/hybrid_routed_expert_ffn_device_operation.hpp"
 #include "device/hybrid_program_factory.hpp"
 #include "device/combine_fabric2d_placement.hpp"
@@ -189,7 +191,12 @@ ttnn::Tensor hybrid_routed_expert_moe(
         constexpr uint32_t kSemaphoreBlock = 64;
         const uint32_t floor =
             overlap_combine ? (3 + combine::MAX_UNTILIZERS_PER_GROUP + num_links) * kSemaphoreBlock : 0;
-        const uint32_t arena_bytes = hybrid_l1_arena_bytes(device) - floor;
+        // Debug escape hatch. The arena otherwise claims every byte above the allocator base, so
+        // anything else holding L1 -- watcher's per-core state, most notably -- makes it
+        // unallocatable. Held at zero for real runs; set only to make the op instrumentable.
+        const char* slack_env = std::getenv("TT_HYBRID_ARENA_SLACK");
+        const uint32_t slack = slack_env != nullptr ? static_cast<uint32_t>(std::atoi(slack_env)) : 0;
+        const uint32_t arena_bytes = hybrid_l1_arena_bytes(device) - floor - slack;
         const uint32_t cols = arena_bytes / 2;  // bfloat16 elements
 
         // Overlapping spans the WHOLE compute grid, not just the routed expert's rectangle:

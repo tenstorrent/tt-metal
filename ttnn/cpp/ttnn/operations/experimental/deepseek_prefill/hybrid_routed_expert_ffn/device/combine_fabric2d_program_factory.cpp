@@ -177,17 +177,6 @@ void validate_allocations(
           std::pair{&output, "output"}}) {
         TT_FATAL(tensor->buffer() != nullptr, "combine_fabric2d: {} has no device buffer", name);
     }
-    // The untilizer reads the control tables one expert-row at a time, num_routed_experts*4 bytes
-    // straight from DRAM into L1 at row_bytes strides. A DRAM read needs a 64-byte-aligned L1
-    // destination, so a row that is not a multiple of 64 misaligns every row after the first.
-    // Without this the transaction is silently dropped or corrupts; only watcher names it.
-    const uint32_t control_row_bytes = static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]) * 4;
-    TT_FATAL(
-        control_row_bytes % 64 == 0,
-        "combine_fabric2d: num_routed_experts ({}) must be a multiple of 16 -- the control-table row is {} B "
-        "and a DRAM read needs a 64-byte-aligned L1 destination",
-        control_row_bytes / 4,
-        control_row_bytes);
     TT_FATAL(
         output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),
         "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
@@ -551,7 +540,144 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     return desc;
 }
+
+// ---- Input validation, carried over from the standalone op ----------------------------------
+//
+// CombineFabric2dDeviceOperation::validate_on_program_cache_miss does not run on the merged path:
+// this op vendors combine's program factory, not its device operation, so nothing checked these
+// until now and a bad input reached the kernels as a hang instead of a message.
+
+void validate_dram_interleaved(const ttnn::Tensor& t, const char* tensor_name) {
+    TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "combine: {} must be on device", tensor_name);
+    TT_FATAL(
+        t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+            t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "combine: {} must be an interleaved DRAM tensor",
+        tensor_name);
+}
+
+void validate_dram_row_major(const ttnn::Tensor& t, const char* tensor_name) {
+    validate_dram_interleaved(t, tensor_name);
+    TT_FATAL(
+        t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "combine: {} must be ROW_MAJOR so one row is exactly one page",
+        tensor_name);
+}
+
+void validate_control_tensor(
+    const ttnn::Tensor& t, uint32_t rows, uint32_t num_routed_experts_, const char* tensor_name) {
+    validate_dram_row_major(t, tensor_name);
+    TT_FATAL(
+        t.dtype() == tt::tt_metal::DataType::INT32 || t.dtype() == tt::tt_metal::DataType::UINT32,
+        "combine: {} must be INT32 or UINT32, got {}",
+        tensor_name,
+        t.dtype());
+    const auto& shape = t.logical_shape();
+    TT_FATAL(
+        shape[-1] == static_cast<int32_t>(num_routed_experts_),
+        "combine: {} last dim is {} but num_routed_experts is {}",
+        tensor_name,
+        shape[-1],
+        num_routed_experts_);
+    TT_FATAL(
+        shape[-2] == static_cast<int32_t>(rows),
+        "combine: {} second-to-last dim is {}, expected {}. expert_offsets must be REPLICATED along the "
+        "dispatch-group axis; counts and region offsets arrive with a single row.",
+        tensor_name,
+        shape[-2],
+        rows);
+}
+
 }  // namespace
+
+void validate_inputs(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    TT_FATAL(args.device != nullptr, "combine: requires a mesh device in attributes");
+    TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "combine: num_links must be 1..4 (got {})", args.num_links);
+    TT_FATAL(
+        args.axis < args.device->shape().dims(),
+        "combine: axis {} is out of range for a {} mesh",
+        args.axis,
+        args.device->shape());
+    const uint32_t extent = ring_extent(args);
+    TT_FATAL(extent >= 4, "combine: axis {} extent {} needs 4+ chips", args.axis, extent);
+    TT_FATAL(extent % 2 == 0, "combine: axis {} extent {} must be even", args.axis, extent);
+    TT_FATAL(args.experts_per_chip >= 1, "combine: experts_per_chip must be >= 1");
+    TT_FATAL(args.num_experts_per_tok >= 1, "combine: num_experts_per_tok must be >= 1");
+    TT_FATAL(args.seq_len_per_chip >= 1, "combine: seq_len_per_chip must be >= 1");
+
+    const auto& buf = tensor_args.dispatched_buffer;
+    validate_dram_interleaved(buf, "dispatched_buffer");
+    TT_FATAL(
+        buf.layout() == tt::tt_metal::Layout::ROW_MAJOR || buf.layout() == tt::tt_metal::Layout::TILE,
+        "combine: dispatched_buffer must be ROW_MAJOR or TILE, got {}",
+        buf.layout());
+    const uint32_t token_page = token_size_bytes(tensor_args);
+    TT_FATAL(
+        buf.layout() == tt::tt_metal::Layout::TILE ||
+            token_page == static_cast<uint32_t>(buf.buffer()->aligned_page_size()),
+        "combine: ROW_MAJOR dispatched_buffer pages by {} B but a token is {} B",
+        buf.buffer()->aligned_page_size(),
+        token_page);
+    TT_FATAL(token_page % 16 == 0, "combine: token page {} B must be 16-byte aligned", token_page);
+    TT_FATAL(
+        (token_page + hyb_cmbf2d::FORWARDING_METADATA_SIZE) % 64 == 0,
+        "combine: token page {} B + {} B of forwarding metadata must be 64-byte aligned",
+        token_page,
+        hyb_cmbf2d::FORWARDING_METADATA_SIZE);
+    TT_FATAL(
+        token_page + hyb_cmbf2d::FORWARDING_METADATA_SIZE <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        "combine: token page {} B + {} B routing tail exceeds the fabric max payload {}",
+        token_page,
+        hyb_cmbf2d::FORWARDING_METADATA_SIZE,
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    TT_FATAL(
+        buf.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "combine: dispatched_buffer must be BFLOAT16, got {}. BFLOAT8_B needs a dequantise the untilizer cores "
+        "do not do.",
+        buf.dtype());
+    const auto buf_shape = buf.logical_shape();
+    TT_FATAL(buf_shape.rank() >= 2, "combine: dispatched_buffer must be rank 2 or more");
+
+    const auto& meta = tensor_args.dispatched_metadata;
+    validate_dram_row_major(meta, "dispatched_metadata");
+    TT_FATAL(
+        meta.dtype() == tt::tt_metal::DataType::INT32,
+        "combine: dispatched_metadata must be INT32, got {}",
+        meta.dtype());
+    const auto meta_shape = meta.logical_shape();
+    TT_FATAL(
+        meta_shape[-1] == 3,
+        "combine: dispatched_metadata last dim is {}, expected 3 (linearized_coord, token_idx, topk_idx)",
+        meta_shape[-1]);
+    TT_FATAL(
+        meta_shape[-2] == buf_shape[-2],
+        "combine: dispatched_metadata holds {} slots but dispatched_buffer holds {}; they index the same flat "
+        "buffer so the two must match",
+        meta_shape[-2],
+        buf_shape[-2]);
+
+    const uint32_t experts = num_routed_experts(tensor_args);
+    TT_FATAL(
+        experts % args.experts_per_chip == 0,
+        "combine: num_routed_experts {} must be divisible by experts_per_chip {}",
+        experts,
+        args.experts_per_chip);
+    const uint32_t experts_per_group = args.experts_per_chip * extent;
+    TT_FATAL(
+        experts >= experts_per_group && experts % experts_per_group == 0,
+        "combine: num_routed_experts {} must be a nonzero multiple of experts_per_chip x ring extent = {}",
+        experts,
+        experts_per_group);
+    TT_FATAL(
+        (experts * sizeof(uint32_t)) % 64 == 0,
+        "combine: num_routed_experts {} must be a multiple of 16 so a control-table row ({} B) is 64-byte "
+        "aligned",
+        experts,
+        experts * sizeof(uint32_t));
+    validate_control_tensor(tensor_args.expert_token_counts, 1, experts, "expert_token_counts");
+    validate_control_tensor(tensor_args.expert_region_offsets, 1, experts, "expert_region_offsets");
+    validate_control_tensor(tensor_args.expert_offsets, extent, experts, "expert_offsets");
+}
 
 uint32_t stream_worker_l1_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     return stream_worker_l1_bytes_impl(args, tensor_args);

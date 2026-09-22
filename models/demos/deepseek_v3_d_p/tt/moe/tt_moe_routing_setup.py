@@ -122,6 +122,7 @@ class TtMoERoutingSetup(LightweightModule):
         num_links: int = 1,
         experts_per_chip: int = 32,
         use_l1_small_for_semaphores: bool = False,
+        replicate_offsets: bool = False,
     ):
         """
         Initialize routing setup with the expert-to-chip mapping.
@@ -147,6 +148,11 @@ class TtMoERoutingSetup(LightweightModule):
         self.num_links = num_links
         self.experts_per_chip = experts_per_chip
         self.use_l1_small_for_semaphores = use_l1_small_for_semaphores
+        # Combine's fabric2d transport needs every chip to hold every ORIGIN chip's run
+        # boundaries, where dispatch needs only its own row. Produced here rather than by the
+        # caller so the gather rides alongside the routing work instead of sitting on the
+        # routed-expert critical path.
+        self.replicate_offsets = replicate_offsets
 
         self.experts_in_dispatch_group = ttnn.from_torch(
             expert_dispatch_table,
@@ -237,4 +243,24 @@ class TtMoERoutingSetup(LightweightModule):
             use_l1_small_for_semaphores=self.use_l1_small_for_semaphores,
         )
 
-        return global_dispatch_offsets, total_counts_per_expert, expert_region_offsets, expert_histograms
+        replicated_dispatch_offsets = None
+        if self.replicate_offsets:
+            # The same call offset_cumsum gathers the histograms with: the async all_gather
+            # hangs on a [1, W] UINT32 ROW_MAJOR tensor whatever dim or topology it is given,
+            # and this one does not. Topology stays unset so the op matches whatever the fabric
+            # realized -- TORUS_Y degrades to MESH on boxes without wrap-around cabling.
+            replicated_dispatch_offsets = ttnn.all_gather(
+                global_dispatch_offsets,
+                dim=0,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                num_links=self.num_links,
+            )
+
+        return (
+            global_dispatch_offsets,
+            total_counts_per_expert,
+            expert_region_offsets,
+            expert_histograms,
+            replicated_dispatch_offsets,
+        )

@@ -84,7 +84,10 @@ Blocking::Blocking(
     uint32_t out_tile_,
     bool enable_phase_alias_,
     bool x_is_rm_,
-    bool fuse_bias_) :
+    bool fuse_bias_,
+    uint32_t l1_alignment_,
+    uint32_t budget_idx_page_,
+    uint32_t budget_counts_page_) :
     fuse_bias(fuse_bias_),
     hgroups(hgroups_),
     kgroups(kgroups_),
@@ -102,7 +105,10 @@ Blocking::Blocking(
     out_tile(out_tile_ == 0 ? bfp8_tile_ : out_tile_),
     enable_phase_alias(enable_phase_alias_),
     x_is_rm(x_is_rm_),
-    l1_budget(l1_budget_) {
+    l1_budget(l1_budget_),
+    l1_alignment(l1_alignment_ == 0 ? 1 : l1_alignment_),
+    budget_idx_page(budget_idx_page_),
+    budget_counts_page(budget_counts_page_) {
     TT_FATAL(kgroups >= 2, "moe_fused_swiglu: grid must be at least two rows tall");
     TT_FATAL(emb % TILE == 0 && hidden % TILE == 0, "moe_fused_swiglu: embedding and hidden must be tile-aligned");
     TT_FATAL(pow2_ceil(M_BLOCK) == M_BLOCK, "moe_fused_swiglu: M_BLOCK must be a power of two");
@@ -440,8 +446,11 @@ std::vector<CbAllocation> Blocking::cb_allocations(
 
 uint64_t Blocking::l1_bytes(bool input_is_rm, uint32_t requested_out_tile, bool aliases_enabled) const {
     uint64_t total = 0;
-    for (const auto& allocation : cb_allocations(input_is_rm, requested_out_tile, 64, 64, aliases_enabled)) {
-        total += allocation.total_size;
+    for (const auto& allocation :
+         cb_allocations(input_is_rm, requested_out_tile, budget_idx_page, budget_counts_page, aliases_enabled)) {
+        // Rounded per buffer, not summed raw: a consumer that packs these end to end advances by
+        // the aligned size of each, so a raw sum reads under the space they will actually take.
+        total += (allocation.total_size + l1_alignment - 1) / l1_alignment * l1_alignment;
     }
     return total;
 }

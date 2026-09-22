@@ -29,6 +29,10 @@ struct CombineFabric2dProgramFactory {
         uint32_t arena_bytes_per_core);
 };
 
+// Combine's own input validation. The merged op vendors this factory, not the device operation, so
+// validate_on_program_cache_miss never runs and nothing else checks these.
+void validate_inputs(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args);
+
 // Bytes above the allocator base that combine hand-places on its stream-worker cores. Those cores
 // carry no circular buffers, so an arena descending into them would go unnoticed; size it to start
 // above this.

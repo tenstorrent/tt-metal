@@ -458,6 +458,17 @@ void append_to_descriptor(
     const uint32_t l1_budget = operation_arguments.l1_arena_bytes;
     TT_FATAL(l1_budget > 0, "moe_fused_swiglu: the shared L1 arena is empty");
 
+    const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
+    const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
+    const uint32_t dram_alignment = hal::get_dram_alignment();
+    const uint32_t idx_page =
+        std::max<uint32_t>(tensor_arguments.global_expert_idx_table.buffer()->aligned_page_size(), dram_alignment);
+    const uint32_t start_page = std::max<uint32_t>(start_tensor.buffer()->aligned_page_size(), dram_alignment);
+    // aligned_page_size() is a 64-bit DeviceAddr, and a narrowing conversion inside a braced-init
+    // list is ill-formed, so the cast is what lets the three bounds share one std::max.
+    const uint32_t counts_page = std::max<uint32_t>(
+        {static_cast<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size()), dram_alignment, start_page});
+
     geo::Blocking blocking(
         hgroups,
         kgroups,
@@ -472,18 +483,13 @@ void append_to_descriptor(
         output_tile,
         /*enable_phase_alias_=*/true,
         activations_are_row_major,
-        operation_arguments.fuse_bias);
+        operation_arguments.fuse_bias,
+        // The merge packs these buffers into the arena one after another, rounding each up, so the
+        // blocking has to be tuned against that same total rather than the raw sum.
+        hal::get_l1_alignment(),
+        idx_page,
+        counts_page);
 
-    const bool direct_write = tensor_arguments.expert_region_offsets.has_value();
-    const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
-    const uint32_t dram_alignment = hal::get_dram_alignment();
-    const uint32_t idx_page =
-        std::max<uint32_t>(tensor_arguments.global_expert_idx_table.buffer()->aligned_page_size(), dram_alignment);
-    const uint32_t start_page = std::max<uint32_t>(start_tensor.buffer()->aligned_page_size(), dram_alignment);
-    // aligned_page_size() is a 64-bit DeviceAddr, and a narrowing conversion inside a braced-init
-    // list is ill-formed, so the cast is what lets the three bounds share one std::max.
-    const uint32_t counts_page = std::max<uint32_t>(
-        {static_cast<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size()), dram_alignment, start_page});
     const bool phase_alias = blocking.phase_cb_alias(output_tile);
     const uint64_t l1_need = blocking.l1_bytes(activations_are_row_major, output_tile, true);
     TT_FATAL(
@@ -2903,6 +2909,12 @@ uint32_t arena_bytes_for(tt::tt_metal::IDevice* device, uint32_t reserved_for_co
         reserved_for_combine,
         usable);
     usable -= reserved_for_combine;
+    // Bounded by what the allocator can actually hand out, not just by the address space above
+    // the base. The arena is one contiguous per-bank allocation, so anything else resident --
+    // another op's L1 tensors, watcher's per-core state -- caps it at the largest free block,
+    // and sizing off the address space alone makes the arena unallocatable rather than smaller.
+    const auto stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
+    usable = std::min(usable, static_cast<uint32_t>(stats.largest_free_block_bytes));
     // Whole 64B units, so the arena tensor's shard shape is exact.
     return usable & ~static_cast<uint32_t>(63);
 }
@@ -3033,6 +3045,13 @@ unified::UnifiedRoutedExpertFfnInputs unified_inputs(const HybridRoutedExpertFfn
 
 }  // namespace
 
+namespace {
+// Defined with the rest of the combine adapters further down; declared here because
+// validate_arguments runs combine's own checks and comes first in the file.
+combine::CombineFabric2dParams combine_attributes(const HybridRoutedExpertFfnParams& op, ttnn::MeshDevice* device);
+combine::CombineFabric2dInputs combine_inputs(const HybridRoutedExpertFfnInputs& t);
+}  // namespace
+
 void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t) {
     if (op.overlap_combine) {
         // Everything combine_inputs dereferences, checked here because that adapter runs inside
@@ -3065,6 +3084,10 @@ void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoute
             "hybrid_routed_expert_ffn: combine_output must be BFLOAT16 ROW_MAJOR, got {} {}",
             combined.dtype(),
             combined.layout());
+
+        // Everything the standalone combine op checks about its own inputs. Its device operation
+        // is not vendored, so this is the only place those run on the merged path.
+        combine::validate_inputs(combine_attributes(op, t.x.device()), combine_inputs(t));
     }
 
     // Each half validates what it will actually be handed, including its own band, so a merged

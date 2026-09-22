@@ -85,9 +85,14 @@ FORCE_INLINE void hybrid_expert_ready_wait(uint32_t expert) {
     volatile tt_l1_ptr uint32_t* sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(HYB_EXPERT_READY_SEM_ID));
     const uint32_t target = HYB_EXPERT_READY_PRIOR + HYB_EXPERT_READY_WRITERS * (expert + 1);
+    // Named so a stalled core is attributable: without it this spin shows whatever waypoint the
+    // kernel last set, and a core waiting on the routed expert is indistinguishable from one doing
+    // NoC work.
+    WAYPOINT("EXRW");
     while (*sem < target) {
         invalidate_l1_cache();
     }
+    WAYPOINT("EXRD");
 }
 
 #else
