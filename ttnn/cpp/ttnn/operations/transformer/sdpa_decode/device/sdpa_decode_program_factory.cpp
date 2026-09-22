@@ -684,10 +684,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = k_mcast_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
 
-    // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
-    // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
+    // Sharded ROW_MAJOR Q is one user's [heads, DH] shard, read in one shot. q_tiles is
+    // already PNHt * DHt, so scaling that by num_q_heads counts the head axis twice and the
+    // read is PNHt times the shard (128 KB into the 64 KB Q CB at 64 heads).
+    // Tiny tiles skip the bottom half of each tile instead of using this length.
     const uint32_t q_chunk_size_bytes =
-        q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
+        tilize_q ? DHt * num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tiles * q_tile_size;
 
     // Page size the dataflow kernels address Q and the output with. A ROW_MAJOR buffer is paged by
     // head row, not by tile, so the kernels must walk it a row at a time; overriding the page size
