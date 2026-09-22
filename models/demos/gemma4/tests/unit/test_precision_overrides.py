@@ -95,3 +95,46 @@ def test_ccl_topology_rejects_an_unknown_name(tmp_path, monkeypatch, expect_erro
     monkeypatch.setattr("models.demos.gemma4.tt.precision._PATH", str(path))
     with expect_error(ValueError, "expected 'ring' or 'linear'"):
         Gemma4Precision.load("/x/m", (1, 8))
+
+
+# --- single_tile_dest_acc: per-arch form -------------------------------------
+# 31B turns the flag off as a workaround for Wormhole #38306 (HiFi3 with fp32
+# dest-accumulation). Written model-wide it also turned it off on Blackhole,
+# which main neither needs nor validates. The object form says which arch the
+# workaround is for; an arch it does not name keeps the default.
+
+
+def _write(tmp_path, monkeypatch, overrides):
+    path = tmp_path / "precision_overrides.json"
+    path.write_text(json.dumps(overrides))
+    monkeypatch.setattr("models.demos.gemma4.tt.precision._PATH", str(path))
+
+
+def test_dest_acc_per_arch_object_applies_only_to_the_named_arch(tmp_path, monkeypatch):
+    _write(tmp_path, monkeypatch, {"m": {"single_tile_dest_acc": {"wormhole_b0": False}}})
+    monkeypatch.setattr("models.common.utility_functions.is_blackhole", lambda: False)
+    assert Gemma4Precision.load("/x/m", (1, 8)).single_tile_dest_acc is False
+    # Blackhole is not named, so it keeps the default rather than the workaround.
+    monkeypatch.setattr("models.common.utility_functions.is_blackhole", lambda: True)
+    assert Gemma4Precision.load("/x/m", (1, 8)).single_tile_dest_acc is True
+
+
+def test_dest_acc_plain_boolean_still_applies_everywhere(tmp_path, monkeypatch):
+    """A genuine model preference stays a bare bool and holds on every arch."""
+    _write(tmp_path, monkeypatch, {"m": {"single_tile_dest_acc": False}})
+    for blackhole in (False, True):
+        monkeypatch.setattr("models.common.utility_functions.is_blackhole", lambda bh=blackhole: bh)
+        assert Gemma4Precision.load("/x/m", (1, 8)).single_tile_dest_acc is False
+
+
+def test_dest_acc_rejects_an_unknown_arch_key(tmp_path, monkeypatch, expect_error):
+    """Raise rather than silently take the default, matching ccl_topology."""
+    _write(tmp_path, monkeypatch, {"m": {"single_tile_dest_acc": {"grayskull": False}}})
+    with expect_error(ValueError, "unknown arch"):
+        Gemma4Precision.load("/x/m", (1, 8))
+
+
+def test_31b_keeps_the_workaround_on_wormhole(monkeypatch):
+    """The shipped entry must still resolve False on the arch it was measured on."""
+    monkeypatch.setattr("models.common.utility_functions.is_blackhole", lambda: False)
+    assert Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8)).single_tile_dest_acc is False

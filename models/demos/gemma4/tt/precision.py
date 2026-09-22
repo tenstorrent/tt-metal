@@ -42,6 +42,16 @@ _DTYPE_BY_NAME = {
 }
 
 
+_ARCH_KEYS = ("wormhole_b0", "blackhole")
+
+
+def _current_arch_key():
+    """Arch key for per-arch override objects."""
+    from models.common.utility_functions import is_blackhole
+
+    return "blackhole" if is_blackhole() else "wormhole_b0"
+
+
 def dtype_to_str(dtype):
     """Short stable string for cache-filename suffixes ("bf16" / "bfp8" / "fp32").
 
@@ -197,9 +207,24 @@ class Gemma4Precision:
                 "this flag is model-wide; put it on the model entry, not a mesh entry"
             )
         dest_acc = model_entry.get("single_tile_dest_acc", DEFAULT_SINGLE_TILE_DEST_ACC)
+        if isinstance(dest_acc, dict):
+            # Per-arch form, for a flag that is a workaround rather than a
+            # preference: an arch the object does not name keeps the default.
+            # 31B needs it because its reason -- Wormhole #38306, HiFi3 paired
+            # with fp32 dest-accumulation -- is a Wormhole hardware bug, and
+            # writing the workaround model-wide also turned it off on Blackhole,
+            # where main runs 31B with the default and passes.
+            unknown = sorted(set(dest_acc) - set(_ARCH_KEYS))
+            if unknown:
+                raise ValueError(
+                    f"precision_overrides.json[{model_key}][single_tile_dest_acc] has unknown arch "
+                    f"key(s) {unknown} — expected one of {sorted(_ARCH_KEYS)}"
+                )
+            dest_acc = dest_acc.get(_current_arch_key(), DEFAULT_SINGLE_TILE_DEST_ACC)
         if not isinstance(dest_acc, bool):
             raise ValueError(
-                f"precision_overrides.json[{model_key}][single_tile_dest_acc]=" f"{dest_acc!r} — expected true or false"
+                f"precision_overrides.json[{model_key}][single_tile_dest_acc]={dest_acc!r} — "
+                f"expected true or false, or an object keyed by {sorted(_ARCH_KEYS)}"
             )
         # Same model-wide argument as single_tile_dest_acc above.
         if "ccl_topology" in raw:

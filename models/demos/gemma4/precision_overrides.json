@@ -19,7 +19,8 @@
   "gemma-4-31B-it": {
     "_comment_ccl_topology": "31B pins Linear at max_seq_len >= 128k; below that the pin is dropped so short/64k decode stays on Ring. Ring and the swept decode table each independently tip 31B long-context-128k into a repetition loop, and Ring is the half that costs accuracy: measured as a 2x2 on a real WH T3K, Linear+no-sweep is CLEAN (718 chars, md5 d1c6e4f208, three runs), Linear+sweep DEGENERATES (546 chars, 39x loop), Ring+no-sweep DEGENERATES (532 chars, 40x loop), Ring+sweep DEGENERATES identically. Ring is worth ~10% TTFT on 31B (77.5s -> 69.8s) but 128k correctness outranks it. 12B is unaffected and keeps Ring.",
     "ccl_topology": "linear",
-    "single_tile_dest_acc": false,
+    "single_tile_dest_acc": { "wormhole_b0": false },
+    "_comment_single_tile_dest_acc": "Wormhole-only on purpose. 31B looped at 128k on a WH T3K because single_tile_matmul_ckc paired HiFi3 with fp32 dest-accumulation, which is Wormhole #38306; every measurement behind it (WH T3K 1x8, real weights, long-context-128k) is Wormhole. Written model-wide it also turned the flag off on Blackhole, which main neither needs nor validates -- main runs 31B there with the default and passes. An arch this object does not name keeps the default.",
     "default": {
       "shared_mlp": "bfp8",
       "attention": "bfp8"
