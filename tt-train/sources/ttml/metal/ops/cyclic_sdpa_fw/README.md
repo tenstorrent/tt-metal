@@ -213,3 +213,19 @@ Loudbox: `LoudboxRingSDPATest.CyclicForward*` (4 tests, 2x4 mesh by default,
 `TTML_LOUDBOX_RING8=1` for the 1x8 ring) run the ring forward and backward
 end to end against a host reference, graded like `sdpa_fw`. Run from the
 tt-metal root with `TT_METAL_HOME` and `TT_METAL_RUNTIME_ROOT` set.
+
+## Audit experiments (2026-09-22)
+
+From the tt-llk audit skills' findings (tt-flash-attn `docs/audit-2026-09-22.md`),
+all neutral in time and kept as bit-identical simplifications: the pack
+thread's exponential framed as the backward frames it (no per-tile MATH stall;
+`FW_EXPERIMENT_LLK_EXP_FRAMING` restores the LLK's), its body recorded once
+per column in the replay buffer (`FW_EXPERIMENT_REPLAY_PER_FACE` restores the
+old form), the MAX reductions' init hoisted out of the per-tile loop. The
+guard-free exponential with a finite mask value (`MASK=<bf16 bits>` with
+`EXP_GUARD=0`) is wrong: the guard is what makes a masked probability an exact
+zero (argument clamped to 0, polynomial exactly 1.0, exponent 0 gives +0.0); a
+saturated conversion leaves a denormal with a garbage mantissa that the output
+matmul turns into inf while the sum's reduction flushes it. Also from the audit:
+a cache fence before the lazy verdict's raw L1 reads and the rounding reset
+moved after the DST release.
