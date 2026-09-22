@@ -15,6 +15,8 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_device_operation.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op_types.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
@@ -833,6 +835,40 @@ std::vector<std::optional<Tensor>> mul_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+    // Hard invariants raise so caller errors (bad storage, cross-device, preallocated
+    // dtype/shape mismatch) cannot be silently coerced. Soft reasons (int/uint dtype,
+    // ROW_MAJOR, non-32x32 tile, broadcast, sharded, partial mask, A1) drop to composite.
+    const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
+        operations::binary_backward::BinaryBackwardOpType::MUL_BW,
+        grad_tensor_arg,
+        input_tensor_arg,
+        other_tensor_arg,
+        input_grad,
+        other_grad);
+    TT_FATAL(!hard.has_value(), "{}", hard.value_or(std::string{}));
+    const auto soft = operations::binary_backward::BinaryBackwardDeviceOperation::soft_fallback_reason(
+        operations::binary_backward::BinaryBackwardOpType::MUL_BW,
+        grad_tensor_arg,
+        input_tensor_arg,
+        other_tensor_arg,
+        output_mem_config,
+        {are_required_outputs.at(0), are_required_outputs.at(1)},
+        input_grad,
+        other_grad);
+    if (!soft.has_value()) {
+        auto outs = operations::binary_backward::launch_binary_backward(
+            operations::binary_backward::BinaryBackwardOpType::MUL_BW,
+            grad_tensor_arg,
+            input_tensor_arg,
+            other_tensor_arg,
+            tt::tt_metal::DataType::INVALID,
+            output_mem_config.value_or(input_tensor_arg.memory_config()),
+            {true, true},
+            input_grad,
+            other_grad);
+        return {outs[0], outs[1]};
+    }
+
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad,
