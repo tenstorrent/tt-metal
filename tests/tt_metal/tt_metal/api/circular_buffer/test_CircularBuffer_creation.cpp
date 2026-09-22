@@ -26,8 +26,7 @@
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-// Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -48,10 +47,10 @@ bool test_cb_config_written_to_core(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     vector<uint32_t> cb_config_vector;
+    auto mesh_device_for_cb = mesh_device;
 
     for (const auto& cb : program.circular_buffers()) {
         for (const CoreRange& core_range : cb->core_ranges().ranges()) {
@@ -59,11 +58,12 @@ bool test_cb_config_written_to_core(
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     uint32_t cb_config_buffer_size =
-                        program.impl().get_cb_size(device, core_coord, tt::CoreType::WORKER);
+                        workload.get_cb_size(mesh_device_for_cb, core_coord, tt::CoreType::WORKER);
 
-                    auto sem_base_addr = program.impl().get_sem_base_addr(device, core_coord, tt::CoreType::WORKER);
-                    tt::tt_metal::detail::ReadFromDeviceL1(
-                        device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
+                    auto sem_base_addr =
+                        workload.get_sem_base_addr(mesh_device_for_cb, core_coord, tt::CoreType::WORKER);
+                    slow_dispatch::ReadFromL1(
+                        *mesh_device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
 
                     for (const auto& [buffer_index, golden_cb_config] : cb_config_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;

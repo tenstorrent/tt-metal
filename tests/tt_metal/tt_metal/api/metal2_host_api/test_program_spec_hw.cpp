@@ -32,6 +32,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "test_helpers.hpp"
 #include "impl/program/program_impl.hpp"  // ScratchpadBaseReDeliveredAfterDfbResize: DFB allocated-address query
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -348,11 +349,10 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
 TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;  // CTA value folded into the XOR (not a DFB size)
     constexpr uint32_t num_tiles = 8;      // CRTA value folded into the XOR
-    const uint32_t report_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t report_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     const NodeCoord node{0, 0};
 
@@ -398,12 +398,12 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> zero_report(1, 0u);
-    detail::WriteToDeviceL1(device, node, report_addr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, report_addr, zero_report);
 
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, report_addr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     EXPECT_EQ(reported[0], kTargetXorSum);
 }
@@ -515,11 +515,10 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
 
 TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;  // CTA value folded into the XOR (not a DFB size)
     constexpr uint32_t num_tiles = 8;      // CRTA value folded into the XOR
-    const uint32_t report_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t report_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     const NodeCoord node{0, 0};
 
@@ -552,12 +551,12 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> zero_report(1, 0u);
-    detail::WriteToDeviceL1(device, node, report_addr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, report_addr, zero_report);
 
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, report_addr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     EXPECT_EQ(reported[0], kTargetXorSum);
 }
@@ -795,7 +794,6 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 
 TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t kReportAddr = 100 * 1024;  // host-known fixed L1 addr (same idiom as ScratchpadWriteReadback)
     constexpr uint32_t kNumReportWords = 4;
@@ -831,12 +829,12 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> zero_report(kNumReportWords, 0u);
-    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
 
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), kNumReportWords);
 
     const uint32_t expected_address = static_cast<uint32_t>(local_tensor.address());
@@ -906,7 +904,6 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
 // real, writable, node-local L1" and "the framework delivered its base address to the kernel".
 TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t kScratchpadBytes = 64;                            // 16 x uint32_t
     constexpr uint32_t kNumElems = kScratchpadBytes / sizeof(uint32_t);  // 16
@@ -950,19 +947,19 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     // Pre-zero the report location so a kernel that never wrote it would be caught (the readback base
     // address would be 0, which is not a valid scratchpad L1 address → the pattern check fails).
     std::vector<uint32_t> zero_report(1, 0u);
-    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+    slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
 
     // Dispatch via the slow-dispatch path (blocking — wait_until_cores_done defaults to true).
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     const uint32_t scratch_base = reported[0];
     EXPECT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address (token not delivered?)";
 
     std::vector<uint32_t> scratch_contents;
-    detail::ReadFromDeviceL1(device, node, scratch_base, kScratchpadBytes, scratch_contents);
+    slow_dispatch::ReadFromL1(*mesh_device, node, scratch_base, kScratchpadBytes, scratch_contents);
     ASSERT_EQ(scratch_contents.size(), kNumElems);
 
     std::vector<uint32_t> expected(kNumElems);
@@ -1230,7 +1227,6 @@ void kernel_main() {
 // (base_B == base_A → the NE check fails) and its pattern write lands inside the grown DFB's region.
 TEST_F(ProgramSpecHWTest, ScratchpadBaseReDeliveredAfterDfbResize) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;      // bytes per DFB entry (constant)
     constexpr uint32_t num_entries_small = 2;  // initial DFB depth
@@ -1337,7 +1333,7 @@ void kernel_main() {
 
         // The scratchpad must be real, writable L1 at the reported base.
         std::vector<uint32_t> scratch_contents;
-        detail::ReadFromDeviceL1(device, node, base, kScratchpadBytes, scratch_contents);
+        slow_dispatch::ReadFromL1(*mesh_device, node, base, kScratchpadBytes, scratch_contents);
         EXPECT_EQ(scratch_contents, expected_pattern)
             << "Scratchpad L1 at reported base 0x" << std::hex << base << " did not contain the pattern";
 
