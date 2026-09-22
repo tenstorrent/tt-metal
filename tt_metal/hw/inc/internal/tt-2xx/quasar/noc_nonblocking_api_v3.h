@@ -135,7 +135,7 @@ static_assert(
 
 inline __attribute__((always_inline)) uint64_t noc_v3_state_base_of(uint64_t noc_addr) {
     // A bare 32-bit offset (completion-queue pointer, packed-write tail) is not a
-    // windowed operand: return it whole (see the static_assert above).
+    // windowed operand: return it whole.
     if (noc_addr < (uint64_t{1} << 32)) {
         return noc_addr;
     }
@@ -985,7 +985,7 @@ inline constexpr uint64_t NOC_V3_CQ_MCAST_LOCAL_MASK = noc_att::DESCRIPTOR_LOCAL
 // Extract the offset half of an address.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_addr) {
     // A bare 32-bit CQ offset is already a local offset: return it whole so the
-    // LoopbackScratch aperture cannot match it (see the static_assert above).
+    // LoopbackScratch aperture cannot match it.
     if (noc_addr < (uint64_t{1} << 32)) {
         return noc_addr;
     }
@@ -999,7 +999,7 @@ inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_a
 // Turn a host-packed coordinate word ((y << NOC_ADDR_NODE_ID_BITS) | x) into
 // the coordinate half of an address: the tile's window and selector with a
 // zero offset. The word is in the host's frame, so the map's frame offset is
-// applied before the lookup (as the backend's packed_worker_address does).
+// applied before the lookup.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_base(uint32_t packed_xy) {
     constexpr uint32_t node_mask = (1u << NOC_ADDR_NODE_ID_BITS) - 1;
     const noc_att::ResolvedTile tile = noc_att::resolve_host_coordinate(

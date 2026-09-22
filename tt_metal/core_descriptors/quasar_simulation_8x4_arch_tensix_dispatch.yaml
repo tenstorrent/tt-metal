@@ -25,7 +25,6 @@ unharvested:
         end: [8, 5]
 
 
-      # One live corner tile per CQ (only the four corners are live on qsr.s1): [-1, -1] is (9,5), [-1, 0] is (2,5).
       dispatch_cores:
         [[-1, -1], [-1, -1], [-1, 0], [-1, 0]]
 

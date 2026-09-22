@@ -64,8 +64,6 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) 
                 asm volatile("csrr %0, mip" : "=r"(mip));
                 asm volatile("csrr %0, mhartid" : "=r"(mhartid));
                 asm volatile("mv %0, sp" : "=r"(sp));
-                // Raw CSR read, as for v->which above: get_hw_thread_idx() asserts, and an assert inside
-                // assert_and_hang() is mutual recursion (GCC 15 rejects it under -Werror).
                 uint32_t hart = internal_::read_hw_thread_idx();
                 auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
                 auto* rb = reinterpret_cast<debug_mpsc_ring_buf_msg_quasar_t tt_l1_ptr*>(wrapper->data);
