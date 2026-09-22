@@ -75,6 +75,13 @@ class LlamaCompositeKV(Llama):
             return params[name].get_value()
 
         def rows(weight: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
+            # Each call allocates a fresh device copy, and all of them (5 per layer, 80 in
+            # total, ~1.2 GB for Llama-3.2-1B) stay live until push_weights drops the dict,
+            # which happens only after the receiver has finished update_weights.
+            # Fine today: the sync runs after the optimizer step, when the chip holds ~2.3 GB
+            # of weights and ~4.6 GB of AdamW state out of 32 GB. If a bigger model ever OOMs
+            # here, cut the slices on access instead of up front: send_weights visits one key
+            # at a time, so only one slice would be live.
             return ttnn.slice(weight, [0, 0, start, 0], [1, 1, end, H])
 
         out: dict[str, ttnn.Tensor] = {}
