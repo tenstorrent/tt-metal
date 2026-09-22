@@ -4,6 +4,7 @@
 
 // Regression fence for RunOutcome::HostWait: host-resolvable stalls vs device faults. Negatives are death tests.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <unistd.h>
@@ -25,6 +26,18 @@ using tt::tt_metal::emule_fiber::FiberEngineStall;
 using tt::tt_metal::emule_fiber::FiberIdentity;
 using tt::tt_metal::emule_fiber::FiberScheduler;
 using tt::tt_metal::emule_fiber::RunOutcome;
+
+// A livelock must not only stall but NAME its cause. FiberEngineStall::what() carries dump_parked(),
+// so match the diagnostic substring on the exception — the attribution IS what these tests assert.
+#define EXPECT_STALL_NAMING(stmt, substr)                                      \
+    do {                                                                       \
+        try {                                                                  \
+            stmt;                                                              \
+            ADD_FAILURE() << "expected FiberEngineStall, but none was thrown"; \
+        } catch (const FiberEngineStall& e) {                                  \
+            EXPECT_THAT(e.what(), ::testing::HasSubstr(substr));               \
+        }                                                                      \
+    } while (0)
 
 // A distinct identity per fiber so a hang dump names which one wedged.
 FiberIdentity ident(uint8_t x, uint8_t y, const char* src) {
@@ -247,7 +260,7 @@ TEST_F(EmuleHostWait, HostFedPollReachesHostWaitBesideAnUntaggedYieldSpinner) {
 
 TEST_F(EmuleHostWait, AllYieldingLivelockStillTripsResumptionWindow) {
     arm_fast_watchdog();
-    EXPECT_THROW(
+    EXPECT_STALL_NAMING(
         {
             for (uint8_t core = 0; core < 2; ++core) {
                 spawn_fiber(
@@ -261,7 +274,7 @@ TEST_F(EmuleHostWait, AllYieldingLivelockStillTripsResumptionWindow) {
             }
             FiberScheduler::instance().run_until_idle();
         },
-        FiberEngineStall);
+        "resumption window");
     disarm_fast_watchdog();
 }
 
@@ -269,42 +282,42 @@ TEST_F(EmuleHostWait, AllYieldingLivelockStillTripsResumptionWindow) {
 // peer-fed poll remains a genuine d2d-only deadlock and must retain the peer diagnostic.
 TEST_F(EmuleHostWait, D2DPollStillDeadlocksAfterHostPollClears) {
     arm_fast_watchdog();
-    EXPECT_THROW(
+    EXPECT_STALL_NAMING(
         {
             std::atomic<bool> host_ready{false};
             std::atomic<bool> peer_never_ready{false};
             spawn_fiber(polling_body(&host_ready, /*host_fed=*/true, nullptr), 4, "h2d_pipeline_source");
             spawn_fiber(polling_body(&peer_never_ready, /*host_fed=*/false, nullptr), 5, "d2d_pipeline_receiver");
 
+            // In-process now (not a forked death test), so a wrong outcome fails the case rather than
+            // killing the binary: EXPECT_EQ records it and the pump below still drives to the stall.
             auto& sched = FiberScheduler::instance();
-            if (sched.run_persistent() != RunOutcome::HostWait) {
-                std::exit(2);
-            }
+            EXPECT_EQ(sched.run_persistent(), RunOutcome::HostWait);
             host_ready.store(true, std::memory_order_release);
             (void)sched.pump();
-            std::exit(3);
         },
-        FiberEngineStall);
+        "spin-polling a d2d socket");
     disarm_fast_watchdog();
 }
 
-// A d2d sender is a PEER, so dying on this regex proves the attribution, not just the outcome.
+// A d2d sender is a PEER, so the stall dump must attribute the wait to a peer-fed poll — matching the
+// substring proves the attribution, not just the outcome.
 TEST_F(EmuleHostWait, PeerFedPollIsNamedAsPeerFedInTheDump) {
     arm_fast_watchdog();
-    EXPECT_THROW(
+    EXPECT_STALL_NAMING(
         {
             std::atomic<bool> never{false};
             spawn_fiber(polling_body(&never, /*host_fed=*/false, nullptr), 3, "d2d_receiver_poll");
             (void)FiberScheduler::instance().run_persistent();
         },
-        FiberEngineStall);
+        "spin-polling a d2d socket");
     disarm_fast_watchdog();
 }
 
 // The tag is sticky, so a kernel that LEAVES the loop must age out or it pins the run host-waiting.
 TEST_F(EmuleHostWait, StalePollTagAgesOut) {
     arm_fast_watchdog();
-    EXPECT_THROW(
+    EXPECT_STALL_NAMING(
         {
             // Tag once, then spin elsewhere: freshness is this fiber's own resumes, so its yields age it.
             spawn_fiber(
@@ -319,7 +332,7 @@ TEST_F(EmuleHostWait, StalePollTagAgesOut) {
                 "poller_that_moved_on");
             (void)FiberScheduler::instance().run_persistent();
         },
-        FiberEngineStall);
+        "no global progress");
     disarm_fast_watchdog();
 }
 
@@ -446,7 +459,7 @@ TEST_F(EmuleHostWait, EmptyLaunchAfterAStalledRunIsNotAHostWait) {
 // One CB slot per fiber, kept by the starving CB: recording the LAST probed points at a healthy one.
 TEST_F(EmuleHostWait, CbPollTagNamesTheStarvingCbNotTheLastProbed) {
     arm_fast_watchdog();
-    EXPECT_THROW(
+    EXPECT_STALL_NAMING(
         {
             spawn_fiber(
                 [] {
@@ -461,7 +474,7 @@ TEST_F(EmuleHostWait, CbPollTagNamesTheStarvingCbNotTheLastProbed) {
                 "compute_two_cb_probe");
             (void)FiberScheduler::instance().run_persistent();
         },
-        FiberEngineStall);
+        "spin-polling CB 3 for 2 page");
     disarm_fast_watchdog();
 }
 
