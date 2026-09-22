@@ -387,7 +387,7 @@ class FileResultDestination(ResultDestination):
                 github_job_id=run_context.get("github_job_id", None),
                 full_test_name=header.get("sweep_name"),
                 test_start_ts=raw.get("start_time_ts"),
-                test_end_ts=raw.get("end_time_ts"),
+                test_end_ts=raw.get("end_time_ts") or dt.datetime.now(dt.timezone.utc),  # refs #54508: end_time_ts may be None when device canary aborts the run before the footer is stamped
                 test_case_name=header.get("suite_name"),
                 filepath=header.get("sweep_name"),
                 success=is_success,
