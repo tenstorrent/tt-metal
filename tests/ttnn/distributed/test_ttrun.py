@@ -494,6 +494,26 @@ class TestOversubscribeHelpers:
         assert out[0] == "--oversubscribe"
 
 
+class TestDefaultMultihostMpiArgs:
+    """The default BTL list must keep shared memory next to TCP: with ``self,tcp`` alone, same-host
+    ranks are forced onto TCP loopback and the first collective can deadlock at 80 ranks."""
+
+    def test_default_keeps_shared_memory_btl(self):
+        from ttnn.distributed.ttrun import default_multihost_mpi_args
+
+        args = default_multihost_mpi_args(None)
+        btl = args[args.index("btl") + 1].split(",")
+        assert "sm" in btl and "tcp" in btl and "self" in btl
+        assert args[args.index("btl_tcp_if_exclude") + 1] == "docker0,lo"
+
+    def test_pinned_interface_keeps_shared_memory_btl(self):
+        from ttnn.distributed.ttrun import default_multihost_mpi_args
+
+        args = default_multihost_mpi_args("eth0")
+        assert "sm" in args[args.index("btl") + 1].split(",")
+        assert args[args.index("btl_tcp_if_include") + 1] == "eth0"
+
+
 class TestMPICommandBuilding:
     """Test MPI command building."""
 

@@ -1144,8 +1144,17 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
+MULTIHOST_BTL = "self,sm,tcp"
+
+
 def default_multihost_mpi_args(tcp_interface: Optional[str]) -> List[str]:
     """OpenMPI MCA arguments for multi-host TCP (used by Phase 1 and legacy flow unless --bare).
+
+    ``btl`` keeps the shared-memory transport (``sm``) next to ``tcp``: ranks on the same host
+    talk through shared memory and only cross-host traffic goes over TCP. With ``self,tcp``
+    alone, same-host ranks are forced onto TCP loopback and, on a 20-host x 4-rank Blackhole
+    galaxy pod, the first collective (``MPI_Comm_dup`` inside ``ttnn.init_distributed_context``)
+    deadlocked 5/5 times while the identical launch with ``sm`` completed in 4 s.
 
     When ``tcp_interface`` is set, uses ``btl_tcp_if_include``; otherwise excludes ``docker0,lo``.
     """
@@ -1153,7 +1162,7 @@ def default_multihost_mpi_args(tcp_interface: Optional[str]) -> List[str]:
         return [
             "--mca",
             "btl",
-            "self,tcp",
+            MULTIHOST_BTL,
             "--mca",
             "btl_tcp_if_include",
             tcp_interface,
@@ -1161,7 +1170,7 @@ def default_multihost_mpi_args(tcp_interface: Optional[str]) -> List[str]:
     return [
         "--mca",
         "btl",
-        "self,tcp",
+        MULTIHOST_BTL,
         "--mca",
         "btl_tcp_if_exclude",
         "docker0,lo",
@@ -2351,7 +2360,7 @@ def legacy_flow(
     Multi-Host MPI Settings (default):
         tt-run applies recommended MPI settings for multi-host clusters by default:
 
-        - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
+        - --mca btl self,sm,tcp: shared memory between same-host ranks, TCP across hosts
         - --mca btl_tcp_if_exclude docker0,lo: Exclude Docker bridge and loopback interfaces
 
         If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
@@ -2501,7 +2510,7 @@ def legacy_flow(
         # use --tcp-interface.
         multihost_args = []
         if not user_has_btl_setting:
-            multihost_args.extend(["--mca", "btl", "self,tcp"])
+            multihost_args.extend(["--mca", "btl", MULTIHOST_BTL])
 
         if tcp_interface:
             if user_has_tcp_include or user_has_tcp_exclude:
