@@ -50,9 +50,7 @@ struct RingAlias::Impl {
     }
 };
 
-using RingAliasImpl = RingAlias::Impl;
-
-RingAlias::RingAlias() : impl_(std::make_unique<RingAliasImpl>()) {}
+RingAlias::RingAlias() : impl_(std::make_unique<Impl>()) {}
 RingAlias::~RingAlias() { impl_->unmap(); }
 
 std::unique_ptr<RingAlias> RingAlias::map(
@@ -65,8 +63,9 @@ std::unique_ptr<RingAlias> RingAlias::map(
     // Pinning captures the physical pages; MAP_FIXED afterwards swaps them out from under
     // both the pin and the MR, with nothing reporting it.
     if (HostRegion::is_provisioned()) {
-        err = "ring-alias: the region is already provisioned and therefore pinned; the overlay "
-              "must precede HostRegion::provision()";
+        err =
+            "ring-alias: the region is already provisioned and therefore pinned; the overlay "
+            "must precede HostRegion::provision()";
         return nullptr;
     }
     if (slots.size() > kProvisionedCores) {
@@ -75,7 +74,7 @@ std::unique_ptr<RingAlias> RingAlias::map(
     }
 
     std::unique_ptr<RingAlias> a(new RingAlias());
-    RingAliasImpl& im = *a->impl_;
+    Impl& im = *a->impl_;
     im.arena = arena;
     im.base.assign(slots.size(), nullptr);
     im.bytes.assign(slots.size(), 0);
@@ -89,8 +88,11 @@ std::unique_ptr<RingAlias> RingAlias::map(
         const size_t rounded = (s.shm_size + kPageBytes - 1) & ~(static_cast<size_t>(kPageBytes) - 1);
         if (rounded > kArenaBytes) {
             err = fmt::format(
-                "ring-alias: core {} ring is {} B ({} B page-rounded) but an arena slot is only {} B", c,
-                s.shm_size, rounded, kArenaBytes);
+                "ring-alias: core {} ring is {} B ({} B page-rounded) but an arena slot is only {} B",
+                c,
+                s.shm_size,
+                rounded,
+                kArenaBytes);
             return nullptr;
         }
 
@@ -122,9 +124,7 @@ std::unique_ptr<RingAlias> RingAlias::map(
     return a;
 }
 
-uint8_t* RingAlias::base(uint32_t core) const {
-    return core < impl_->base.size() ? impl_->base[core] : nullptr;
-}
+uint8_t* RingAlias::base(uint32_t core) const { return core < impl_->base.size() ? impl_->base[core] : nullptr; }
 
 uint32_t RingAlias::count() const { return static_cast<uint32_t>(impl_->base.size()); }
 

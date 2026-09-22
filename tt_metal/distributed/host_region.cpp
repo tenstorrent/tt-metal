@@ -73,13 +73,18 @@ void validate_shape(uint32_t cores_in_use, HostTopology topology, HostRegion::Gr
         m = fmt::format("cores_in_use {} is outside 1..{}", cores_in_use, kProvisionedCores);
     } else if (!host_topology_ok(topology)) {
         m = fmt::format(
-            "topology ident={} num={} chips_per_host={} does not fit the 12-bit UVA selector", topology.ident,
-            topology.num, topology.chips_per_host);
+            "topology ident={} num={} chips_per_host={} does not fit the 12-bit UVA selector",
+            topology.ident,
+            topology.num,
+            topology.chips_per_host);
     } else if (grid.width == 0 || grid.height == 0) {
         m = "grid width/height must be non-zero; they are part of the wire contract";
     } else if (cores_in_use > grid.width * grid.height) {
         m = fmt::format(
-            "cores_in_use {} exceeds the {} a {}x{} grid has", cores_in_use, grid.width * grid.height, grid.width,
+            "cores_in_use {} exceeds the {} a {}x{} grid has",
+            cores_in_use,
+            grid.width * grid.height,
+            grid.width,
             grid.height);
     } else {
         return;
@@ -90,8 +95,13 @@ void validate_shape(uint32_t cores_in_use, HostTopology topology, HostRegion::Gr
 // Published LAST, and with a release store: everything else must be true before a peer can
 // find the magic and start computing offsets against it.
 void publish_header(
-    RegionHeader* h, uint32_t cores_in_use, HostTopology topology, HostRegion::Grid grid, uint32_t chip,
-    uint64_t pinned_bytes, const HostRegion::DeviceView& dev) {
+    RegionHeader* h,
+    uint32_t cores_in_use,
+    HostTopology topology,
+    HostRegion::Grid grid,
+    uint32_t chip,
+    uint64_t pinned_bytes,
+    const HostRegion::DeviceView& dev) {
     std::memset(h, 0, sizeof(*h));
     h->version = kRegionVersion;
     h->provisioned_cores = kProvisionedCores;
@@ -143,8 +153,11 @@ void HostRegion::declare_alias(AliasArena arena, uint32_t core, uint64_t fill_by
     if (fill_bytes != 0 && (fill_bytes > mapped_bytes || mapped_bytes > kArenaBytes)) {
         // Refused, not clamped: a clamp would quietly fill part of a ring's metadata.
         throw std::runtime_error(fmt::format(
-            "declare_alias(core {}, fill {}, mapped {}) is not 0 < fill <= mapped <= {}", core, fill_bytes,
-            mapped_bytes, kArenaBytes));
+            "declare_alias(core {}, fill {}, mapped {}) is not 0 < fill <= mapped <= {}",
+            core,
+            fill_bytes,
+            mapped_bytes,
+            kArenaBytes));
     }
     g_alias_fill[a][core] = fill_bytes;
     g_alias_mapped[a][core] = fill_bytes == 0 ? 0 : mapped_bytes;
@@ -199,7 +212,10 @@ HostRegion& HostRegion::provision(
     if (limits.rlimit_memlock != UINT64_MAX && want > limits.rlimit_memlock) {
         throw std::runtime_error(fmt::format(
             "need {} MiB pinned for {} cores but RLIMIT_MEMLOCK is {} MiB (ulimit -l); each core costs {} MiB",
-            want >> 20, cores_in_use, limits.rlimit_memlock >> 20, kArenaStride >> 20));
+            want >> 20,
+            cores_in_use,
+            limits.rlimit_memlock >> 20,
+            kArenaStride >> 20));
     }
     if (limits.max_total_pin != 0 && want > limits.max_total_pin) {
         throw std::runtime_error(fmt::format(
@@ -304,7 +320,9 @@ std::string HostRegion::verify_header() const {
             return fmt::format(
                 "region header disagrees on {}: published {}, this build has {}. Rebuild both sides from the "
                 "same commit.",
-                c.what, c.got, c.want);
+                c.what,
+                c.got,
+                c.want);
         }
     }
     return {};

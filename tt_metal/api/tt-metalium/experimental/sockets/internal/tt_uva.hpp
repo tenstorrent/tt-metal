@@ -73,8 +73,7 @@ inline uint64_t wall_clock() {
 
 // Payload, then trailer, then the caller decides whether to commit. The signal fields are
 // written unconditionally: the staging slot is reused, so stale bytes would read as an op.
-inline void stage(
-    uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_off, uint32_t sig_val, uint32_t sig_op) {
+inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_off, uint32_t sig_val, uint32_t sig_op) {
     // Bracketed separately from the write below: this is the wait for the host to retire a
     // page, which is the slot round trip and not a cost of sending.
     const uint64_t t_pre = wall_clock();
@@ -125,8 +124,7 @@ inline void apply_signal(const volatile FrameTrailer* t) {
     if (!tt_uva_frame_signal_ok(t->sig_op, t->sig_off, g_sig_span)) {
         return;
     }
-    volatile tt_l1_ptr uint32_t* const w =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_rx_l1_base + t->sig_off);
+    volatile tt_l1_ptr uint32_t* const w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_rx_l1_base + t->sig_off);
     *w = t->sig_op == kSignalAdd ? (*w + t->sig_val) : t->sig_val;
 }
 
