@@ -158,9 +158,8 @@ ttsl::hash::hash_t TanhBwDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& grad_output = tensor_args.grad_output;
     const auto& input_shape = input_tensor.padded_shape();
-    // volume() alone cannot distinguish tensors with the same volume but different Alignment
-    // (e.g. padded 64x32 vs 32x64) -- both are valid since only 32x32 tiles are accepted (see
-    // require_standard_tile above), but their per-core work differs, so key on Alignment too.
+    // Equal padded volume can still differ in alignment: logical 32x32 padded to 64x32
+    // versus padded to 32x64. Tile is already fixed at 32x32.
     operation::Hash hash = operation::hash_operation<TanhBwDeviceOperation>(
         args,
         input_tensor.dtype(),

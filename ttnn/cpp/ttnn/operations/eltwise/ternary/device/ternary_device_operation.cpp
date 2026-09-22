@@ -609,9 +609,7 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         return std::pair<uint32_t, uint32_t>{s.rank() >= 2 ? s[-2] : 1u, s[-1]};
     };
 
-    // Alignment/Tile: two tensors with the same logical H,W but different padding (e.g. over-padded vs
-    // normally padded TILE tensors) otherwise share one program, matching the gap already fixed for
-    // unary in #55702.
+    // Same logical H/W can still differ in alignment or tile.
     const auto alignment = [](const Tensor& t) { return t.tensor_spec().tensor_layout().get_alignment(); };
 
     return tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
