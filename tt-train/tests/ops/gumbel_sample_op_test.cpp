@@ -1109,6 +1109,8 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     // Five sigma on Binomial(total, p): flakes at ~1e-6 per column, while a broken Gumbel chain
     // moves these counts by tens of sigma. Shared by the every-row and the positions+mask paths --
     // both draw the same number of samples, so the bounds are identical.
+    //
+    // LIMITATION: this bound cannot see the approximate-log BIAS.
     auto expect_counts_match_weights =
         [&](const std::array<uint32_t, kActive>& counts, uint32_t total, const char* what) {
             for (uint32_t c = 0; c < kActive; ++c) {
