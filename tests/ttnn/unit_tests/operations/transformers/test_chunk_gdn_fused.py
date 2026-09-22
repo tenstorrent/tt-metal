@@ -512,11 +512,15 @@ def _vblock_mismatches(o_ref, o_got, hv, nv):
     return bad
 
 
-def _fused_vs_phased(device, monkeypatch, hk, hv, nc, nv, np_producers, seed):
+def _fused_vs_phased(device, monkeypatch, hk, hv, nc, nv, np_producers, seed, env=None):
     """Run phased (twice, for cache stability), then fused with the given geometry. Returns the
-    outputs and the program-cache delta of the fused run (must be exactly 1: one fused program)."""
+    outputs and the program-cache delta of the fused run (must be exactly 1: one fused program).
+    `env` holds the extra QWEN_GDN_* knobs of the run; they are applied AFTER the env is cleared — a
+    knob set by the caller beforehand would be wiped here and the test would silently run the default."""
     B = 1
     _clear_gdn_env(monkeypatch)
+    for key, val in (env or {}).items():
+        monkeypatch.setenv(key, str(val))
     _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, hk, hv, True, seed=seed)
     const_tiles = _const_tiles(device)
 
@@ -585,10 +589,16 @@ def test_fused_nv_transport_bit_exact(device, monkeypatch, nv, np_producers, nc,
     hashed, so the fused program compiles fresh (delta == 1)."""
     hk, hv = NP_BH_KV_HEADS
     _skip_unless_geometry_fits(device, hv, nv, np_producers, nc)
-    monkeypatch.setenv("QWEN_GDN_UNICAST", str(unicast))
-    monkeypatch.setenv("QWEN_GDN_HANDOFF_NBUF", str(nbuf))
     (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
-        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921
+        device,
+        monkeypatch,
+        hk,
+        hv,
+        nc,
+        nv,
+        np_producers,
+        20260921,
+        env={"QWEN_GDN_UNICAST": unicast, "QWEN_GDN_HANDOFF_NBUF": nbuf},
     )
     assert (
         delta == 1
@@ -615,9 +625,8 @@ def test_fused_nv_row_local_placement_bit_exact(device, monkeypatch, nv, np_prod
     placement is hashed (delta == 1)."""
     hk, hv = NP_BH_KV_HEADS
     _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=1)
-    monkeypatch.setenv("QWEN_GDN_PLACEMENT", "1")
     (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
-        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921
+        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921, env={"QWEN_GDN_PLACEMENT": 1}
     )
     assert delta == 1, f"row-local fused(NV={nv},NP={np_producers}) compiled {delta} programs (expected 1)"
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
@@ -639,9 +648,8 @@ def test_fused_nv_row_local_shapes_bit_exact(device, monkeypatch, hk, hv, nv, np
     """Row-local placement across the BH range the cost model dispatches (design D8/D9 v0.3, N12):
     k heads per row plus leftover column blocks, bit-identical to phased."""
     _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=1)
-    monkeypatch.setenv("QWEN_GDN_PLACEMENT", "1")
     (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
-        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921 + hv
+        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921 + hv, env={"QWEN_GDN_PLACEMENT": 1}
     )
     assert delta == 1, f"row-local fused(BH={hv},NV={nv},NP={np_producers}) compiled {delta} programs (expected 1)"
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
@@ -662,11 +670,16 @@ def test_fused_nv_posted_bit_exact(device, monkeypatch, nv, np_producers, nc, nb
     behind them by same-VC in-order delivery (no per-item barrier) are bit-identical to phased."""
     hk, hv = NP_BH_KV_HEADS
     _skip_unless_geometry_fits(device, hv, nv, np_producers, nc)
-    monkeypatch.setenv("QWEN_GDN_UNICAST", "1")
-    monkeypatch.setenv("QWEN_GDN_POSTED", "1")
-    monkeypatch.setenv("QWEN_GDN_HANDOFF_NBUF", str(nbuf))
     (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
-        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921
+        device,
+        monkeypatch,
+        hk,
+        hv,
+        nc,
+        nv,
+        np_producers,
+        20260921,
+        env={"QWEN_GDN_UNICAST": 1, "QWEN_GDN_POSTED": 1, "QWEN_GDN_HANDOFF_NBUF": nbuf},
     )
     assert delta == 1, f"posted fused(NV={nv},NP={np_producers},nbuf={nbuf}) compiled {delta} programs (expected 1)"
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
@@ -806,9 +819,8 @@ def test_fused_nv_row_major_placement_bit_exact(device, monkeypatch, hk, hv, nv,
     orientation lands on another head's receivers: finite, wrong, no hang; the per-V-block report
     names the (head, vblock) slices that differ."""
     _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=0)
-    monkeypatch.setenv("QWEN_GDN_PLACEMENT", "0")
     (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
-        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260930 + hv
+        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260930 + hv, env={"QWEN_GDN_PLACEMENT": 0}
     )
     assert delta == 1, f"row-major fused(BH={hv},NV={nv},NP={np_producers}) compiled {delta} programs (expected 1)"
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
