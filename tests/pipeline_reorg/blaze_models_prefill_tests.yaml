@@ -1013,7 +1013,7 @@
       timeout: 30
       tier: 1
       release_ready: false
-  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
+  owner_id: U02LLCK5MML # Sasha Vuckovic
   team: models
   sp_config: sc1
 
@@ -1040,7 +1040,7 @@
       timeout: 30
       tier: 1
       release_ready: false
-  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
+  owner_id: U02LLCK5MML # Sasha Vuckovic
   team: models
   sp_config: sc1
 
