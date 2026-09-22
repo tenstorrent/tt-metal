@@ -421,8 +421,9 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1533
+    bh_sc1: 1608
     bh_sc1_high_power: 388
+    bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
