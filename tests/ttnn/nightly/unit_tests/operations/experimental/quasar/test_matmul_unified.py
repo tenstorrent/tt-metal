@@ -182,6 +182,18 @@ def test_edges_and_blocking(device, M, K, N, C_slice_M_tiles, C_slice_N_tiles, K
     _check(out, _golden(a, b))
 
 
+def test_auto_subblock_falls_back_when_padding_does_not_fit(device):
+    """22x22-tile C slice: every max-volume subblock pads a dim to 24 and blows the DFB extent limit,
+    so auto must fall back to a smaller subblock (2x2 pads nothing) instead of failing."""
+    M = N = 22 * TILE
+    K = TILE
+    torch.manual_seed(4)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=22, C_slice_N_tiles=22)
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
 def test_identity_is_exact_on_ragged_edges(device):
     """in1 = I: the output must be in0 bit for bit, on every tile of every edge block."""
     gx, gy = _grid(device)
