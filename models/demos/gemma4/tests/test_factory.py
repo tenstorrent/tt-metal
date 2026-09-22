@@ -290,13 +290,19 @@ def resolve_assistant_model_path(*, allow_download=None):
     if not allow_download:
         return None
 
+    from huggingface_hub import constants as _hf_constants
     from huggingface_hub import snapshot_download
 
+    # Popping HF_HUB_OFFLINE alone is not enough: hub caches the flag into
+    # constants.HF_HUB_OFFLINE at import (see generator_vllm._hf_resolve_repo).
     prev_offline = os.environ.get("HF_HUB_OFFLINE")
+    prev_const = _hf_constants.HF_HUB_OFFLINE
     os.environ["HF_HUB_OFFLINE"] = "0"
+    _hf_constants.HF_HUB_OFFLINE = False
     try:
         snapshot_download(repo_id, local_dir=cache_dir)
     finally:
+        _hf_constants.HF_HUB_OFFLINE = prev_const
         if prev_offline is None:
             os.environ.pop("HF_HUB_OFFLINE", None)
         else:
@@ -312,6 +318,15 @@ def configure_spec_decode_smoke_env():
         return os.environ.get("GEMMA4_ASSISTANT_MODEL")
 
     if os.environ.get("CI") == "true":
+        # CI defaults HF_HUB_OFFLINE=1; assistant/target snapshots are often
+        # missing from the shared mount, so allow Hub download for this smoke.
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        try:
+            from huggingface_hub import constants as _hf_constants
+
+            _hf_constants.HF_HUB_OFFLINE = False
+        except ImportError:
+            pass
         os.environ.setdefault("HF_HOME", "/mnt/MLPerf/huggingface")
         os.environ.setdefault("HF_HUB_CACHE", os.path.join(os.environ["HF_HOME"], "hub"))
         if uses_ci_config_only_checkpoint():
@@ -319,7 +334,7 @@ def configure_spec_decode_smoke_env():
         os.environ.setdefault("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it")
         os.environ.setdefault("GEMMA4_NUM_LAYERS", "4")
 
-    path = resolve_assistant_model_path()
+    path = resolve_assistant_model_path(allow_download=(os.environ.get("CI") == "true"))
     if path:
         os.environ["GEMMA4_SPEC_DECODE_ENV_READY"] = "1"
     return path
