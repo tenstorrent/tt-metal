@@ -194,14 +194,14 @@ shield:
     bh_p150: 60
   demo:
     # Sums over the team's disaggregated-prefill legs on each SKU, not per-leg caps.
-    # bh_sc4: Kimi-K2.7 100 + GLM-5.2 60 + Kimi-K3 200. Kimi-K3 is 93 layers against the others'
+    # bh_sc4_high_power: Kimi-K2.7 100 + GLM-5.2 60 + Kimi-K3 200. Kimi-K3 is 93 layers against the others'
     # depths and its bringup is dominated by streaming a 1.5 TB TTNN cache off the models share on
     # four ranks at once -- 42.6 and 65.9 min to all ranks serving on runs 34648535999 and
     # 34659612357, and run 34831600450 was killed at 106 min under a 100 min cap.
-    # Kimi-K2.7 carries the DFlash drafter KV legs, 60 on bh_sc4 and 120 on bh_sc1 on top of the
+    # Kimi-K2.7 carries the DFlash drafter KV legs, 60 on bh_sc4_high_power and 120 on bh_sc1 on top of the
     # verifier entries. Both size a cold TTNN weight cache, which the SC1 leg pays in full.
     # bh_sc1: Kimi-K2.7 190 + GLM-5.2 80 + Kimi-K3 60.
-    bh_sc4: 360
+    bh_sc4_high_power: 360
     bh_sc1: 330
 
 scaleout:

@@ -45,6 +45,7 @@ env:
     bh_sc1
     bh_sc1_high_power
     bh_sc4
+    bh_sc4_high_power
     bh_sc16
 
   # Yamls the gate cannot dispatch, so edits to them go to their code owners for

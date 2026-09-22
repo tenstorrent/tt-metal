@@ -140,7 +140,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_sc4
+      enabled-skus: bh_sc4_high_power
       sp-config: sc4
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       resource-prefix: sc4
