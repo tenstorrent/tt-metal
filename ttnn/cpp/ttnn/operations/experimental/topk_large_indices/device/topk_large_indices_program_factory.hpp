@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::topk_large_indices::program {
 // One core's work: a contiguous block of rows, or, when the rows are fewer than the cores, one column
 // segment (a run of whole K chunks, the last one carrying the row tail) of one row.
 struct CoreRowAssignment {
-    CoreCoord core{};
+    CoreCoord core;
     uint32_t start_row{};
     uint32_t num_rows{};
     // Row chunks [seg_first_chunk, seg_end_chunk) of every assigned row; the kernels clip the end to the
@@ -38,8 +38,8 @@ struct TopkLargeIndicesSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle compute_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
-    CoreRangeSet core_grid{};
-    std::vector<CoreCoord> cores{};
+    CoreRangeSet core_grid;
+    std::vector<CoreCoord> cores;
     ttnn::Shape input_shape;
     std::optional<uint32_t> valid_length;
     uint32_t llk_k = 0;
