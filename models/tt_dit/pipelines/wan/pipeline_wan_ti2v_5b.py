@@ -49,10 +49,9 @@ def _register_5b_matmul_tables() -> None:
           -k "bh_4x8_sp1_tp0 and (3072_2304 or 3072_768 or 3072_3584 or 3584_3072 \\
                                   or 3072_192 or 512_3072_1536)"
 
-    An entry marked PRE-SWEEP is not swept yet and reproduces exactly what the lookup resolved to
-    before the table existed, so it changes the key, not the kernel. Note the sweep compiles one
-    program per combo and the kernel JIT cache keeps every one (~12 GB per shape under
-    ``~/.cache/tt-metal-cache``, on top of ~3 GB of profiler capture); budget disk accordingly.
+    Note the sweep compiles one program per combo and the kernel JIT cache keeps every one (~12 GB
+    per shape under ``~/.cache/tt-metal-cache``, on top of ~3 GB of profiler capture); budget disk
+    accordingly.
     """
     dim, ffn = 3072, 14336
     dim_tp = dim // 4
@@ -62,7 +61,7 @@ def _register_5b_matmul_tables() -> None:
     prompt_seq = 512
     m_720p, m_480p = 2336, 1024
 
-    # Swept 2026-09-22 on this Galaxy (sweep_mm_block_sizes.py, DEVICE KERNEL DURATION, ~330-380
+    # Swept 2026-09-22 on this Galaxy (sweep_mm_block_sizes.py, DEVICE KERNEL DURATION, ~310-380
     # L1-feasible combos per shape). "was" is the blocking the lookup resolved to before the table
     # existed: the AGMM v3 / MMRS v2.3 rule pick where one fired, the warned 8x8x8 default otherwise.
     register_matmul_configs(
@@ -85,7 +84,7 @@ def _register_5b_matmul_tables() -> None:
                 (m_480p, dim, proj_out_n): (3, 8, 2, (3, 1)),  # 33.7 us; was (8, 8, 2) 35.4 us
                 (m_720p, dim, proj_out_n): (4, 8, 4, (2, 2)),  # 70.2 us; was (8, 8, 2) 74.7 us
                 # attn2.to_kv over the padded prompt (chunks=2, approx math); same at both resolutions.
-                (prompt_seq, dim, 2 * dim_tp): (8, 8, 8, (2, 2)),  # PRE-SWEEP: was the warned default
+                (prompt_seq, dim, 2 * dim_tp): (2, 6, 5, (2, 1)),  # 54.7 us; was (8, 8, 8) 58.7 us
             },
         }
     )
