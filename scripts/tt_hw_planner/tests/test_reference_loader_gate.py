@@ -785,3 +785,81 @@ def test_the_prompt_asks_for_the_contract_to_be_stamped(tmp_path: Path) -> None:
 
     text = build_prompt("some-org/some-model", tmp_path, "Unrecognized model")
     assert _LOADER_CONTRACT_VAR in text, "the agent is never told to stamp the brief it was given"
+
+
+# --------------------------------------------------------------------------------------------
+# Importing the loader. A module executed via spec_from_file_location but never put in
+# sys.modules still names itself in every class it defines, so anything resolving a class back
+# through sys.modules[cls.__module__] gets None. @dataclass does exactly that. Latent for as long
+# as generated loaders stayed simple; the first loader that had real config objects to model --
+# the one covering the whole voxtral_4b_tts_2603 checkpoint -- used three dataclasses and died on
+# import, and discovery reported 0 components.
+
+
+def test_a_loader_using_dataclasses_imports(tmp_path: Path) -> None:
+    from scripts.tt_hw_planner.reference_loader_resolver import load_reference
+
+    d = tmp_path / "tests" / "pcc"
+    d.mkdir(parents=True)
+    (d / "_reference_loader.py").write_text(
+        "from dataclasses import dataclass\n"
+        "import torch\n"
+        "@dataclass\n"
+        "class Args:\n"
+        "    width: int = 4\n"
+        "def load_reference_model(model_id):\n"
+        "    m = torch.nn.Linear(Args().width, Args().width)\n"
+        "    return m\n"
+    )
+    ref = load_reference(tmp_path, "some-org/some-model")
+    assert ref is not None
+
+
+def test_a_failed_loader_does_not_leave_a_half_built_module_behind(tmp_path: Path, expect_error) -> None:
+    """Registering before exec must not strand a broken module for the next import to find."""
+    import sys
+
+    from scripts.tt_hw_planner.reference_loader_resolver import load_reference
+
+    d = tmp_path / "tests" / "pcc"
+    d.mkdir(parents=True)
+    (d / "_reference_loader.py").write_text("raise ValueError('boom')\n")
+    before = dict(sys.modules)
+    with expect_error(ValueError, "boom"):
+        load_reference(tmp_path, "some-org/some-model")
+    assert set(sys.modules) - set(before) == set(), "a failed import left its module registered"
+
+
+# --------------------------------------------------------------------------------------------
+# Diagnosing the failure. `.name` is the missing MODULE on an ImportError and the missing
+# ATTRIBUTE on an AttributeError (3.10+), and the package extractor read it off either -- so the
+# dataclass failure above surfaced as "needs the Python package '__dict__'", with a
+# `pip install __dict__` to fix it, hiding the real fault behind advice that cannot work.
+
+
+def test_an_import_error_still_names_its_missing_package() -> None:
+    from scripts.tt_hw_planner.module_tree import _pkg_from_import_error
+
+    assert _pkg_from_import_error(ModuleNotFoundError("No module named 'somepkg'", name="somepkg")) == "somepkg"
+
+
+def test_a_submodule_miss_reports_its_top_level_package() -> None:
+    from scripts.tt_hw_planner.module_tree import _pkg_from_import_error
+
+    assert _pkg_from_import_error(ModuleNotFoundError("nope", name="somepkg.inner.bit")) == "somepkg"
+
+
+def test_an_attribute_error_is_not_mistaken_for_a_package() -> None:
+    from scripts.tt_hw_planner.module_tree import _pkg_from_import_error
+
+    try:
+        None.__dict__["x"]
+    except AttributeError as exc:
+        assert getattr(exc, "name", None) == "__dict__", "precondition: 3.10+ sets .name here"
+        assert _pkg_from_import_error(exc) == "", "an attribute name was reported as a package"
+
+
+def test_an_unrelated_exception_names_no_package() -> None:
+    from scripts.tt_hw_planner.module_tree import _pkg_from_import_error
+
+    assert _pkg_from_import_error(ValueError("nothing to do with imports")) == ""

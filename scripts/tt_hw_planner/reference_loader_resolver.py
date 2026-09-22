@@ -336,13 +336,30 @@ def load_reference(demo_dir: Path, model_id: str):
     whatever the loader raises -- callers already turn that into their own diagnostic.
     """
     import importlib.util as ilu
+    import sys
 
     p = loader_path(demo_dir)
-    spec = ilu.spec_from_file_location("_tt_hw_planner_reference_loader", str(p))
+    name = "_tt_hw_planner_reference_loader"
+    spec = ilu.spec_from_file_location(name, str(p))
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot import {p}")
     mod = ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # Registered BEFORE exec, and removed again on failure. A module executed outside sys.modules
+    # still names itself in every class it defines, so anything that resolves a class back through
+    # sys.modules[cls.__module__] gets None: @dataclass does exactly that (dataclasses._is_type,
+    # reached for any annotated field) and dies with "'NoneType' object has no attribute
+    # '__dict__'". That surfaced as a missing-package blocker naming the package '__dict__'.
+    # Loaders are free to use dataclasses; registering the module is what makes that true.
+    prev = sys.modules.get(name)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        if prev is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = prev
+        raise
     fn = getattr(mod, _LOADER_FUNC, None)
     if not callable(fn):
         raise AttributeError(f"{p} defines no callable {_LOADER_FUNC}")

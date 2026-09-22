@@ -526,6 +526,11 @@ def _build_torch_reference():
             if _os.path.isfile(_rl):
                 _spec = _ilu.spec_from_file_location("_reference_loader", _rl)
                 _rlmod = _ilu.module_from_spec(_spec)
+                # Registered before exec, for the same reason load_reference does it: a module run
+                # outside sys.modules still names itself in the classes it defines, so @dataclass
+                # (which resolves sys.modules[cls.__module__]) gets None and dies.
+                import sys as _sys
+                _sys.modules["_reference_loader"] = _rlmod
                 _spec.loader.exec_module(_rlmod)
                 model = _rlmod.load_reference_model(HF_MODEL_ID)
         except Exception as _rle:

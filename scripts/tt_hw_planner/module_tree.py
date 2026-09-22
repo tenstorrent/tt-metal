@@ -528,6 +528,16 @@ def discover_components_from_hf_id(
 
 
 def _pkg_from_import_error(exc: BaseException) -> str:
+    """The missing module named by an IMPORT failure, or "" for anything else.
+
+    `.name` IS NOT A MODULE NAME ON EVERY EXCEPTION. ImportError sets it to the module that could
+    not be imported, but since 3.10 AttributeError sets it to the missing ATTRIBUTE, and this read
+    it off whatever it was handed. A loader that died with "'NoneType' object has no attribute
+    '__dict__'" was therefore reported as needing a Python package called `__dict__`, with a
+    `pip install __dict__` to fix it -- the real fault invisible behind advice that cannot work.
+    """
+    if not isinstance(exc, ImportError):
+        return ""
     pkg = getattr(exc, "name", "") or ""
     if not pkg:
         _m = re.search(r"[Nn]o module named ['\"]([\w.]+)['\"]", str(exc))
