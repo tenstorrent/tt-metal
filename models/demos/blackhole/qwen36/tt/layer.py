@@ -46,9 +46,21 @@ class Qwen36DecoderLayer:
         # Prefill fuses the norm all-gather into the in-proj matmul (all_gather_minimal_matmul_async):
         # GDN qkvzab and full-attn QKV. attention_norm then skips its post-norm AG (prefill only;
         # decode gathers pre-norm). Gates must match the module-side _fuse_agmm gates.
-        self._fuse_norm_agmm = self.num_devices > 1 and (
-            (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
-            or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
+        # tpc.agmm_disabled(): when QWEN36_NO_AGMM turns the fusion off (needed under FABRIC_2D,
+        # whose routing the AGMM kernel does not support), the norm must do its OWN all-gather
+        # again. Leaving this gate on while the module-side fusion is off means the norm skips
+        # the gather that nothing then performs, and the in-proj matmul gets a K-sharded
+        # activation against a full-K weight:
+        #   matmul_device_operation.cpp:76  width=512 height=2048   (512 = dim/tp at tp=4)
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        self._fuse_norm_agmm = (
+            self.num_devices > 1
+            and not _tpc.agmm_disabled()
+            and (
+                (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
+                or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
+            )
         )
         self.attention_norm = self._make_norm(
             mesh_device,

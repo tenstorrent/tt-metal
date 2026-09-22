@@ -73,7 +73,14 @@ def _open_sp_mesh(n_dies=None, **kwargs):
     # e.g. (4,8) split into (1,4) puts group 1 at row0/cols4-7 and group 2 at row1/cols0-3, and
     # the hop dies with "Sender and receiver chips must be in the same row or column when using
     # 1D Line Fabric". FABRIC_2D routes those diagonal hops.
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    # SP_FABRIC=2d uses the Galaxy's native 2-D fabric, which routes hops in BOTH axes.
+    # FABRIC_1D on this (4,8) mesh routes the column direction only (measured: a same-column
+    # group hop succeeds, a same-row one fails with fabric.cpp:174 "Could not find any
+    # forwarding direction"), which makes SP=8 x TP=4 impossible -- (1,4) groups tile the mesh
+    # 4 rows x 2 blocks and vertical-only edges leave two disjoint 4-node paths. 2D needs
+    # QWEN36_NO_AGMM=1 (the AGMM kernel is 1D-only).
+    _fab = ttnn.FabricConfig.FABRIC_2D if os.environ.get("SP_FABRIC") == "2d" else ttnn.FabricConfig.FABRIC_1D
+    ttnn.set_fabric_config(_fab)
     system = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
     size = system.mesh_size()
     if SP_TP > 1 and size == n_dies:
@@ -291,7 +298,10 @@ def test_sp_prefill_matches_tp4(T):
     tokens = torch.randint(1000, 100000, (1, T), dtype=torch.long)
 
     # ---- phase (a): TP=4 bespoke prefill_tp oracle (mirrors test_model_tp.py::test_model_tp_contract) ----
-    mesh_owner, mesh = _open_sp_mesh(trace_region_size=64 * 1024 * 1024, l1_small_size=GDN_CONV1D_L1_SMALL_SIZE)
+    # Pin the oracle to 4 dies. The default size is SP_DIES*SP_TP, which at SP=8 x TP=4 is 32 and
+    # builds a TP=32 model: "n_heads 8 not divisible by TP=32". The oracle is a fixed reference,
+    # independent of how the SP side is parallelised.
+    mesh_owner, mesh = _open_sp_mesh(4, trace_region_size=64 * 1024 * 1024, l1_small_size=GDN_CONV1D_L1_SMALL_SIZE)
     try:
         model = Qwen36Model.from_pretrained(mesh, max_batch_size=1, max_seq_len=max_seq_len, hf_model=hf_model)
         tp4_logits = model.prefill_tp(tokens, valid_len=T).float()

@@ -6,6 +6,7 @@ Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
+import os
 
 import torch
 
@@ -447,9 +448,21 @@ def all_gather_matmul_prefill(
     return out
 
 
+def agmm_disabled():
+    """QWEN36_NO_AGMM=1 turns off every all_gather_minimal_matmul_async fusion.
+
+    Needed to run under FABRIC_2D: that op's dm_in0_sender kernel is written against the
+    linear (1D) fabric API and fails to compile under 2D ("template argument deduction/
+    substitution failed" from tt_metal/fabric/hw/inc/linear/api.h). Dropping the fusion falls
+    back to a separate all_gather + matmul, which was measured e2e-neutral at TP=8
+    (51.15 ms with the fusion vs 51.15 without), so this buys 2D routing at no known cost.
+    """
+    return os.environ.get("QWEN36_NO_AGMM") == "1"
+
+
 def mlp_gateup_agmm_enabled(num_devices):
     """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
-    return num_devices > 1
+    return num_devices > 1 and not agmm_disabled()
 
 
 def all_gather_swiglu_prefill(

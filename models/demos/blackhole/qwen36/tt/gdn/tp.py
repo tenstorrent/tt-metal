@@ -263,7 +263,7 @@ class TPGatedDeltaNet:
         self._fuse_ab = self._dram_sharded
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
-        self._fuse_agmm = self._fuse_ab and args.num_devices > 1
+        self._fuse_agmm = self._fuse_ab and args.num_devices > 1 and not tpc.agmm_disabled()
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.

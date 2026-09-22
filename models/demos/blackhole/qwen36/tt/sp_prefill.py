@@ -290,6 +290,10 @@ class SPPrefill:
             # ---- two socket pairs per hop d -> d+1 (both forward), reused for every transfer on
             # that hop: STATE (GDN) and KV (attention); mode/FIFO size per the constructor args above ----
             for d in range(n_spans - 1):
+                logger.info(
+                    f"[SPPrefill] hop {d}: sub[{d}] ids={self.subs[d].get_device_ids()} "
+                    f"-> sub[{d + 1}] ids={self.subs[d + 1].get_device_ids()}"
+                )
                 self.state_sockets.append(
                     _build_socket_pair(
                         self.subs[d],

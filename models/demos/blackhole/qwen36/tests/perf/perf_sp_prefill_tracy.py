@@ -28,7 +28,13 @@ import os
 import torch
 from loguru import logger
 
-from models.demos.blackhole.qwen36.tests.test_sp_prefill import SP_DIES, _close_sp_mesh, _open_sp_mesh, model_path
+from models.demos.blackhole.qwen36.tests.test_sp_prefill import (
+    SP_DIES,
+    SP_TP,
+    _close_sp_mesh,
+    _open_sp_mesh,
+    model_path,
+)
 from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 from models.demos.blackhole.qwen36.tt.sp_prefill import SPPrefill
 
