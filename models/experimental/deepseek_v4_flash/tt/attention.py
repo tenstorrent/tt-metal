@@ -285,8 +285,10 @@ def build_static_layer_cache(
             win_kv = _filled(cr, feat)
             win_gate = _filled(cr, feat)
         # ``[sliding ring | compressed entries]`` on one axis. The width matches the
-        # mask that :func:`host_decode_mask` builds for this layer.
-        if not paged:
+        # mask that :func:`host_decode_mask` builds for this layer. Paged mode normally
+        # leaves this to the block pool; a CSA layer with an indexer also keeps a dense
+        # mirror, because ``sparse_sdpa`` gathers by index and cannot read a page table.
+        if not paged or (is_csa and index_head_dim):
             combined = _filled(sliding_window + max(cap // cr, 0), head_dim)
         if is_csa and index_head_dim:
             idx_feat = 2 * index_head_dim
@@ -294,25 +296,15 @@ def build_static_layer_cache(
             idx_win_gate = _csa_window(cr, idx_feat)
             idx_prev_kv = _csa_window(cr, idx_feat)
             idx_prev_gate = _csa_window(cr, idx_feat, _MASK_NEG)
-            if not paged:
-                n_win = max(cap // cr, 0)
-                tp = device.get_num_devices()
-                if tp > 1:
-                    if n_win % tp:
-                        raise ValueError(f"index-key cache T={n_win} is not divisible by tp_size={tp}")
-                    t_local = n_win // tp
-                    if t_local % ttnn.TILE_SIZE:
-                        raise ValueError(f"TP{tp} index-key shard T/tp={t_local} must be tile-aligned")
-                    idx_key_cache = ttnn.from_torch(
-                        torch.zeros(batch, 1, n_win, index_head_dim),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
-                    )
-                else:
-                    idx_key_cache = _filled(n_win, index_head_dim)
+            n_win = max(cap // cr, 0)
+            # Replicated on every TP rank. A sequence shard would make the cache
+            # write's global window row illegal once ``start_pos`` passes the
+            # local piece, and decode's query is one replicated token, not a
+            # sequence shard the ring scorer expects. Pad so ``T - 32`` is
+            # tile-aligned; top-k's valid length stops at closed windows.
+            align = ttnn.TILE_SIZE
+            t_alloc = max(align, ((n_win + align - 1) // align) * align)
+            idx_key_cache = _filled(t_alloc, index_head_dim)
     return _StaticLayerCache(
         sliding,
         win_kv,
@@ -1092,25 +1084,49 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             if compressor_cls is not None
             else None
         )
+        self._sparse_sink = None
+        self._sparse_full_heads = False
+        indexer = getattr(self.compressor, "indexer", None)
+        if indexer is not None:
+            self._init_sparse_sink()
 
-    def prefetch_weights(self):
+    def prefetch_weights(self, *, index_sparse: bool = False):
         """Stage this block's projection weights ahead of the :meth:`decode` that uses them.
 
         Queues every projection configured for a GCB. The weights stay DRAM ND-sharded
         ``[K, N]`` pages; FIFO order is part of the contract and
         is checked nowhere -- a matmul that runs out of turn pops another weight's page and
-        computes wrong results rather than erroring -- so the projections are queued here in
-        the order :meth:`decode` consumes them: on the shared 64-receiver GCB q_b, then
-        ``_attend``'s o_a before o_b; on q_a's private 32-receiver ring q_a, then CSA's
-        kv/gate; on kv's private 16-receiver ring kv, then HCA's kv/gate. The MoE shared
-        expert's gate/up follow CSA on q_a's ring and its down follows o_b on the shared
-        buffer (queued from :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`).
+        computes wrong results rather than erroring -- so each ring is queued in the order
+        :meth:`decode` consumes it. On the shared 64-receiver GCB that is q_b, then the
+        indexer's q_b when scoring, then ``_attend``'s o_a before o_b. On q_a's private
+        32-receiver ring it is q_a, then CSA's kv/gate. On kv's private 16-receiver ring it
+        is kv, then HCA's kv/gate. The MoE shared expert's gate/up follow CSA on q_a's ring
+        and its down follows o_b on the shared buffer (queued from
+        :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`).
+
+        One prefetcher socket serves every ring, and it does not read the next request
+        while the current one is waiting for ring space. o_a and o_b are not popped until
+        ``_attend``, so queueing them before the compressor leaves the compressor's readers
+        parked in ``remote_cb_wait_front``. The compressor rings are therefore queued
+        before those two, which does not change either ring's own order.
+
+        ``index_sparse`` also stages the CSA indexer's score projections. Key compression
+        is staged whenever the indexer is attached; the score pages are not, on the
+        short-sequence trace that never pops them.
         """
-        for proj in (self.q_a_proj, self.q_b_proj, self.kv_proj, self.o_a_proj, self.o_b_proj):
+        for proj in (self.q_a_proj, self.q_b_proj, self.kv_proj):
             if proj.use_prefetcher:
                 proj.fetch_weights()
         if self.compressor is not None:
-            self.compressor.prefetch_weights()
+            self.compressor.prefetch_weights(index_sparse=index_sparse)
+        # Indexer q_b shares q_b's 64-receiver ring. It is consumed after attention's
+        # q_b and before o_a, so it has to sit between them in that ring's FIFO.
+        indexer = getattr(self.compressor, "indexer", None)
+        if index_sparse and indexer is not None and indexer.q_b_proj.use_prefetcher:
+            indexer.q_b_proj.fetch_weights()
+        for proj in (self.o_a_proj, self.o_b_proj):
+            if proj.use_prefetcher:
+                proj.fetch_weights()
 
     def _sdpa_decode(
         self,
@@ -1281,6 +1297,133 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
         return self._grouped_output(attn)
 
+    def _init_sparse_sink(self) -> None:
+        """``[1, 1, 1, H]`` ROW_MAJOR DRAM sink for ``sparse_sdpa``.
+
+        The kernel multiplies ``scale`` into the sink, and the reference leaves it
+        unscaled, so this is ``model_sink / scale`` -- the same pre-division the
+        fused SDPA-decode sink uses. TP ranks with fewer than 32 local heads gather
+        to the full head count before the op, and then the sink is replicated;
+        otherwise each rank keeps its head shard.
+        """
+        sinks = (self.sinks_torch.reshape(1, 1, 1, self.num_heads) / self.scaling).to(torch.bfloat16)
+        self._sparse_full_heads = self.tp_size > 1 and (
+            self.local_num_heads < ttnn.TILE_SIZE or self.local_num_heads % ttnn.TILE_SIZE != 0
+        )
+        mapper = None
+        if self.tp_size > 1:
+            mapper = (
+                ttnn.ReplicateTensorToMesh(self.device)
+                if self._sparse_full_heads
+                else ttnn.ShardTensorToMesh(self.device, dim=3)
+            )
+        self._sparse_sink = ttnn.from_torch(
+            sinks,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    def _sparse_k_chunk(self, width: int) -> int:
+        """Smallest tile-multiple chunk that divides the sparse index row.
+
+        ``sparse_sdpa`` places its circular buffers on every core. A 128-wide
+        chunk at head dim 512 does not fit above the prefetcher rings, so the
+        chunk stays at 32 whenever the index row allows it.
+        """
+        for chunk in (32, 64, 128):
+            if width % chunk == 0:
+                return chunk
+        raise ValueError(f"sparse index width {width} is not divisible by 32")
+
+    def _sparse_attend(
+        self,
+        q: ttnn.Tensor,
+        kv: ttnn.Tensor,
+        indices: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        neg_sin: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """``sparse_sdpa`` over the sliding ring plus the indexer's compressed picks.
+
+        ``q`` is packed ``[1, 1, B, H_local*Dh]``. ``kv`` is the dense combined cache
+        ``[B, 1, Skv, Dh]`` TILE (K == V). ``indices`` is uint32 ROW_MAJOR
+        ``[B, 1, 1, window + k]``. Returns the same packed hidden ``[1, 1, B, D]``
+        :meth:`_attend` does. One ``sparse_sdpa`` call scores a single cache slot, so
+        the batch is unrolled; ``B`` is fixed for the captured trace.
+        """
+        h, dh = self.local_num_heads, self.head_dim
+        batch = _packed_users(q)
+        grid_size = self._sdpa_pcfg.compute_with_storage_grid_size
+        out_mem = _sdpa_decode_output_config(batch, h, dh, grid_size)
+        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(q, out_mem.shard_spec.grid)
+        if gathered is not q:
+            ttnn.deallocate(q)
+        q = ttnn.experimental.view(gathered, [1, batch, h, dh])
+        q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        # The gather replica is L1 on the SDPA cores. Leave it there and
+        # sparse_sdpa's full-grid circular buffers overlap it.
+        if q_dram is not q and q_dram.buffer_address() != q.buffer_address():
+            ttnn.deallocate(q)
+        q = q_dram
+        q = ttnn.permute(q, (0, 2, 1, 3))  # [1, H_local, B, Dh]
+        if self._sparse_full_heads:
+            q = ttnn.all_gather(
+                q,
+                dim=1,
+                cluster_axis=_tp_cluster_axis(self.device),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+        kv_rm = ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT)
+        heads = q.shape[1]
+        width = indices.shape[-1]
+        k_chunk = self._sparse_k_chunk(width)
+        use_slot = batch > 1 or kv.shape[0] > 1
+        rows = []
+        for user in range(batch):
+            q_user = ttnn.slice(q, [0, 0, user, 0], [1, heads, user + 1, dh])
+            idx_user = ttnn.slice(indices, [user, 0, 0, 0], [user + 1, 1, indices.shape[2], width])
+            attended = ttnn.transformer.sparse_sdpa(
+                q_user,
+                kv_rm,
+                idx_user,
+                v_dim=dh,
+                kv_format=ttnn.transformer.SparseKVFormat.BF16,
+                scale=self.scaling,
+                k_chunk_size=k_chunk,
+                attention_sink=self._sparse_sink,
+                cache_batch_idx=user if use_slot else None,
+            )
+            ttnn.deallocate(q_user)
+            ttnn.deallocate(idx_user)
+            if self._sparse_full_heads:
+                # mesh_partition wants TILE. The height shard below is [H_local, Dh]
+                # with H_local=16, which is not a tile, so untilize before sharding
+                # — the same ROW_MAJOR layout sdpa_decode hands to RoPE.
+                tiled = ttnn.to_layout(attended, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(attended)
+                local = ttnn.mesh_partition(
+                    tiled,
+                    dim=1,
+                    cluster_axis=_tp_cluster_axis(self.device),
+                )
+                ttnn.deallocate(tiled)
+                attended = ttnn.to_layout(local, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(local)
+            rows.append(ttnn.permute(attended, (0, 2, 1, 3)))  # [1, 1, H_local, Dh]
+            ttnn.deallocate(attended)
+        ttnn.deallocate(q)
+        ttnn.deallocate(kv_rm)
+        attn = rows[0] if batch == 1 else ttnn.concat(rows, dim=1)
+        attn = ttnn.to_memory_config(attn, out_mem)
+        attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
+        return self._grouped_output(attn)
+
     def _decode_activation_grid(self) -> ttnn.CoreRangeSet:
         """Core set that receives the ``[1, 1, B, D]`` decode all-gather replica of ``tokens``.
 
@@ -1298,13 +1441,16 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 grid = other
         return grid
 
-    def _qkv(self, tokens: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _qkv(
+        self, tokens: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Project + RoPE the query and (shared) K=V for the packed-row ``tokens`` ``[1, 1, B, D]``.
 
-        Returns ``q`` ``[1, 1, B, H_local*Dh]`` (packed; ``H_local == H / TP``) and the
-        rotated, replicated ``kv`` ``[1, 1, B, Dh]``, both still on packed rows
-        (pre-compressor, pre-cache). ``cos`` / ``sin`` are the ``[1,1,L,Rd]`` RoPE tables.
-        Shared by the decode paths.
+        Returns ``q`` ``[1, 1, B, H_local*Dh]`` (packed; ``H_local == H / TP``), the
+        rotated, replicated ``kv`` ``[1, 1, B, Dh]``, and the normalized q_a latent
+        ``[1, 1, B, q_lora]`` the CSA indexer scores from. All three are still on
+        packed rows (pre-compressor, pre-cache). ``cos`` / ``sin`` are the
+        ``[1,1,L,Rd]`` RoPE tables. Shared by the decode paths.
 
         ``q`` stays packed through RoPE; :meth:`_sdpa_decode` gathers it onto the
         SDPA cores and views ``[1, B, H_local, Dh]``. The projections and norms all run
@@ -1339,7 +1485,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         kv = kv_raw if self.kv_norm is None else self.kv_norm(kv_raw)  # [1, 1, B, Dh]
 
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
-        return q, kv
+        return q, kv, q_a
 
     def decode(
         self,
@@ -1358,6 +1504,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         sdpa_cur_pos: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
         win_row: ttnn.Tensor | None = None,
+        index_sparse: bool = False,
     ) -> ttnn.Tensor:
         """Single-token decode attention against the in-place ``scache`` (or ``paged``).
 
@@ -1384,6 +1531,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             sdpa_cur_pos=sdpa_cur_pos,
             win_slot=win_slot,
             win_row=win_row,
+            index_sparse=index_sparse,
         )
 
     def decode_static(
@@ -1403,6 +1551,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         sdpa_cur_pos: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
         win_row: ttnn.Tensor | None = None,
+        index_sparse: bool = False,
     ) -> ttnn.Tensor:
         """Trace-safe single-token decode against fixed-size in-place caches.
 
@@ -1430,6 +1579,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         ``sdpa_cur_pos`` ``[B]`` INT32, when set, replaces ``mask`` with causal-mode SDPA
         bounded by that position (see :meth:`_sdpa_decode` and :func:`sdpa_causal_ok`).
+
+        ``index_sparse`` selects the CSA lightning-indexer trace: score compressed keys
+        and attend with ``sparse_sdpa``. It is false below ``compress_rate * index_topk``,
+        where that top-k does not yet fit and dense causal SDPA is the captured program.
+        HCA ignores it.
         """
         b, s, _, d = hidden.shape
         assert s == 1, f"decode attends one token per user, but S == {s}"
@@ -1441,9 +1595,15 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         if gathered is not tokens:
             ttnn.deallocate(tokens)
         tokens = gathered
-        q, kv_new = self._qkv(tokens, cos, sin)  # q [1,1,B,H*Dh], kv_new [1,1,B,Dh]
+        q, kv_new, q_a = self._qkv(tokens, cos, sin)  # q [1,1,B,H*Dh], kv_new [1,1,B,Dh]
+        use_indexer = (
+            index_sparse
+            and self.layer_type == "compressed_sparse_attention"
+            and getattr(self.compressor, "indexer", None) is not None
+        )
 
         if self.compressor is None:
+            ttnn.deallocate(q_a)
             # The KV axis is the sliding ring alone. Paged: the *absolute* position,
             # which ``paged.position_modulo`` wraps into the bounded ring, read in causal
             # mode so the kernel honours ``cur_pos`` -- non-causal ignores it and walks
@@ -1482,18 +1642,38 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # One KV axis holds both regions, so there is no per-step concat: the ring slot
         # ``pos % window`` lands in the prefix and each pooled entry is appended after
         # it at row ``window + w``. Both indices are pre-wrapped, so the paged reads
-        # need no ``cache_position_modulo``.
+        # need no ``cache_position_modulo``. The dense ``combined`` mirror, when the
+        # paged pool is also live, is what ``sparse_sdpa`` gathers from.
+        if not use_indexer:
+            ttnn.deallocate(q_a)
+            q_a = None
+        else:
+            # The fused q_a epilogue multicasts one [M, q_lora] replica onto every q_b
+            # core, so the tensor height is cores*M. Spilling that as-is makes the
+            # indexer's q_b read M=64. Collapse to the single packed row first.
+            if self.q_b_proj._is_replicated_rm_hs(q_a):
+                spilled_qa = self.q_b_proj._unreplicate_rm_hs_activation(q_a)
+            else:
+                spilled_qa = ttnn.to_memory_config(q_a, ttnn.DRAM_MEMORY_CONFIG)
+            if spilled_qa is not q_a:
+                ttnn.deallocate(q_a)
+            q_a = spilled_qa
         kv = None if paged is not None else scache.combined  # [B, 1, window + n_win, Dh]
         _update_cache_at(kv, kv_new, sliding_pos, paged=paged)
+        if paged is not None and scache.combined is not None:
+            _update_cache_at(scache.combined, kv_new, sliding_pos)
         # One row per user is a whole tile of L1 each -- worth handing back before the
         # compressor and SDPA below ask for their own.
         ttnn.deallocate(kv_new)
         # ``q`` is packed and nothing reads it until the SDPA below, while the compressor in
-        # between is the step's L1 high-water mark: at a wide batch, holding both at once is
-        # what leaves an op's circular buffers nowhere to go, so park q in DRAM across the
-        # compressor and bring it back before SDPA height-shards it. At batch 1 both fit and
-        # the round trip is dead cost.
-        q_config = q.memory_config() if b > 1 else None
+        # between is the step's L1 high-water mark. A wide batch, or the indexer's second
+        # compressor pair on top of the prefetch rings, leaves the gate matmul's circular
+        # buffers nowhere to go, so park q in DRAM across the compressor and bring it back
+        # before SDPA height-shards it.
+        indexer_attached = (
+            self.layer_type == "compressed_sparse_attention" and getattr(self.compressor, "indexer", None) is not None
+        )
+        q_config = q.memory_config() if b > 1 or indexer_attached else None
         if q_config is not None:
             spilled = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(q)
@@ -1503,14 +1683,31 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             cos_win,
             sin_win,
             scache,
-            kv,
+            scache.combined,
             win_slot,
             win_row=win_row,
             pool=pool_compressor,
             paged=paged,
         )
+        indices = None
+        if use_indexer:
+            indices = self.compressor.indexer.score_and_select(
+                tokens, q_a, cos, sin, scache.idx_key_cache, compress_pos
+            )
+            ttnn.deallocate(q_a)
+            # weights_proj has no prefetch ring, so its matmul keeps a width-sharded
+            # L1 copy. That copy sits on cores sparse_sdpa also uses for circular
+            # buffers; drop it before the attend. The next score copies it again.
+            held = self.compressor.indexer.weights_proj.l1_weights
+            if held is not None and held.is_allocated():
+                ttnn.deallocate(held)
+            self.compressor.indexer.weights_proj.l1_weights = None
         ttnn.deallocate(tokens)
         if q_config is not None:
             q = ttnn.to_memory_config(q, q_config)
-        out = self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos, paged=paged)
+        if use_indexer:
+            out = self._sparse_attend(q, scache.combined, indices, cos, neg_sin)
+            ttnn.deallocate(indices)
+        else:
+            out = self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos, paged=paged)
         return ttnn.reshape(out, [b, s, 1, d])

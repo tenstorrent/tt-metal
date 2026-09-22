@@ -139,7 +139,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         )
         _profile(self.device)
 
-    def prefetch_weights(self):
+    def prefetch_weights(self, *, index_sparse: bool = False):
         """Stage this layer's prefetched weights ahead of the :meth:`decode_static` that uses them.
 
         Every weight staged here answers that next call on this layer's ``[B,S,hc,D]`` streams.
@@ -148,10 +148,11 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         hyper-connection, then the MoE (router gate on its 8-receiver ring, then the shared
         expert's down on the shared ring; at TP4 the shared gate/up are per-step DRAM -> L1
         copies and queue on no ring). The requests queued here must be consumed by this layer's
-        own decode before any later layer queues its own.
+        own decode before any later layer queues its own. ``index_sparse`` stages the CSA
+        indexer's score projections; the short-sequence trace leaves them unqueued.
         """
         self.attn_hc.prefetch_weights()
-        self.self_attn.prefetch_weights()
+        self.self_attn.prefetch_weights(index_sparse=index_sparse)
         self.ffn_hc.prefetch_weights()
         self.mlp.prefetch_weights()
 
@@ -189,6 +190,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         win_slot: ttnn.Tensor | None = None,
         win_row: ttnn.Tensor | None = None,
         hash_token: ttnn.Tensor | None = None,
+        index_sparse: bool = False,
     ) -> ttnn.Tensor:
         """Single-token decode: same graph as :meth:`decode_static` (the capture).
 
@@ -222,6 +224,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             sdpa_cur_pos=sdpa_cur_pos,
             win_slot=win_slot,
             win_row=win_row,
+            index_sparse=index_sparse,
         )
 
     def decode_static(
@@ -242,6 +245,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         sdpa_cur_pos: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
         win_row: ttnn.Tensor | None = None,
+        index_sparse: bool = False,
     ) -> ttnn.Tensor:
         """Trace-safe single-token decode (see :meth:`decode`). Uses the fixed-size
         in-place attention cache + the host-sync-free MoE so the whole block can be
@@ -279,6 +283,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
                 sdpa_cur_pos=sdpa_cur_pos,
                 win_slot=win_slot,
                 win_row=win_row,
+                index_sparse=index_sparse,
             )
         with _region("ATTN_MIX"):
             hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
