@@ -21,9 +21,9 @@ class ExperimentalDecoder(LlamaDecoder):
         )
         normalized = self._norm_input(residual, decode=True, site="mlp")
         normalized = ttnn.to_memory_config(normalized, self.decode_inputs["gate_up"])
-        if self.fusion_mode == "mlp":
+        if self.fusion_mode in ("mlp", "mlp_reduce"):
             local_down = self.fused_body(normalized, self.fused_layer_index)
-            down = self._rs(local_down, decode=True, site="down")
+            down = local_down if self.fusion_mode == "mlp_reduce" else self._rs(local_down, decode=True, site="down")
         else:
             packed = self._decode_linear(normalized, "gate_up")
             product = fused_swiglu(packed, output_memory_config=self.decode_inputs["down"])
@@ -43,11 +43,11 @@ def experimental_layers(layers, *, mode="mlp", reuse_scratch=False):
     resulting layers and must retain them until all referencing traces release.
     Prefill is inherited unchanged. This does not fuse the complete decoder.
     """
-    if mode not in ("swiglu", "mlp"):
-        raise ValueError("mode must be swiglu or mlp")
+    if mode not in ("swiglu", "mlp", "mlp_reduce"):
+        raise ValueError("mode must be swiglu, mlp or mlp_reduce")
     if not layers or any(layer.decode_workspace.batch != 1 for layer in layers):
         raise ValueError("Experimental decode supports only prepared batch-one layers")
-    body = FusedMLP(layers, reuse_scratch=reuse_scratch) if mode == "mlp" else None
+    body = FusedMLP(layers, reuse_scratch=reuse_scratch, fuse_reduce=mode == "mlp_reduce") if mode != "swiglu" else None
     result = []
     for index, layer in enumerate(layers):
         adapted = copy(layer)

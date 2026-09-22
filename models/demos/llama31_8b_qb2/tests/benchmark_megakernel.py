@@ -45,7 +45,7 @@ def metrics(actual, expected):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("baseline", "swiglu", "mlp"), required=True)
+    parser.add_argument("--mode", choices=("baseline", "swiglu", "mlp", "mlp_reduce"), required=True)
     parser.add_argument("--context", type=int, default=128)
     parser.add_argument("--tokens", type=int, default=32)
     parser.add_argument("--repeats", type=int, default=3)
@@ -99,7 +99,10 @@ def run(args):
         "tokens": args.tokens,
         "profile_run": args.profile,
         "sampling": {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},
-        "limitations": "B1; fused local MLP only; attention, collectives and model boundary remain traced TTNN",
+        "limitations": (
+            "B1; MLP and optional down reduce-scatter fused; attention, normalization, "
+            "other collectives and model boundary remain traced TTNN"
+        ),
     }
     evidence = {"context": args.context, "tokens": args.tokens}
     ttnn.set_fabric_config(**LlamaForCausalLM.model_capabilities["fabric_config"])
@@ -139,6 +142,10 @@ def run(args):
         if args.profile:
             from tracy import signpost
 
+            # Drain warmup/capture records before measuring. Without these
+            # explicit drains, small-op records disappear from later replays
+            # once the device profiler's finite DRAM buffers fill.
+            ttnn.ReadDeviceProfiler(mesh)
             # Reset outside the signposts so each trace starts at the same
             # context and token. Profiling deliberately freezes this one token.
             for repeat in range(args.repeats):
@@ -151,6 +158,7 @@ def run(args):
                 generator.replay_decode(sample=True)
                 ttnn.synchronize_device(mesh)
                 signpost(f"QB2_DECODE_END_{repeat}")
+                ttnn.ReadDeviceProfiler(mesh)
             result["measurement"] = (
                 "Read device kernel/firmware durations inside decode signposts from the profiler artifacts"
             )

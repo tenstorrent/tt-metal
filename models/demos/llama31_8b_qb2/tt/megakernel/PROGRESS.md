@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 13:27 UTC. **Verified partial MLP prototype; full megakernel incomplete.**
+Updated 2026-09-22 14:03 UTC. **Verified partial MLP prototype; full megakernel incomplete.**
 
 - Base: `b8915544692d8f9feb2c890afbc2f22791560cd2` (origin/main at setup).
 - Earlier implementation HEAD: `4214810a674a018b256f4dd0f776974ba919bec1`; subsequent
@@ -105,3 +105,29 @@ loop or vLLM qualification. B1 only. Current Blackhole supports 64 CB indices.
 All device operations are serial and bounded. On a hang, save tt-triage before
 terminating only this run's process. Credentials, weights, builds, caches and
 bulk logs remain outside Git.
+
+## Four-chip reduction milestone (2026-09-22 14:03 UTC)
+
+`mlp_reduce` now combines MLP and native-order four-chip reduce-scatter in one
+mesh program, with two fabric workers and program-local CB receive storage.
+An opt-in native writer LOCAL_STAGING_CB define uses this scratch with the
+existing initialization barrier before any peer writes. Current-runtime rebuild
+passed (five actions, build-local-staging.log); native modes remain unchanged.
+Standalone12 back-to-back trace replays and complete-layer page/remap checks
+pass. All32-layer context128 comparison passes: teacher logits and all64 KV
+tensors bitwise exact,32/32 greedy tokens identical,3 repeats stable. Host trials
+9.161502/9.162214/9.155281 ms/token; median9.161502,4.28% slower than baseline.
+Evidence: local-reduce-layer.*, numerical-local-reduce/, model-mlp-reduce-local-128/.
+
+The first four-worker communication attempt hung; full triage was preserved
+before own-process termination (compact-reduce-triage/). Authorized bounded
+recovery at13:44 passed full connectivity and mesh opening. Two workers avoid
+duplicate fabric sender use. Persistent staging then hit LM-head L1 validation;
+program-local staging resolves it and passes the full model.
+
+Earlier per-op profiler captures lose records in later replays; their breakdowns
+are provisional. The harness now drains buffers between measured windows.
+Matched recapture and coverage validation are underway. Next: optimize gate/up
+from eight workers toward the native two-readers-per-bank schedule, extend
+context, and continue normalization/attention fusion. Full decoder, device
+32-layer loop and embedding/head/sampling fusion remain incomplete.

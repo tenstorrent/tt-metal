@@ -53,7 +53,9 @@ def copy_to(value, target, mesh):
 
 
 @pytest.mark.parametrize(
-    "mode,reuse_scratch", [("swiglu", False), ("mlp", False), ("mlp", True)], ids=["swiglu", "mlp", "mlp_shared"]
+    "mode,reuse_scratch",
+    [("swiglu", False), ("mlp", False), ("mlp", True), ("mlp_reduce", False)],
+    ids=["swiglu", "mlp", "mlp_shared", "mlp_reduce"],
 )
 def test_fused_layer_real_weights(qb2_mesh, mode, reuse_scratch):
     torch.set_num_threads(8)

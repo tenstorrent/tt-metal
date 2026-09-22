@@ -43,7 +43,16 @@ void kernel_main() {
     constexpr uint32_t num_dests = num_devices - 1;
 
     size_t ai = 0;
-    const address_t staging_addr = get_arg_val<address_t>(ai++);
+    const address_t staging_arg = get_arg_val<address_t>(ai++);
+#ifdef LOCAL_STAGING_CB
+    // A fused producer can reserve receive storage as program-local scratch.
+    // Every peer must enter this program before writes can target that scratch;
+    // the native launch barrier provides this lifetime boundary.
+    static_assert(arrivals_in_cb && needs_init_sync, "Local staging requires aliased arrivals and start sync");
+    const address_t staging_addr = get_write_ptr(LOCAL_STAGING_CB);
+#else
+    const address_t staging_addr = staging_arg;
+#endif
     const address_t output_addr = get_arg_val<address_t>(ai++);
     const uint32_t device_idx = get_arg_val<uint32_t>(ai++);
     const uint32_t chunk_start = get_arg_val<uint32_t>(ai++);

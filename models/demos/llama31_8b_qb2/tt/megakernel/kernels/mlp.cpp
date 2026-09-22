@@ -110,6 +110,18 @@ void kernel_main() {
         noc_async_write_barrier();
     }
     cb_pop_front(17, 16);
+#ifdef FUSE_REDUCE
+    // Every down shard must be globally visible before collective readers
+    // consume slices spanning projection workers. The write barrier above
+    // orders data before these release atomics.
+    notify_coordinator(4);
+    if (bank == 0) {
+        DeviceZoneScopedN("MLP-DOWN-BARRIER");
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(4)), 8);
+        release_workers(5, 24, 26);
+    }
+    noc_async_atomic_barrier();
+#endif
 }
 #elif defined(SWIGLU) && defined(READER)
 void kernel_main() {

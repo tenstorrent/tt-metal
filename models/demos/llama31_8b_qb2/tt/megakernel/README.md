@@ -1,11 +1,12 @@
 # Experimental QB2 decode fusion
 
-This is a **hardware-validated local MLP prototype**, not a complete decode
+This is a **hardware-validated MLP and four-chip reduction prototype**, not a complete decode
 megakernel. On Blackhole QB2, real-checkpoint gate/up, SwiGLU and down stages,
 complete-layer paged replay/remapping, and a batch-one context-128 full-model
 comparison pass. All 32 teacher-forced logit rows and all-layer KV caches are
 bitwise identical to the native traced baseline; all 32 greedy tokens agree.
-Initial warmed host decode is slower: 9.246 versus 8.786 ms/token (31 decode
+Warmed host decode is slower: 9.162 versus 8.786 ms/token with fused reduction
+(9.246 ms/token for local MLP) (31 decode
 steps, median of three runs). These are host generation timings, not device
 profiler or serving measurements. See `PROGRESS.md` and run artifacts for limits.
 
@@ -71,7 +72,7 @@ outputs with distinct real layer-0/layer-31 weight-table rows and trace replay.
 Run profiling in a separate process, without Watcher or serving:
 
 ```bash
-python -m tracy -r --device-trace-profiler -o /outside/repo/profile \
+python -m tracy -r --device-memory-profiler --op-support-count 4000 -o /outside/repo/profile \
     -m models.demos.llama31_8b_qb2.tests.benchmark_megakernel \
     --mode mlp --context 128 --repeats 3 --profile --output /outside/repo/profile-run
 ```
@@ -101,3 +102,33 @@ BFP4/BFP8 baseline has aggregate logit PCC 0.97753 on this prompt, despite 100%
 teacher top-1 agreement. The prototype reproduces it exactly. The saved result
 explicitly records `hf_pcc_099_passed=false`; this is not a 0.99 HF accuracy pass.
 Use `--require-hf-pcc` to make an HF threshold mandatory after saving evidence.
+
+## Four-chip reduction milestone (2026-09-22 14:03 UTC)
+
+`mlp_reduce` now combines MLP and native-order four-chip reduce-scatter in one
+mesh program, with two fabric workers and program-local CB receive storage.
+An opt-in native writer LOCAL_STAGING_CB define uses this scratch with the
+existing initialization barrier before any peer writes. Current-runtime rebuild
+passed (five actions, build-local-staging.log); native modes remain unchanged.
+Standalone12 back-to-back trace replays and complete-layer page/remap checks
+pass. All32-layer context128 comparison passes: teacher logits and all64 KV
+tensors bitwise exact,32/32 greedy tokens identical,3 repeats stable. Host trials
+9.161502/9.162214/9.155281 ms/token; median9.161502,4.28% slower than baseline.
+Evidence: local-reduce-layer.*, numerical-local-reduce/, model-mlp-reduce-local-128/.
+
+The first four-worker communication attempt hung; full triage was preserved
+before own-process termination (compact-reduce-triage/). Authorized bounded
+recovery at13:44 passed full connectivity and mesh opening. Two workers avoid
+duplicate fabric sender use. Persistent staging then hit LM-head L1 validation;
+program-local staging resolves it and passes the full model.
+
+Earlier per-op profiler captures lose records in later replays; their breakdowns
+are provisional. The harness now drains buffers between measured windows.
+Matched recapture and coverage validation are underway. Next: optimize gate/up
+from eight workers toward the native two-readers-per-bank schedule, extend
+context, and continue normalization/attention fusion. Full decoder, device
+32-layer loop and embedding/head/sampling fusion remain incomplete.
+
+Verify complete operation coverage for device profiling. The current
+`--device-trace-profiler` flag aggregates whole traces and must be used
+separately from per-operation reporting. No serving result is claimed.
