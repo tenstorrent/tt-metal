@@ -1,5 +1,4 @@
 name: "LLK perf gate impl"
-# Entry points: workflow_call only. Trigger lives in llk-perf-gate.yaml.
 
 on:
   workflow_call:
@@ -44,13 +43,13 @@ jobs:
       gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 20
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142 # v5.0.0
+        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142
         with:
           python-version: '3.10'
 
@@ -59,7 +58,6 @@ jobs:
           pip install pandas snowflake-connector-python
           apt-get update && apt-get install -y sshpass
 
-      # Query Snowflake for the latest main baseline
       - name: Get branch point commit
         id: branch_point
         run: |
@@ -85,7 +83,6 @@ jobs:
           from datetime import datetime
           from snowflake.connector import connect
 
-          # Snowflake credentials from GitHub secrets
           conn = connect(
             account=os.environ['SNOWFLAKE_ACCOUNT'],
             user=os.environ['SNOWFLAKE_USER'],
@@ -96,8 +93,6 @@ jobs:
 
           cursor = conn.cursor()
 
-          # Query: Try exact commit first, then fall back to latest before branch point
-          # ordered by commit date (or main ordinal if available)
           query_exact = """
           SELECT commit_sha, timestamp, run_id
           FROM llk_baselines
@@ -150,7 +145,6 @@ jobs:
           SFTP_USER: ${{ secrets.SFTP_USER }}
           SSHPASS: ${{ secrets.SFTP_PASSWORD }}
         run: |
-          # Read baseline commit from metadata
           BASELINE_COMMIT=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
 
           if [ -z "$BASELINE_COMMIT" ]; then
@@ -173,13 +167,9 @@ jobs:
             exit 1
           fi
 
-      # Pilot path: the baseline is another workflow run's artifacts rather than
-      # the warehouse. Same CSVs the warehouse would have been fed, so the
-      # comparison is identical — it just skips the round trip, and writes
-      # nothing to Snowflake.
       - name: Download the baseline from a workflow run
         if: inputs.baseline_run_id != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: perf-data-*
           merge-multiple: true
@@ -202,8 +192,6 @@ jobs:
             exit 1
           fi
 
-          # The report and the Slack message name the baseline commit, so take
-          # it from the run itself rather than leaving it unknown.
           BASELINE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BASELINE_RUN_ID}" \
             --jq '.head_sha') || BASELINE_SHA=""
           python3 - "$BASELINE_SHA" "$BASELINE_RUN_ID" > baseline_metadata.json <<'PYTHON'
@@ -216,10 +204,8 @@ jobs:
           echo "true" > have_baseline.txt
           echo "Baseline commit: ${BASELINE_SHA:-unknown}"
 
-      # The perf jobs upload one artifact per (arch, split group), named
-      # perf-data-<arch>-<split_group>, so this collects them all into one tree.
       - name: Download the PR's perf data
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: perf-data-*
           merge-multiple: true
@@ -236,7 +222,6 @@ jobs:
             exit 1
           fi
 
-      # Run the comparison
       - name: Compare regressions
         id: compare
         run: |
@@ -257,7 +242,6 @@ jobs:
           echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
           exit 0  # Don't fail the step; let the verdict step decide
 
-      # Post the report as a PR comment
       - name: Comment on PR
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
@@ -272,7 +256,6 @@ jobs:
               body: report
             });
 
-      # Check whether baseline was found and gate passed
       - name: Gate verdict
         if: always()
         run: |

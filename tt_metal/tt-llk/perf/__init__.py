@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
-"""LLK perf infrastructure.
-
-Canonical modules for perf comparison, baselines, and gate operations.
-"""
+"""LLK perf infrastructure."""
 
 from .regression_compare import (
     DEFAULT_MIN_CYCLES,
