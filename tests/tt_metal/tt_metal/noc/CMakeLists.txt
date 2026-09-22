@@ -10,7 +10,6 @@ target_link_libraries(unit_tests_noc PUBLIC test_metal_common_libs)
 target_include_directories(
     unit_tests_noc
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}

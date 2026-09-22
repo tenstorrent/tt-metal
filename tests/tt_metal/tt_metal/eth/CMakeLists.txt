@@ -19,7 +19,6 @@ function(create_unit_test_executable)
         ${exec_name}
         BEFORE
         PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
             ${CMAKE_CURRENT_SOURCE_DIR}

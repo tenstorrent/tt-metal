@@ -14,12 +14,7 @@ if(ENABLE_DISTRIBUTED)
     target_link_libraries(distributed_unit_tests PRIVATE OpenMPI::MPI)
 endif()
 
-target_include_directories(
-    distributed_unit_tests
-    PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-        ${PROJECT_SOURCE_DIR}/tests
-)
+target_include_directories(distributed_unit_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
 set_target_properties(
     distributed_unit_tests
@@ -50,7 +45,6 @@ target_link_libraries(
 target_include_directories(
     distributed_benchmarks
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}
 )
@@ -72,12 +66,7 @@ target_link_libraries(
         test_common_libs
 )
 
-target_include_directories(
-    multiproc_loopback_test
-    PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-        ${PROJECT_SOURCE_DIR}/tests
-)
+target_include_directories(multiproc_loopback_test PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
 set_target_properties(
     multiproc_loopback_test

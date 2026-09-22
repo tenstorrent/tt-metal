@@ -18,7 +18,6 @@ target_link_libraries(unit_tests_legacy PUBLIC test_metal_common_libs)
 target_include_directories(
     unit_tests_legacy
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
@@ -35,11 +34,11 @@ list(APPEND METAL_TEST_TARGETS unit_tests_legacy)
 # Standalone test_clean_init executable (not a gtest - requires custom main with skip-teardown handling)
 add_executable(test_clean_init test_clean_init.cpp)
 tt_reuse_precompile_headers(test_clean_init metal_test_pch)
-target_link_libraries(test_clean_init PUBLIC Metalium::Metal)
+# White-box test: includes impl/context/metal_context.hpp.
+target_link_libraries(test_clean_init PUBLIC Metalium::Metal PRIVATE TT::Metalium::Impl::Headers)
 target_include_directories(
     test_clean_init
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common

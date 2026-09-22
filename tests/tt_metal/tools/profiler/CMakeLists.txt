@@ -11,14 +11,15 @@ foreach(TEST_SRC ${PROFILER_TEST_SRCS})
     set(TEST_TARGET profiler_${TEST_NAME})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
-    target_link_libraries(${TEST_TARGET} PRIVATE tt_metal)
-
-    target_include_directories(
+    # White-box tests: include impl/streaming_profiler/... and impl/kernels/... headers.
+    target_link_libraries(
         ${TEST_TARGET}
         PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-            ${CMAKE_CURRENT_SOURCE_DIR}
+            tt_metal
+            TT::Metalium::Impl::Headers
     )
+
+    target_include_directories(${TEST_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     set_target_properties(
         ${TEST_TARGET}

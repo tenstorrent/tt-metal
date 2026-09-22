@@ -12,7 +12,6 @@ target_include_directories(
     unit_tests_api_lib
     BEFORE
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -54,7 +53,6 @@ target_include_directories(
     unit_tests_tensor_lib
     BEFORE
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -109,7 +107,6 @@ target_include_directories(
     dfb_init_timing_bench
     BEFORE
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}

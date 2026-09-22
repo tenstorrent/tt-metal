@@ -2,6 +2,12 @@
 
 include(sources.cmake)
 
+# Usage requirements for compiling against llrt's headers, without llrt's object
+# files. See TT::Metalium::Impl::Headers in ../impl/CMakeLists.txt (#57055).
+add_library(llrt_headers INTERFACE)
+add_library(TT::Metalium::LLRT::Headers ALIAS llrt_headers)
+target_include_directories(llrt_headers INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+
 add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)
 
@@ -15,6 +21,7 @@ add_dependencies(llrt hal_generate_dev_msgs_header)
 target_link_libraries(
     llrt
     PUBLIC
+        llrt_headers
         umd::tt-umd
         TT::Metalium::HostDevCommon
     PRIVATE
@@ -29,7 +36,7 @@ target_link_libraries(
         tt-logger::tt-logger
         Metalium::Metal::Hardware
 )
-target_include_directories(llrt PUBLIC .)
+# Public include directory lives on llrt_headers (linked PUBLIC above).
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
 
 include(GNUInstallDirs)

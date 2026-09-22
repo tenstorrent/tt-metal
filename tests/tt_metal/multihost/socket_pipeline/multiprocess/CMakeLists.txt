@@ -22,7 +22,6 @@ function(setup_metal_pipeline_test target_name test_source)
     target_include_directories(
         ${target_name}
         PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
     )

@@ -10,7 +10,6 @@ target_sources(unit_tests_dispatch_smoke PRIVATE ${UNIT_TESTS_DISPATCH_SMOKE_SOU
 target_include_directories(
     unit_tests_dispatch_smoke
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -27,7 +26,6 @@ target_sources(unit_tests_dispatch_basic PRIVATE ${UNIT_TESTS_DISPATCH_BASIC_SOU
 target_include_directories(
     unit_tests_dispatch_basic
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -43,7 +41,6 @@ target_sources(unit_tests_dispatch_slow PRIVATE ${UNIT_TESTS_DISPATCH_SLOW_SOURC
 target_include_directories(
     unit_tests_dispatch_slow
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}

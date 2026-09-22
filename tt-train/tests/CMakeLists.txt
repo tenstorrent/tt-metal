@@ -195,14 +195,17 @@ if(TARGET benchmark::benchmark)
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
         get_filename_component(BENCH_TARGET ${BENCH_SRC} NAME_WE)
         add_executable(${BENCH_TARGET} ${BENCH_SRC})
+        # White-box benchmarks: some include impl/context/metal_context.hpp and
+        # llrt/tt_cluster.hpp for cache-clearing between runs.
         target_link_libraries(
             ${BENCH_TARGET}
             PUBLIC
                 ttml
                 TTNN::TTNN
                 benchmark::benchmark
+            PRIVATE
+                TT::Metalium::Impl::Headers
         )
-        target_include_directories(${BENCH_TARGET} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
         tt_reuse_precompile_headers(${BENCH_TARGET} ttml_pch)
     endforeach()
 endif()

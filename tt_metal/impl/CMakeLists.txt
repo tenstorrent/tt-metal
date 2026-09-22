@@ -87,6 +87,38 @@ list(APPEND IMPL_SRC ${PROTO_SRCS})
 # dir is already on this target, so this is the natural home for it.
 list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table_protobuf.cpp)
 
+# Usage requirements for compiling against impl's headers, without impl's object
+# files. impl itself links this PUBLIC (it is the single definition of these
+# paths); white-box tests that include impl/... headers link this alongside
+# TT::Metalium instead of copying tt_metal's INCLUDE_DIRECTORIES property, which
+# would flatten -isystem and other usage requirements into plain -I paths (#57055).
+add_library(impl_headers INTERFACE)
+add_library(TT::Metalium::Impl::Headers ALIAS impl_headers)
+target_include_directories(
+    impl_headers
+    INTERFACE
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/debug
+        ${CMAKE_CURRENT_SOURCE_DIR}/profiler
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        ${CMAKE_CURRENT_BINARY_DIR}
+        # impl headers include public API headers unscoped (e.g. "core_coord.hpp"
+        # in kernels/kernel.hpp), mirroring the include_directories() convenience
+        # in tt_metal/CMakeLists.txt. FIXME: scope those includes and drop this.
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+)
+target_include_directories(impl_headers SYSTEM INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation)
+# impl headers include llrt headers unqualified (e.g. "tt_cluster.hpp"), and
+# streaming_profiler headers include SIMDe. Linking the real targets preserves
+# their usage requirements (e.g. SIMDe's -isystem classification).
+target_link_libraries(
+    impl_headers
+    INTERFACE
+        llrt_headers
+        simde::simde
+)
+
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
@@ -105,6 +137,7 @@ tt_reuse_precompile_headers(impl metal_common_pch)
 target_link_libraries(
     impl
     PUBLIC
+        impl_headers
         common
         Tracy::TracyClient
     PRIVATE
@@ -121,18 +154,9 @@ target_link_libraries(
         Taskflow::Taskflow
 )
 
-target_include_directories(
-    impl
-    PUBLIC
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        .
-        debug
-        profiler
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
-        ${CMAKE_CURRENT_BINARY_DIR}
-)
+# Public include directories live on impl_headers (linked PUBLIC above).
+# Only requirements for compiling impl's own sources stay here.
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
-target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation)
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)

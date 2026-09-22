@@ -40,12 +40,7 @@ target_link_libraries(
         tt_metal
         test_common_libs
 )
-target_include_directories(
-    cross_process_h2d_stream_service_test
-    PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-        ${PROJECT_SOURCE_DIR}/tests
-)
+target_include_directories(cross_process_h2d_stream_service_test PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 set_target_properties(
     cross_process_h2d_stream_service_test
     PROPERTIES
@@ -64,12 +59,7 @@ target_link_libraries(
         tt_metal
         test_common_libs
 )
-target_include_directories(
-    cross_process_d2h_stream_service_test
-    PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-        ${PROJECT_SOURCE_DIR}/tests
-)
+target_include_directories(cross_process_d2h_stream_service_test PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 set_target_properties(
     cross_process_d2h_stream_service_test
     PROPERTIES

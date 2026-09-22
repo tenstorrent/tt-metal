@@ -16,7 +16,6 @@ target_sources(
 target_include_directories(
     multi_host_fabric
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
@@ -38,7 +37,6 @@ target_sources(
 target_include_directories(
     mesh_socket_components
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
@@ -82,7 +80,6 @@ target_link_libraries(
 target_include_directories(
     test_mesh_socket_main
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
