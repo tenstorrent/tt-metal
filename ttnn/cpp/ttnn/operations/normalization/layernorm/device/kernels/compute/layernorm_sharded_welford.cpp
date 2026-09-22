@@ -183,6 +183,11 @@ void kernel_main() {
 #else
     constexpr bool do_beta = false;
 #endif
+#ifdef WELFORD_FP32_ALIAS
+    constexpr bool welford_fp32_alias = true;
+#else
+    constexpr bool welford_fp32_alias = false;
+#endif
     // Only the cores that gather read the cross-core combine's arguments and touch its buffers, so the
     // distinction is a compile-time one: their runtime-argument schemas differ.
 #ifdef IS_ALLGATHER_WORKER
@@ -211,7 +216,9 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_external_id = dfb::ex_external;
     constexpr uint32_t dfb_ex_global_id = dfb::ex_global;  // Interleaved E[x] and Var[x] final global mcast result
     constexpr uint32_t dfb_transpose_id = dfb::transpose;  // Transpose interleaved E[x] and Var[x] to columns
-    constexpr uint32_t dfb_fusion_id = dfb::xmm;           // stream gamma/beta
+    // FP32 normalisation writes xmm directly, leaving x free for gamma's
+    // output when beta follows. The tile path retains its original buffers.
+    constexpr uint32_t dfb_fusion_id = welford_fp32_alias && do_gamma ? dfb_x : dfb_xmm_id;
     constexpr uint32_t dfb_out_id = dfb::out;
     constexpr uint32_t dfb_reciprocals = dfb::reciprocals;  // LUT of pre-computed reciprocals for Welford's algorithm
 
@@ -230,7 +237,7 @@ void kernel_main() {
     DataflowBuffer dfb_fusion(dfb_fusion_id);
     DataflowBuffer dfb_out(dfb_out_id);
 
-    constexpr uint32_t dfb_im_id = (do_gamma || do_beta) ? dfb_x : dfb_out_id;
+    constexpr uint32_t dfb_im_id = (do_gamma || do_beta) ? (welford_fp32_alias ? dfb_xmm_id : dfb_x) : dfb_out_id;
     DataflowBuffer dfb_im(dfb_im_id);
     constexpr uint32_t dfb_outgamma_id = do_beta ? dfb_fusion_id : dfb_out_id;
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
@@ -248,10 +255,8 @@ void kernel_main() {
     // pointer manipulation, and so does the alias. When the alias is inactive the name resolves to the
     // intake buffer itself.
 #ifdef WELFORD_FP32_ALIAS
-    constexpr bool welford_fp32_alias = true;
     constexpr uint32_t dfb_x_welford_id = dfb::x_welford;
 #else
-    constexpr bool welford_fp32_alias = false;
     constexpr uint32_t dfb_x_welford_id = dfb_in_id;
 #endif
     DataflowBuffer dfb_x_welford(dfb_x_welford_id);
@@ -566,40 +571,58 @@ void kernel_main() {
 
     dfb_transpose.wait_front(num_block_ht_result_tiles);
 
-    // ---------------------------------------------------------------------------
-    // Compute x - E[x]
-    // ---------------------------------------------------------------------------
-    if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(dfb_in_id, dfb_transpose_id);
-    }
-    index_h_offset = 0;
-    if constexpr (!welford_fp32_alias) {
-        sub_bcast_cols_init(dfb_in_id, dfb_transpose_id);
-    }
-    dfb_xmm.reserve_back(num_tiles_per_block);
-    for (uint32_t i = 0; i < block_ht; i++) {
-        index_subblock_w_offset = 0;
-        const auto mean_idx = 2 * i;
-        dfb_transpose.wait_front(static_cast<uint16_t>(mean_idx + 1));
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            if constexpr (welford_fp32_alias) {
-                for (uint32_t w = 0; w < subblock_wt; w++) {
-                    index = w + index_subblock_w_offset;
-                    tile_regs_acquire();
-                    reconfig_data_format_srca(dfb_x_welford_id);
-                    copy_init(dfb_x_welford_id);
-                    copy_tile(dfb_x_welford_id, index, 0);
-                    reconfig_data_format_srca(dfb_transpose_id);
-                    copy_init(dfb_transpose_id);
-                    copy_tile(dfb_transpose_id, mean_idx, 1);
-                    sfpu_sub_bcast_col_init();
-                    sfpu_sub_bcast_col(0, 1);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, dfb_xmm_id);
-                    tile_regs_release();
+    if constexpr (welford_fp32_alias) {
+        // Keep centring and scaling in FP32 DEST. Spilling x - mean to xmm
+        // would round it through TF32 on the next UnpackToSrc reload.
+        // Use xmm for affine input so fused pre-add in x is never overwritten
+        // while its alias still holds unread tiles.
+        pack_reconfig_data_format(dfb_im_id);
+        dfb_im.reserve_back(num_tiles_per_block);
+        for (uint32_t i = 0; i < block_ht; ++i) {
+            for (uint32_t w = 0; w < block_wt; w += 2) {
+                const bool paired = w + 1 < block_wt;
+                tile_regs_acquire();
+                reconfig_data_format_srca(dfb_transpose_id);
+                copy_init(dfb_transpose_id);
+                copy_tile(dfb_transpose_id, 0, 2);
+                copy_tile(dfb_transpose_id, 1, 3);
+                reconfig_data_format_srca(dfb_x_welford_id);
+                copy_init(dfb_x_welford_id);
+                copy_tile(dfb_x_welford_id, w, 0);
+                if (paired) {
+                    copy_tile(dfb_x_welford_id, w + 1, 1);
                 }
-            } else {
+                sfpu_bcast_col_init();
+                if (paired) {
+                    sfpu_normalize_bcast_col_two_tiles(0, 1, 2, 3);
+                } else {
+                    sfpu_normalize_bcast_col(0, 2, 3);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, dfb_im_id);
+                if (paired) {
+                    pack_tile(1, dfb_im_id);
+                }
+                tile_regs_release();
+            }
+            dfb_in.pop_front(block_wt);
+            dfb_x_welford.pop_front(block_wt);
+            dfb_transpose.pop_front(2);
+        }
+        dfb_im.push_back(num_tiles_per_block);
+    } else {
+        // Compute x - E[x], then scale by 1/sqrt(Var[x] + eps).
+        if constexpr (FLOAT32_DTYPE) {
+            reconfig_data_format(dfb_in_id, dfb_transpose_id);
+        }
+        sub_bcast_cols_init(dfb_in_id, dfb_transpose_id);
+        dfb_xmm.reserve_back(num_tiles_per_block);
+        for (uint32_t i = 0; i < block_ht; i++) {
+            index_subblock_w_offset = 0;
+            const auto mean_idx = 2 * i;
+            dfb_transpose.wait_front(static_cast<uint16_t>(mean_idx + 1));
+            for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset;
@@ -611,57 +634,28 @@ void kernel_main() {
                     pack_tile(sbi, dfb_xmm_id);
                 }
                 tile_regs_release();
+                index_subblock_w_offset += subblock_wt;
             }
-            index_subblock_w_offset += subblock_wt;
+            dfb_in.pop_front(block_wt);
         }
-        dfb_in.pop_front(block_wt);
-        if constexpr (welford_fp32_alias) {
-            dfb_x_welford.pop_front(block_wt);
-        }
-        // Don't pop transpose buffer until after the mul below
-    }
-    dfb_xmm.push_back(num_tiles_per_block);
+        dfb_xmm.push_back(num_tiles_per_block);
 #ifndef FUSE_PRE_ADD
-    reconfig_data_format_srca(dfb_in_id, dfb_xmm_id);
+        reconfig_data_format_srca(dfb_in_id, dfb_xmm_id);
 #endif
-    dfb_xmm.wait_front(num_tiles_per_block);
+        dfb_xmm.wait_front(num_tiles_per_block);
 
-    if constexpr (!do_gamma && !do_beta) {
-        pack_reconfig_data_format(dfb_out_id);
-    }
-
-    // ---------------------------------------------------------------------------
-    // Scale by 1/sqrt(Var[x] + eps)
-    // ---------------------------------------------------------------------------
-    if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(dfb_xmm_id, dfb_transpose_id);
-    }
-    if constexpr (!welford_fp32_alias) {
+        if constexpr (!do_gamma && !do_beta) {
+            pack_reconfig_data_format(dfb_out_id);
+        }
+        if constexpr (FLOAT32_DTYPE) {
+            reconfig_data_format(dfb_xmm_id, dfb_transpose_id);
+        }
         mul_bcast_cols_init(dfb_xmm_id, dfb_transpose_id);
-    }
-    index_h_offset = 0;
-    dfb_im.reserve_back(num_tiles_per_block);
-    for (uint32_t i = 0; i < block_ht; i++) {
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            if constexpr (welford_fp32_alias) {
-                for (uint32_t w = 0; w < subblock_wt; w++) {
-                    index = w + index_subblock_w_offset + index_h_offset;
-                    tile_regs_acquire();
-                    reconfig_data_format_srca(dfb_xmm_id);
-                    copy_init(dfb_xmm_id);
-                    copy_tile(dfb_xmm_id, index, 0);
-                    reconfig_data_format_srca(dfb_transpose_id);
-                    copy_init(dfb_transpose_id);
-                    copy_tile(dfb_transpose_id, 1, 1);
-                    sfpu_mul_bcast_col_init();
-                    sfpu_mul_bcast_col(0, 1);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, dfb_im_id);
-                    tile_regs_release();
-                }
-            } else {
+        index_h_offset = 0;
+        dfb_im.reserve_back(num_tiles_per_block);
+        for (uint32_t i = 0; i < block_ht; i++) {
+            index_subblock_w_offset = 0;
+            for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset + index_h_offset;
@@ -673,14 +667,14 @@ void kernel_main() {
                     pack_tile(sbi, dfb_im_id);
                 }
                 tile_regs_release();
+                index_subblock_w_offset += subblock_wt;
             }
-            index_subblock_w_offset += subblock_wt;
+            index_h_offset += block_wt;
+            dfb_transpose.pop_front(2);
         }
-        index_h_offset += block_wt;
-        dfb_transpose.pop_front(2);
+        dfb_im.push_back(num_tiles_per_block);
+        dfb_xmm.pop_front(num_tiles_per_block);
     }
-    dfb_im.push_back(num_tiles_per_block);
-    dfb_xmm.pop_front(num_tiles_per_block);
 
     // ---------------------------------------------------------------------------
     // Scale by gamma

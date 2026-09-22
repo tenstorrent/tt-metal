@@ -10,12 +10,9 @@
 // Partial-width tiles retain per-column statistics, of which only W % 32 are valid.
 // This kernel combines those equal-sized populations across W, applies
 // Bessel's correction, and writes the combined scalar into dfb::combined for
-// the compute kernel to apply
-// sqrtf (if std) and re-pack in the output format. dfb::combined is
-// normally fp32, but for variance output to bf16 the program
-// factory may declare it as bf16 to save SRAM with no precision loss
-// since data is packed to bf16 output anyways and there is no math before
-// the final pack. combined_is_bf16 compile-time arg selects the path.
+// the compute kernel to apply sqrtf (if std), the runtime post-multiplier,
+// and re-pack in the output format. dfb::combined stays FP32 so scaling
+// precedes output rounding, including when the scalar changes on a cache hit.
 //
 // Phase 2 (per output): Waits for the compute kernel to pack the
 // output tile into dfb::out (in the correct output data format), then
@@ -26,7 +23,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/numeric/bfloat16.h"
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "experimental/kernel_args.h"
@@ -119,7 +115,6 @@ void kernel_main() {
     constexpr std::uint32_t H = get_arg(args::H);
     constexpr bool correction = get_arg(args::correction) != 0;
     constexpr std::uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
-    constexpr bool combined_is_bf16 = get_arg(args::combined_is_bf16) != 0;
     static_assert(tile_width == welford_block_size);
 
     constexpr std::uint32_t num_partials = reduce_batch_size * W;
@@ -284,15 +279,8 @@ void kernel_main() {
         // Write the combined scalar into a tile in dfb::combined. The compute
         // kernel will unpack this and re-pack into dfb::out in the correct
         // output data format (using the packer hardware).
-        if constexpr (combined_is_bf16) {
-            auto* combined_ptr = reinterpret_cast<volatile std::uint16_t*>(dfb_combined.get_write_ptr());
-            // fp32_to_bf16 applies round-to-nearest-even, matching the packer
-            // hardware so the output is bit-identical to a packer-produced bf16.
-            combined_ptr[0] = fp32_to_bf16(final_var);
-        } else {
-            auto* combined_ptr = reinterpret_cast<volatile float*>(dfb_combined.get_write_ptr());
-            combined_ptr[0] = final_var;
-        }
+        auto* combined_ptr = reinterpret_cast<volatile float*>(dfb_combined.get_write_ptr());
+        combined_ptr[0] = final_var;
         dfb_combined.push_back(1);
 
         // --- Phase 2: NOC-write the output tile (packed by compute) to DRAM ---

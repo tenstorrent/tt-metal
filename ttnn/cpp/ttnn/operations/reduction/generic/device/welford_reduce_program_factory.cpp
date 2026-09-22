@@ -55,9 +55,6 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     const float post_mul_scaler =
         plan.is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
     plan.post_mul_scaler_bits = std::bit_cast<std::uint32_t>(post_mul_scaler);
-    // Scalars can change on a cache hit. Keep HW scratch in FP32 even for BF16
-    // variance so a later non-identity multiplier runs before output rounding.
-    plan.combined_format = DataFormat::Float32;
     const auto arch = tensor_arg.device()->arch();
     // Compact SFPU combining handles full-width tiles. A partial final tile keeps
     // per-column statistics; the writer accumulates only its valid columns into
@@ -109,7 +106,7 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     // the single combined-result tile produced by the writer.
     std::uint64_t footprint =
         static_cast<std::uint64_t>(replay_tiles) * plan.input_tile_size + 2 * plan.output_tile_size;
-    footprint += plan.reduce_hw ? 4 * tile_size(DataFormat::Float32) + tile_size(plan.combined_format) : 0;
+    footprint += plan.reduce_hw ? 5 * tile_size(DataFormat::Float32) : 0;
 
     // Live allocator occupancy intentionally participates in planning. use_l1_replay is included in the operation
     // hash, so the streaming and replay programmes remain distinct cache entries as the available L1 span changes.
@@ -160,7 +157,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     const auto dst_single_tile_size = plan.output_tile_size;
     const auto is_std = plan.is_std;
     const auto post_mul_scaler_bits = plan.post_mul_scaler_bits;
-    const bool narrow_scratch_to_bf16 = plan.combined_format == DataFormat::Float16_b;
 
     tt_metal::IDevice* device = &input.mutable_device();
 
@@ -275,7 +271,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // partial: HW-reduce only -- holds per-column mean+var tile pairs
     // from the compute kernel, consumed by the writer kernel.
     // Uses Float32 format to preserve precision from DST accumulators.
-    tt::DataFormat combined_cb_data_format = tt::DataFormat::Float32;
+    constexpr auto combined_cb_data_format = tt::DataFormat::Float32;
     if (reduce_hw) {
         tt::DataFormat partial_cb_data_format = tt::DataFormat::Float32;
         // Reserve space for 4 tiles to enable double buffering (since compute kernel packs 2 tiles at a time).
@@ -292,8 +288,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         // The compute kernel reads this tile, applies sqrt_tile for std, and
         // re-packs it to the output buffer in the correct output data format (the packer
         // hardware is required for BFLOAT8_B conversion).
-        // Keep FP32 until the runtime post-multiplier has been applied.
-        combined_cb_data_format = plan.combined_format;
+        // Scalars can change on a cache hit. Keep FP32 even for BF16 variance
+        // until the runtime post-multiplier has been applied, before output rounding.
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = COMBINED_DFB,
             .entry_size = tt::tile_size(combined_cb_data_format),
@@ -408,7 +404,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"H", H},
             {"correction", static_cast<uint32_t>(operation_attributes.correction)},
             {"reduce_batch_size", reduce_batch_size},
-            {"combined_is_bf16", static_cast<uint32_t>(narrow_scratch_to_bf16)},
         };
         writer_rta_names = {"NC_per_core", "output_tile_start_id"};
         writer_dfb_bindings = {
@@ -528,7 +523,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             if (input_cb_data_format == tt::DataFormat::Float32) {
                 compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
             }
-            if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
+            if (reduce_hw && fp32_dest_acc_en) {
                 compute_cfg.unpack_modes.emplace(COMBINED_DFB, UnpackMode::UnpackToDest);
             }
             // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an

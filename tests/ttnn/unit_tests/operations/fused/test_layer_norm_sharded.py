@@ -796,9 +796,42 @@ _LARGE_OFFSET_PCC = 0.999
 _LARGE_OFFSET_BASES = [0.0, 1_000.0, 3_000.0, 10_000.0, 30_000.0, 100_000.0, 1_000_000.0]
 
 
+@pytest.mark.parametrize("block_wt", [1, 2, 3])
+@pytest.mark.parametrize("has_residual", [False, True])
+def test_layer_norm_sharded_fp32_preserves_centred_low_bits(device, block_wt, has_residual):
+    # Each pair differs in FP32 but collapses to one TF32 value. Comparing their
+    # output difference isolates the centred-value reload from rsqrt accuracy.
+    h, w = 128, 64 * block_wt
+    values = torch.tensor([1.0001, 1.0002, -1.0001, -1.0002]).repeat(h, w // 4)
+    memory_config = create_sharded_mem_config(h, w, 2, 2, two_stage=False)
+    input_tensor = ttnn.from_torch(values, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    residual = (
+        ttnn.from_torch(
+            torch.full_like(values, 0.125), layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        if has_residual
+        else None
+    )
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    output = ttnn_layer_norm_sharded(
+        device, input_tensor, True, block_ht=2, block_wt=block_wt, residual=residual, compute_kernel_config=config
+    ).double()
+    reference_input = (values + (0.125 if has_residual else 0.0)).double()
+    reference = torch.nn.functional.layer_norm(reference_input, [w])
+    torch.testing.assert_close(
+        output[:, 1::4] - output[:, 0::4],
+        reference[:, 1::4] - reference[:, 0::4],
+        rtol=0.01,
+        atol=1e-7,
+    )
+
+
 @pytest.mark.parametrize("base", _LARGE_OFFSET_BASES)
 @pytest.mark.parametrize("two_stage", [False, True])
-@pytest.mark.parametrize("has_residual, has_gamma, has_beta", [(False, False, False), (True, True, True)])
+@pytest.mark.parametrize("has_residual", [False, True])
+@pytest.mark.parametrize("has_gamma, has_beta", [(False, False), (True, False), (False, True), (True, True)])
 def test_layer_norm_sharded_fp32_large_offset(device, base, two_stage, has_residual, has_gamma, has_beta):
     """Sharded FP32 LayerNorm accuracy must not degrade as a shared offset is added to every row.
 
