@@ -300,6 +300,50 @@ def run_demo_text(
         enable_trace = _decode_trace.lower() in ("1", "true", "yes")
         logger.info(f"GEMMA4_DECODE_TRACE override: enable_trace={enable_trace}")
 
+    # ── Speculative-decoding dispatch ────────────────────────────────────────
+    # `--speculative` reroutes the demo through the it-assistant drafter +
+    # target verifier path. Delegated to _run_spec_decode, which builds its own
+    # target+drafter, so we return before this test loads a model.
+    if request.config.getoption("--speculative"):
+        draft_len = request.config.getoption("--spec-draft-len")
+        if draft_len is None:
+            # auto-K: the optimum depends on available context (see
+            # spec_decode.auto_draft_len). Prompt length is known below, so
+            # defer to the resolver at call time.
+            draft_len = None
+        if batch_size != 1:
+            # Batched (B>1) spec-decode: drafts each user at batch=1 and runs ONE
+            # batched packed verify over all users (KV-amortization win). Greedy,
+            # ragged per-user acceptance. Currently UNTRACED (host-dispatch bound).
+            prompts = load_inputs(input_prompts, batch_size, instruct)
+            _run_spec_decode_batched(
+                prompts=prompts,
+                instruct=instruct,
+                max_seq_len=max_seq_len,
+                max_generated_tokens=max_generated_tokens,
+                page_params=page_params,
+                sampling_params=sampling_params,
+                mesh_device=mesh_device,
+                enable_trace=enable_trace,
+                draft_len=draft_len,
+                num_layers=num_layers,
+            )
+            return
+        prompt = load_inputs(input_prompts, 1, instruct)[0]
+        _run_spec_decode(
+            prompt=prompt,
+            instruct=instruct,
+            max_seq_len=max_seq_len,
+            max_generated_tokens=max_generated_tokens,
+            page_params=page_params,
+            sampling_params=sampling_params,
+            mesh_device=mesh_device,
+            enable_trace=enable_trace,
+            draft_len=draft_len,
+            num_layers=num_layers,
+        )
+        return
+
     model_path = _model_path()
     temperature = sampling_params.get("temperature", 0)
     top_p = sampling_params.get("top_p", 1.0)
@@ -782,12 +826,11 @@ def _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=
     so long-context spec decode gets the memory profile the model needs (31B at
     >=128k does not fit unbounded).
     """
-    try:
-        lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
-        return bool(lc["bounded_sliding"])
-    except Exception as exc:  # policy unavailable -> previous behaviour
-        logger.warning(f"Spec-decode long-context policy unavailable ({exc}); using unbounded sliding KV")
-        return False
+    # No silent fallback: at >=128k the 31B model does NOT fit unbounded, so
+    # continuing after a policy-resolution failure serves a broken memory
+    # profile. Fail fast instead (review finding on tt-metal#56048).
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+    return bool(lc["bounded_sliding"])
 
 
 def _run_spec_decode(
@@ -1083,8 +1126,14 @@ def _run_spec_decode_batched(
     temperature = sampling_params.get("temperature", 0)
     if temperature and temperature > 0:
         pytest.skip("batched spec-decode supports greedy only (set temperature=0)")
+    _env_k = os.environ.get("GEMMA4_SPEC_DRAFT_LEN")
+    _auto_requested = draft_len is None and (_env_k is None or _env_k.strip().lower() == "auto")
     if draft_len is None:
-        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+        # "auto" mirrors the solo path: seed the short-prompt default so
+        # anything reading draft_len early is sane, then defer to
+        # auto_draft_len_batched below (previously int("auto") raised here
+        # before the auto-override could run).
+        draft_len = 3 if _auto_requested else int(_env_k)
 
     block_size = page_params["page_block_size"]
     blocks_per_user = math.ceil(max_seq_len / block_size)
@@ -1189,7 +1238,7 @@ def _run_spec_decode_batched(
     from models.demos.gemma4.tt.spec_decode import auto_draft_len_batched
 
     _auto_k = auto_draft_len_batched(max(prompt_lens) if prompt_lens else None, B)
-    if os.environ.get("GEMMA4_SPEC_DRAFT_LEN") is None and draft_len != _auto_k:
+    if _auto_requested and draft_len != _auto_k:
         logger.info(f"Spec-decode batch-aware K: B={B} -> draft_len {draft_len} -> {_auto_k}")
         draft_len = _auto_k
     if draft_len < 1:

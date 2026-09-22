@@ -109,6 +109,9 @@ public:
     // Convert a logical coordinate to a virtual coordinate for a worker coordinate
     virtual CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const = 0;
 
+    // Convert a virtual/translated worker coordinate to a logical coordinate
+    virtual CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const = 0;
+
     virtual CoreCoord compute_with_storage_grid_size() const = 0;
 
     // Returns a logical CoreRangeSet of the worker cores in the specified sub device that was previously loaded.

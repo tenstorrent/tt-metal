@@ -32,6 +32,7 @@ import os as _os
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather, ccl_allreduce
@@ -1230,6 +1231,14 @@ class DFlashFusedDecoder:
         self.V = min(int(_os.environ.get("GEMMA4_DFLASH_VERIFY", str(K))), K) if self.use_packed else K
         self.P_v = self.V + 1
         self.pv_pos = None  # allocated in capture() (needs the generation horizon)
+        # Packed-verify WIDTH SET: {pv_sk: buffer set + its captured trace}. One
+        # decoder serves every width, so the heavy per-session state is held
+        # once; see _pv_width_install.
+        self._pv_widths = {}
+        self.pv_widx_all = None
+        self.pv_mask_slide = None
+        self.pv_tables = None
+        self._pv_cache_by_type = None
         # Persistent OUTPUT slots (lazy first-use clone on the compile pass,
         # then ttnn.copy per body run). The body's fresh draft_ids/vidx are
         # created MID-GRAPH; ops after them (the whole packed verify) can
@@ -1343,6 +1352,11 @@ class DFlashFusedDecoder:
         # persistent tap buffers for the verify's copy-mode capture —
         # lazily allocated by the hook on the compile pass (shape-proof).
         self.tap_bufs = [None for _ in drafter.target_layer_ids]
+        # Does step(first=True) have to REPLAY before reading self._out?
+        # capture() executes the body once (the compile pass) so _out holds
+        # this request's first iteration; reseed() executes nothing, so it
+        # must replay or it would read the PREVIOUS request's output.
+        self._replay_on_first = False
         self.trace = None
         self.start = None
         self.anchor = None
@@ -1605,27 +1619,49 @@ class DFlashFusedDecoder:
         n_taps = len(d.target_layer_ids)
         assert len(taps) % n_taps == 0, f"taps {len(taps)} not a multiple of {n_taps}"
         groups = [taps[i : i + n_taps] for i in range(0, len(taps), n_taps)]
+        # Only the last ``keep_target`` rows survive into the mirror (the
+        # sliding window), so the concat+project+device->host readback below is
+        # wasted on every row before the window. Skip chunk groups wholly below
+        # it and slice the straddling group at a tile-aligned offset: the
+        # per-session ingest drops from O(prompt) to O(window) readback
+        # (measured 2.4 s -> ~0.2 s at 131k ISL; dominated every REUSE session).
+        # Window math is in RETAINED-row coordinates (groups the hook's
+        # keep_last cap dropped never made it here), matching the tail-slice
+        # into the mirror below, which is likewise relative to what was kept.
+        rvs = []
         seen = 0
-        chunks = []
-        for gi, g in enumerate(groups):
-            avail = int(g[0].shape[2])
-            remaining = n - seen
-            if remaining <= 0:
-                for t in g:
-                    t.deallocate(True)
-                continue
+        for g in groups:
             # never slice past what this forward actually produced; the final
             # chunk is tile-padded so its valid rows are what remains of n
-            rv = min(avail, remaining)
-            cat = ttnn.concat([t[:, :, :rv, :] for t in g], dim=3)
+            rv = min(int(g[0].shape[2]), max(n - seen, 0))
+            rvs.append(rv)
+            seen += rv
+        keep_target = min(self.cap, seen, n)
+        window_start = seen - keep_target
+        g_start = 0
+        chunks = []
+        for g, rv in zip(groups, rvs):
+            if rv <= 0 or g_start + rv <= window_start:
+                # Dead group (past n, or entirely below the window): no row of
+                # it can reach the mirror.
+                for t in g:
+                    t.deallocate(True)
+                g_start += rv
+                continue
+            # Straddling group starts at the window (aligned down to the tile
+            # row so the slice stays tile-friendly; the extra leading rows are
+            # dropped by the tail-slice into the mirror below).
+            lo = max(0, window_start - g_start)
+            lo -= lo % 32
+            cat = ttnn.concat([t[:, :, lo:rv, :] for t in g], dim=3)
             for t in g:
                 t.deallocate(True)
             proj = d._fc_linear(cat)
             cat.deallocate(True)
             host = ttnn.to_torch(ttnn.get_device_tensors(proj)[0] if self._tp > 1 else proj)
             proj.deallocate(True)
-            chunks.append(host.reshape(-1, host.shape[-1])[:rv])
-            seen += rv
+            chunks.append(host.reshape(-1, host.shape[-1])[: rv - lo])
+            g_start += rv
         if not chunks:
             # No usable prefill taps reached the drafter (e.g. a chunked or
             # prefix-cache-served prefill whose tap hook produced nothing for
@@ -1639,6 +1675,11 @@ class DFlashFusedDecoder:
             )
         rows = torch.cat(chunks, dim=0) if len(chunks) > 1 else chunks[0]
         keep = min(self.cap, rows.shape[0], n)
+        # The mirror persists across REUSE. A shorter new prompt writes fewer
+        # rows than the previous request did, so anything above `keep` would
+        # still hold THAT request's projected context and get uploaded with
+        # the rest of the cap. A freshly constructed decoder has zeros there.
+        self.mirror.zero_()
         self.mirror[:keep] = rows[-keep:].to(torch.bfloat16)
         self.win_first = n - keep
         self.ctx_len = n
@@ -1690,8 +1731,13 @@ class DFlashFusedDecoder:
         are WIDTH-MATCHED to their masks (the packed SDPA attends the table
         width -- root cause #4 on the MTP side).
         """
+        self._pv_ring_meta()
+        horizon = start + max_new + self.P_v + 64
+        self._pv_width_install(((horizon + 1023) // 1024) * 1024)
+
+    def _pv_ring_meta(self):
+        """Per-layer-type ring metadata. Idempotent, request-independent."""
         t = self.target
-        P_v = self.P_v
         self.pv_ring = {}
         rep = {}
         for i, layer in enumerate(t.layers):
@@ -1701,15 +1747,39 @@ class DFlashFusedDecoder:
             rep.setdefault(lt, i)
             if lt in self.pv_ring and self.pv_ring[lt] != (int(mod) if mod is not None else None):
                 raise NotImplementedError("packed dflash verify needs uniform pools per layer type")
-        horizon = start + max_new + P_v + 64
-        self.pv_sk = ((horizon + 1023) // 1024) * 1024
+        # Representative layer index per type: refresh_page_tables re-points
+        # only the full-attention layers at the grown flat table and leaves the
+        # sliding-layer RING buffers alone (bounded target).
+        self._pv_rep = rep
+
+    def _pv_width_install(self, pv_sk):
+        """Allocate (or reuse) the WIDTH-DEPENDENT packed-verify buffers for
+        ``pv_sk`` and make them the active set.
+
+        Only three things depend on the verify width: ``pv_iota`` (the on-device
+        mask source), the FULL-attention page table (``pv_sk // 64`` entries),
+        and -- on an unbounded target only -- the slide mask. Everything else the
+        fused body reads is sized by ``cap``, ``P_v`` and ``H``: the drafter
+        mirror, the ctx cache, ``fc_prev``, ``commit_pos``, ``merge_idx``,
+        ``pv_pos``, ``pv_widx_all``. That is what makes a WIDTH SET affordable
+        (one decoder, one copy of the heavy state, one buffer set + one trace per
+        width) and what makes moving a request between widths free: no state
+        moves, only which buffers and which trace the next replay uses.
+        """
+        t = self.target
+        P_v = self.P_v
+        rec = self._pv_widths.get(pv_sk)
+        if rec is not None:
+            self._pv_width_activate(rec)
+            return rec
+        self.pv_sk = pv_sk
         rows_t = {}
         installed = getattr(t, "_active_page_tables_per_layer", None)
         flat = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(torch.int64)
         for lt in self.pv_ring:
             rows_t[lt] = flat
         if installed:
-            for lt, i in rep.items():
+            for lt, i in self._pv_rep.items():
                 lpt = installed[i]
                 if lpt is not None and hasattr(lpt, "dim"):
                     rows_t[lt] = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
@@ -1720,9 +1790,19 @@ class DFlashFusedDecoder:
             lt = t.hf_config.layer_types[i]
             if lt not in cache_by_type:
                 ring = self.pv_ring.get(lt)
-                width = (ring // bs) if ring else max(1, self.pv_sk // bs)
+                width = (ring // bs) if ring else max(1, pv_sk // bs)
                 row = rows_t[lt]
-                width = min(width, int(row.shape[0]))
+                # Width-MATCHED to the mask, NOT clamped to this request's table
+                # row: the packed SDPA attends the table width, so the table and
+                # the mask must agree (root cause #4 on the MTP side). A row
+                # shorter than the width is zero-padded, exactly as
+                # refresh_page_tables pads it on every later request -- those
+                # columns sit past the live top, where the mask is NEG, so they
+                # contribute nothing. Clamping instead would have made a width
+                # record created by a SHORT request truncate a longer one's
+                # table, silently reading the null block past the clamp.
+                if int(row.shape[0]) < width:
+                    row = torch.cat([row, torch.zeros(width - int(row.shape[0]), dtype=row.dtype)])
                 cache_by_type[lt] = ttnn.from_torch(
                     row[:width].to(torch.int32).reshape(1, width),
                     device=self.mesh_device,
@@ -1735,30 +1815,63 @@ class DFlashFusedDecoder:
         mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
         mkU = dict(device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
         ring = self.pv_ring.get("sliding_attention")
-        self.pv_ssl = ring if ring else self.pv_sk
+        pv_ssl = ring if ring else pv_sk
         self.pv_slide_ring = ring
-        self.pv_pos = ttnn.from_torch(z(1, P_v, dtype=torch.int64), **mkU)
+        # Shared across widths (P_v-sized): allocate once.
+        if self.pv_pos is None:
+            self.pv_pos = ttnn.from_torch(z(1, P_v, dtype=torch.int64), **mkU)
         # Verify masks are built ON DEVICE from pv_iota + the block positions
         # (sub/gtz/mul -- probe-verified boundary-exact in fp32; bf16 would
         # round positions > 256). Only the bounded RING slide mask stays a host
         # upload (ring-width, tiny; the wrap modulo is host math).
-        self.pv_iota = ttnn.from_torch(
-            torch.arange(self.pv_sk, dtype=torch.float32).reshape(1, 1, 1, self.pv_sk),
+        pv_iota = ttnn.from_torch(
+            torch.arange(pv_sk, dtype=torch.float32).reshape(1, 1, 1, pv_sk),
             device=self.mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=self._mapper,
         )
-        self.pv_mask_slide = ttnn.from_torch(z(1, 1, P_v, self.pv_ssl, dtype=torch.bfloat16), **mkT) if ring else None
+        # Bounded target: the slide mask is ``ring`` wide, a per-layer
+        # cache_position_modulo constant, so it is width-INDEPENDENT and shared.
+        # Unbounded: it is pv_ssl == pv_sk wide, so it belongs to the width.
+        if ring:
+            if self.pv_mask_slide is None:
+                self.pv_mask_slide = ttnn.from_torch(z(1, 1, P_v, pv_ssl, dtype=torch.bfloat16), **mkT)
+            pv_mask_slide = self.pv_mask_slide
+        else:
+            pv_mask_slide = None
         # ONE [P_v] int32 upload; the body slices per-position [1] views for the
         # fallback KV writes (was P_v singleton uploads -- pure dispatch waste).
-        self.pv_widx_all = ttnn.from_torch(
-            z(P_v, dtype=torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._mapper,
-        )
+        if self.pv_widx_all is None:
+            self.pv_widx_all = ttnn.from_torch(
+                z(P_v, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._mapper,
+            )
+        rec = {
+            "pv_sk": pv_sk,
+            "pv_iota": pv_iota,
+            "pv_tables": self.pv_tables,
+            "cache_by_type": cache_by_type,
+            "pv_ssl": pv_ssl,
+            "pv_mask_slide": pv_mask_slide,
+            "trace": None,
+        }
+        self._pv_widths[pv_sk] = rec
+        self._pv_width_activate(rec)
+        return rec
+
+    def _pv_width_activate(self, rec):
+        """Point the per-iteration uploads and the next replay at one width."""
+        self.pv_sk = rec["pv_sk"]
+        self.pv_iota = rec["pv_iota"]
+        self.pv_tables = rec["pv_tables"]
+        self._pv_cache_by_type = rec["cache_by_type"]
+        self.pv_ssl = rec["pv_ssl"]
+        self.pv_mask_slide = rec["pv_mask_slide"]
+        self.trace = rec["trace"]
 
     def _pv_host_masks(self, start):
         """P-row target-side masks (H-repeated in-trace). Full: causal to
@@ -1842,6 +1955,148 @@ class DFlashFusedDecoder:
         self._out = self._body()
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
         self.trace = tid
+        if self.use_packed:
+            # The trace belongs to the width it was captured against: replaying
+            # it with another width's buffers would read the wrong pv_iota
+            # length and the wrong page-table width.
+            self._pv_widths[self.pv_sk]["trace"] = tid
+        # The compile pass above RAN with this request's inputs, so _out is
+        # already this request's first iteration -- step(first=True) may read
+        # it without replaying.
+        self._replay_on_first = False
+
+    # ── packed-verify width SET: capture at config time, select per step ─────
+    def capture_widths(self, widths, anchor_id=1, start=0):
+        """Capture one fused trace per verify WIDTH, before any request exists.
+
+        This is what makes the fused verify conformant with the plugin's
+        serving contract (vllm-tt-plugin#110 section 8): the set of widths is
+        derived from ``max_model_len`` at config time and every one of them is
+        captured here, so no capture happens during serving and no captured
+        shape depends on a request existing. Per step the narrowest covering
+        width is selected (``select_width``), and a request that outgrows its
+        width moves to the next one -- the largest covers ``max_model_len``, so
+        one always fits.
+
+        The taps and the anchor set the CONTENT of the first iteration, never a
+        shape, so capturing against their construction values is sound; every
+        request re-points the trace with ``reseed`` + ``prefill_ingest`` +
+        ``refresh_page_tables``. Returns {width: seconds}.
+        """
+        import time as _time
+
+        if not self.use_packed:
+            raise NotImplementedError("width-set capture is packed-verify only")
+        self._pv_ring_meta()
+        cost = {}
+        for w in sorted(int(x) for x in widths):
+            t0 = _time.time()
+            self._pv_width_install(w)
+            if self._pv_widths[w]["trace"] is not None:
+                continue
+            self._pv_upload(start)
+            self.target.dflash_capture_taps(self.drafter.target_layer_ids, buffers=self.tap_bufs)
+            self._upload_iter_inputs(anchor_id, start)
+            self._body()  # compile pass
+            ttnn.synchronize_device(self.mesh_device)
+            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            self._out = self._body()
+            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+            self._pv_widths[w]["trace"] = tid
+            self.trace = tid
+            cost[w] = _time.time() - t0
+        self.target.dflash_capture_taps(None)
+        # Nothing has run for a real request yet: the next one must replay
+        # rather than read _out, and must reset the per-request buffers.
+        self._replay_on_first = True
+        return cost
+
+    def width_for(self, start):
+        """Narrowest CAPTURED width that covers a verify block at ``start``.
+
+        ``None`` means no captured width covers it, which is a configuration
+        error once the set is derived from ``max_model_len`` -- the caller falls
+        back to a per-session capture rather than truncating the request.
+        """
+        need = int(start) + self.P_v + 64
+        fits = [w for w, r in self._pv_widths.items() if r["trace"] is not None and w >= need]
+        return min(fits) if fits else None
+
+    def select_width(self, start):
+        """Point this session at the narrowest captured width covering ``start``.
+
+        Called before every replay. When the width CHANGES -- the request has
+        grown past the one it was using -- the new width's page tables have
+        never held this request, so they are refreshed here. Nothing else moves:
+        the mirror, ctx cache, fc_prev, commit_pos and merge_idx are shared by
+        every width (see _pv_width_install), which is why migration costs one
+        page-table upload instead of a re-capture.
+        """
+        w = self.width_for(start)
+        if w is None or w == self.pv_sk:
+            return w
+        prev = self.pv_sk
+        self._pv_width_activate(self._pv_widths[w])
+        self.refresh_page_tables(self.page_table_torch)
+        logger.info(f"dFlash verify width {prev} -> {w} at position {int(start)}")
+        return w
+
+    def reseed(self, anchor_id, start):
+        """Re-point the ALREADY-captured trace at a new request WITHOUT
+        re-capturing (the ~2.6s serving bootstrap). Valid only when the new
+        request shares this decoder's packed-verify width bucket (pv_sk depends
+        on start bucketed to 1024). The caller refreshes the mirror
+        (prefill_ingest) and the KV page tables (refresh_page_tables); this
+        re-uploads the per-request packed-verify masks/positions and the
+        first-iteration anchor/position into the persistent input buffers the
+        captured body reads."""
+        self.anchor, self.start = anchor_id, start
+        self._reset_per_request_state()
+        # NOTHING has executed for this request: unlike capture() there is no
+        # compile pass, so self._out still holds the PREVIOUS request's last
+        # replay. The first step MUST replay before reading it -- skipping it
+        # made a reused session open with the previous request's tokens
+        # (observed as request N answering with request N-1's content).
+        self._replay_on_first = True
+        if self.use_packed:
+            self._pv_upload(start)
+        self._upload_iter_inputs(anchor_id, start)
+
+    def _reset_per_request_state(self):
+        """Restore the PERSISTENT buffers the captured body reads to the state a
+        FRESHLY CAPTURED decoder has.
+
+        ``capture()`` runs against their construction values -- fc_prev zeros,
+        commit_pos zeros (which is what makes the start-of-replay commit a
+        no-op), merge_idx identity -- so a decoder re-pointed at a new request
+        has to be put back into exactly that state. Left as the previous
+        request finished them, the new request's FIRST replay commits the
+        PREVIOUS request's projected tap rows (fc_prev) at the PREVIOUS
+        request's absolute positions (commit_pos) through the PREVIOUS
+        request's row map (merge_idx). The drafter then continues the OLD
+        prompt -- and since the same stale rows are merged into the context the
+        verify attends over, those drafts are ACCEPTED rather than rejected, so
+        the new request's OUTPUT carries the old request's content. Observed on
+        a P150x8 server as request N reasoning about request N-1's prompt.
+        """
+        H = self.drafter.hidden
+        mkT = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
+        mkU = dict(dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
+        h = ttnn.from_torch(torch.zeros(1, 1, self.P_v, H, dtype=torch.bfloat16), **mkT)
+        ttnn.copy_host_to_device_tensor(h, self.fc_prev)
+        h.deallocate(True)
+        h = ttnn.from_torch(torch.zeros(1, self.P_v, dtype=torch.int64), **mkU)
+        ttnn.copy_host_to_device_tensor(h, self.commit_pos)
+        h.deallocate(True)
+        h = ttnn.from_torch(torch.arange(self.cap, dtype=torch.int64).reshape(1, self.cap), **mkU)
+        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
+        h.deallocate(True)
+
+    def pv_bucket(self, start, max_new):
+        """The packed-verify width bucket for a (start, horizon) -- decoders are
+        reusable across requests that share it. Mirrors _pv_setup's pv_sk."""
+        horizon = start + max_new + self.P_v + 64
+        return ((horizon + 1023) // 1024) * 1024
 
     def restore_model_logits_mode(self):
         """Leave the target in its default gathered-logits mode.
@@ -1878,7 +2133,33 @@ class DFlashFusedDecoder:
         h = ttnn.from_torch(pt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
         ttnn.copy_host_to_device_tensor(h, self.v_pt)
         h.deallocate(True)
-        if getattr(self, "pv_tables", None):
+        if getattr(self, "_pv_cache_by_type", None):
+            # BOUNDED-aware refresh: full-attention layers grow with the sequence,
+            # so re-point them at the current flat table; sliding layers live in a
+            # STATIC ring pool, so re-point them at the installed per-layer ring
+            # (never the flat global table -- doing so was the acceptance-collapse
+            # bug at >=131072). Unbounded targets have installed=None and every
+            # type is treated as full -> flat, i.e. the prior behaviour.
+            installed = getattr(self.target, "_active_page_tables_per_layer", None)
+            seen = set()
+            for lt, buf in self._pv_cache_by_type.items():
+                if buf is None or id(buf) in seen:
+                    continue
+                seen.add(id(buf))
+                ring = self.pv_ring.get(lt)
+                if ring is not None and installed is not None and self._pv_rep.get(lt) is not None:
+                    lpt = installed[self._pv_rep[lt]]
+                    src = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
+                else:
+                    src = flat
+                pw = int(buf.shape[-1])
+                p2 = pw - int(src.numel())
+                r = src if p2 <= 0 else torch.cat([src, torch.zeros(p2, dtype=src.dtype)])
+                row = r[:pw].to(torch.int32).reshape(1, pw)
+                h = ttnn.from_torch(row, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
+                ttnn.copy_host_to_device_tensor(h, buf)
+                h.deallocate(True)
+        elif getattr(self, "pv_tables", None):
             seen = set()
             for buf in self.pv_tables:
                 if buf is None or id(buf) in seen:
@@ -1892,104 +2173,26 @@ class DFlashFusedDecoder:
                 ttnn.copy_host_to_device_tensor(h, buf)
                 h.deallocate(True)
 
-    def step_submit(self, first=False):
-        """Async submit half of one iteration: upload this step's inputs and
-        launch the fused trace NON-BLOCKING. Returns the persistent device
-        output tensor (draft+posterior ids) that ``step_accept`` reads once the
-        device is done. Splitting submit from accept lets the server overlap
-        the vLLM engine loop with the device forward.
+    def _replay_and_read(self, first=False):
+        """One replay, then the ids it produced: (drafts, posterior).
+
+        Everything up to the accept walk. Shared by both rails: the BLOCK rail
+        walks acceptance itself in step(); the CONTRACT rail hands the drafts to
+        the runner, which walks acceptance and reports the count back.
         """
-        if not first:
+        if (not first) or self._replay_on_first:
             self._upload_iter_inputs(self.anchor, self.start)
             ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
-        return self._out[0]
-
-    def step_accept(self, ids=None):
-        """Accept half: read the draft+posterior ids (blocks only until the
-        already-launched device forward completes), run greedy acceptance,
-        commit taps on device, advance state. ``ids`` may be a preread host
-        list; otherwise it is read here. Returns (accepted, bonus, produced).
-        """
-        if ids is None:
-            ids = self._read_ids(self._out[0])
-        drafts = ids[: self.V]
-        posterior = ids[self.K : self.K + self.P_v]
-        if _os.environ.get("GEMMA4_DFLASH_DEBUG_STEP") == "1":
-            print(f"[dbg] start={self.start} drafts={drafts} posterior={posterior}", flush=True)
-        acc = 0
-        for dtok, ptok in zip(drafts, posterior[:-1]):
-            if dtok == ptok:
-                acc += 1
-            else:
-                break
-        bonus = posterior[acc]
-        produced = acc + 1
-        win_len = self.ctx_len - self.win_first
-        idx = torch.arange(self.cap, dtype=torch.int64)
-        if win_len + produced <= self.cap:
-            m = idx.clone()
-            m[win_len : win_len + produced] = self.cap + torch.arange(produced)
-        else:
-            shift = win_len + produced - self.cap
-            keep_n = self.cap - produced
-            m = torch.empty(self.cap, dtype=torch.int64)
-            m[:keep_n] = idx[:keep_n] + shift
-            m[keep_n:] = self.cap + torch.arange(produced)
-            self.win_first += shift
-        h = ttnn.from_torch(
-            m.reshape(1, self.cap), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper
-        )
-        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
-        h.deallocate(True)
-        if self.ctx_cache:
-            cp = torch.arange(self.start, self.start + self.P_v, dtype=torch.int64).reshape(1, self.P_v)
-            h = ttnn.from_torch(cp, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
-            ttnn.copy_host_to_device_tensor(h, self.commit_pos)
-            h.deallocate(True)
-        self.ctx_len = self.start + produced
-        accepted = drafts[:acc]
-        self.anchor = bonus
-        self.start = self.start + produced
-        return accepted, bonus, produced
-
-    def step(self, first=False):
-        """One iteration: (replay unless first) -> acceptance -> commit -> host updates.
-
-        Returns (accepted_tokens_list, bonus, produced)."""
-        _prof = _os.environ.get("GEMMA4_DFLASH_PROF") == "1"
-        if _prof:
-            import time as _t
-
-            _t0 = _t.perf_counter()
-        if not first:
-            self._upload_iter_inputs(self.anchor, self.start)
-            if _prof:
-                _t1 = _t.perf_counter()
-            ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
-        elif _prof:
-            _t1 = _t0
-        out_ids_t, fc_out = self._out
+            self._replay_on_first = False
+        out_ids_t, _fc_out = self._out
         # Verify truncation: only the first V drafts were verified (P_v rows).
         ids = self._read_ids(out_ids_t)
-        drafts = ids[: self.V]
-        posterior = ids[self.K : self.K + self.P_v]
-        if _prof:
-            _t2 = _t.perf_counter()
-        if _os.environ.get("GEMMA4_DFLASH_DEBUG_STEP") == "1":
-            print(f"[dbg] start={self.start} drafts={drafts} posterior={posterior}", flush=True)
-        acc = 0
-        for dtok, ptok in zip(drafts, posterior[:-1]):
-            if dtok == ptok:
-                acc += 1
-            else:
-                break
-        bonus = posterior[acc]
-        produced = acc + 1
-        # Commit taps ON DEVICE: fc rows [0..produced) are positions
-        # [start..start+produced). Build the row map the NEXT replay's start-of-
-        # body merge applies to [ctx_dev | fc_prev]: identity (optionally window-
-        # shifted) for kept rows, cap+j for committed row j. ~8 KB upload
-        # replaces the old fc readback + full ctx re-upload (~22 MB/iter).
+        return ids[: self.V], ids[self.K : self.K + self.P_v]
+
+    def _commit_rows(self, produced):
+        """Row map the NEXT replay's start-of-body merge applies to
+        [ctx_dev | fc_prev]: identity (optionally window-shifted) for kept
+        rows, cap+j for each of ``produced`` committed rows."""
         win_len = self.ctx_len - self.win_first
         idx = torch.arange(self.cap, dtype=torch.int64)
         if win_len + produced <= self.cap:
@@ -2010,6 +2213,70 @@ class DFlashFusedDecoder:
         )
         ttnn.copy_host_to_device_tensor(h, self.merge_idx)
         h.deallocate(True)
+
+    # ── contract rail (vllm-tt-plugin#110): the runner owns the accept walk ──
+    def contract_replay(self, first=False):
+        """Propose half: this replay's (drafts, posterior).
+
+        The fused body emits both in ONE output ([K | P_v] ids) because it
+        drafts and verifies those same drafts in a single trace. The contract
+        splits them across two calls, so the caller hands the drafts to the
+        runner now and the posterior to the runner's verify of the block those
+        drafts become -- no second trace, and no re-verification of tokens the
+        device already verified.
+        """
+        return self._replay_and_read(first=first)
+
+    def contract_commit(self, produced, anchor):
+        """Verify half: commit what the RUNNER accepted, not our own walk.
+
+        ``produced`` is the runner's accepted count for the previous step (its
+        accepted_counts domain is [1, 1+K]) and ``anchor`` the last token it
+        committed. This is the ONLY place the rails differ: step() derives both
+        from its own comparison of drafts against the posterior.
+        """
+        produced = max(1, min(int(produced), self.P_v))
+        self._commit_rows(produced)
+        if self.ctx_cache:
+            cp = torch.arange(self.start, self.start + self.P_v, dtype=torch.int64).reshape(1, self.P_v)
+            h = ttnn.from_torch(cp, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
+            ttnn.copy_host_to_device_tensor(h, self.commit_pos)
+            h.deallocate(True)
+        self.ctx_len = self.start + produced
+        self.anchor = int(anchor)
+        self.start = self.start + produced
+        return self.start
+
+    def step(self, first=False):
+        """One iteration: (replay unless first) -> acceptance -> commit -> host updates.
+
+        Returns (accepted_tokens_list, bonus, produced)."""
+        _prof = _os.environ.get("GEMMA4_DFLASH_PROF") == "1"
+        if _prof:
+            import time as _t
+
+            _t0 = _t.perf_counter()
+        drafts, posterior = self._replay_and_read(first=first)
+        if _prof:
+            _t1 = _t.perf_counter()
+        if _prof:
+            _t2 = _t.perf_counter()
+        if _os.environ.get("GEMMA4_DFLASH_DEBUG_STEP") == "1":
+            print(f"[dbg] start={self.start} drafts={drafts} posterior={posterior}", flush=True)
+        acc = 0
+        for dtok, ptok in zip(drafts, posterior[:-1]):
+            if dtok == ptok:
+                acc += 1
+            else:
+                break
+        bonus = posterior[acc]
+        produced = acc + 1
+        # Commit taps ON DEVICE: fc rows [0..produced) are positions
+        # [start..start+produced). Build the row map the NEXT replay's start-of-
+        # body merge applies to [ctx_dev | fc_prev]: identity (optionally window-
+        # shifted) for kept rows, cap+j for committed row j. ~8 KB upload
+        # replaces the old fc readback + full ctx re-upload (~22 MB/iter).
+        self._commit_rows(produced)
         if self.ctx_cache:
             # positions of fc_prev's rows for the NEXT replay's roped commit
             # (pre-advance start: row j holds position start + j).

@@ -15,6 +15,7 @@ are added there rather than in code.
 
 import json
 import os
+import re
 
 from loguru import logger
 
@@ -259,6 +260,16 @@ class Gemma4Precision:
         # context WORKING; GEMMA4_BFP8_MAX_CONTEXT overrides every limit, 0
         # disables the ceiling entirely.
         limits = model_entry.get("bfp8_max_context")
+        # MESH-SCOPED form: {"1x8": {...}, "default": {...}}, told apart from the
+        # flat {module: limit} form by its keys being mesh shapes. The ceiling
+        # trades memory for coherence -- downgrading to bf16 DOUBLES those
+        # weights -- so it can only be declared where bf16 actually fits. It was
+        # measured on tp=8; applying it to every mesh hung Gemma4-31B on
+        # bh_quietbox_2 (1x4) in model init, because 31B shared_mlp in bf16 at
+        # 262144 does not fit on four chips. A mesh with no entry keeps bfp8,
+        # which is what main did before the ceiling existed.
+        if isinstance(limits, dict) and limits and all(re.fullmatch(r"\d+x\d+|default", str(k)) for k in limits):
+            limits = limits.get(mesh_key, limits.get("default"))
         env_limit = os.environ.get("GEMMA4_BFP8_MAX_CONTEXT")
         if env_limit is not None:
             try:

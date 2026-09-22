@@ -182,6 +182,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
         (std::uint32_t)num_q_heads,   // q_out_c
         (std::uint32_t)num_kv_heads,  // kv_out_c
         static_cast<uint32_t>(split.head_parallel),
+        operation_attributes.q_head_split.value_or(0) / TILE_WIDTH,
     };
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);

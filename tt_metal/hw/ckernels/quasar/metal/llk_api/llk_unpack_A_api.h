@@ -112,9 +112,7 @@ inline void llk_unpack_A_init(
                     ckernel::trisc::bfd_current<engine>(), tensor_shape, 1);
             }
         } else {
-            static_assert(
-                !(DST_ACCUM_MODE && !unpack_to_dest),
-                "32BIT_DEST is not supported for broadcast when unpack_to_dest is false");
+            static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
             // Unlike the unary path above, the broadcast LLK takes no TensorShape, so it does not scale
             // its L1 tile index by the face count. Full-tile only until it is converted (tt-metal #47597).
             LLK_ASSERT(
@@ -122,7 +120,7 @@ inline void llk_unpack_A_init(
                     tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, DST_ACCUM_MODE, unpack_to_dest>(
                 ckernel::trisc::bfd_current<engine>(), 1);
         }
     }
@@ -171,6 +169,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
                 l1_tile_idx, tensor_shape);
         }
     } else {
+        static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
         constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
         _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
     }
@@ -219,6 +218,7 @@ inline void llk_unpack_A_block(
                     rd_entry_idx + tile_index, tensor_shape);
             }
         } else {
+            static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(rd_entry_idx + tile_index);
         }
