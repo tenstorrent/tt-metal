@@ -10,13 +10,16 @@ from .ulp import has_ulp_gate, ulp_dtype
 
 
 def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
-    """Gap from each golden value to the next representable number in *out_fmt*."""
+    """Gap from each golden value to the next representable number in *out_fmt*'s
+    measurement dtype."""
     golden = np.asarray(golden, dtype=np.float64)
     # Asked through helpers.ulp, so the proxy formats it gates are measured here too; a
     # private copy of the native set left the sweep writing NaN for exactly the format
-    # the gate can judge. For Bfp8_b the step returned is a *bfloat16* one -- at least
-    # twice the Bfp8_b step, and far more where a shared block exponent coarsens a small
-    # element -- so the `signed_ulp_error` column reads in bf16 steps for that format.
+    # the gate can judge. For Bfp8_b the step returned is a *bfloat16* one -- Bfp8_b has 6
+    # fractional bits against bfloat16's 7, so it is at most *half* a native Bfp8_b step,
+    # and far less where a shared block exponent coarsens a small element. The
+    # `signed_ulp_error` column therefore reads in bf16 steps for that format, and a
+    # budget derived from it is finer-grained than the format it names.
     if not has_ulp_gate(out_fmt):
         return np.full(golden.shape, np.nan, dtype=np.float64)
 

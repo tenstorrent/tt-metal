@@ -303,6 +303,7 @@ def _selection(
         raise ValueError(f"{caller}: mask must be bool, got {mask.dtype}")
     return mask
 
+
 def ulp_elementwise_valid(
     golden: torch.Tensor,
     result: torch.Tensor,
@@ -347,6 +348,14 @@ def ulp_elementwise_valid(
     rescued = torch.zeros_like(valid)
 
     if near_zero_atol is not None:
+        if near_zero_atol < 0:
+            # `passed_test` rejects this too, but every other caller reaches the floor
+            # through here: a negative cut makes the rescue false on every lane, so the
+            # floor is inert and nothing tells that apart from a real regression.
+            raise ValueError(
+                f"near_zero_atol must not be negative, got {near_zero_atol}; "
+                "0.0 is the no-floor value, and None is the default"
+            )
         absolute_cut = near_zero_atol / near_zero_fraction
         # In float32, like the error compare below: both cuts are Python floats, so a
         # 16-bit `golden.abs()` would promote them onto the tensor's own lattice and round
