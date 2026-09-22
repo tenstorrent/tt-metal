@@ -61,7 +61,7 @@ from helpers.utils import passed_test
 def _integer_only_ops() -> set:
     """Every SFPU op whose operands and result are integers, from canonical sources.
 
-    Three of them, because the harness has no single classification that covers all:
+    Four of them, because the harness has no single classification that covers all:
 
     * ``MathOpType.SFPU_BINARY_INT`` — the typed integer binaries (``SfpuGtInt`` and its
       siblings).
