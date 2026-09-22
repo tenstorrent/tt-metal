@@ -881,6 +881,13 @@ class TestConfig:
     @staticmethod
     def resolve_worker_tensix_location():
         """Bind TENSIX_LOCATION from the card once Exalens has a context."""
+        forced = os.environ.get("PERF_FORCE_CORE_INDEX")
+        if forced is not None:
+            TestConfig.TENSIX_LOCATION = (
+                device_module.tensix_location_for_worker(int(forced))
+            )
+            TestConfig._PENDING_WORKER_INDEX = None
+            return
         index = TestConfig._PENDING_WORKER_INDEX
         if index is None:
             return
