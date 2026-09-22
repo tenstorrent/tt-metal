@@ -121,7 +121,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // ---- Resource names ----
     const DFBSpecName IN_DFB{"in"};            // interleaved pages streamed in; exists only when converting formats
     const DFBSpecName OUT_DFB{"out"};          // the output shard, in the output's data format
-    const DFBSpecName SCRATCH_DFB{"scratch"};  // DRAM->L1 alignment staging; row-major only
+    const ScratchpadSpecName SCRATCH{"scratch"};  // DRAM->L1 alignment staging; row-major only
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
@@ -129,6 +129,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     const KernelSpecName COMPUTE{"compute"};
 
     Group<DataflowBufferSpec> dataflow_buffers;
+    Group<ScratchpadSpec> scratchpads;
 
     // Output DFB. When the destination is sharded (non-DRAM) it is built on the output shard's own L1
     // buffer (borrowed memory), so the pages the program produces land directly in the output tensor and
@@ -167,20 +168,19 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // tile path declares no spec at all rather than an unbound one.
     const bool needs_scratch =
         (src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned;
-    const bool has_scratch_dfb = !is_tile && needs_scratch;
-    if (has_scratch_dfb) {
+    const bool has_scratch = !is_tile && needs_scratch;
+    if (has_scratch) {
         uint32_t scratch_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = SCRATCH_DFB,
-            .entry_size = scratch_page_size,
-            .num_entries = num_trids,
-            .data_format_metadata = input_data_format,
+        // Whole region the former DFB reserved on each node: entry_size * num_entries.
+        scratchpads.push_back(ScratchpadSpec{
+            .unique_id = SCRATCH,
+            .size_per_node = scratch_page_size * num_trids,
         });
     }
 
     // Reader kernel. Produces into the input DFB when converting formats, otherwise straight into the
-    // output DFB. The row-major reader additionally drives the alignment scratchpad, which it both fills
-    // and drains itself -- a self-loop, so it is bound on both endpoints under one accessor name.
+    // output DFB. The row-major reader additionally drives the alignment scratchpad -- a private
+    // Scratchpad it fills and drains itself.
     KernelSpec reader{
         .unique_id = READER,
         .dfb_bindings =
@@ -221,16 +221,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             "aligned_block_width_bytes",
             "aligned_offset",
             "start_id"};
-        if (has_scratch_dfb) {
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = SCRATCH_DFB,
+        if (has_scratch) {
+            reader.scratchpad_bindings.push_back(ScratchpadBinding{
+                .scratchpad_spec_name = SCRATCH,
                 .accessor_name = "scratch",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = SCRATCH_DFB,
-                .accessor_name = "scratch",
-                .endpoint_type = DFBEndpointType::CONSUMER,
             });
         }
     }
@@ -510,6 +504,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         .name = "interleaved_to_sharded",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
