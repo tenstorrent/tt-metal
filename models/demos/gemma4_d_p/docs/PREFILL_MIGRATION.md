@@ -20,11 +20,10 @@ pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_mig
 For loopback, first [build and start the migration endpoint](PREFILL_TEST_FLOWS.md#loopback-16k), then run:
 
 ```bash
-GEMMA4_TEST_LOOPBACK=1 pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py \
-    -k loopback -sv --basetemp=/tmp/gemma4-migration-loopback
+GEMMA4_TEST_LOOPBACK=1 pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[loopback-256k] -sv
 ```
 
-The loopback command runs all loopback cases. List available cases with:
+List available cases with:
 
 ```bash
 pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py --collect-only -q
