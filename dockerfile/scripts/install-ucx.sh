@@ -74,8 +74,8 @@ rm -rf "${WORKDIR}"
 # GUARD: verbs is the whole point. A UCX without rc_verbs builds and installs cleanly and
 # then runs everything over TCP, which looks like a working RDMA run at one tenth the
 # bandwidth -- so fail the image build here rather than ship that.
-if [ ! -e "${UCX_PREFIX}/lib/ucx/libuct_ib.so" ] && [ ! -e "${UCX_PREFIX}/lib/ucx/libuct_ib.a" ]; then
-    echo "[ERROR] ${UCX_PREFIX}/lib/ucx/libuct_ib.* is missing: UCX built without verbs." >&2
+if ! { [ -e "${UCX_PREFIX}/lib/ucx/libuct_ib.so" ] || [ -e "${UCX_PREFIX}/lib/ucx/libuct_ib.a" ] || [ -e "${UCX_PREFIX}/lib64/ucx/libuct_ib.so" ] || [ -e "${UCX_PREFIX}/lib64/ucx/libuct_ib.a" ]; }; then
+    echo "[ERROR] ${UCX_PREFIX}/lib{,64}/ucx/libuct_ib.* is missing: UCX built without verbs." >&2
     echo "[ERROR] libibverbs-devel / librdmacm-devel are required in the builder stage." >&2
     exit 1
 fi
