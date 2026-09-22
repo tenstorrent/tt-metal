@@ -28,9 +28,8 @@ from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
-from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -73,10 +72,6 @@ class PrefillBlockThresholds:
 
 DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
-# Mistral runs GPT_DEVICE, and the selector above only special-cases device gates, so every
-# other gate mode lands on `moe_gate_host` -- the same reason Kimi tunes that field rather than
-# moe_gate_device_fp32. Floor set just under the measured 0.990894 (pcc-prompt_5k, mesh-8x4, CHUNK=5120).
-MISTRAL4_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.990)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
 DETERMINISM_PCC_THRESHOLD = 1.0
@@ -110,12 +105,11 @@ def run_model(
     # The routing family this row drives must match the one the adapter declares; crossing
     # families applies a different affinity function with no error (see the assert).
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
-    # Kimi and Mistral parametrize no `balanced` entry (only non_balanced), so applying this skip
-    # would zero out their CI coverage for this test -- which is exactly what happened to Mistral
-    # until this exemption was added: the leg reported 36 skipped, 0 passed, and read as green.
-    # Neither can add one today: RotarySetup asserts indexed rotated rope is incompatible with
-    # is_balanced (rope.py). Remove an entry once its variant gains a balanced row.
-    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name not in ("kimi_k2_7", "mistral_small_4"):
+    # Kimi parametrizes no `balanced` entry (only non_balanced); applying this skip would zero
+    # out its CI coverage. Mistral moved to test_prefill_block_chunked.py. Remove once the
+    # variant gains a balanced row: RotarySetup asserts indexed rope is incompatible with
+    # is_balanced (rope.py).
+    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_7":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
     # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
@@ -545,103 +539,6 @@ def run_model(
     logger.info(f"{'='*60}")
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
-
-
-# ---------------------------------------------------------------------------
-# Mistral Small 4 block test
-# ---------------------------------------------------------------------------
-# Two rows differ from the Kimi test above, both forced by the config rather than chosen:
-#
-#   * NO "dense" row. text_config.first_k_dense_replace = 0, so all 36 layers are MoE and a dense
-#     block is a configuration this model never has. Kimi/DeepSeek run ("dense", None) because their
-#     first 1 / 3 layers really are dense.
-#   * GPT_DEVICE, not DEVICE_FP32. moe_grouped_topk.cpp's parse_score_func accepts only sigmoid and
-#     sqrtsoftplus, so the sigmoid device gate cannot express Mistral's softmax -> top-4 ->
-#     renormalize router. Running DEVICE_FP32 here would apply a sigmoid affinity and silently
-#     produce wrong routing weights -- no crash, and invisible to an MLA-only test.
-#
-# The adapter now carries supports_pretrained=True, so the pretrained row RUNS rather than skipping --
-# matching the deepseek/kimi siblings. It needs the checkpoint and a TTNN weight cache staged; without
-# the cache it rebuilds in-job. Check `passed` vs `skipped`, since a skip reads as success.
-@pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
-    [
-        ("random", False, 1024, 8),
-        ("random", False, 5 * 1024, 8),
-        ("prompt_5k", True, 5 * 1024, 8),
-    ],
-    ids=["smoke-random", "perf-random-5k", "pcc-prompt_5k"],
-)
-@pytest.mark.parametrize(
-    "layer_type, gate_fallback_mode",
-    [("moe", GateComputeMode.GPT_DEVICE)],
-    ids=["moe_gate_gpt"],
-)
-@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (8, 4),
-            fabric2d_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
-@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [1, 2, 5], ids=["iter1", "iter2", "iter5"])
-@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 targets the Blackhole galaxy")
-@pytest.mark.timeout(900)
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-def test_mistral4_prefill_block(
-    variant,
-    config_only,
-    mesh_device,
-    device_params,
-    is_balanced,
-    isl_total,
-    dispatch_buffer_capacity_factor,
-    layer_type,
-    gate_fallback_mode,
-    num_links,
-    pcc_validation,
-    input_source,
-    tokenizer,
-    is_ci_env,
-    is_ci_v2_env,
-    determinism_check,
-    num_iterations,
-    use_pretrained,
-    request,
-):
-    topology = per_axis_topology(device_params["fabric_config"])
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        is_balanced,
-        isl_total,
-        dispatch_buffer_capacity_factor,
-        layer_type,
-        gate_fallback_mode,
-        num_links,
-        topology,
-        pcc_validation,
-        input_source,
-        tokenizer,
-        request,
-        is_ci_env,
-        is_ci_v2_env,
-        determinism_check=determinism_check,
-        num_iterations=num_iterations,
-        thresholds=MISTRAL4_THRESHOLDS,
-        use_pretrained=use_pretrained,
-    )
 
 
 # ---------------------------------------------------------------------------
