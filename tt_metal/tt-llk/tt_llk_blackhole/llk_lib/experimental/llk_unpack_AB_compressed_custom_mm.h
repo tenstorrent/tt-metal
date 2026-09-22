@@ -249,7 +249,17 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
         meta >>= 3;
     }
 
-    t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_SYNC);
+    // The unpacker fetches bfp2 at a pinned x1 and every other format at the configured rate, so the replay table
+    // separates each switch into or out of bfp2 with a SrcA clear. A block whose last tile is bfp2 leaves that
+    // switch to the next unpack, whose format this block's table cannot see, so the clear goes here instead.
+    {
+        const std::uint32_t last = kt_dim * ct_dim - 1;
+        if (((meta_ptr[last / 10] >> ((last % 10) * 3 + 3)) & 0b11) == 1)
+        {
+            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+        }
+    }
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     wait_for_next_context(1);
     reset_config_context();
