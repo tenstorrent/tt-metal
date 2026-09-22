@@ -172,6 +172,7 @@ DfbSizes size_dfbs(
 }  // namespace
 
 UnifiedMatmulPlan plan_unified_matmul(
+    tt::tt_metal::IDevice& device,
     const ttnn::Tensor& A,
     const ttnn::Tensor& B,
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
@@ -234,7 +235,7 @@ UnifiedMatmulPlan plan_unified_matmul(
                                                         : tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
 
     TT_FATAL(config.cores.num_cores() > 0, "MatmulUnifiedProgramConfig.cores is empty");
-    const CoreCoord grid = A.device()->compute_with_storage_grid_size();
+    const CoreCoord grid = device.compute_with_storage_grid_size();
     const CoreRange bounding_box = config.cores.bounding_box();
     TT_FATAL(
         bounding_box.end_coord.x < grid.x && bounding_box.end_coord.y < grid.y,
@@ -251,15 +252,14 @@ UnifiedMatmulPlan plan_unified_matmul(
     // ---- Subblock: the C slice's tiles accumulated in DST at once ----
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
     const bool packer_l1_acc =
-        std::get<3>(get_compute_kernel_config_args(A.device()->arch(), attributes.compute_kernel_config.value()));
+        std::get<3>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
 
     plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
     plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
-    const uint32_t l1_base = A.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint32_t l1_ceiling =
-        A.device()->lowest_occupied_compute_l1_address().value_or(A.device()->l1_size_per_core());
+    const uint32_t l1_base = device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
     TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
     const uint64_t l1_budget = l1_ceiling - l1_base;
 
@@ -478,7 +478,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     tt::tt_metal::IDevice* device = &A.mutable_device();
 
     const UnifiedMatmulPlan plan =
-        plan_unified_matmul(A_tensor, B_tensor, config, operation_attributes, tensor_return_value.at(0));
+        plan_unified_matmul(*device, A_tensor, B_tensor, config, operation_attributes, tensor_return_value.at(0));
 
     // ---- Tensor parameters: the kernels' tensor accessors are generated from these specs ----
     Group<TensorParameter> tensor_parameters = {

@@ -1846,6 +1846,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     !optional_bias.has_value(),
                     "MatmulUnifiedProgramConfig does not fuse bias; ttnn::matmul applies it as a separate add");
                 (void)plan_unified_matmul(
+                    *input_tensor_a.device(),
                     input_tensor_a,
                     input_tensor_b,
                     program_config,
@@ -2188,8 +2189,13 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     // the accessor's shard -> core mapping is the factory's C slice -> core mapping and every
                     // core writes its own shard.
                     // Reached only when no output tensor was supplied, so C is allocated from this plan.
-                    const UnifiedMatmulPlan plan =
-                        plan_unified_matmul(input_tensor_a, input_tensor_b, program_config, attributes, std::nullopt);
+                    const UnifiedMatmulPlan plan = plan_unified_matmul(
+                        *input_tensor_a.device(),
+                        input_tensor_a,
+                        input_tensor_b,
+                        program_config,
+                        attributes,
+                        std::nullopt);
                     const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
                     const ShardOrientation orientation =
                         plan.row_major_cores ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
