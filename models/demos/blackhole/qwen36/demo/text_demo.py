@@ -144,7 +144,6 @@ def _get_prompt(seqlen, tokenizer, max_prompt_len=None):
         context = _load_and_cache_context(entry["context"], entry.get("max_length"))
         instruction = entry["prompt"]
         prefix = "<|im_start|>user\n"
-        # Seed <think> for reasoning; QWEN35_NO_THINK=1 disables it
         if os.environ.get("QWEN35_NO_THINK"):
             # Empty thinking block (enable_thinking=False)
             suffix = (
@@ -804,10 +803,6 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     _mode = os.environ.get("QWEN36_BATCHED_DECODE_MODE", "shard")
     # Both "shard" and "sample" ask ttnn_decode_forward for on_device_logits, which asserts on
     # model.sampling -- so BOTH must fall back, not just "sample". model.sampling is None whenever
-    # vocab/num_devices > 64K (model.py:44): a P150x4 gets 248320/4 = 62080 and keeps the sampler,
-    # but an N300 gets 248320/2 = 124160 and does not, so the default "shard" hit
-    # "on_device_logits=True but self.sampling is None". "host" is the universal path (the implicit
-    # else of every _mode branch below), so downgrading is always safe.
     if _mode in ("shard", "sample") and model.sampling is None:
         _mode = "host"
     if _mode == "shard":
@@ -1130,18 +1125,6 @@ def _log_results(perf, prompt_len, num_generated, text):
 
 # Expected content terms per source book, keyed by the Gutenberg epub id in the entry's context URL
 # so this cannot desync from eval_frankenstein_long.json.
-#
-# WHY THIS IS NOT ONE HARDCODED FRANKENSTEIN LIST (it was, and it produced false failures on 4 of the
-# 6 long-context configs):
-#   * entry 4 (seqlen 262144) is epub 2600 = WAR AND PEACE, not Frankenstein at all, so a
-#     Frankenstein term list can never match a correct summary of it.
-#   * the short configs truncate the context to their own token budget, so 8k/16k/32k stop inside
-#     Walton's letters / the first chapters -- BEFORE Victor, the creature, Elizabeth or Geneva are
-#     named. A correct summary of that excerpt legitimately contains none of those words. Hence the
-#     opening-section terms (walton/margaret/arctic/...) for epub 84.
-# Both failure modes were observed: 8k summarised "Robert Walton's four letters and the beginning of
-# Chapter 1" and 256k summarised "Leo Tolstoy's War and Peace (Books One through Five)", and both were
-# reported as long-prefill regressions.
 _CONTEXT_TERMS = {
     "84": (
         (

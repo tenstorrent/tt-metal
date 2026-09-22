@@ -53,7 +53,17 @@ class DistributedNorm(LightweightModule):
     identity (it still divides by RMS), hence this explicit mode.
     """
 
-    def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
+    def __init__(
+        self,
+        norm,
+        args,
+        tt_ccl,
+        prefetcher=None,
+        TG=False,
+        ag_config_key=None,
+        enable_all_gather=True,
+        prefill_ag_tuning=None,
+    ):
         if norm is None and TG:
             raise NotImplementedError("Gather-only DistributedNorm (norm=None) is not supported on Galaxy (TG)")
         self.norm = norm
@@ -61,6 +71,10 @@ class DistributedNorm(LightweightModule):
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
         self.ag_config_key = ag_config_key
+        # Per-op CCL tuning was honoured for DECODE only; prefill got the literals 10/2 and was
+        # never tunable. (num_links|None, chunks_per_sync, num_workers_per_link); None keeps 10/2.
+        # Measured N300 seq 2048, both gathers in a GDN layer: wpl 2 -> 2,487us, 8 -> 2,028us.
+        self.prefill_ag_tuning = prefill_ag_tuning
 
         # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
         self.enable_all_gather = enable_all_gather
@@ -103,9 +117,25 @@ class DistributedNorm(LightweightModule):
             raise ValueError("Gather-only DistributedNorm (norm=None) owns no weights to update")
         self.norm.update(weight=weight)
 
+    def _ag_tuning(self, mode):
+        """(num_links, chunks_per_sync, num_workers_per_link) for this mode.
+
+        Falls back to the untuned defaults when the key is absent: a model may register a decode
+        entry without a prefill one (or neither), and the gather must still run.
+        """
+        if mode == "decode":
+            cfg = self.args.model_config.get(self.ag_config_key) if self.ag_config_key else None
+            if cfg:
+                return cfg["num_links"], cfg["chunks_per_sync"], cfg["num_workers_per_link"]
+        elif self.prefill_ag_tuning:
+            links, cps, wpl = self.prefill_ag_tuning
+            return (self.tt_ccl.get_num_links(1) if links is None else links), cps, wpl
+        return self.tt_ccl.get_num_links(1), 10, 2
+
     def forward(self, x, mode: Mode, norm_config=None):
         """Apply a norm, possibly gathering inputs if required."""
 
+        _ag_links, _ag_cps, _ag_wpl = self._ag_tuning(mode)
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
 
         if self.TG:
@@ -139,18 +169,12 @@ class DistributedNorm(LightweightModule):
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=self.args.model_config[self.ag_config_key]["num_links"]
-                if self.ag_config_key and mode == "decode"
-                else self.tt_ccl.get_num_links(1),
+                num_links=_ag_links,
                 topology=self.args.ccl_topology(),
                 memory_config=input_mem_cfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
-                if self.ag_config_key and mode == "decode"
-                else 10,
-                num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
-                if self.ag_config_key and mode == "decode"
-                else 2,
+                chunks_per_sync=_ag_cps,
+                num_workers_per_link=_ag_wpl,
                 num_buffers_per_channel=2,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
@@ -173,12 +197,12 @@ class DistributedNorm(LightweightModule):
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=self.tt_ccl.get_num_links(1),
+                num_links=_ag_links,
                 topology=self.args.ccl_topology(),
                 memory_config=x.memory_config(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
+                chunks_per_sync=_ag_cps,
+                num_workers_per_link=_ag_wpl,
                 num_buffers_per_channel=2,
             )
 
