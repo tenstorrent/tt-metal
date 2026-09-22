@@ -107,18 +107,24 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "subdevice_id",
-        "global_semaphore");
+        "global_semaphore",
+        "global_semaphore_address");
     auto attribute_values() const {
-        return std::forward_as_tuple(
-            chunk_M_tiles,
-            m_tiles,
-            local_expert_id,
-            read_x_at_offset,
-            x_is_row_major,
-            activation,
-            fuse_bias,
-            subdevice_id,
-            global_semaphore);
+        // These programs embed the address as a scalar runtime argument. GlobalSemaphore
+        // reflection excludes it, so distinguish live allocations while retaining cache
+        // hits for copies/reuse of the same allocation.
+        return std::tuple_cat(
+            std::forward_as_tuple(
+                chunk_M_tiles,
+                m_tiles,
+                local_expert_id,
+                read_x_at_offset,
+                x_is_row_major,
+                activation,
+                fuse_bias,
+                subdevice_id,
+                global_semaphore),
+            std::make_tuple(global_semaphore.has_value() ? global_semaphore->address() : 0));
     }
 };
 

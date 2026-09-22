@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -43,23 +44,29 @@ struct CombineParams {
         "init_zeros",
         "use_l1_small_for_semaphores",
         "use_fp8_combine",
-        "global_semaphore");
+        "global_semaphore",
+        "global_semaphore_address");
 
     auto attribute_values() const {
-        return std::forward_as_tuple(
-            dispatch_group_size,
-            experts_per_chip,
-            num_experts_per_tok,
-            seq_len_per_chip,
-            axis,
-            num_links,
-            topology,
-            output_mem_config,
-            worker_core_range_set,
-            init_zeros,
-            use_l1_small_for_semaphores,
-            use_fp8_combine,
-            global_semaphore);
+        // These programs embed the address as a scalar runtime argument. GlobalSemaphore
+        // reflection excludes it, so distinguish live allocations while retaining cache
+        // hits for copies/reuse of the same allocation.
+        return std::tuple_cat(
+            std::forward_as_tuple(
+                dispatch_group_size,
+                experts_per_chip,
+                num_experts_per_tok,
+                seq_len_per_chip,
+                axis,
+                num_links,
+                topology,
+                output_mem_config,
+                worker_core_range_set,
+                init_zeros,
+                use_l1_small_for_semaphores,
+                use_fp8_combine,
+                global_semaphore),
+            std::make_tuple(global_semaphore.has_value() ? global_semaphore->address() : 0));
     };
 };
 
