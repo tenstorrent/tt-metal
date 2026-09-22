@@ -752,8 +752,17 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     // Adjust shard shape based on full volume ratios
     TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
     TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
-    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    // Scale the shard by the ratio of the two shapes, so the output keeps the input's shard count,
+    // and floor it at one tile so a TILE tensor always gets a whole tile per shard. The floor is
+    // capped by the destination's own extent, because a ROW_MAJOR destination is not tile-padded:
+    // its padded height is the true row count -- often 1 -- and flooring such a shard at a tile's 32
+    // rows would ask for a shard the tensor's physical height can never satisfy, which TensorSpec
+    // rejects outright. For TILE the padded shape already carries the tile alignment, so the cap
+    // never bites and the shard is the same 32-floored one as before.
+    ret.shape[0] = std::max(
+        (ret.shape[0] * to_volume_except_width) / from_volume_except_width,
+        std::min<uint32_t>(32u, to_volume_except_width));
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, std::min<uint32_t>(32u, to_width));
     return ret;
 }
 

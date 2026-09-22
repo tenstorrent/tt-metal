@@ -116,6 +116,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "write",
             &tt::tt_metal::distributed::H2DSocket::write,
+            nb::call_guard<nb::gil_scoped_release>(),
             nb::arg("data"),
             nb::arg("num_pages"),
             R"doc(
@@ -145,6 +146,9 @@ void py_module_types(nb::module_& mod) {
                     data_span.size(),
                     page_size);
                 uint32_t num_writes = data_span.size() / page_size;
+                // The writes spin on device credits when the FIFO is full and touch no
+                // Python state, so let other threads run meanwhile.
+                nb::gil_scoped_release no_gil;
                 for (uint32_t i = 0; i < num_writes; i++) {
                     self.write(data_span.data() + (i * page_size), 1);
                 }
@@ -174,6 +178,9 @@ void py_module_types(nb::module_& mod) {
                     page_size);
                 auto* base = static_cast<std::byte*>(const_cast<void*>(tensor.data()));
                 uint32_t num_writes = nbytes / page_size;
+                // Spins on device credits when the FIFO is full; the buffer is already
+                // resolved to a raw pointer, so nothing here needs the GIL.
+                nb::gil_scoped_release no_gil;
                 for (uint32_t i = 0; i < num_writes; i++) {
                     self.write(base + (i * page_size), 1);
                 }
@@ -194,6 +201,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "barrier",
             &tt::tt_metal::distributed::H2DSocket::barrier,
+            nb::call_guard<nb::gil_scoped_release>(),
             nb::arg("timeout_ms") = nb::none(),
             R"doc(
                 Blocks until the device has acknowledged all written data.
@@ -320,6 +328,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "read",
             &tt::tt_metal::distributed::D2HSocket::read,
+            nb::call_guard<nb::gil_scoped_release>(),
             nb::arg("data"),
             nb::arg("num_pages"),
             nb::arg("notify_sender") = true,
@@ -353,6 +362,9 @@ void py_module_types(nb::module_& mod) {
                 uint32_t num_pages = data_span.size() / page_size;
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
+                // Blocks until the device has pushed every page, so hold no GIL: a
+                // pipelined caller reads from one thread while dispatching on another.
+                nb::gil_scoped_release no_gil;
                 while (remaining_bytes_to_read > 0) {
                     uint32_t num_pages_to_read = 1;
                     self.read(
@@ -395,6 +407,9 @@ void py_module_types(nb::module_& mod) {
                 uint32_t num_pages = nbytes / page_size;
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
+                // Blocks until the device has pushed every page, so hold no GIL: a
+                // pipelined caller reads from one thread while dispatching on another.
+                nb::gil_scoped_release no_gil;
                 while (remaining_bytes_to_read > 0) {
                     uint32_t num_pages_to_read = 1;
                     self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
@@ -421,6 +436,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "barrier",
             &tt::tt_metal::distributed::D2HSocket::barrier,
+            nb::call_guard<nb::gil_scoped_release>(),
             nb::arg("timeout_ms") = nb::none(),
             R"doc(
                 Blocks until all sent data has been acknowledged.
