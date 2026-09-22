@@ -506,7 +506,90 @@ def _run_matmul_sweep_prepass(args, run_root: Path, run_demo: Path, node: str = 
     )
 
 
+def _memory_scope_argv(cmdline):
+    """Return the systemd-run argv that re-runs `cmdline` inside a memory-capped cgroup scope, or
+    None when capping should be skipped. Split from the exec so the decision is testable.
+
+    Why a cgroup scope: a runaway build in the run can exhaust host RAM and let the kernel's GLOBAL
+    OOM-killer take down the whole session. A cgroup `memory.max` kills only the offending process,
+    in-scope, and the supervisor survives to retry. It caps physical RSS, NOT the virtual address
+    space the retired RLIMIT_AS capped -- which is why it is safe with the device driver's large TLB
+    mappings that broke under RLIMIT_AS. A user cannot mkdir a cgroup under its own slice here, so
+    systemd must create the scope; hence systemd-run.
+
+    Skips (returns None) when: already inside the scope, capping disabled via the SAME escape hatch
+    the rest of the memory logic uses (PERF_MCP_DISABLE_MEM_CAP=1), systemd-run is absent, or the
+    machine size cannot be read. The cap is a RATIO of MemTotal (PERF_MCP_MEM_CAP_FRACTION), never a
+    fixed byte count, so it scales to any box."""
+    if os.environ.get("PERF_MCP_MEM_SCOPE") == "1":
+        return None
+    if os.environ.get("PERF_MCP_DISABLE_MEM_CAP") == "1":
+        return None
+    sr = shutil.which("systemd-run")
+    if not sr or not cmdline:
+        return None
+    total_kb = None
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    total_kb = int(line.split()[1])
+                    break
+    except Exception:  # noqa: BLE001
+        return None
+    if not total_kb:
+        return None
+    try:
+        frac = float(os.environ.get("PERF_MCP_MEM_CAP_FRACTION", "0.9"))
+    except Exception:  # noqa: BLE001
+        frac = 0.9
+    frac = min(0.98, max(0.5, frac))
+    cap_bytes = int(total_kb * 1024 * frac)
+    return [
+        sr,
+        "--user",
+        "--scope",
+        "--collect",
+        "--quiet",
+        "-p",
+        "MemoryMax=%d" % cap_bytes,
+        "-p",
+        "MemorySwapMax=0",
+        "--",
+        *cmdline,
+    ]
+
+
+def _reexec_under_memory_scope():
+    """Re-exec this whole optimize process inside a memory-capped systemd-run scope (see
+    _memory_scope_argv). One re-exec at entry caps the ENTIRE process tree -- supervisor, child and
+    every worker -- in a single cgroup, so none of the tool's own launch, reaping or kill logic
+    changes. Best-effort: if anything about the scope does not work, the run proceeds uncapped rather
+    than not at all (a missing safety net must never block the work)."""
+    try:
+        cmdline = [c.decode() for c in open("/proc/self/cmdline", "rb").read().split(b"\x00") if c]
+        argv = _memory_scope_argv(cmdline)
+        if not argv:
+            return
+        # Only re-exec if a trivial scope actually starts here; otherwise run uncapped.
+        chk = subprocess.run(argv[: -len(cmdline)] + ["true"], capture_output=True, timeout=20)
+        if chk.returncode != 0:
+            return
+        env = dict(os.environ)
+        env["PERF_MCP_MEM_SCOPE"] = "1"
+        cap_gb = next((int(a.split("=")[1]) // (1024**3) for a in argv if a.startswith("MemoryMax=")), 0)
+        print(
+            "  [optimize/cc] memory-capped scope active: MemoryMax=%dGB -- a runaway build is killed "
+            "in-scope, never on the whole box" % cap_gb,
+            flush=True,
+        )
+        os.execve(argv[0], argv, env)
+    except Exception:  # noqa: BLE001 -- capping must never prevent the run
+        return
+
+
 def cmd_optimize(args) -> int:
+    _reexec_under_memory_scope()
     _tf = invalid_trace_flag_error()
     if _tf:
         print("error: " + _tf)
