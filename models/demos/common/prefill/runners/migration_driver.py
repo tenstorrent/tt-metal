@@ -375,6 +375,12 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
         cfg_id, rows = entry["config_id"], entry["rows"]
         if rows is None:
             continue
+        if entry["kind"] not in ("kvpe", "index"):
+            # Not a token-addressed cache (Kimi-K3's KDA state configs); nothing to decode into KV rows.
+            logger.info(
+                f"[migration_driver] src-KV dump: cache config {cfg_id} ({entry['kind']}) is not a KV cache; not dumped."
+            )
+            continue
         if entry["head_dim"] is None:
             logger.warning(
                 f"[migration_driver] src-KV dump: cache config {cfg_id} not dumped -- axis known, but no "
@@ -461,8 +467,12 @@ def _verify_dst_vs_src_bytes(
         for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
             stride = int(tcfg.chunk_n_tokens)
-            n_full = (real_len // stride) * stride
-            tail_tokens += real_len - n_full
+            # A config's position axis ends at its own max_sequence_length, which is the request length
+            # only for token caches. A whole-state config (Kimi-K3's KDA state: one position per segment)
+            # is shorter, and lookups past its end are unchecked.
+            extent = min(int(real_len), int(tcfg.max_sequence_length))
+            n_full = (extent // stride) * stride
+            tail_tokens += extent - n_full
             logger.info(
                 f"[migration_driver] verify bytes: slot {src} -> {dst} config {cfg_id}: "
                 f"{len(picked)} layer(s) x {n_full // stride} chunk(s) of {stride} token(s) "
