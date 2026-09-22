@@ -230,7 +230,7 @@ class TracedEncoder:
             self.op_event = ttnn.record_event(device, 0)
 
     def _forward(self, device_inputs):
-        tr = self.model.transform_and_embed_prefill_inputs_device(*device_inputs)
+        tr = self.model.transform_and_embed_prefill_inputs_device(*device_inputs, tt_chunk_start_idx=None)
         out = self.model.ttnn_prefill_forward(
             x=tr[0],
             rot_mats_global=self._rot_g,

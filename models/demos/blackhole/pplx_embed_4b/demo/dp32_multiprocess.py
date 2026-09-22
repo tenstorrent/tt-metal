@@ -132,7 +132,7 @@ def _worker(
             fwd_kw["user_id"] = 0
 
         def _fwd_post(di):
-            tr = model.transform_and_embed_prefill_inputs_device(*di)
+            tr = model.transform_and_embed_prefill_inputs_device(*di, tt_chunk_start_idx=None)
             out = model.ttnn_prefill_forward(x=tr[0], page_table=tr[1], chunk_page_table=tr[2], **fwd_kw)
             if mean_pool:
                 # Live serving path: full-sequence RMSNorm + mean-token pooling
