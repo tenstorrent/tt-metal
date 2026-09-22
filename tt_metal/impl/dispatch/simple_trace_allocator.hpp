@@ -65,11 +65,11 @@ private:
     static std::optional<uint32_t> merge_syncs(std::optional<uint32_t> sync_1, std::optional<uint32_t> sync_2) {
         if (sync_1.has_value() && sync_2.has_value()) {
             return std::max(sync_1.value(), sync_2.value());
-        } else if (sync_1.has_value()) {
-            return sync_1;
-        } else {
-            return sync_2;
         }
+        if (sync_1.has_value()) {
+            return sync_1;
+        }
+        return sync_2;
     }
 
     class RegionAllocator {
