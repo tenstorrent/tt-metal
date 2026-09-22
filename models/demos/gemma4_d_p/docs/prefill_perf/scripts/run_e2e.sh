@@ -27,6 +27,18 @@ done
 [ -n "$CHUNK" ] || usage
 [ -n "$LABEL" ] || LABEL="c${CHUNK}"
 
+# GEMMA4_PREFILL_L1_ACT is DEAD on this base. The rebase onto mmanzoor/svuckovic
+# inverted the knob: gemma4_d_p now places short-lived prefill activations in L1 by
+# DEFAULT and the opt-out is GEMMA4_ACTIVATIONS_DRAM_ONLY=1. The old name survives only
+# in models/demos/gemma4/ (a different model) and as a stale comment. Passing it is a
+# silent no-op that produced two "different" configs with bit-identical numbers, so
+# refuse it rather than measure it.
+if printf '%s\n' "${FLAGS[@]:-}" | grep -q '^GEMMA4_PREFILL_L1_ACT='; then
+  echo "ERROR: GEMMA4_PREFILL_L1_ACT is a no-op on this base (gemma4_d_p)." >&2
+  echo "       L1 activations are ON by default; use GEMMA4_ACTIVATIONS_DRAM_ONLY=1 to turn them OFF." >&2
+  exit 2
+fi
+
 mkdir -p "$OUT"
 LOG="$OUT/${LABEL}.log"
 DEMO=models/demos/gemma4_d_p/demo/text_demo_prefill.py
@@ -67,6 +79,7 @@ has () { printf '%s\n' "${FLAGS[@]:-}" | grep -q "^$1=1$" && echo 1 || echo 0; }
 check "$(has GEMMA4_NORM_SHARD)"  "prefill norm: block-sharded"                 GEMMA4_NORM_SHARD
 check "$(has GEMMA4_MLP_MM_CFG)"  "MLP explicit matmul cfg ENGAGED"             GEMMA4_MLP_MM_CFG
 check "$(has GEMMA4_ATTN_MM_PC)"  "ATTN explicit mm cfg ENGAGED"                GEMMA4_ATTN_MM_PC
+check "$(has GEMMA4_ACTIVATIONS_DRAM_ONLY)" "prefill activations: DRAM-only" GEMMA4_ACTIVATIONS_DRAM_ONLY
 
 N=$(grep -c 'traced_perf\] chunk' "$LOG")
 echo "# rc=$RC chunks=$N witness_fail=$fail finished=$(date -Is)" >> "$LOG"
