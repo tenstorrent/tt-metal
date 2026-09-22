@@ -19,10 +19,10 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.config import MeshConfig, Mode
 
-from .weights import AttentionWeights, load_attention_weights
-from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
+from .kv_cache import init_kv_cache
 from .prefill import flush_deferred_bounded_fills, prefill_forward
+from .weights import AttentionWeights, load_attention_weights
 
 # Named sentinel for optional per-request arguments (clearer than a bare `...`).
 _UNSET = object()
@@ -99,6 +99,8 @@ class Gemma4AttentionConfig:
             self.partial_rotary_factor = hf_config.partial_rotary_factor
 
         self.num_key_value_groups = self.num_attention_heads // self.num_key_value_heads
+        self.decode_rope_fast_and_approximate_mode = False
+        self.decode_sdpa_max_cores_per_head_batch = None
 
         # When set (only on sliding-window layers wired with bounded allocations),
         # the three paged ops (paged_fill_cache / paged_update_cache /

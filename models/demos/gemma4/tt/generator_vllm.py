@@ -3469,6 +3469,11 @@ class Gemma4DFlashContractForCausalLM(DFlashContractMixin, Gemma4DFlashForCausal
     def __init__(self, *args, **kwargs):
         self._contract_init()
         super().__init__(*args, **kwargs)
+        # Select target arithmetic before eager preparation and trace capture.
+        for target in self.model:
+            for layer in target.layers:
+                layer.self_attn.config.decode_rope_fast_and_approximate_mode = True
+                layer.self_attn.config.decode_sdpa_max_cores_per_head_batch = 1
 
     def allocate_kv_cache(self, *args, **kwargs):
         kv_cache = super().allocate_kv_cache(*args, **kwargs)

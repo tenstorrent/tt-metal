@@ -224,7 +224,7 @@ def _rotate_half(x):
     return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
 
 
-def apply_rope_decode_peruser(tensor, cos_b, sin_b):
+def apply_rope_decode_peruser(tensor, cos_b, sin_b, *, fast_and_approximate_mode=False):
     """Per-user decode RoPE: ``q*cos + rotate_half(q)*sin``.
 
     Batched, multi-core, and convention-matched to Gemma4's HF NeoX cos/sin
@@ -242,7 +242,8 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
     if cos_b.shape[2] != heads:
         cos_b = ttnn.repeat(cos_b, ttnn.Shape([1, 1, heads, 1]))
         sin_b = ttnn.repeat(sin_b, ttnn.Shape([1, 1, heads, 1]))
-    return ttnn.add(ttnn.mul(tensor, cos_b), ttnn.mul(_rotate_half(tensor), sin_b))
+    mul_kwargs = {"fast_and_approximate_mode": True} if fast_and_approximate_mode else {}
+    return ttnn.add(ttnn.mul(tensor, cos_b, **mul_kwargs), ttnn.mul(_rotate_half(tensor), sin_b, **mul_kwargs))
 
 
 def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None):

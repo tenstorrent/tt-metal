@@ -124,6 +124,32 @@ speculative refresh retain the allocator's full lookahead tables.
 is open. Request-level release retains the width set for later requests; final
 shutdown bypasses that retention and releases each trace once.
 
+## Contract target attention policy
+
+`Gemma4DFlashContractForCausalLM.__init__` selects target attention arithmetic
+after inherited model construction and before eager program preparation or
+trace capture. Each target layer uses
+`Gemma4AttentionConfig.decode_rope_fast_and_approximate_mode=True` and
+`Gemma4AttentionConfig.decode_sdpa_max_cores_per_head_batch=1`.
+`apply_rope_decode_peruser` supplies `fast_and_approximate_mode=True` to both
+multiplications. Ordinary and packed decode supply the same SDPA core limit.
+The fused batch-1 RoPE path and natural batch-1/batch-32 selection are unchanged.
+
+`Gemma4ForCausalLM` and `Gemma4DFlashForCausalLM` retain the existing arithmetic
+by default. Their ordinary multiplication and SDPA calls omit these optional
+keywords; their packed SDPA retains its existing conditional limit of 16 or 8.
+Each attention layer owns its `Gemma4AttentionConfig` instance, so the contract
+constructor does not modify another adapter's configuration.
+
+Controlled P150x8 experiments with fixed ordinary batch 32 and these arithmetic
+settings match all 704 completed output tokens across four sync/async schedules.
+The controlled experiments do not prove parity with natural batch selection or
+all request histories. A cancelled request ends at different token counts, and
+some proposal histories differ despite equal completed outputs. Synthetic
+operator checks establish consistency on their tested operands, not improved
+FP64-reference accuracy. Current-source natural-batch validation and performance
+remain unverified. Both async capability defaults remain false.
+
 ## Host regression command
 
 From the tt-metal checkout, use Python 3.10 or newer with PyTorch, pytest,
@@ -134,13 +160,18 @@ checkout so the tests use the production `SpecPlan`, `DraftOutput`, and
 ```sh
 PYTHONPATH=/path/to/vllm-tt-plugin/src python -m pytest -o addopts='' \
   --confcutdir=models/demos/gemma4/tests/unit \
-  models/demos/gemma4/tests/unit/test_dflash_contract_adapter.py \
-  models/demos/gemma4/tests/unit/test_dflash_width_prepare.py \
+  models/demos/gemma4/tests/unit/test_async_ahead_decode_tokens.py \
+  models/demos/gemma4/tests/unit/test_async_prefill_row_authority.py \
+  models/demos/gemma4/tests/unit/test_bounded_ring_page_tables_host.py \
+  models/demos/gemma4/tests/unit/test_dflash_attention_policy.py \
+  models/demos/gemma4/tests/unit/test_dflash_bounded_ring_ownership.py \
   models/demos/gemma4/tests/unit/test_dflash_capture_cleanup.py \
+  models/demos/gemma4/tests/unit/test_dflash_contract_adapter.py \
   models/demos/gemma4/tests/unit/test_dflash_contract_bounded.py \
-  models/demos/gemma4/tests/unit/test_dflash_contract_reconstruction.py \
   models/demos/gemma4/tests/unit/test_dflash_contract_prefill_continuation.py \
-  models/demos/gemma4/tests/unit/test_dflash_contract_width_config.py -q
+  models/demos/gemma4/tests/unit/test_dflash_contract_reconstruction.py \
+  models/demos/gemma4/tests/unit/test_dflash_contract_width_config.py \
+  models/demos/gemma4/tests/unit/test_dflash_width_prepare.py -q
 ```
 
 The host test module supplies scoped stubs for lower TT imports. `--confcutdir`

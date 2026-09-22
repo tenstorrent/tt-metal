@@ -146,7 +146,12 @@ def decode_forward(
         def _rope(t):
             if batch == 1:
                 return apply_rope(t, cos_pos, sin_pos, token_index=0)
-            return apply_rope_decode_peruser(t, cos_b, sin_b)
+            return apply_rope_decode_peruser(
+                t,
+                cos_b,
+                sin_b,
+                fast_and_approximate_mode=getattr(config, "decode_rope_fast_and_approximate_mode", False),
+            )
 
         # Rotate Q (and K, unless this is a KV-shared layer) with the shared
         # cos/sin. A concat(Q,K)->rope->split "fusion" was tried to collapse the
@@ -293,11 +298,14 @@ def decode_forward(
         # Sliding layers, and all batched decode: use the full device compute grid.
         sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
 
+    sdpa_core_cap = getattr(config, "decode_sdpa_max_cores_per_head_batch", None)
+    sdpa_kwargs = {"max_cores_per_head_batch": sdpa_core_cap} if sdpa_core_cap is not None else {}
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_grid,
         q_chunk_size=32,
         k_chunk_size=64,
         exp_approx_mode=False,
+        **sdpa_kwargs,
     )
 
     if page_table is not None:
@@ -821,12 +829,13 @@ def packed_decode_forward(
     # splits can't help when nkv_local > 1 (31B sliding: 16 kv heads / tp8 = 2),
     # so trade reduction parallelism for L1: 8 cores fits (~1.29 MB).
     _pnht = (H_local * P + 31) // 32
+    sdpa_core_cap = getattr(config, "decode_sdpa_max_cores_per_head_batch", None)
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=_packed_sdpa_grid(config, mesh_device),
         q_chunk_size=32,
         k_chunk_size=_k_chunk,
         exp_approx_mode=False,
-        max_cores_per_head_batch=16 if _pnht <= 2 else 8,
+        max_cores_per_head_batch=sdpa_core_cap if sdpa_core_cap is not None else (16 if _pnht <= 2 else 8),
     )
     _grid = sdpa_program_config.compute_with_storage_grid_size
     n_sdpa_splits = _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=_grid.x * _grid.y)
