@@ -350,6 +350,8 @@ UnifiedMatmulPlan plan_unified_matmul(
         plan.subblock_M_tiles * plan.subblock_N_tiles,
         dst_capacity_tiles,
         fp32_dest_acc_en);
+    // The padded-dim conditions are redundant for auto subblocks (the viability filter enforced them)
+    // but load-bearing for explicit ones, which may pad a borrowable operand and must take the copy path.
     const bool A_borrowable = A_shard_borrowable && plan.C_slice_M_padded_tiles == plan.C_slice_M_tiles;
     const bool B_borrowable = B_shard_borrowable && plan.C_slice_N_padded_tiles == plan.C_slice_N_tiles;
     const bool C_borrowable = C_shard_borrowable && plan.subblock_N_tiles == plan.C_slice_N_tiles &&
