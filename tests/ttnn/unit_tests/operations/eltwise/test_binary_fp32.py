@@ -505,7 +505,7 @@ def test_logaddexp_beyond_exp_range_fp32(device, a, b):
         f"logaddexp({a}, {b}) returned {tt_out.flatten()[0].item()}; "
         f"the exact result is {z_torch.flatten()[0].item()}"
     )
-    assert_allclose(tt_out, z_torch, *_LOGADDEXP_TOLERANCE[torch.float32])
+    assert_allclose(z_torch, tt_out, *_LOGADDEXP_TOLERANCE[torch.float32])
 
 
 @pytest.mark.parametrize(
@@ -536,7 +536,7 @@ def test_logaddexp_beyond_exp_range_bf16(device, a, b):
     got = tt_out.flatten()[0].item()
     want = z_torch.flatten()[0].item()
     assert torch.isfinite(tt_out).all(), f"logaddexp({a}, {b}) on bfloat16 returned {got}; the exact result is {want}"
-    assert_allclose(tt_out, z_torch, *_LOGADDEXP_TOLERANCE[torch.bfloat16])
+    assert_allclose(z_torch, tt_out, *_LOGADDEXP_TOLERANCE[torch.bfloat16])
 
 
 @pytest.mark.parametrize(
@@ -614,7 +614,7 @@ def test_logaddexp2_beyond_exp2_range_fp32(device, a, b):
         f"logaddexp2({a}, {b}) returned {tt_out.flatten()[0].item()}; "
         f"the exact result is {z_torch.flatten()[0].item()}"
     )
-    assert_allclose(tt_out, z_torch, *_LOGADDEXP_TOLERANCE[torch.float32])
+    assert_allclose(z_torch, tt_out, *_LOGADDEXP_TOLERANCE[torch.float32])
 
 
 @pytest.mark.parametrize(
@@ -643,7 +643,7 @@ def test_logaddexp2_beyond_exp2_range_bf16(device, a, b):
     got = tt_out.flatten()[0].item()
     want = z_torch.flatten()[0].item()
     assert torch.isfinite(tt_out).all(), f"logaddexp2({a}, {b}) on bfloat16 returned {got}; the exact result is {want}"
-    assert_allclose(tt_out, z_torch, *_LOGADDEXP_TOLERANCE[torch.bfloat16])
+    assert_allclose(z_torch, tt_out, *_LOGADDEXP_TOLERANCE[torch.bfloat16])
 
 
 @pytest.mark.parametrize(
