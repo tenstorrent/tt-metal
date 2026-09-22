@@ -248,6 +248,15 @@ inline void init_env(int& argc, char**& argv) {
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
+        // The Python bindings release the GIL around barrier / send_bytes / recv_bytes so several
+        // Python threads may be inside MPI at once (DFlash relay + collective teardown). That is only
+        // legal at MPI_THREAD_MULTIPLE; MPI_Init_thread may succeed while granting a weaker level.
+        TT_FATAL(
+            provided >= MPI_THREAD_MULTIPLE,
+            "MPI runtime provided thread level {} but MPI_THREAD_MULTIPLE ({}) is required for concurrent "
+            "host-socket / barrier calls from multiple Python threads",
+            provided,
+            static_cast<int>(MPI_THREAD_MULTIPLE));
 
         // Ensure MPI_Finalize is called when the program exits
         std::atexit([] { MPI_Finalize(); });
