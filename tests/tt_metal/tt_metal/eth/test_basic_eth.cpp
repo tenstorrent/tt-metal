@@ -631,12 +631,17 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
 TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
     auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
 
-    // PTP stamping is compiled out under watcher and outside
-    // 2-erisc mode.
-    const bool watcher_on = env.get_rtoptions().get_watcher_enabled();
-    const auto erisc_count = env.get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
-    if (watcher_on || erisc_count < 2) {
-        GTEST_SKIP() << "PTP trace is compiled out: " << (watcher_on ? "watcher build" : "single-erisc mode");
+    // PTP stamping is compiled out under watcher, outside 2-erisc mode, and on older eth FW.
+    const char* disabled = nullptr;
+    if (env.get_rtoptions().get_watcher_enabled()) {
+        disabled = "watcher build";
+    } else if (!env.get_rtoptions().get_enable_2_erisc_mode()) {
+        disabled = "single-erisc mode";
+    } else if (!env.get_rtoptions().get_eth_ptp_trace()) {
+        disabled = "eth FW predates debug_buf_t::scratchpad";
+    }
+    if (disabled != nullptr) {
+        GTEST_SKIP() << "PTP trace is compiled out: " << disabled;
     }
 
     const auto trace_addr =
@@ -657,9 +662,13 @@ TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
             if (trace[kMagic] != expected_magic) {
                 continue;
             }
-            // A previous session that ran to completion would have left this set, so a cleared flag
-            // means this session's entry did the stamping.
-            EXPECT_EQ(trace[kExitValid], 0u) << "runtime FW should still be resident on " << eth_noc_xy.str();
+
+            const uint64_t entry = (static_cast<uint64_t>(trace[kEntryHi]) << 32) | trace[kEntryLo];
+            EXPECT_NE(entry, 0u) << "empty entry stamp on " << eth_noc_xy.str();
+            if (trace[kExitValid] != 0) {
+                const uint64_t exit = (static_cast<uint64_t>(trace[kExitHi]) << 32) | trace[kExitLo];
+                EXPECT_GT(exit, entry) << "exit precedes entry on " << eth_noc_xy.str();
+            }
         }
     }
 }

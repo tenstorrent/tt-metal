@@ -273,8 +273,8 @@ static_assert(
 
 #define AERISC_PTP_TRACE_MAGIC 0x1234ABCD
 
-// Runtime FW tenure stamps. Base FW zeroes the debug buffer once at load, so an all-zero record
-// means runtime FW has not run since. Reader contract:
+// Runtime FW tenure stamps, in 20 ns PTP ticks. Base FW zeroes the debug buffer once at load, so
+// an all-zero record means runtime FW has not run since. Reader contract:
 //   magic != AERISC_PTP_TRACE_MAGIC -> entry in flight or never stamped; sample again
 //   fw_exit_valid == 0              -> runtime FW took the core at fw_entry_ptp and still owns it
 //   fw_exit_valid != 0              -> runtime FW owned the core from fw_entry_ptp to fw_exit_ptp
@@ -345,8 +345,9 @@ struct boot_results_t {
 #include "internal/ethernet/tt_eth_api.h"
 #include "hostdev/dev_msgs.h"
 
+// AERISC_PTP_TRACE_SUPPORTED means base FW is new enough to have debug_buf_t::scratchpad.
 // Under watcher, erisc_exit()'s longjmp bypasses the exit stamp in main(), leaving no exit to record.
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0) && \
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0) && defined(AERISC_PTP_TRACE_SUPPORTED) && \
     !(defined(WATCHER_ENABLED) && !defined(FORCE_WATCHER_OFF))
 #define AERISC_PTP_TRACE_ENABLED 1
 #else

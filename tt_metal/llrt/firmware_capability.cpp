@@ -20,6 +20,7 @@ void compare_requested_and_actual_capabilities(
     // DRAM programmable cores are a Blackhole-only feature; off unless the BLACKHOLE case below
     // confirms the firmware supports them.
     resolved.dram_programmable_cores = false;
+    resolved.eth_ptp_trace = false;
 
     switch (arch) {
         case tt::ARCH::BLACKHOLE: {
@@ -45,6 +46,13 @@ void compare_requested_and_actual_capabilities(
             const bool bundle_fw_ok =
                 fw_versions.firmware_bundle && (fw_versions.firmware_bundle.value() >= k_min_dram_cores_version);
             resolved.dram_programmable_cores = requested.dram_programmable_cores && bundle_fw_ok;
+
+            // debug_buf_t gained its scratchpad in 1.8.0; stamping into older firmware would land on
+            // live syseng state. As above, an unknown version is treated as NOT ok.
+            constexpr tt::umd::SemVer k_min_eth_ptp_trace_version(1, 8, 0);
+            const bool ptp_trace_fw_ok =
+                fw_versions.eth_fw && (fw_versions.eth_fw.value() >= k_min_eth_ptp_trace_version);
+            resolved.eth_ptp_trace = requested.eth_ptp_trace && ptp_trace_fw_ok;
             break;
         }
         case tt::ARCH::WORMHOLE_B0:
@@ -63,7 +71,8 @@ bool check_firmware_capabilities(
     FirmwareCapabilityResult& resolved_out) {
     compare_requested_and_actual_capabilities(arch, fw_versions, requested, resolved_out);
     return resolved_out.enable_2_erisc_mode == requested.enable_2_erisc_mode &&
-           resolved_out.dram_programmable_cores == requested.dram_programmable_cores;
+           resolved_out.dram_programmable_cores == requested.dram_programmable_cores &&
+           resolved_out.eth_ptp_trace == requested.eth_ptp_trace;
 }
 
 }  // namespace tt::tt_metal

@@ -341,6 +341,9 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
 
+    // Requested on Blackhole; resolved down when base FW predates debug_buf_t::scratchpad.
+    bool eth_ptp_trace = true;
+
     // Tri-state override for Blackhole DRAM programmable cores in the HAL:
     //   nullopt = auto-detect (firmware + topology), the default
     //   true    = force enable (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1)
@@ -674,14 +677,15 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
             get_measure_dfb_init_time_enabled(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode());
+            get_disable_fabric_2_erisc_mode(),
+            get_eth_ptp_trace());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -833,6 +837,10 @@ public:
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
+
+    bool get_eth_ptp_trace() const { return eth_ptp_trace; }
+
+    void set_eth_ptp_trace(bool enable) { eth_ptp_trace = enable; }
 
     std::optional<bool> get_blackhole_dram_programmable_cores_override() const {
         return blackhole_dram_programmable_cores_override;
