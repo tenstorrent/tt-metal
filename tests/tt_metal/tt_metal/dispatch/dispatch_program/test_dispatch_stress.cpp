@@ -33,7 +33,6 @@ using std::vector;
 using namespace tt;
 
 void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const auto device_id = mesh_device->get_device_ids()[0];
     // Set up program
     Program program = Program();
     CoreRange core_range({0, 0}, {5, 5});
@@ -59,6 +58,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             .compile_args = {l1_unreserved_base + 4}});
 
     // Write runtime args
+    const auto device_id = mesh_device->get_device_ids()[0];
     auto get_first_arg =
         [device_id](
             const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/, CoreCoord& core, uint32_t multiplier) {

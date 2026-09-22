@@ -39,7 +39,7 @@ namespace basic_tests::circular_buffer {
 
 bool test_cb_config_written_to_core(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& /*cr_set*/,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;
@@ -50,7 +50,6 @@ bool test_cb_config_written_to_core(
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     vector<uint32_t> cb_config_vector;
-    auto mesh_device_for_cb = mesh_device;
 
     for (const auto& cb : program.circular_buffers()) {
         for (const CoreRange& core_range : cb->core_ranges().ranges()) {
@@ -58,10 +57,9 @@ bool test_cb_config_written_to_core(
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     uint32_t cb_config_buffer_size =
-                        workload.get_cb_size(mesh_device_for_cb, core_coord, tt::CoreType::WORKER);
+                        workload.get_cb_size(mesh_device, core_coord, tt::CoreType::WORKER);
 
-                    auto sem_base_addr =
-                        workload.get_sem_base_addr(mesh_device_for_cb, core_coord, tt::CoreType::WORKER);
+                    auto sem_base_addr = workload.get_sem_base_addr(mesh_device, core_coord, tt::CoreType::WORKER);
                     slow_dispatch::ReadFromL1(
                         *mesh_device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
 

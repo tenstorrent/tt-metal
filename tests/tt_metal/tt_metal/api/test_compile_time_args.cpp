@@ -25,10 +25,6 @@
 #include <tt-metalium/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 using namespace tt;
 using namespace tt::tt_metal;
 using CompileTimeArgsTest = MeshDevice1x1Fixture;

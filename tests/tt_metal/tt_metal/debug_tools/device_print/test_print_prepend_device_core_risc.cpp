@@ -103,6 +103,7 @@ void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto* device = mesh_device->get_devices()[0];
 
     // The ethernet variant still needs the legacy API (Metal 2.0 places kernels on Tensix only), and
     // a Program cannot mix the two APIs -- so that variant keeps the whole program on the old path.
@@ -133,8 +134,7 @@ void RunTest(
     }
 
     if (add_active_eth_kernel) {
-        const std::unordered_set<CoreCoord>& active_eth_cores =
-            mesh_device->get_devices()[0]->get_active_ethernet_cores(true);
+        const std::unordered_set<CoreCoord>& active_eth_cores = device->get_active_ethernet_cores(true);
         CoreRangeSet crs(std::set<CoreRange>(active_eth_cores.begin(), active_eth_cores.end()));
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0};
         eth_test_common::set_arch_specific_eth_config(config);

@@ -330,8 +330,9 @@ DramRunSummary run_dram_base_test(
     uint32_t pass_index,
     uint32_t repeat_index,
     DataMovementProcessor processor) {
-    const auto device_id = mesh_device->get_device_ids()[0];
     /* ======================== */
+    const auto device_id = mesh_device->get_device_ids()[0];
+
     TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
     TT_FATAL(cfg.total_bytes <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB-2KB)");
     TT_FATAL(cfg.chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
@@ -447,8 +448,9 @@ DramRunSummary run_dram_multi_core_single_controller_test(
     uint32_t pass_index,
     uint32_t repeat_index,
     DataMovementProcessor processor) {
-    const auto device_id = mesh_device->get_device_ids()[0];
     /* ======================== */
+    const auto device_id = mesh_device->get_device_ids()[0];
+
     TT_FATAL(!cores.empty(), "No cores provided");
     TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
     TT_FATAL(cfg.total_bytes <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB-2KB)");
@@ -577,8 +579,9 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
     uint32_t pass_index,
     uint32_t repeat_index,
     DataMovementProcessor processor) {
-    const auto device_id = mesh_device->get_device_ids()[0];
     /* ======================== */
+    const auto device_id = mesh_device->get_device_ids()[0];
+
     constexpr uint32_t num_controllers = 8u;
 
     TT_FATAL(!cores.empty(), "No cores provided");
@@ -728,8 +731,9 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
     uint32_t pass_index,
     uint32_t repeat_index,
     DataMovementProcessor processor) {
-    const auto device_id = mesh_device->get_device_ids()[0];
     /* ======================== */
+    const auto device_id = mesh_device->get_device_ids()[0];
+
     constexpr uint32_t num_controllers = 8u;
 
     TT_FATAL(!cores.empty(), "No cores provided");
@@ -854,8 +858,9 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
     uint32_t pass_index,
     uint32_t repeat_index,
     DataMovementProcessor processor) {
-    const auto device_id = mesh_device->get_device_ids()[0];
     /* ======================== */
+    const auto device_id = mesh_device->get_device_ids()[0];
+
     constexpr uint32_t num_controllers = 8u;
 
     TT_FATAL(!cores.empty(), "No cores provided");
@@ -984,7 +989,9 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     const std::vector<std::vector<DramWorkItem>>& jobs_per_core,
     uint32_t chunk_bytes,
     DataMovementProcessor processor) {
+    /* ======================== */
     const auto device_id = mesh_device->get_device_ids()[0];
+
     TT_FATAL(!worker_cores.empty(), "No worker cores provided");
     TT_FATAL(!jobs_per_core.empty(), "No per-core jobs provided");
     TT_FATAL(
