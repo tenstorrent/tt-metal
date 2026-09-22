@@ -521,14 +521,6 @@ GlobalCircularBuffer::GlobalCircularBuffer(GlobalCircularBuffer&& other) noexcep
 GlobalCircularBuffer& GlobalCircularBuffer::operator=(GlobalCircularBuffer&& other) noexcept = default;
 GlobalCircularBuffer::~GlobalCircularBuffer() = default;
 
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(GlobalCircularBufferImpl(device, sender_receiver_core_mapping, size, buffer_type));
-}
-
 GlobalCircularBufferImpl& GlobalCircularBuffer::impl() {
     TT_FATAL(impl_ != nullptr, "GlobalCircularBuffer is in a moved-from state.");
     return *impl_;
