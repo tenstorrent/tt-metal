@@ -131,6 +131,9 @@ serve_profiles:
       TT_PD_LEASE: "30"
       TT_PD_FABRIC_CLAIM_LEASE_S: "0"      # 0 = 3 x LEASE = 90 s claim lease (claim-gated sends)
       TT_PD_TAG: ttm
+      TT_PD_GDN_FUSED: "2"                 # decode rank: fused GDN decode + fused conv ("M2"; TPOT 1.3-1.5x vs composite, laneE_RESULTS 5); the prefill rank stays composite
+      TT_PD_ALLOW_FUSED_CONV: "1"          # the connector's fused-conv gate: parity-safe slot remap validated (PHASE2 6.1, laneE_RESULTS 4)
+      TT_PD_SSE_KEEPALIVE: "0"             # proxy sends no SSE keep-alive comments: vllm bench serve 0.26 counts a stream whose first token follows one as FAILED (laneB_RESULTS 1.4)
       TT_CACHE_PATH: /cache/tensors-tp1
       TT_METAL_OPERATION_TIMEOUT_SECONDS: "600"
 
