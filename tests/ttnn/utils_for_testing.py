@@ -637,12 +637,22 @@ def get_per_core_size_and_num_cores(
             yield per_core_size, num_cores_actual
 
 
+# Callables invoked with True on start_measuring_time() and False on stop_measuring_time().
+# The sweep framework uses this to tell a module's op apart from its tensor setup.
+_measuring_window_listeners = []
+
+
 def start_measuring_time() -> int:
+    for listener in _measuring_window_listeners:
+        listener(True)
     return time.time_ns()
 
 
 def stop_measuring_time(start_time) -> int:
-    return time.time_ns() - start_time
+    elapsed = time.time_ns() - start_time
+    for listener in _measuring_window_listeners:
+        listener(False)
+    return elapsed
 
 
 def maybe_trace(op_func, enable_trace, device):

@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
-import functools
 import os
 import inspect
 import subprocess
@@ -13,6 +11,7 @@ from typing import Any, Optional, Tuple, Dict
 
 from framework.sweeps_logger import sweeps_logger as logger
 from sweep_utils.roofline_utils import get_updated_message
+from sweep_utils.tensor_setup import setup_context
 
 
 # Device profiler keys to retain in simplified outputs
@@ -271,63 +270,9 @@ def prepare_program_cache_for_comparison(device) -> None:
     logger.info(f"Program cache cleared (entries after: {num_entries_after})")
 
 
-@contextlib.contextmanager
-def host_side_tensor_construction():
-    """Keep sweep tensor setup out of the device-profiler window.
-
-    gather_single_test_perf() sums every program dispatched since the previous profiler
-    read, so a device program launched while building the op's inputs is charged to the
-    op. from_torch with a device tilizes and typecasts on device for BF16/FP32 tile-layout
-    inputs, and the mesh helpers reshard sharded inputs with to_memory_config. Building on
-    host and writing the finished buffer to the device dispatches no program, so the
-    window holds only the op under test. Both routes yield the same tensor spec.
-
-    Only active while device perf is being measured. No model_traced module measures
-    to_memory_config itself, so rerouting it never hides the op under test.
-    """
-    import ttnn
-
-    if os.environ.get("SWEEPS_DEVICE_SIDE_SETUP") == "1":
-        yield
-        return
-
-    orig_from_torch = ttnn.from_torch
-    orig_to_memory_config = ttnn.to_memory_config
-
-    @functools.wraps(orig_from_torch)
-    def _from_torch(tensor, dtype=None, **kwargs):
-        device = kwargs.pop("device", None)
-        if tensor is None or device is None:
-            return orig_from_torch(tensor, dtype, **kwargs)
-        memory_config = kwargs.pop("memory_config", None)
-        cq_id = kwargs.pop("cq_id", None)
-        spec = kwargs.get("spec")
-        if spec is not None:
-            # from_torch rejects memory_config alongside spec; the spec carries it.
-            memory_config = spec.memory_config
-        host = orig_from_torch(tensor, dtype, **kwargs)
-        if cq_id is None:
-            return ttnn.to_device(host, device, memory_config=memory_config)
-        return ttnn.to_device(host, device, memory_config=memory_config, queue_id=cq_id)
-
-    @functools.wraps(orig_to_memory_config)
-    def _to_memory_config(tensor, memory_config, dtype=None, **kwargs):
-        if dtype is not None or kwargs or not ttnn.is_tensor_storage_on_device(tensor):
-            return orig_to_memory_config(tensor, memory_config, dtype, **kwargs)
-        device = tensor.device()
-        host = ttnn.from_device(tensor)
-        return ttnn.to_device(host, device, memory_config=memory_config)
-
-    ttnn.from_torch = _from_torch
-    ttnn.to_memory_config = _to_memory_config
-    try:
-        yield
-    finally:
-        ttnn.from_torch = orig_from_torch
-        ttnn.to_memory_config = orig_to_memory_config
-
-
-def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Optional[float]]:
+def execute_test(test_module, test_vector: dict, device, config: Any = None) -> Tuple[bool, Any, Optional[float]]:
+    """Run one vector. With device perf requested in `config`, tensor setup is built on the
+    host so the profiler window holds only the op (sweep_utils/tensor_setup.py)."""
     # Filter 'device' from test_vector to avoid conflict with explicit device param
     if "device" in test_vector:
         test_vector = {k: v for k, v in test_vector.items() if k != "device"}
@@ -349,7 +294,8 @@ def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Opt
     if accepts_absent:
         test_vector["__absent_keys__"] = absent_keys
 
-    results = test_module.run(**test_vector, device=device)
+    with setup_context(test_module, config):
+        results = test_module.run(**test_vector, device=device)
     if isinstance(results, list):
         status, message = results[0]
         e2e_ms = results[1] / 1000000  # Nanoseconds to milliseconds
@@ -383,18 +329,15 @@ def run_with_cache_comparison(
     # Prepare program cache state
     prepare_program_cache_for_comparison(device)
 
-    dp_requested = getattr(config, "measure_device_perf", False)
-    setup_guard = host_side_tensor_construction if dp_requested else contextlib.nullcontext
-
     # First run (without cache)
-    with setup_guard():
-        status_uncached, message_uncached, e2e_uncached_ms = execute_test(test_module, test_vector, device)
+    status_uncached, message_uncached, e2e_uncached_ms = execute_test(test_module, test_vector, device, config)
 
     # A sweep module can set _SKIP_DEVICE_PERF (per-vector) to opt this vector out of
     # the profiler read -- e.g. conv2d's heavy FABRIC_1D path, where the profiler's
     # remote-chip AICLK ARC read hangs over the fabric-busy ETH link. Checked AFTER
     # execute_test() since run() sets the flag. dp_skipped -> return the SKIPPED
     # sentinel so the runner marks PASS (perf N/A), not FAIL_UNSUPPORTED_DEVICE_PERF.
+    dp_requested = getattr(config, "measure_device_perf", False)
     dp_skipped = dp_requested and getattr(test_module, "_SKIP_DEVICE_PERF", False)
     measure_dp = dp_requested and not dp_skipped
 
@@ -406,8 +349,7 @@ def run_with_cache_comparison(
         device_perf_uncached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_uncached)
 
     # Second run (with cache)
-    with setup_guard():
-        status_cached, message_cached, e2e_cached_ms = execute_test(test_module, test_vector, device)
+    status_cached, message_cached, e2e_cached_ms = execute_test(test_module, test_vector, device, config)
 
     device_perf_cached = None
     if measure_dp:
@@ -473,10 +415,7 @@ def run_with_cache_comparison(
 def run_single(
     test_module, test_vector: dict, device, config: Any
 ) -> Tuple[bool, Any, Optional[float], Optional[dict], Optional[Dict]]:
-    dp_requested = getattr(config, "measure_device_perf", False)
-    setup_guard = host_side_tensor_construction if dp_requested else contextlib.nullcontext
-    with setup_guard():
-        status, message, e2e_ms = execute_test(test_module, test_vector, device)
+    status, message, e2e_ms = execute_test(test_module, test_vector, device, config)
 
     # Capture peak memory if enabled
     peak_memory = None
@@ -485,6 +424,7 @@ def run_single(
 
         peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
+    dp_requested = getattr(config, "measure_device_perf", False)
     # Per-vector opt-out: a module sets _SKIP_DEVICE_PERF when the profiler read would
     # hang (e.g. conv2d heavy FABRIC_1D path -> remote-chip AICLK ARC read over fabric).
     # Return the SKIPPED sentinel (not None) so the runner marks PASS, not unsupported.

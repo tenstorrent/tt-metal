@@ -59,7 +59,7 @@ jobs:
       matrix:
         test-group:
           - name: ttnn group 1
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests tests/sweep_framework/test_tensor_setup.py tests/sweep_framework/test_tensor_setup_device.py -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3

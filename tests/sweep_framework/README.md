@@ -321,7 +321,8 @@ python tests/sweep_framework/sweeps_runner.py \
 | `--tag <tag>`          | Reserved; tag field is stored in vectors but not used for filtering yet |
 | `--skip-modules <a,b>` | Skip these modules when running all                                     |
 | `--perf`               | Measure end-to-end performance                                          |
-| `--device-perf`        | Measure device-level performance (requires profiler build)              |
+| `--device-perf`        | Measure device-level performance (requires profiler build); inputs are built on the host so only the op is timed, see Device Perf |
+| `--device-side-setup`  | With `--device-perf`, build inputs on the device as before; setup programs then count toward the op (`TTNN_SWEEP_DEVICE_SIDE_SETUP=1`) |
 | `--measure-memory`     | Capture per-core L1 memory usage via graph trace                        |
 | `--watcher`            | Enable watcher for memory/exception monitoring                          |
 | `--skip-on-timeout`    | Abort remaining suite tests after a timeout                             |
@@ -353,6 +354,12 @@ python tests/sweep_framework/sweeps_runner.py \
 - On timeout, the test subprocess is killed and `tt-smi` resets the device before the next test.
 - Set `TT_SMI_RESET_COMMAND` env var for your system (e.g., `TT_SMI_RESET_COMMAND="tt-smi -tr 0"`).
 - When running a single vector (`--vector-id`), hang detection is disabled so you can attach debuggers.
+
+### Device Perf
+
+`--device-perf` reads the device profiler once after each `run()` and sums every program dispatched since the previous read into `DEVICE KERNEL DURATION`. To keep tensor setup out of that sum, inputs are built on the host while device perf is requested: `ttnn.from_torch(..., device=...)` becomes a host build plus `to_device`, and `ttnn.to_memory_config` on a device tensor becomes a host round trip, but only outside the module's `start_measuring_time()` / `stop_measuring_time()` bracket. Inside the bracket everything runs on the device and is counted, so an op that is itself a `to_memory_config` (`interleaved_to_sharded_e2e`) or calls one internally (`global_avg_pool2d`) is measured as written. Keep the op, and only the op, inside the bracket.
+
+Opt-outs: `--device-side-setup` or `TTNN_SWEEP_DEVICE_SIDE_SETUP=1` for a run, `_DEVICE_SIDE_SETUP = True` at module level for one sweep. Results recorded before this routing landed include the setup programs and are 2 to 6x higher for bandwidth-bound ops; do not trend `DEVICE KERNEL DURATION` across that boundary. Mechanism and caveats: `sweep_utils/tensor_setup.py`.
 
 ### Memory Profiling
 
