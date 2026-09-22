@@ -122,6 +122,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     def import_request_state(self, sources, block_ids, num_tokens, slot, *, chunk_range=None):
         return self.kv_transfer.import_request_state(sources, block_ids, num_tokens, slot, chunk_range=chunk_range)
 
+    # producer step-begin seam (plugin TTKVWorker._begin_producer): the export is opened BEFORE the prefill so the
+    # model mirrors every chunk's K/V into the pool while the prefill runs; end_export closes the window.
+    def begin_export(self, block_ids, num_tokens, sinks):
+        return self.kv_transfer.begin_export(block_ids, num_tokens, sinks)
+
+    def end_export(self):
+        return self.kv_transfer.end_export()
+
+    def set_kv_transfer_pump(self, fn):
+        """Worker callback run at every prefill chunk boundary (the claim-gated sends' mid-prefill clock)."""
+        return self.kv_transfer.set_chunk_pump(fn)
+
     def _validate_device_sampling_request(self, requested):
         if not requested:
             return

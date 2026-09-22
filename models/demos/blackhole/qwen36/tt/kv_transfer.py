@@ -25,10 +25,28 @@ block-major -> head-major relayout is ``ttnn.permute`` on bfp8 (bit-exact); the 
 ``ttnn.fill_cache`` (``batch_idx`` is a runtime arg, byte-exact vs ``_write_index``; ``TT_PD_REC_WRITE=write_index``
 selects the slice/concat/copy fallback); the 4 tap rows use ``_write_index`` (the exact host-path primitive).
 
+Handoff fast paths (p1d1_opt lane B, 2026-09-22):
+
+* producer K/V: the prefill traces MIRROR each chunk's head-major K/V (``paged_fill_cache``'s input = the bytes the
+  cache holds) into persistent staging tensors bound into the attention layers by ``warmup_kv_transfer`` (one
+  ``fill_cache`` per K/V part per chunk, inside the trace); the worker opens the export at step BEGIN
+  (``begin_export``) and the model's chunk observer (``on_prefill_chunk``) copies the staging into the transport's
+  pool buffers at every chunk boundary, so ``export_request_state`` only writes chunks the mirror missed (the
+  paged-cache gather = 32 unit slices + concat + relayout per part, ~20-30 ms per chunk) plus the GDN row;
+* producer taps: ONE device concat + untilize + D2H read of all 48 x 4 tap rows (2 ms) instead of 192 blocking tile
+  reads (30 ms);
+* consumer GDN install: the rec row is ``fill_cache``'d straight from the received pool buffer (no staging copy) and
+  the 192 tap rows go up as ONE compact ROW_MAJOR tensor, are tilized on device and written with ``update_cache``
+  over a width-split zero-copy view of ``conv_states[m]`` (one op per row; ``TT_PD_TAPS_WRITE=write_index`` keeps
+  the slice/concat/copy path, 4 ops + a 640 KiB tile upload per row).
+
 Env knobs: ``TT_PD_STRICT_SHAPES`` (1: raise on program-cache growth inside a hook), ``TT_PD_REC_WRITE``
 (``fill_cache`` | ``write_index``), ``TT_PD_IMPORT_VIA_WRITE_SLOT`` (1: install through ``TPGatedDeltaNet.write_slot``,
 bisect only), ``TT_PD_CHECKSUM`` (1: check ``Source.crc32c()`` in ``validate_gdn_parts``), ``TT_PD_TIMING`` (1: log a
-per-call timing line).
+per-call timing line), ``TT_PD_TAPS_WRITE`` (``update_cache`` | ``write_index``), ``TT_PD_TAPS_SPLIT`` (width slabs of
+the tap-row view, default 40 -> 256 columns each; ``update_cache`` stages ``32 x slab`` tiles per core),
+``TT_PD_EXPORT_MIRROR`` (0: never bind the staging; the export gathers from the paged cache as before),
+``TT_PD_CHUNK_SYNC`` (1: the chunk observer sees every chunk complete on the device; 0: host-time boundaries only).
 """
 
 import os
@@ -121,6 +139,19 @@ def _spec_key(spec) -> tuple:
     return (tuple(int(s) for s in spec.shape), str(spec.dtype), str(spec.layout))
 
 
+@dataclass
+class _ActiveExport:
+    """The export the worker opened at step begin for the request whose prefill runs in this step."""
+
+    block_ids: list
+    num_tokens: int
+    nblk: int
+    nchunks: int
+    sinks: object  # {part name: Sink}
+    written: set = field(default_factory=set)  # chunk indices the mirror copied into the sinks (all K/V parts)
+    t0: float = 0.0
+
+
 class Qwen36KVTransfer:
     """Model-side hook (design 5.1). ``model`` is the ``Qwen36Model`` (TP code path, paged KV allocated)."""
 
@@ -150,7 +181,9 @@ class Qwen36KVTransfer:
         self._rec_staging = None  # [1, Nv, Dk, Dv] rec dtype (consumer, raw mode)
         self._slice_start = None  # int32 [4] device tensors for the tensor-args slice (producer, dumpfile)
         self._slice_end = None
-        self._zero_blk = None  # [1, heads, block, head_dim] zeros (cache dtype): the dumpfile chunk's filler rows (producer)
+        self._zero_blk = (
+            None  # [1, heads, block, head_dim] zeros (cache dtype): the dumpfile chunk's filler rows (producer)
+        )
         self._pt_host = {}
         self._warmed = set()  # {"producer", "consumer"}
         self._mode = None
@@ -159,6 +192,22 @@ class Qwen36KVTransfer:
         self.request_time_compiles = 0  # entries the program cache grew by inside hook calls after warmup
         self._shape_keys = set()  # (op, key) recorded during warmup; first unknown request-time key is logged
         self._recording = False
+        # producer: the prefill traces mirror each chunk's head-major K/V into these persistent staging tensors (one
+        # per K/V part, bound into the attention layers); on_prefill_chunk copies them into the open export's pool
+        # buffers at the chunk boundary, so export_request_state re-gathers nothing from the paged cache.
+        self._export_staging = {}  # part name -> [1, heads, chunk_tokens, head_dim] cache-dtype device tensor
+        self._active_export = None  # _ActiveExport between begin_export and export_request_state / end_export
+        self._chunk_pump = None  # worker callback run at every prefill chunk boundary (claim-gated sends' clock)
+        self._observer_installed = False
+        self.export_mirror = os.environ.get("TT_PD_EXPORT_MIRROR", "1") != "0"
+        # consumer: all tap rows of one install as ONE compact ROW_MAJOR upload + device tilize, each row written with
+        # update_cache over a width-split zero-copy view of conv_states[m]; write_index = the slice/concat/copy path.
+        self.taps_write = os.environ.get("TT_PD_TAPS_WRITE", "update_cache")
+        assert self.taps_write in ("update_cache", "write_index"), f"TT_PD_TAPS_WRITE={self.taps_write!r}"
+        self.taps_split = int(os.environ.get("TT_PD_TAPS_SPLIT", "40"))
+        self._taps_stage_rm = None  # [1, 1, R32, D] bf16 ROW_MAJOR device staging (R32 = tap rows rounded up to 32)
+        self.mirrored_chunks = 0  # chunks copied by the mirror (all requests)
+        self.gathered_chunks = 0  # chunks the export had to gather from the paged cache
 
     # ----------------------------------------------------------------------------------------------------------- #
     # geometry
@@ -235,7 +284,9 @@ class Qwen36KVTransfer:
                 return False
             grew = self.hook._npc() - self.n0
             if self.hook.timing:
-                logger.info(f"[PD_TIMING] {self.name}: {1e3 * (time.perf_counter() - self.t0):.1f} ms (+{grew} programs)")
+                logger.info(
+                    f"[PD_TIMING] {self.name}: {1e3 * (time.perf_counter() - self.t0):.1f} ms (+{grew} programs)"
+                )
             if grew > 0 and self.hook._n_program_cache_after_warmup is not None:
                 self.hook.request_time_compiles += grew
                 msg = f"PD: request-time program compile (+{grew} entries) in {self.name}"
@@ -259,7 +310,9 @@ class Qwen36KVTransfer:
     # ----------------------------------------------------------------------------------------------------------- #
     # describe
     # ----------------------------------------------------------------------------------------------------------- #
-    def describe_request_state(self, num_tokens: int, block_ids, *, model_sig: str = "", prompt_hash: str = "") -> Manifest:
+    def describe_request_state(
+        self, num_tokens: int, block_ids, *, model_sig: str = "", prompt_hash: str = ""
+    ) -> Manifest:
         """The Manifest for ``num_tokens`` (= T-1) tokens in ``block_ids`` (design 3.4): 2 x n_attn ``kv_blocks`` parts of
         ``cdiv(nblk, 32)`` chunks, one ``gdn_rec`` and one ``gdn_taps`` part per GDN layer."""
         g = self._geometry()
@@ -299,7 +352,9 @@ class Qwen36KVTransfer:
     # ----------------------------------------------------------------------------------------------------------- #
     def _upload_starts(self, b: int):
         g = self._geometry()
-        sh = ttnn.from_torch(torch.tensor([b, 0, 0, 0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        sh = ttnn.from_torch(
+            torch.tensor([b, 0, 0, 0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         eh = ttnn.from_torch(
             torch.tensor([b + 1, g["heads"], g["block_size"], g["head_dim"]], dtype=torch.int32),
             dtype=ttnn.int32,
@@ -382,11 +437,14 @@ class Qwen36KVTransfer:
                     ttnn.deallocate(blk)
                     for p in parts[: min(2, len(parts))]:
                         ttnn.deallocate(p)
-                # GDN D2H reads (no programs): rec whole buffer + 4 tap tensors
+                # GDN D2H reads: rec whole buffer (no program) + the batched taps read (concat + untilize programs)
                 dn0 = dns[0]
                 _ = ttnn.from_device(dn0.rec_state)
-                for m in range(dn0.K):
-                    _ = ttnn.to_torch(dn0.conv_states[m])
+                _ = self._read_taps_batched(dns, 0)
+                # the export mirror: persistent head-major staging per K/V part, bound into the attention layers so
+                # every prefill trace captured from now on fill_cache's its chunk's K/V there (attention/tp.py)
+                if self.export_mirror:
+                    self._bind_export_staging(g, kv, bpc)
             if "consumer" in roles:
                 cache_dtype = kv[0][1].dtype
                 st_shape = (1, g["heads"], bpc * g["block_size"], g["head_dim"])
@@ -414,7 +472,9 @@ class Qwen36KVTransfer:
                 # paged_fill_cache from the staging tensor with an all-pad page table (writes zeros into the pad block)
                 pt = self._pt_tensor([pad] * bpc)
                 for name, t in kv:
-                    self._note_shape("paged_fill_cache", (tuple(int(d) for d in t.shape), st_shape, dtype_name(t.dtype)))
+                    self._note_shape(
+                        "paged_fill_cache", (tuple(int(d) for d in t.shape), st_shape, dtype_name(t.dtype))
+                    )
                     ttnn.experimental.paged_fill_cache(t, self._kv_staging[0], pt, batch_idx=0)
                 ttnn.deallocate(pt)
                 if mode == "dumpfile":
@@ -431,10 +491,13 @@ class Qwen36KVTransfer:
                     self._relayout_into_staging(blk, self._kv_staging[1])
                     ttnn.deallocate(blk)
                 # per-slot GDN row writes on the first GDN layer (programs are shape-keyed, identical across layers):
-                # rec via fill_cache (runtime batch_idx) or _write_index, 4 taps via _write_index, packed row on fused-conv
+                # rec via fill_cache (runtime batch_idx) or _write_index, taps via update_cache over the width-split
+                # view (all layers, one compact upload) or 4 x _write_index, packed row on fused-conv
                 dn0 = dns[0]
                 zero_row = torch.zeros(1, 1, g["conv_dim"], dtype=torch.bfloat16)
                 zero_rec_dev = None
+                if self.taps_write == "update_cache":
+                    self._alloc_taps_stage(g, len(dns), dn0.K)
                 for slot in slots:
                     assert 0 <= slot < dn0.B, f"slot {slot} outside [0, {dn0.B})"
                     if self.rec_write == "fill_cache":
@@ -443,13 +506,25 @@ class Qwen36KVTransfer:
                     else:
                         self._note_shape("write_index_rec", (tuple(int(d) for d in dn0.rec_state.shape), slot))
                         dn0._write_index(dn0.rec_state, ttnn.clone(self._rec_staging), slot, dim=0)
-                    for m in range(dn0.K):
-                        c = self._tap_row_tensor(zero_row, dn0)
-                        self._note_shape("write_index_tap", (tuple(int(d) for d in dn0.conv_states[m].shape), slot))
-                        dn0._write_index(dn0.conv_states[m], c, slot, dim=1)
+                    if self.taps_write == "update_cache":
+                        # the slot rows hold no live sequence at warmup: zeros into every layer's row `slot`
+                        keep = self._write_taps_update_cache(
+                            dns, torch.zeros(len(dns), dn0.K, g["conv_dim"], dtype=torch.bfloat16), slot
+                        )
+                        ttnn.synchronize_device(self.mesh)
+                        del keep
+                    else:
+                        for m in range(dn0.K):
+                            c = self._tap_row_tensor(zero_row, dn0)
+                            self._note_shape("write_index_tap", (tuple(int(d) for d in dn0.conv_states[m].shape), slot))
+                            dn0._write_index(dn0.conv_states[m], c, slot, dim=1)
                     if getattr(dn0, "_decode_fused_conv", False) and dn0.conv_hist_packed is not None:
-                        packed = self._packed_slot_tensor(dn0, torch.zeros(dn0.K, g["conv_dim"], dtype=torch.bfloat16), slot)
-                        self._note_shape("write_index_packed", (tuple(int(d) for d in dn0.conv_hist_packed.shape), slot))
+                        packed = self._packed_slot_tensor(
+                            dn0, torch.zeros(dn0.K, g["conv_dim"], dtype=torch.bfloat16), slot
+                        )
+                        self._note_shape(
+                            "write_index_packed", (tuple(int(d) for d in dn0.conv_hist_packed.shape), slot)
+                        )
                         dn0._write_index(dn0.conv_hist_packed, packed, slot, dim=0)
                 del zero_rec_dev
             ttnn.synchronize_device(self.mesh)
@@ -511,6 +586,218 @@ class Qwen36KVTransfer:
         del hm
 
     # ----------------------------------------------------------------------------------------------------------- #
+    # export mirror (producer): staging bound into the prefill traces + the chunk observer
+    # ----------------------------------------------------------------------------------------------------------- #
+    def _bind_export_staging(self, g, kv, bpc) -> None:
+        """Allocate one head-major staging tensor per K/V part and bind them into the attention layers (the prefill
+        traces captured afterwards fill_cache each chunk's K/V there); warm the fill programs; install the observer.
+        Skipped (with a warning; the paged-cache gather stays) when the model's chunking cannot match the wire
+        chunks: batched prefill (max_batch_size > 1), a chunk trace of another size, or a bucket wider than a chunk."""
+        if self._export_staging:
+            return
+        args = getattr(self.model, "args", None)
+        mbs = int(getattr(args, "max_batch_size", 1) or 1)
+        ct = bpc * g["block_size"]
+        mcs = int(getattr(self.model, "_chunked_chunk_size", None) or 2048)
+        buckets = tuple(int(b) for b in getattr(self.model, "_PREFILL_MASK_BUCKETS", ()))
+        why = None
+        if mbs != 1:
+            why = f"batched prefill model (max_batch_size {mbs})"
+        elif mcs != ct:
+            why = f"model chunk trace {mcs} tokens != wire chunk {ct}"
+        elif buckets and max(buckets) > ct:
+            why = f"masked bucket {max(buckets)} wider than the wire chunk {ct}"
+        elif not hasattr(self.model, "set_prefill_chunk_observer"):
+            why = "model has no set_prefill_chunk_observer"
+        if why is not None:
+            logger.warning(f"PD: export mirror disabled ({why}); export_request_state gathers from the paged cache")
+            return
+        cache_dtype = kv[0][1].dtype
+        st_shape = (1, g["heads"], ct, g["head_dim"])
+        rep = self._rep()
+        for name, _ in kv:
+            self._export_staging[name] = ttnn.from_torch(
+                torch.zeros(*st_shape, dtype=torch.bfloat16),
+                dtype=cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=rep,
+            )
+        for i, a in enumerate(self.attn_layers):
+            a._pd_export_k = self._export_staging[f"kv.L{i}.k"]
+            a._pd_export_v = self._export_staging[f"kv.L{i}.v"]
+        # every fill width the traces produce: the full chunk and each masked bucket (rows [0, S) of the staging)
+        st0 = self._export_staging[kv[0][0]]
+        for S in sorted(set(buckets) | {ct}):
+            x = ttnn.from_torch(
+                torch.zeros(1, g["heads"], S, g["head_dim"], dtype=torch.bfloat16),
+                dtype=cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=rep,
+            )
+            self._note_shape("fill_cache_export", (st_shape, S, dtype_name(cache_dtype)))
+            ttnn.fill_cache(st0, x, 0)
+            ttnn.deallocate(x)
+        self._install_observer()
+        logger.info(
+            f"[PD] export mirror bound: {len(self._export_staging)} staging tensors {st_shape} "
+            f"({len(self._export_staging) * tile_nbytes(st_shape, dtype_name(cache_dtype)) / 2**20:.0f} MiB), "
+            f"fill widths {sorted(set(buckets) | {ct})}"
+        )
+
+    def _install_observer(self) -> None:
+        if self._observer_installed:
+            return
+        sync = os.environ.get("TT_PD_CHUNK_SYNC", "1") != "0"
+        self.model.set_prefill_chunk_observer(self._on_prefill_chunk, sync_each_chunk=sync)
+        self._observer_installed = True
+        logger.info(f"[PD] prefill chunk observer installed (sync_each_chunk={sync})")
+
+    def begin_export(self, block_ids, num_tokens: int, sinks) -> bool:
+        """Producer step BEGIN (before the prefill of this request runs): remember the open export so the chunk
+        observer can copy every mirrored chunk into ``sinks`` as the prefill goes. Returns True when the mirror path
+        is active (staging bound), False when ``export_request_state`` will gather everything at step end."""
+        g = self._geometry()
+        nblk = cdiv(int(num_tokens), g["block_size"])
+        ids = [int(b) for b in block_ids[:nblk]]
+        assert len(ids) == nblk, f"{len(block_ids)} blocks for {num_tokens} tokens (need {nblk})"
+        self._active_export = _ActiveExport(
+            ids, int(num_tokens), nblk, cdiv(nblk, self._bpc()), sinks, set(), time.perf_counter()
+        )
+        return bool(self._export_staging)
+
+    def end_export(self) -> None:
+        self._active_export = None
+
+    def set_chunk_pump(self, fn) -> None:
+        """``fn()`` runs on the engine thread at every non-final prefill chunk boundary (the worker's transport pump:
+        the claim-gated sends of an earlier export go out mid-prefill instead of at the step's end)."""
+        self._chunk_pump = fn
+
+    def _on_prefill_chunk(self, *, chunk_start: int, n_tokens: int, final: bool) -> None:
+        """Model chunk observer (engine thread; device ops). Copies the mirrored chunk into the open export's pool
+        buffers (32 head-major device copies, enqueued before the next chunk's replay: the in-order cq runs them
+        between the two chunks), then pumps the transport."""
+        exp = self._active_export
+        if exp is not None and self._export_staging:
+            ct = self._chunk_tokens
+            c = chunk_start // ct
+            if chunk_start % ct == 0 and c < exp.nchunks and c not in exp.written:
+                t0 = time.perf_counter()
+                try:
+                    with self._guard("mirror_chunk"):
+                        for name, _ in self._kv_tensors():
+                            exp.sinks[name].write_from_device(self._export_staging[name], chunk=c, blocking=False)
+                    exp.written.add(c)
+                    self.mirrored_chunks += 1
+                    if self.timing:
+                        logger.info(
+                            f"[PD_TIMING] mirror chunk {c}/{exp.nchunks} ({n_tokens} tokens): "
+                            f"{1e3 * (time.perf_counter() - t0):.2f} ms"
+                        )
+                except Exception:
+                    # a part written before the failure is noted in its sink: the step-end gather of this chunk then
+                    # fails the export (write twice) and the consumer recomputes -- never a wrong K/V
+                    logger.exception(f"PD: mirror copy of chunk {c} failed; export_request_state gathers it")
+        pump = self._chunk_pump
+        if pump is not None and not final:
+            try:
+                pump()
+            except Exception:
+                logger.exception("PD: chunk-boundary transport pump raised")
+
+    # ----------------------------------------------------------------------------------------------------------- #
+    # GDN taps: batched device read (producer) and update_cache row writes (consumer)
+    # ----------------------------------------------------------------------------------------------------------- #
+    def _read_taps_batched(self, dns, slot: int):
+        """All conv taps of ``slot`` as ONE host tensor [n_layers, K, D] bf16: stack the n_layers x K ``[1, B, D]``
+        TILE tap tensors along dim 0 (tile-row stacking, one concat), untilize + unpad on device, one D2H read
+        (2 ms for 192 rows vs 192 blocking 640 KiB tile reads + host untilizes = 30 ms)."""
+        parts = [dn.conv_states[m] for dn in dns for m in range(dn.K)]
+        R = len(parts)
+        B = int(parts[0].shape[1])
+        D = int(parts[0].shape[-1])
+        assert 0 <= int(slot) < B, f"slot {slot} outside [0, {B})"
+        self._note_shape("taps_concat", (R, B, D))
+        cat = ttnn.concat(parts, dim=0)  # [R, B, D] TILE (B rows per part live in one tile row)
+        self._note_shape("taps_untilize", (R, B, D))
+        rm = ttnn.untilize_with_unpadding(cat, (R - 1, B - 1, D - 1))
+        rows = ttnn.to_torch(rm)  # [R, B, D] bf16 host
+        ttnn.deallocate(rm)
+        ttnn.deallocate(cat)
+        K = int(dns[0].K)
+        return rows.reshape(R, B, D)[:, int(slot), :].reshape(len(dns), K, D).to(torch.bfloat16).contiguous()
+
+    def _alloc_taps_stage(self, g, n_layers: int, K: int) -> None:
+        if self._taps_stage_rm is not None:
+            return
+        D = g["conv_dim"]
+        NS = self.taps_split
+        assert (
+            NS >= 1 and D % NS == 0 and (D // NS) % 32 == 0
+        ), f"TT_PD_TAPS_SPLIT={NS} must split D={D} into tile-aligned slabs"
+        R32 = cdiv(n_layers * K, 32) * 32
+        self._taps_stage_rm = ttnn.from_torch(
+            torch.zeros(1, 1, R32, D, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._rep(),
+        )
+
+    def _write_taps_update_cache(self, dns, rows, slot: int):
+        """rows [n_layers, K, D] bf16 host -> row ``slot`` of every ``conv_states[m]`` of every layer, in place:
+        ONE compact ROW_MAJOR upload into the persistent staging, one device tilize, one tile-aligned slice per 32
+        rows, and one ``update_cache`` per tap row over zero-copy width-split views (``[1, NS, rows, D/NS]``: the
+        same linear tile order as ``[1, rows, D]``, so the op stages ``32 x D/NS`` tiles per core instead of the
+        whole 10240-wide row, which does not fit L1). Exact: the kernel untilizes the tile row, overwrites the bf16
+        row bytes and retilizes. Returns the host tensor, to keep alive until the device is synchronized."""
+        n, K, D = (int(d) for d in rows.shape)
+        R = n * K
+        assert self._taps_stage_rm is not None, "warmup_kv_transfer(role=consumer) must run first"
+        R32 = int(self._taps_stage_rm.shape[2])
+        assert R <= R32 and int(self._taps_stage_rm.shape[-1]) == D, (R, R32, D)
+        t0 = time.perf_counter()
+        host = torch.zeros(1, 1, R32, D, dtype=torch.bfloat16)
+        host[0, 0, :R] = rows.reshape(R, D).to(torch.bfloat16)
+        h = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        t_host = time.perf_counter()
+        ttnn.copy_host_to_device_tensor(h, self._taps_stage_rm)
+        t_h2d = time.perf_counter()
+        self._note_shape("taps_tilize", (R32, D))
+        tiled = ttnn.tilize(self._taps_stage_rm)
+        NS = self.taps_split
+        WS = D // NS
+        tile_rows = []
+        views = []
+        for t in range(R32 // 32):
+            self._note_shape("taps_tilerow_slice", (R32, D, t))
+            x = ttnn.slice(tiled, (0, 0, 32 * t, 0), (1, 1, 32 * t + 32, D))
+            tile_rows.append(x)
+            views.append(ttnn.experimental.view(x, (1, NS, 32, WS)))
+        slot = int(slot)
+        for j, dn in enumerate(dns):
+            for m in range(dn.K):
+                r = j * dn.K + m
+                conv = dn.conv_states[m]
+                cache = ttnn.experimental.view(conv, (1, NS, int(conv.shape[1]), WS))
+                self._note_shape("update_cache_tap", (tuple(int(d) for d in cache.shape), slot))
+                ttnn.update_cache(cache, views[r // 32], slot, batch_offset=r % 32)
+        for x in tile_rows:
+            ttnn.deallocate(x)
+        ttnn.deallocate(tiled)
+        if self.timing:
+            logger.info(
+                f"[PD_TIMING] taps update_cache x{R}: host prep {1e3 * (t_host - t0):.1f} + H2D {1e3 * (t_h2d - t_host):.1f} "
+                f"+ device ops enqueue {1e3 * (time.perf_counter() - t_h2d):.1f} ms"
+            )
+        return h
+
+    # ----------------------------------------------------------------------------------------------------------- #
     # export (producer; design 5.3)
     # ----------------------------------------------------------------------------------------------------------- #
     def export_request_state(self, block_ids, num_tokens: int, slot: int, sinks) -> None:
@@ -528,7 +815,22 @@ class Qwen36KVTransfer:
             kv = self._kv_tensors()
             tmp = []
             t0 = time.perf_counter()
-            for c in range(cdiv(nblk, bpc)):
+            # chunks the prefill's mirror already copied into these very sinks (begin_export -> on_prefill_chunk)
+            exp = self._active_export
+            self._active_export = None
+            mirrored = set()
+            if exp is not None and exp.sinks is sinks and exp.num_tokens == int(num_tokens) and exp.block_ids == ids:
+                mirrored = set(exp.written)
+            elif exp is not None:
+                logger.warning(
+                    f"PD: open export ({exp.num_tokens} tokens, {len(exp.written)} mirrored chunks) does not match this "
+                    f"export_request_state ({num_tokens} tokens); gathering every chunk from the paged cache"
+                )
+            nchunks = cdiv(nblk, bpc)
+            self.gathered_chunks += nchunks - len(mirrored)
+            for c in range(nchunks):
+                if c in mirrored:
+                    continue
                 chunk_ids = ids[bpc * c : bpc * c + bpc]
                 regions = getattr(sinks[kv[0][0]], "supports_regions", False)
                 if regions:
@@ -537,7 +839,12 @@ class Qwen36KVTransfer:
                         sink = sinks[name]
                         for k0, b0, n in _contiguous_runs(chunk_ids):
                             sink.write_region_from_device(
-                                t, b0 * blk_nbytes, n * blk_nbytes, chunk=c, dst_offset_bytes=k0 * blk_nbytes, blocking=False
+                                t,
+                                b0 * blk_nbytes,
+                                n * blk_nbytes,
+                                chunk=c,
+                                dst_offset_bytes=k0 * blk_nbytes,
+                                blocking=False,
                             )
                     continue
                 # dumpfile: one runtime-start unit slice per (block, tensor) + one bpc-way concat per tensor; the block
@@ -561,26 +868,40 @@ class Qwen36KVTransfer:
                         ttnn.deallocate(p)
                 del keep
             t1 = time.perf_counter()
-            for j, dn in enumerate(self.gdn_layers):
+            dns = self.gdn_layers
+            taps = self._read_taps_batched(dns, slot)  # [n_layers, K, D] bf16, one device read for every layer
+            t_taps = time.perf_counter()
+            for j, dn in enumerate(dns):
                 rs = sinks[f"gdn.L{j}.rec"]
                 if dn.B == 1:
                     rs.write_from_device(dn.rec_state, chunk=0, blocking=False)
                 elif getattr(rs, "supports_regions", False):
                     row_nbytes = tile_nbytes((1,) + g["rec_shape"], g["rec_dtype"])
-                    rs.write_region_from_device(dn.rec_state, slot * row_nbytes, row_nbytes, chunk=0, dst_offset_bytes=0, blocking=False)
+                    rs.write_region_from_device(
+                        dn.rec_state, slot * row_nbytes, row_nbytes, chunk=0, dst_offset_bytes=0, blocking=False
+                    )
                 else:
                     h = ttnn.from_device(dn.rec_state)  # whole [B, Nv, Dk, Dv] (24 MiB at B=8), blocking
-                    row = ttnn.from_torch(ttnn.to_torch(h)[slot : slot + 1], dtype=dn.rec_state.dtype, layout=ttnn.TILE_LAYOUT)
+                    row = ttnn.from_torch(
+                        ttnn.to_torch(h)[slot : slot + 1], dtype=dn.rec_state.dtype, layout=ttnn.TILE_LAYOUT
+                    )
                     rs.write_host(row, chunk=0)
-                rows = torch.stack([ttnn.to_torch(dn.conv_states[m])[0, slot] for m in range(dn.K)])  # [K, D] bf16 host
-                sinks[f"gdn.L{j}.taps"].write_rows(rows.to(torch.bfloat16).contiguous())
+            t_rec = time.perf_counter()
+            for j in range(len(dns)):
+                # .clone(): a fresh 80 KiB storage. taps[j] is a view of the [n_layers, K, D] batch and torch.save (the
+                # dumpfile taps sink) serializes a view's WHOLE storage: 48 x 3.75 MiB files = 50 ms (py-spy, 10:32).
+                sinks[f"gdn.L{j}.taps"].write_rows(taps[j].clone())
+            t_rows = time.perf_counter()
             ttnn.synchronize_device(self.mesh)
+            t_sync = time.perf_counter()
             for t in tmp:
                 ttnn.deallocate(t)
             if self.timing:
                 logger.info(
-                    f"[PD_TIMING] export T={num_tokens} nblk={nblk} slot={slot} B={dn.B}: kv {1e3 * (t1 - t0):.1f} ms, "
-                    f"gdn {1e3 * (time.perf_counter() - t1):.1f} ms"
+                    f"[PD_TIMING] export T={num_tokens} nblk={nblk} slot={slot} B={dn.B}: kv {1e3 * (t1 - t0):.1f} ms "
+                    f"(mirrored {len(mirrored)}/{nchunks} chunks), gdn {1e3 * (t_sync - t1):.1f} ms = taps read "
+                    f"{1e3 * (t_taps - t1):.1f} + rec copies {1e3 * (t_rec - t_taps):.1f} + rows files "
+                    f"{1e3 * (t_rows - t_rec):.1f} + sync {1e3 * (t_sync - t_rows):.1f}"
                 )
 
     # ----------------------------------------------------------------------------------------------------------- #
@@ -614,12 +935,17 @@ class Qwen36KVTransfer:
                         blk = src.read_device(self.mesh)  # dumpfile: fresh [bpc, heads, block, hd] block-major tensor
                         self._relayout_into_staging(blk, st)
                         ttnn.deallocate(blk)
-                    self._note_shape("paged_fill_cache", (tuple(int(d) for d in t.shape), tuple(int(d) for d in st.shape), dtype_name(t.dtype)))
+                    self._note_shape(
+                        "paged_fill_cache",
+                        (tuple(int(d) for d in t.shape), tuple(int(d) for d in st.shape), dtype_name(t.dtype)),
+                    )
                     ttnn.experimental.paged_fill_cache(t, st, pt, batch_idx=0)
                 ttnn.deallocate(pt)
                 done += 1
             if self.timing:
-                logger.info(f"[PD_TIMING] import_kv_blocks T={num_tokens} chunks={list(chunks)}: {1e3 * (time.perf_counter() - t0):.1f} ms")
+                logger.info(
+                    f"[PD_TIMING] import_kv_blocks T={num_tokens} chunks={list(chunks)}: {1e3 * (time.perf_counter() - t0):.1f} ms"
+                )
             return done
 
     def validate_gdn_parts(self, sources) -> None:
@@ -631,7 +957,10 @@ class Qwen36KVTransfer:
         taps_spec = ((g["K"], g["conv_dim"]), "bfloat16", "ROW_MAJOR")
         taps_nbytes = row_major_nbytes(taps_spec[0], "bfloat16")
         for j in range(len(self.gdn_layers)):
-            for name, spec, nbytes in ((f"gdn.L{j}.rec", rec_spec, rec_nbytes), (f"gdn.L{j}.taps", taps_spec, taps_nbytes)):
+            for name, spec, nbytes in (
+                (f"gdn.L{j}.rec", rec_spec, rec_nbytes),
+                (f"gdn.L{j}.taps", taps_spec, taps_nbytes),
+            ):
                 s = sources[name]  # KeyError -> missing part
                 got = _spec_key(s.spec)
                 if got != spec:
@@ -656,17 +985,24 @@ class Qwen36KVTransfer:
             dns = self.gdn_layers
             fresh = []
             keep = []
+            rows_all = []
             slot = int(slot)
             t0 = time.perf_counter()
+            batched_taps = self.taps_write == "update_cache" and not self.via_write_slot
             for j, dn in enumerate(dns):
                 assert 0 <= slot < dn.B, f"slot {slot} outside [0, {dn.B})"
                 src = sources[f"gdn.L{j}.rec"].chunk(0)
-                if getattr(src, "is_device_readable", False):
+                dev_tensor = getattr(src, "device_tensor", None)
+                if callable(dev_tensor):
+                    r = dev_tensor()  # fabric: the received pool buffer itself (valid until finish_import); no copy
+                elif getattr(src, "is_device_readable", False):
                     r = self._rec_staging
                     assert r is not None, "warmup_kv_transfer(role=consumer) must run first"
                     src.read_into_device(r)
                 else:
-                    r = src.read_device(self.mesh)  # dumpfile: load_tensor -> fresh DRAM tensor (outside the trace region)
+                    r = src.read_device(
+                        self.mesh
+                    )  # dumpfile: load_tensor -> fresh DRAM tensor (outside the trace region)
                     fresh.append(r)
                 if r.dtype != dn.rec_state.dtype:
                     rc = ttnn.typecast(r, dn.rec_state.dtype)
@@ -687,10 +1023,15 @@ class Qwen36KVTransfer:
                 else:
                     self._note_shape("write_index_rec", (tuple(int(d) for d in dn.rec_state.shape), slot))
                     dn._write_index(dn.rec_state, ttnn.clone(r), slot, dim=0)
-                for m in range(dn.K):
-                    c = self._tap_row_tensor(rows[m], dn)
-                    self._note_shape("write_index_tap", (tuple(int(d) for d in dn.conv_states[m].shape), slot))
-                    dn._write_index(dn.conv_states[m], c, slot, dim=1)  # exact host-path primitive (write_slot's tap path)
+                if batched_taps:
+                    rows_all.append(rows)  # written below, all layers in one pass
+                else:
+                    for m in range(dn.K):
+                        c = self._tap_row_tensor(rows[m], dn)
+                        self._note_shape("write_index_tap", (tuple(int(d) for d in dn.conv_states[m].shape), slot))
+                        dn._write_index(
+                            dn.conv_states[m], c, slot, dim=1
+                        )  # exact host-path primitive (write_slot's tap path)
                 if getattr(dn, "_decode_fused_conv", False):
                     # fused-conv decode (QWEN36_GDN_DECODE_FUSED=2, AM3 M2): the op reads conv_hist_packed[slot] (parity
                     # slot & 1) inside the decode trace, so the row we just installed must also land there. Never a full
@@ -700,12 +1041,21 @@ class Qwen36KVTransfer:
                     packed = self._packed_slot_tensor(dn, rows, slot)
                     self._note_shape("write_index_packed", (tuple(int(d) for d in dn.conv_hist_packed.shape), slot))
                     dn._write_index(dn.conv_hist_packed, packed, slot, dim=0)
+            t_layers = time.perf_counter()
+            if batched_taps and rows_all:
+                keep.append(self._write_taps_update_cache(dns, torch.stack(rows_all), slot))
+            t_taps = time.perf_counter()
             ttnn.synchronize_device(self.mesh)  # every H2D done before any host buffer above goes away
+            t_sync = time.perf_counter()
             for t in fresh:
                 ttnn.deallocate(t)
             del keep
             if self.timing:
-                logger.info(f"[PD_TIMING] install_gdn_state slot={slot}: {1e3 * (time.perf_counter() - t0):.1f} ms")
+                logger.info(
+                    f"[PD_TIMING] install_gdn_state slot={slot}: {1e3 * (time.perf_counter() - t0):.1f} ms = rec writes + "
+                    f"rows reads {1e3 * (t_layers - t0):.1f} + taps device write {1e3 * (t_taps - t_layers):.1f} + sync "
+                    f"{1e3 * (t_sync - t_taps):.1f}"
+                )
 
     def import_request_state(self, sources, block_ids, num_tokens: int, slot: int, *, chunk_range=None) -> None:
         """import_kv_blocks (all chunks) + validate_gdn_parts + install_gdn_state; tests / TT_PD_VERIFY_IMPORT only."""

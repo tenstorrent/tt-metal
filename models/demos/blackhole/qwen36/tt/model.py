@@ -279,6 +279,12 @@ class Qwen36Model:
             os.environ.get("QWEN36_PREFILL_BUCKET_TRACE"), self._PREFILL_MASK_BUCKETS
         )
         self._mb_traces = {}  # bucket -> _MaskedBucketTrace (empty unless the gate is on)
+        # PD producer seam (tt/kv_transfer.py): observer run after every prefill chunk (traced chunk replays, the
+        # masked-bucket tail / short prompt, the eager fallbacks); with sync_each_chunk the chunk is COMPLETE on the
+        # device first, so the claim-gated K/V sends the observer enqueues follow a finished chunk (the traced
+        # long-prompt loop otherwise runs the host up to 8 chunks ahead of the device).
+        self._prefill_chunk_observer = None
+        self._prefill_chunk_sync = False
         # DFlash2 drafter: 5-tap capture from the verify (layers [5,19,33,47,61]). GATED — set True
         # BEFORE capture_verify_trace to bake the tap copies into the trace; default OFF so the
         # native-MTP verify trace is byte-identical.
@@ -3854,6 +3860,21 @@ class Qwen36Model:
             ttnn.deallocate(csi_tensor)
         return x
 
+    def set_prefill_chunk_observer(self, fn, sync_each_chunk=False):
+        """PD producer seam: ``fn(chunk_start=, n_tokens=, final=)`` runs on the engine thread right after every
+        prefill chunk was issued (traced replay or eager forward); ``sync_each_chunk`` synchronizes the device before
+        the call for the chunks that are not already synchronized. ``None`` removes the observer."""
+        self._prefill_chunk_observer = fn
+        self._prefill_chunk_sync = bool(sync_each_chunk)
+
+    def _notify_prefill_chunk(self, chunk_start, n_tokens, final, synced=False):
+        fn = self._prefill_chunk_observer
+        if fn is None:
+            return
+        if self._prefill_chunk_sync and not synced:
+            ttnn.synchronize_device(self.device)
+        fn(chunk_start=int(chunk_start), n_tokens=int(n_tokens), final=bool(final))
+
     def prefill_masked_bucket(
         self,
         token_ids,
@@ -3908,12 +3929,15 @@ class Qwen36Model:
         # set, so this is dead by default; any un-traced bucket falls through to the eager path.
         _tr = self._mb_traces.get(bucket) if (self.use_tp and flex_sdpa) else None
         if _tr is not None:
-            return self._replay_prefill_bucket_trace_tp(_tr, token_buf, actual_len, chunk_start, page_table)
+            out = self._replay_prefill_bucket_trace_tp(_tr, token_buf, actual_len, chunk_start, page_table)
+            self._notify_prefill_chunk(chunk_start, actual_len, final=True, synced=True)
+            return out
 
         hidden = self._forward_prefill_chunk_masked(
             token_buf, actual_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa, vision_tokens=vision_tokens
         )
         ttnn.synchronize_device(self.device)
+        self._notify_prefill_chunk(chunk_start, actual_len, final=True, synced=True)
 
         if self.use_tp:
             logits = self._masked_bucket_logits_tp(hidden, actual_len, bucket)
@@ -4510,6 +4534,7 @@ class Qwen36Model:
                 token_ids[:, cs : cs + chunk_size], chunk_size, cs, page_table, chunk_size, flex_sdpa=flex_sdpa
             )
             ttnn.synchronize_device(self.device)
+            self._notify_prefill_chunk(cs, chunk_size, final=(tail_real == 0 and c == num_full - 1), synced=True)
         if tail_real > 0:
             ttnn.deallocate(last_hidden)
             cs = num_full * chunk_size
@@ -4625,6 +4650,9 @@ class Qwen36Model:
             )
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
+            # PD producer seam: mirror-copy this chunk's K/V to the export pool + pump the claim-gated sends. Its
+            # copies are enqueued BEFORE the next chunk's DMAs/replay, so the in-order CQ runs them between the two.
+            self._notify_prefill_chunk(cs, chunk_size, final=(tail_real == 0 and c == num_full - 1))
 
             # Bound in-flight depth; after a sync the completed DMAs' host tensors can be released.
             if (c + 1) % _SYNC_EVERY == 0:

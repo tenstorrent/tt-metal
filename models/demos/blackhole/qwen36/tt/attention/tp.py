@@ -217,6 +217,11 @@ class TPAttention:
         self.paged_k = None
         self.paged_v = None
         self.use_paged = False
+        # PD producer mirror (tt/kv_transfer.py warmup_kv_transfer binds these): forward_prefill_paged fill_cache's
+        # each chunk's head-major K/V -- paged_fill_cache's input, i.e. the exact bytes the cache holds -- into these
+        # persistent [1, NKV, chunk_tokens, HD] staging tensors (rows [0, S)). None on every non-PD node: no op.
+        self._pd_export_k = None
+        self._pd_export_v = None
 
     def set_paged_kv_cache(self, k_cache, v_cache):
         """Attach an externally-allocated paged KV cache (one call after allocate_kv_caches)."""
@@ -536,8 +541,12 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=self._pf_mc), tw["q_norm"], memory_config=self._pf_mc)
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=self._pf_mc), tw["k_norm"], memory_config=self._pf_mc)
+        q = ttnn.multiply(
+            ttnn.rms_norm(q, epsilon=1e-6, memory_config=self._pf_mc), tw["q_norm"], memory_config=self._pf_mc
+        )
+        k = ttnn.multiply(
+            ttnn.rms_norm(k, epsilon=1e-6, memory_config=self._pf_mc), tw["k_norm"], memory_config=self._pf_mc
+        )
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim, memory_config=self._pf_mc)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim, memory_config=self._pf_mc)
 
@@ -1132,8 +1141,12 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=self._pf_mc), tw["q_norm"], memory_config=self._pf_mc)
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=self._pf_mc), tw["k_norm"], memory_config=self._pf_mc)
+        q = ttnn.multiply(
+            ttnn.rms_norm(q, epsilon=1e-6, memory_config=self._pf_mc), tw["q_norm"], memory_config=self._pf_mc
+        )
+        k = ttnn.multiply(
+            ttnn.rms_norm(k, epsilon=1e-6, memory_config=self._pf_mc), tw["k_norm"], memory_config=self._pf_mc
+        )
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim, memory_config=self._pf_mc)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim, memory_config=self._pf_mc)
 
@@ -1212,6 +1225,12 @@ class TPAttention:
                 k_fill, v_fill = k, v
             ttnn.experimental.paged_fill_cache(k_paged, k_fill, fill_page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(v_paged, v_fill, fill_page_table, batch_idx=user_id)
+            if self._pd_export_k is not None:
+                # PD producer: mirror the fill bytes into the export staging (raw tile copy of rows [0, S)); baked
+                # into every prefill trace captured after the staging was bound, so the export never re-gathers
+                # blocks from the paged cache (kv_transfer.py on_prefill_chunk copies the staging to the pool).
+                ttnn.fill_cache(self._pd_export_k, k_fill, 0)
+                ttnn.fill_cache(self._pd_export_v, v_fill, 0)
             if page_len < S:
                 ttnn.deallocate(k_fill)
                 ttnn.deallocate(v_fill)
