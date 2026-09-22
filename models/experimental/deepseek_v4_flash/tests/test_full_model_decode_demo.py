@@ -497,7 +497,6 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
                 decode_time += time.perf_counter() - t0
                 decode_tokens += 1
                 generated.append(next_id)
-                logger.info(f"step {step:3d} (pos {pos:4d}): token id {next_id} {tokenizer.decode([next_id])!r}")
 
                 # Running decode throughput, reported every 10 generated tokens.
                 if decode_tokens % 64 == 0:
