@@ -18,7 +18,13 @@ from models.tt_dit.pipelines.events import profiler_event_callback
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b import WanTI2V5BPipeline
-from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config, set_quant_config_from_env
+from models.tt_dit.pipelines.wan.quant_config import (
+    QuantConfig,
+    configure_trace_mode_from_env,
+    device_params_for_trace_mode,
+    set_quant_config,
+    set_quant_config_from_env,
+)
 from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import (
@@ -29,6 +35,8 @@ from ....utils.test import (
 )
 
 DEVICE_PARAMS = {"trace_region_size": 150000000}
+# 5B tests: WAN5B_TRACE_MODE=2cq opens the mesh with two command queues (read at import time).
+DEVICE_PARAMS_5B = device_params_for_trace_mode(DEVICE_PARAMS)
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
 BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
@@ -502,7 +510,7 @@ def test_pipeline_performance(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
     [
         # Single BH Galaxy, ring. Dense 5B is warm-traced, so reserve a trace region.
-        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS, **ring_params_req_exact_devices}, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS_5B, **ring_params_req_exact_devices}, ttnn.Topology.Ring],
     ],
     ids=["ring_bh_4x8_sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -586,6 +594,8 @@ def test_pipeline_performance_ti2v_5b(
     # Applied before the traced warmup, with a second eager warmup, so the trace captures the
     # quantized programs. Unset means the bf16 / HiFi2 baseline the gates are calibrated for.
     quant_config_name = set_quant_config_from_env(pipeline)
+    # Opt-in trace execution mode (WAN5B_TRACE_MODE=blocking | nonblocking | 2cq); default blocking.
+    trace_mode = configure_trace_mode_from_env(pipeline)
 
     # Warmup run (traced trace-capture, not timed).
     logger.info("Running warmup iteration...")
@@ -634,6 +644,7 @@ def test_pipeline_performance_ti2v_5b(
     print("=" * 80)
     print(f"Image Size: {width}x{height}")
     print(f"Quant Config: {quant_config_name or 'none (bf16 / HiFi2 baseline)'}")
+    print(f"Trace Mode: {trace_mode}")
     print(f"Inference Steps: {num_inference_steps}")
     print(f"Num Frames: {num_frames}")
     print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")
@@ -742,7 +753,7 @@ def ti2v_5b_i2v_metrics(mesh_shape, height):
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
     [
-        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS, **ring_params_req_exact_devices}, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS_5B, **ring_params_req_exact_devices}, ttnn.Topology.Ring],
     ],
     ids=["ring_bh_4x8_sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -811,6 +822,7 @@ def test_pipeline_performance_ti2v_5b_i2v(
     )
     # Same opt-in precision preset as the T2V test; see there.
     quant_config_name = set_quant_config_from_env(pipeline)
+    trace_mode = configure_trace_mode_from_env(pipeline)
 
     logger.info("Running warmup iteration...")
     with benchmark_profiler("run", iteration=0):
@@ -856,6 +868,7 @@ def test_pipeline_performance_ti2v_5b_i2v(
     print("=" * 80)
     print(f"Image Size: {width}x{height}")
     print(f"Quant Config: {quant_config_name or 'none (bf16 / HiFi2 baseline)'}")
+    print(f"Trace Mode: {trace_mode}")
     print(f"Inference Steps: {num_inference_steps}")
     print(f"Num Frames: {num_frames}")
     print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")

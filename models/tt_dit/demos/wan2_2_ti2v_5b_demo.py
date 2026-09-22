@@ -36,7 +36,11 @@ import ttnn
 from models.tt_dit.pipelines.events import log_event_section
 from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b import WanTI2V5BPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b_i2v import WanTI2V5BI2VPipeline
-from models.tt_dit.pipelines.wan.quant_config import set_quant_config_from_env
+from models.tt_dit.pipelines.wan.quant_config import (
+    configure_trace_mode_from_env,
+    device_params_for_trace_mode,
+    set_quant_config_from_env,
+)
 
 MESH_SHAPE = (4, 8)
 TRACE_REGION_SIZE = 150_000_000  # same as the 5B perf tests (DEVICE_PARAMS)
@@ -63,7 +67,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def open_mesh() -> ttnn.MeshDevice:
     """Open the 4x8 Blackhole Galaxy with the 1D ring fabric the 5B pipeline is tuned for."""
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricReliabilityMode.STRICT_INIT)
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*MESH_SHAPE), trace_region_size=TRACE_REGION_SIZE)
+    params = device_params_for_trace_mode({"trace_region_size": TRACE_REGION_SIZE})
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*MESH_SHAPE), **params)
 
 
 def close_mesh(mesh: ttnn.MeshDevice) -> None:
@@ -125,7 +130,10 @@ def main(argv: list[str] | None = None) -> int:
             mesh_device=mesh, height=args.height, width=args.width, num_frames=args.frames, run_warmup=True
         )
         quant = set_quant_config_from_env(pipeline, rewarm=traced)
-        logger.info(f"pipeline ready in {time.perf_counter() - t0:.1f}s (quant preset: {quant or 'none'})")
+        trace_mode = configure_trace_mode_from_env(pipeline)
+        logger.info(
+            f"pipeline ready in {time.perf_counter() - t0:.1f}s (quant preset: {quant or 'none'}, trace mode: {trace_mode})"
+        )
 
         call_kwargs = dict(
             prompts=[args.prompt],

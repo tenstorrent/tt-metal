@@ -441,6 +441,14 @@ class WanPipeline(PipelineAPIMixin):
             or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=12.0)
         )
 
+        # How the per-step denoise trace is executed. Defaults are the gated production path:
+        # blocking `execute_trace` on command queue 0 with every input update on that queue.
+        # `configure_trace_execution` switches to a non-blocking trace (the host runs ahead and
+        # the on-device solver dispatch overlaps the trace) and/or a second command queue for the
+        # per-step host->device uploads (timestep, guidance), fenced with events in the Tracer.
+        self.trace_blocking: bool = True
+        self.trace_input_cq_id: int | None = None
+
         # persistent latent buffers to enable safe tracing.
         self.latent_buffer = None
         self.condition_buffer = None
@@ -563,6 +571,8 @@ class WanPipeline(PipelineAPIMixin):
             **rope_args,
             guidance_scale=guidance_scale_tt,
             traced=traced,
+            tracer_blocking_execution=self.trace_blocking,
+            tracer_input_cq_id=self.trace_input_cq_id,
             gather_output=False,
         )
 
@@ -906,6 +916,16 @@ class WanPipeline(PipelineAPIMixin):
 
         on_event(SectionEnd("vae"))
         return video
+
+    def configure_trace_execution(self, *, blocking: bool = True, input_cq_id: int | None = None) -> None:
+        """Choose how the traced denoise step is executed; see `trace_blocking` / `trace_input_cq_id`.
+
+        `input_cq_id` requires the mesh to have been opened with `num_command_queues=2`. Both
+        settings change scheduling only: outputs must stay bit-identical to the default.
+        """
+        self.trace_blocking = blocking
+        self.trace_input_cq_id = input_cq_id
+        logger.info(f"trace execution: blocking={blocking}, input_cq_id={input_cq_id}")
 
     def synchronize_devices(self) -> None:
         ttnn.synchronize_device(self.mesh_device)
