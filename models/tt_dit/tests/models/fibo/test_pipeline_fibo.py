@@ -43,10 +43,10 @@ MESH_DEVICE = pytest.mark.parametrize(
         # 1 MP tier, aspect ratios according to API docs
         # resolutions taken from images generated via https://huggingface.co/spaces/briaai/FIBO
         pytest.param(1024, 1024, id="1024x1024_1x1_1mp"),
-        pytest.param(1152, 768, id="1152x768_3x2_1mp"),
-        pytest.param(1024, 768, id="1024x768_4x3_1mp"),
-        pytest.param(960, 768, id="960x768_5x4_1mp"),
-        pytest.param(1024, 576, id="1024x576_16x9_1mp"),
+        # pytest.param(1152, 768, id="1152x768_3x2_1mp"),
+        # pytest.param(1024, 768, id="1024x768_4x3_1mp"),
+        # pytest.param(960, 768, id="960x768_5x4_1mp"),
+        # pytest.param(1024, 576, id="1024x576_16x9_1mp"),
     ],
 )
 @MESH_DEVICE

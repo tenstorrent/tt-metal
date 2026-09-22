@@ -4,7 +4,7 @@
 
 """Speed of FIBO-vlm: sampled decode, and the prefill of an image prompt through tower and encoder.
 
-Timing only: the weights are random, the shapes are the checkpoint's.
+Timing only: the weights are zero, the shapes are the checkpoint's.
 """
 
 from __future__ import annotations
@@ -45,8 +45,15 @@ DEVICE_PARAMS = pytest.mark.parametrize(
 )
 
 
+def _zero_state(config: transformers.PretrainedConfig) -> dict[str, torch.Tensor]:
+    """The state dict of `config`'s model with all weights zero, much faster than HF's random init."""
+    with torch.device("meta"):
+        model = transformers.AutoModel.from_config(config, dtype=torch.bfloat16)
+    return {k: torch.zeros(v.shape, dtype=v.dtype) for k, v in model.state_dict().items()}
+
+
 def _encoder(hf_config: transformers.PretrainedConfig, mesh_device: ttnn.MeshDevice) -> Qwen3VlEncoder:
-    """The text model with random weights, tensor-parallel over the mesh."""
+    """The text model with zero weights, tensor-parallel over the mesh."""
     tp_axis = 1
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis)
@@ -59,9 +66,7 @@ def _encoder(hf_config: transformers.PretrainedConfig, mesh_device: ttnn.MeshDev
         ccl_manager=ccl_manager,
     )
 
-    logger.info("building random torch model...")
-    torch_model = transformers.AutoModel.from_config(hf_config.text_config, dtype=torch.bfloat16)
-    state = {f"model.language_model.{k}": v for k, v in torch_model.state_dict().items()}
+    state = {f"model.language_model.{k}": v for k, v in _zero_state(hf_config.text_config).items()}
     # The checkpoint ties the lm head to the token embedding.
     state["lm_head.weight"] = state["model.language_model.embed_tokens.weight"]
     encoder.load_torch_state_dict(Qwen3VlEncoder.convert_state(state))
@@ -69,7 +74,7 @@ def _encoder(hf_config: transformers.PretrainedConfig, mesh_device: ttnn.MeshDev
 
 
 def _tower(vision_config: transformers.PretrainedConfig, mesh_device: ttnn.MeshDevice) -> Qwen3VlVisionModel:
-    """The vision tower with random weights, replicated over the mesh like the tt_transformers one."""
+    """The vision tower with zero weights, replicated over the mesh like the tt_transformers one."""
     tower = Qwen3VlVisionModel(
         hidden_size=vision_config.hidden_size,
         num_heads=vision_config.num_heads,
@@ -85,8 +90,7 @@ def _tower(vision_config: transformers.PretrainedConfig, mesh_device: ttnn.MeshD
         deepstack_visual_indexes=vision_config.deepstack_visual_indexes,
         mesh_device=mesh_device,
     )
-    torch_model = transformers.AutoModel.from_config(vision_config, dtype=torch.bfloat16)
-    tower.load_torch_state_dict(torch_model.state_dict())
+    tower.load_torch_state_dict(_zero_state(vision_config))
     return tower
 
 

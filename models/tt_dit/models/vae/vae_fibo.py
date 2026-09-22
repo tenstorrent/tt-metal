@@ -354,7 +354,9 @@ class FiboVAEDecoderAdapter:
         self.spatial_compression_ratio: int = hf_config["scale_factor_spatial"]
 
         if use_torch:
-            self._torch_vae = AutoencoderKLWan.from_pretrained(checkpoint_name, subfolder="vae")
+            self._torch_vae = AutoencoderKLWan.from_pretrained(
+                checkpoint_name, subfolder="vae", torch_dtype=torch.float32
+            )
             self._decoder = None
             self._tracer = None
             self._tt_latents_std = None

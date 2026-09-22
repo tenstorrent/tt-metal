@@ -72,7 +72,9 @@ def test_transformer(
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
     checkpoint_name = "briaai/FIBO"
-    torch_model = reference.BriaFiboTransformer2DModel.from_pretrained(checkpoint_name, subfolder="transformer")
+    torch_model = reference.BriaFiboTransformer2DModel.from_pretrained(
+        checkpoint_name, subfolder="transformer", torch_dtype=torch.float32
+    )
     assert isinstance(torch_model, reference.BriaFiboTransformer2DModel)
     torch_model.eval()
 

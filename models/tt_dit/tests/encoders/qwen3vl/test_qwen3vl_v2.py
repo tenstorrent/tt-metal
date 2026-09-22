@@ -16,7 +16,7 @@ from loguru import logger
 from safetensors.torch import load_file
 
 import ttnn
-from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlEncoder
+from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlCheckpoint, Qwen3VlEncoder
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.reference.ideogram4.constants import QWEN3_VL_ACTIVATION_LAYERS
@@ -91,18 +91,14 @@ def test_text_only_forward(
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     parallel_config = EncoderParallelConfig.from_tuples(tp=tp, sp=None, fsdp=fsdp)
 
-    # Loaded in bfloat16 since that converts to ttnn faster, and upcast afterwards for the reference.
-    torch_model = transformers.Qwen3VLForConditionalGeneration.from_pretrained(CHECKPOINT, dtype=torch.bfloat16)
+    torch_model = transformers.Qwen3VLForConditionalGeneration.from_pretrained(CHECKPOINT, dtype=torch.float32)
     text_config = torch_model.config.text_config
 
-    model = Qwen3VlEncoder(
-        Qwen3VlEncoder.config_from_hf(torch_model.config),
+    model = Qwen3VlCheckpoint(CHECKPOINT).build(
         device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
     )
-    model.load_torch_state_dict(Qwen3VlEncoder.convert_state(torch_model.state_dict()))
-    torch_model.float()
 
     tokens = torch.randint(0, text_config.vocab_size, [batch_size, sequence_length])
     lengths = torch.randint(sequence_length // 4, 3 * sequence_length // 4, [batch_size])
@@ -141,27 +137,26 @@ def test_text_only_forward(
     assert len(hidden_states) == len(tt_hidden_states_torch)
 
     for x, tt_x in zip(hidden_states[-4:], tt_hidden_states_torch[-4:], strict=True):
-        assert_quality(x, tt_x, pcc=0.99, relative_rmse=0.15)
+        assert_quality(x, tt_x, pcc=0.999, relative_rmse=0.03)
 
 
 def _reference_lm(weights: str):
-    cfg = transformers.AutoConfig.from_pretrained(CHECKPOINT)
-    hf = transformers.AutoModel.from_config(cfg, dtype=torch.bfloat16)
+    hf = transformers.AutoModel.from_pretrained(CHECKPOINT, dtype=torch.bfloat16)
     lm = hf.language_model if hasattr(hf, "language_model") else hf.model.language_model
-    if weights == "real":
+    if weights == "ideogram":
         sd = dequant_fp8_state_dict(load_file(f"{FP8}/text_encoder/model.safetensors"))
         sd = {k[len("language_model.") :]: v for k, v in sd.items() if k.startswith("language_model.")}
         incompat = lm.load_state_dict(sd, strict=False)
-        # empty missing/unexpected proves the weights landed; else both sides share the random init and PCC is vacuous
+        # empty missing/unexpected proves the weights landed; else both sides share the Instruct weights
         assert not incompat.missing_keys and not incompat.unexpected_keys, (
-            f"real Qwen3-VL load key mismatch: missing={incompat.missing_keys[:5]} "
+            f"Ideogram Qwen3-VL load key mismatch: missing={incompat.missing_keys[:5]} "
             f"unexpected={incompat.unexpected_keys[:5]}"
         )
     return lm.eval()
 
 
-# Qwen3-VL-8B text encoder for Ideogram 4.0 and its 13-layer feature tap. HF reference is built from
-# config (no 8B pull); "real" overlays the shipped Ideogram fp8 text_encoder weights.
+# Qwen3-VL-8B text encoder for Ideogram 4.0 and its 13-layer feature tap. The HF reference holds the
+# Qwen3-VL-8B-Instruct weights; "ideogram" overlays the shipped Ideogram fp8 text_encoder weights.
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis"),
     [
@@ -175,7 +170,7 @@ def _reference_lm(weights: str):
 )
 @pytest.mark.parametrize(
     "weights",
-    [pytest.param("random", id="random"), pytest.param("real", id="real", marks=_NEEDS_WEIGHTS)],
+    [pytest.param("instruct", id="instruct"), pytest.param("ideogram", id="ideogram", marks=_NEEDS_WEIGHTS)],
 )
 @pytest.mark.parametrize("masked", [pytest.param(False, id="nomask"), pytest.param(True, id="masked")])
 @pytest.mark.parametrize("seq_len", [128])
@@ -187,27 +182,37 @@ def test_qwen3vl_text_encoder(
     tp_factor = tuple(submesh.shape)[tp_axis]
     fsdp_axis = 1 - tp_axis
 
-    # Built in bfloat16 so both sides share the same weights and the conversion to ttnn is faster, and
-    # upcast afterwards for the reference.
+    # Loaded in bfloat16, so the Ideogram weights round as they do on the device, and upcast once the
+    # TT model is loaded.
     lm = _reference_lm(weights)
     cfg = lm.config
 
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
 
-    # As the Ideogram 4 pipeline builds it: no head, and no final norm since the taps are raw layer outputs.
-    enc = Qwen3VlEncoder(
-        dataclasses.replace(Qwen3VlEncoder.config_from_hf(cfg), final_norm=False, final_linear=False),
-        device=submesh,
-        parallel_config=EncoderParallelConfig.from_tuples(
-            tp=(tp_factor, tp_axis), sp=None, fsdp=(tuple(submesh.shape)[fsdp_axis], fsdp_axis)
-        ),
-        ccl_manager=CCLManager(submesh, num_links=1, topology=ttnn.Topology.Linear),
+    parallel_config = EncoderParallelConfig.from_tuples(
+        tp=(tp_factor, tp_axis), sp=None, fsdp=(tuple(submesh.shape)[fsdp_axis], fsdp_axis)
     )
-    enc.load_torch_state_dict(
-        Qwen3VlEncoder.convert_state(
-            {f"model.language_model.{k}": v for k, v in lm.state_dict().items() if k != "norm.weight"}
+    ccl_manager = CCLManager(submesh, num_links=1, topology=ttnn.Topology.Linear)
+    if weights == "instruct":
+        enc = Qwen3VlCheckpoint(CHECKPOINT).build(
+            device=submesh, parallel_config=parallel_config, ccl_manager=ccl_manager
         )
-    )
+        # The taps are raw layer outputs, so the last one must not pass through the final norm.
+        enc.final_norm = None
+    else:
+        # As the Ideogram 4 pipeline builds it: no head, and no final norm since the taps are raw
+        # layer outputs.
+        enc = Qwen3VlEncoder(
+            dataclasses.replace(Qwen3VlEncoder.config_from_hf(cfg), final_norm=False, final_linear=False),
+            device=submesh,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+        )
+        enc.load_torch_state_dict(
+            Qwen3VlEncoder.convert_state(
+                {f"model.language_model.{k}": v for k, v in lm.state_dict().items() if k != "norm.weight"}
+            )
+        )
     lm.float()
 
     with capture_layer_outputs(lm, QWEN3_VL_ACTIVATION_LAYERS) as caps:
@@ -217,9 +222,13 @@ def test_qwen3vl_text_encoder(
 
     tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
     attn_mask = tensor.from_torch(torch.ones(1, seq_len, dtype=torch.bool), device=submesh) if masked else None
-    tt_caps = enc.forward(tt_ids, mask=attn_mask, output_hidden_states=[i + 1 for i in QWEN3_VL_ACTIVATION_LAYERS])
+    tt_caps = enc.forward(
+        tt_ids,
+        mask=attn_mask,
+        skip_final_linear=True,
+        output_hidden_states=[i + 1 for i in QWEN3_VL_ACTIVATION_LAYERS],
+    )
 
-    pcc = 0.99 if weights == "real" else 0.98  # random weights over 36 layers accumulate more bf16 error
     for layer_idx, g, tt_t in zip(QWEN3_VL_ACTIVATION_LAYERS, golden, tt_caps):
         logger.info(f"qwen3vl [{weights}] TP={tp_factor} layer {layer_idx}:")
-        assert_quality(g, tensor.to_torch(tt_t), pcc=pcc)
+        assert_quality(g, tensor.to_torch(tt_t), pcc=0.999 if weights == "instruct" else 0.99)

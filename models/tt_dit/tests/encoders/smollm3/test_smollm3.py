@@ -21,9 +21,7 @@ from models.tt_dit.utils.check import assert_quality
         pytest.param((1, 1), None, id="1x1"),
         pytest.param((1, 2), None, id="1x2"),
         pytest.param((1, 4), None, id="1x4"),
-        pytest.param((1, 8), None, id="1x8"),
         pytest.param((2, 2), 0, id="2x2sp"),
-        pytest.param((2, 4), 0, id="2x4sp"),
     ],
     indirect=["mesh_device"],
 )

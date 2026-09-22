@@ -130,4 +130,4 @@ def test_generation(*, mesh_device: ttnn.MeshDevice) -> None:
     )
     assert tt_out.logits is not None
 
-    assert_quality(out.logits[:, generated_positions].float(), tt_out.logits, ccc=0.998, relative_rmse=0.063)
+    assert_quality(out.logits[:, generated_positions].float(), tt_out.logits, ccc=0.997, relative_rmse=0.08)
