@@ -136,7 +136,11 @@ class FusedMLP:
 
         self.packed = empty(7168, _width_memory(self.projection_cores, 7168))
         self.product = empty(3584, layers[0].decode_inputs["down"])
-        self.output = empty(4096, layers[0].residual_memcfg)
+        # Complete decode replaces every native use of these workspace slots.
+        # Reuse them so persistent decode storage leaves the native prefill
+        # head's static CB region available at longer contexts.
+        workspace = layers[0].decode_workspace.buffers
+        self.output = workspace["attn"] if fuse_prepare else empty(4096, layers[0].residual_memcfg)
         self.normalizer = None
         if fuse_norm:
             from .norm import FusedNorm
@@ -146,7 +150,7 @@ class FusedMLP:
         if fuse_attention:
             from .attention import FusedAttention
 
-            self.attention_stage = FusedAttention(layers[0])
+            self.attention_stage = FusedAttention(layers[0], output=workspace["o"] if fuse_prepare else None)
         self.preparation = None
         if fuse_prepare:
             from .prepare import FusedPreparation
@@ -156,7 +160,9 @@ class FusedMLP:
         if fuse_reduce:
             from .reduce_scatter import CompactReduceScatter
 
-            self.reduction = CompactReduceScatter(self.mesh, layers[0].local_residual_memcfg)
+            self.reduction = CompactReduceScatter(
+                self.mesh, layers[0].local_residual_memcfg, output=workspace["down"] if fuse_prepare else None
+            )
         self.scratch_storage = []
         self.scratch_by_cb = {}
         if reuse_scratch:

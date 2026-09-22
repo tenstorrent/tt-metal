@@ -15,7 +15,7 @@ from .mlp import _grid
 
 
 class CompactReduceScatter:
-    def __init__(self, mesh, output_memory_config):
+    def __init__(self, mesh, output_memory_config, *, output=None):
         if tuple(mesh.shape) != (1, 4) or ttnn.get_fabric_config() != ttnn.FabricConfig.FABRIC_1D_RING:
             raise ValueError("Compact reduction requires the four-chip QB2 1D ring")
         self.mesh = mesh
@@ -24,12 +24,22 @@ class CompactReduceScatter:
         # Receive staging is a program-local CB. The native all-peer start
         # barrier prevents an early sender overwriting a peer's preceding op.
         # This leaves the large native prefill/head L1 workspace available.
-        self.output = ttnn.empty(
-            (1, 1, 1, 1024),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=output_memory_config,
+        if output is not None and (
+            tuple(output.shape) != (1, 1, 1, 1024)
+            or output.dtype != ttnn.bfloat16
+            or output.memory_config() != output_memory_config
+        ):
+            raise ValueError("Borrowed reduction output must match the native layout")
+        self.output = (
+            output
+            if output is not None
+            else ttnn.empty(
+                (1, 1, 1, 1024),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=output_memory_config,
+            )
         )
         # Native contract: arrivals[4], reader_gen, writer_gen, compute_gen,
         # init_sync. Keep these alive through all cached programs and traces.

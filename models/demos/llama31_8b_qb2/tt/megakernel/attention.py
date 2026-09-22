@@ -14,7 +14,7 @@ from .mlp import _grid
 
 
 class FusedAttention:
-    def __init__(self, layer):
+    def __init__(self, layer, *, output=None):
         self.mesh = layer.mesh_device
         if self.mesh.compute_with_storage_grid_size().y < 10:
             raise ValueError("Attention composition requires ten worker rows")
@@ -35,12 +35,22 @@ class FusedAttention:
             device=self.mesh,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        self.output = ttnn.empty(
-            (1, 1, 1, 1024),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh,
-            memory_config=layer.decode_inputs["o"],
+        if output is not None and (
+            tuple(output.shape) != (1, 1, 1, 1024)
+            or output.dtype != ttnn.bfloat16
+            or output.memory_config() != layer.decode_inputs["o"]
+        ):
+            raise ValueError("Borrowed attention output must match the native O-input layout")
+        self.output = (
+            output
+            if output is not None
+            else ttnn.empty(
+                (1, 1, 1, 1024),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=layer.decode_inputs["o"],
+            )
         )
 
     def append(self, program, inputs, projection_cores, *, wait_for_kv=False):

@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 17:16 UTC. **Full token-to-logits prototype verified at B1/context128; slower than baseline.**
+Updated 2026-09-22 17:25 UTC. **Full token-to-logits prototype verified at B1/context128 and2048; slower than baseline.**
 
 Base origin/main: `b8915544692d8f9feb2c890afbc2f22791560cd2`.
 Branch: `codex/llama31-qb2-megakernel`. Last hardware-qualified checkpoint:
@@ -296,3 +296,18 @@ currentAPI; realSFPI compilation andfullmodel retry passed. Originalfailedrun
 andallrecovery evidence retained. Currentcontext2048baseline rerun fixes
 teacherstream toHF reference (earlier2048baseline useddifferentstream).
 Deviceprofiles/traffic andcurrentbaseline refresh remain next work.
+
+## Context2048 and native workspace reuse (17:25UTC)
+
+Nativeprefillhead initially hit L1/staticCB overlap: allocated1054208B versus
+staticregionend1094784B. The complete decoder replaces nativeworkspaceuses,
+so its fullprojection output nowborrows attn, attentionconcat borrows o, and
+reduction output borrows down. This removes49152B/coreextra persistentstorage
+onthose8workspacecores. Layoutguards enforcecompatibility. Nativeprefill and
+arithmetic unchanged; noresetneededforallocationexception.
+
+`model-baseline-2048-hfmatched`9.219413ms/token; full`model-decode-token-2048-v2`
+11.567906ms/token,25.47%slower. All32-layer teacherlogits/all64KVbitwiseexact,
+32of32greedyoutputs,3stablegenerations. BothshareHFteacherstream. BothHFlogit
+PCC.984128,relativeL2.172836,top1agreement93.75%; no broadaccuracyclaim.
+Initialfailuremodel-decode-token-2048 retained. Deviceprofiler runs next.
