@@ -76,7 +76,7 @@ ALWI void welford_clear() { MATH((llk_math_welfords_sfpu_clear_previous_mean_and
  *
  * Configures the Welford address mode used by their SFPU loads without
  * programming Welford's unused replay buffer. The first shifted update with
- * `initialize_anchor=true` initializes the accumulators.
+ * `TwoPassAnchor::Initialise` initialises the accumulators.
  */
 ALWI void two_pass_stats_init_shifted() { MATH((llk_math_two_pass_sfpu_init())); }
 
@@ -93,18 +93,23 @@ ALWI void two_pass_stats_update_rows(std::uint32_t input_dst_idx, std::uint32_t 
     MATH((llk_math_two_pass_sfpu_update_rows<dual_m2>(input_dst_idx, start_row, num_rows)));
 }
 
+enum class TwoPassAccumulation : std::uint8_t { ShiftedSum, CentredM2 };
+enum class TwoPassAnchor : std::uint8_t { Reuse, Initialise };
+
 /**
  * @brief Accumulates shifted sums or centred M2 over a row range.
- * @tparam accumulate_m2 If true, accumulates centred squared residuals; otherwise accumulates shifted sums.
- * @tparam initialize_anchor If true, initialises the common anchor from the first selected input value.
+ * @tparam accumulation Selects shifted sums or centred squared residuals.
+ * @tparam anchor Initialise takes the common anchor from the first selected input value; Reuse retains it.
  * @tparam dual_accumulator If true, uses two independent accumulators to hide SFPU dependency latency.
  * @param input_dst_idx Index of the input tile in the DST register buffer.
  * @param start_row First tile row to process.
  * @param num_rows Number of consecutive tile rows to process.
  */
-template <bool accumulate_m2, bool initialize_anchor = false, bool dual_accumulator = true>
+template <TwoPassAccumulation accumulation, TwoPassAnchor anchor = TwoPassAnchor::Reuse, bool dual_accumulator = true>
 ALWI void two_pass_stats_update_shifted_rows(
     std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
+    constexpr bool accumulate_m2 = accumulation == TwoPassAccumulation::CentredM2;
+    constexpr bool initialize_anchor = anchor == TwoPassAnchor::Initialise;
     ASSERT(start_row + num_rows <= TILE_WIDTH);
     ASSERT(!initialize_anchor || num_rows > 0);
     MATH((llk_math_two_pass_sfpu_update_shifted_rows<accumulate_m2, initialize_anchor, dual_accumulator>(

@@ -252,10 +252,10 @@ void kernel_main() {
                 wt < num_front_retained_limit ? (wt == 0 ? retained_input_dst : wt) : input_dst;
             transpose_tile(dfb_x_welford, wt, stats_input_dst);
             if (wt == 0) {
-                two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+                two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
                     stats_input_dst, 0, tile_width);
             } else {
-                two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(stats_input_dst, 0, tile_width);
+                two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum>(stats_input_dst, 0, tile_width);
             }
         }
 
@@ -274,10 +274,10 @@ void kernel_main() {
                                                 : input_dst;
         transpose_tile(dfb_x_welford, Wt - 1, last_pass1_dst);
         if constexpr (Wt == 1) {
-            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+            two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
                 last_pass1_dst, 0, last_tile_rows);
         } else {
-            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(last_pass1_dst, 0, last_tile_rows);
+            two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum>(last_pass1_dst, 0, last_tile_rows);
         }
         two_pass_stats_finish_shifted_mean<true /* dual_sum */, true /* retain_anchor */>(reciprocal_w);
 

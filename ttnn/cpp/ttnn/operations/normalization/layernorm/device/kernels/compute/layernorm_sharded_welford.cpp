@@ -438,13 +438,13 @@ void kernel_main() {
         // Retain input in otherwise idle DEST slots for the centred second pass.
         if (num_full_welford_tiles > 0) {
             transpose_tile(dfb_x_welford_id, index_h_offset, retained_welford_input_dst);
-            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+            two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
                 retained_welford_input_dst, 0, tile_width);
         }
         for (uint32_t w = 1; w < num_full_welford_tiles; ++w) {
             const uint32_t stats_input_dst = w < retained_welford_tiles ? w : welford_input_dst;
             transpose_tile(dfb_x_welford_id, w + index_h_offset, stats_input_dst);
-            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(stats_input_dst, 0, tile_width);
+            two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum>(stats_input_dst, 0, tile_width);
         }
         // Do the partial statistics tile, if any. It is the tile immediately after this core's full tiles
         // (index_h_offset + num_full_welford_tiles), i.e. the last real tile of this core's logical
@@ -457,10 +457,10 @@ void kernel_main() {
                     : welford_input_dst;
             transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, stats_input_dst);
             if (num_full_welford_tiles == 0) {
-                two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+                two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
                     stats_input_dst, 0, partial_welford_tile_w);
             } else {
-                two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(
+                two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum>(
                     stats_input_dst, 0, partial_welford_tile_w);
             }
         }

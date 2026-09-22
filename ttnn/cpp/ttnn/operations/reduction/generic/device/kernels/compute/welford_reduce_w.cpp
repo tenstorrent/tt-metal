@@ -87,10 +87,10 @@ void kernel_main() {
             dfb_in.pop_front(onetile);
 #endif
             if (wt == 0) {
-                two_pass_stats_update_shifted_rows<false, true>(
+                two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
                     stats_input_dst, 0, (wt == Wt - 1) ? last_tile_rows : tile_width);
             } else {
-                two_pass_stats_update_shifted_rows<false>(
+                two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum>(
                     stats_input_dst, 0, (wt == Wt - 1) ? last_tile_rows : tile_width);
             }
         }

@@ -307,13 +307,13 @@ void kernel_main() {
 
                     if (mt == 0 && channels_left == num_channels_per_group) {
                         two_pass_stats_update_shifted_rows<
-                            false /* accumulate_m2 */,
-                            true /* initialize_anchor */,
+                            TwoPassAccumulation::ShiftedSum,
+                            TwoPassAnchor::Initialise,
                             num_groups == 1 /* dual_accumulator */>(input_dst, group_offset, cols_consumed);
                     } else {
                         two_pass_stats_update_shifted_rows<
-                            false /* accumulate_m2 */,
-                            false /* initialize_anchor */,
+                            TwoPassAccumulation::ShiftedSum,
+                            TwoPassAnchor::Reuse,
                             num_groups == 1 /* dual_accumulator */>(input_dst, group_offset, cols_consumed);
                     }
 

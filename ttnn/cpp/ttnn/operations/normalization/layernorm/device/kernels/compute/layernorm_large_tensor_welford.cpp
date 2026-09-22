@@ -173,7 +173,7 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_stats_input, i, input_dst);
-            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+            two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
                 input_dst, 0, rows);
             block_n += rows;
         }
@@ -181,7 +181,7 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_stats_input, i, input_dst);
-            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(input_dst, 0, rows);
+            two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum>(input_dst, 0, rows);
             block_n += rows;
         }
         two_pass_stats_finish_shifted_mean<true /* dual_sum */, true /* retain_anchor */>(reciprocal_lut[block_n - 1]);
@@ -319,7 +319,7 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_x_welford, i, input_dst);
-            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */, true /* initialize_anchor */>(
+            two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
                 input_dst, 0, rows);
             block_n += rows;
         }
@@ -327,7 +327,7 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_x_welford, i, input_dst);
-            two_pass_stats_update_shifted_rows<false /* accumulate_m2 */>(input_dst, 0, rows);
+            two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum>(input_dst, 0, rows);
             block_n += rows;
         }
         two_pass_stats_finish_shifted_mean<true /* dual_sum */, true /* retain_anchor */>(reciprocal_lut[block_n - 1]);
