@@ -335,11 +335,13 @@ ALWI void reduce_accumulate_via_add(
     // Quasar binds the output descriptor at op init, even when buffer formats match.
     ckernel::pack_init(output_dfb_id);
 #endif
-    // Light: (re)load the SFPU reduce macro (persists across the adds). Skipped under ReduceWithinTile::Skip —
-    // there is no sfpu_reduce to arm. The later AVG scale initializes its scalar op when needed, but a caller's
-    // SFPU post_reduce_op should still follow the normal contract and run its own <op>_tile_init.
+    // Load the SFPU reduce macro only for calls that perform the within-tile collapse.
+    // The later AVG scale initializes its scalar op when needed, but a caller's SFPU post_reduce_op should
+    // still follow the normal contract and run its own <op>_tile_init.
     if constexpr (within_tile == ReduceWithinTile::Collapse) {
-        sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+        if (do_finalize) {
+            sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+        }
     }
     // Basic validity the reduce() dispatch skips on this path (its compile-time restrictions are asserted
     // there). Capacity self-asserts in each wait_front/reserve_back, except NoWaitNoPop which does neither.
@@ -691,7 +693,9 @@ ALWI void reduce_accumulate_via_add(
                         add_binary_tile_init();
                         add_binary_tile(0, 1, 0);  // DST[0] = DST[0] + DST[1] (fp32 SFPU add)
                         if constexpr (within_tile == ReduceWithinTile::Collapse) {
-                            sfpu_reduce_init<PoolType::SUM, dst_fmt>();  // restore the reduce macro to finalize with
+                            if (do_finalize) {
+                                sfpu_reduce_init<PoolType::SUM, dst_fmt>();  // restore the reduce macro to finalize with
+                            }
                         }
 #else
                         ASSERT(false);  // CopySeedSfpuAdd needs add_binary_tile (WH/BH only)
