@@ -105,7 +105,40 @@ def candidates(name, K, N, act):
                     tpc.create_matmul_1d_decode_progcfg(1, K, N, num_cores=cores, fused_activation=act, grid_w=gw),
                 )
             )
+    if name == "lm_head":
+        out = []  # the generic 1D grids overflow L1 (per_core_N 71-243 tiles x in0_block_w 8); use small K blocks
+        k_tiles = K // 32
+        for cores in (110, 100, 88, 80):
+            gw = GRID_W if cores in (110, 88) else 10
+            pcN = math.ceil(n_tiles / cores)
+            for ibw in (1, 2, 4):
+                for sub_w in (1, 2, 4):
+                    if pcN % sub_w:
+                        continue
+                    pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(gw, math.ceil(cores / gw)),
+                        in0_block_w=ibw,
+                        out_subblock_h=1,
+                        out_subblock_w=sub_w,
+                        per_core_M=1,
+                        per_core_N=pcN,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=True,
+                    )
+                    out.append((f"1d_c{cores}_ibw{ibw}_sw{sub_w}_pcN{pcN}", pc))
     out.append(("auto", None))
+    return out
+
+
+def dram_sharded_candidates(K, N):
+    """(label, num_cores) for the DRAM-WIDTH_SHARDED weight kernel: the worker count that reads the 8 DRAM
+    shards; None = tp_common's default (_find_grid(k_tiles) ~32)."""
+    out = [("dram_default", None)]
+    k_tiles = K // 32
+    for cores in (8, 16, 24, 32, 40, 48, 56, 64, 72, 80):
+        if k_tiles % cores == 0:
+            out.append((f"dram_c{cores}", cores))
     return out
 
 
@@ -147,8 +180,10 @@ def run_one(mesh, name, K, N, wdtype, cur_factory, act):
             else:
                 exact = bool(torch.equal(ref, o_host))
             tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-            outs = [mm(pc) for _ in range(REPS)]
-            ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            try:
+                outs = [mm(pc) for _ in range(REPS)]
+            finally:
+                ttnn.end_trace_capture(mesh, tid, cq_id=0)
             ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
             best = 1e9
             for _ in range(3):
@@ -163,6 +198,79 @@ def run_one(mesh, name, K, N, wdtype, cur_factory, act):
             gbs = wbytes / best / 1e9
             logger.info(f"[SWEEP] {name} {label}: {us:.1f} us  {gbs:.0f} GB/s  exact={exact}")
             emit(shape=name, K=K, N=N, dtype=str(wdtype), label=label, us=round(us, 1), gbs=round(gbs), exact=exact)
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).splitlines()[0][:200]
+            logger.warning(f"[SWEEP] {name} {label}: FAILED {msg}")
+            emit(shape=name, K=K, N=N, dtype=str(wdtype), label=label, error=msg)
+            ttnn.synchronize_device(mesh)
+    ttnn.deallocate(w)
+    ttnn.deallocate(x)
+    if os.environ.get("SWEEP_DRAM", "1") != "1":
+        return
+    # DRAM-sharded weight path (tpc.sharded_decode_matmul): weight WIDTH_SHARDED over the 8 DRAM banks, activation
+    # L1 WIDTH_SHARDED (act_shard config), output L1 width-sharded then -> L1 interleaved (as the model does).
+    try:
+        w_mc = tpc.create_dram_sharded_mem_config(K, N)
+        w = ttnn.from_torch(w_host, dtype=wdtype, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=w_mc)
+        act_cfg = tpc.create_activation_shard_config(K)
+        x = ttnn.from_torch(x_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=act_cfg)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[SWEEP] {name} dram-sharded setup FAILED {str(e).splitlines()[0][:200]}")
+        emit(shape=name, K=K, N=N, dtype=str(wdtype), label="dram_setup", error=str(e).splitlines()[0][:200])
+        return
+
+    def mm_ds(pc):
+        o = ttnn.linear(
+            x, w, compute_kernel_config=ckc, program_config=pc, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        )
+        o2 = ttnn.to_memory_config(o, out_mc)
+        ttnn.deallocate(o)
+        return o2
+
+    for label, cores in dram_sharded_candidates(K, N):
+        try:
+            pc = tpc.create_dram_sharded_matmul_program_config(1, K, N, num_cores=cores)
+            if act is not None:
+                pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=pc.in0_block_w, per_core_M=pc.per_core_M, per_core_N=pc.per_core_N, fused_activation=act
+                )
+            o = mm_ds(pc)
+            ttnn.synchronize_device(mesh)
+            o_host = ttnn.to_torch(o)
+            ttnn.deallocate(o)
+            exact = bool(torch.equal(ref, o_host)) if ref is not None else None
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            try:
+                outs = [mm_ds(pc) for _ in range(REPS)]
+            finally:
+                ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+            best = 1e9
+            for _ in range(3):
+                ttnn.synchronize_device(mesh)
+                t0 = time.perf_counter()
+                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+                best = min(best, (time.perf_counter() - t0) / REPS)
+            ttnn.release_trace(mesh, tid)
+            for t in outs:
+                ttnn.deallocate(t)
+            us = best * 1e6
+            gbs = wbytes / best / 1e9
+            logger.info(
+                f"[SWEEP] {name} {label} (in0_block_w {pc.in0_block_w} per_core_N {pc.per_core_N}): {us:.1f} us  {gbs:.0f} GB/s  exact={exact}"
+            )
+            emit(
+                shape=name,
+                K=K,
+                N=N,
+                dtype=str(wdtype),
+                label=label,
+                us=round(us, 1),
+                gbs=round(gbs),
+                exact=exact,
+                in0_block_w=int(pc.in0_block_w),
+                per_core_N=int(pc.per_core_N),
+            )
         except Exception as e:  # noqa: BLE001
             msg = str(e).splitlines()[0][:200]
             logger.warning(f"[SWEEP] {name} {label}: FAILED {msg}")

@@ -7,6 +7,7 @@ hub ids are snapshot_download'd first (AutoConfig on bare hub id is unreliable h
 Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text config.
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
+
 import os
 from pathlib import Path
 
@@ -92,9 +93,7 @@ def tp_path_forced_for_single_device_from_hf(hf_model=None):
         with open(os.path.join(hf_model, "config.json")) as f:
             cfg = json.load(f)
         cfg = cfg.get("text_config", cfg)
-        return tp_path_forced_for_single_device(
-            int(cfg.get("hidden_size", 0)), int(cfg.get("num_hidden_layers", 0))
-        )
+        return tp_path_forced_for_single_device(int(cfg.get("hidden_size", 0)), int(cfg.get("num_hidden_layers", 0)))
     except (OSError, ValueError, TypeError):
         return tp_path_forced_for_single_device(0, 0)
 
@@ -311,8 +310,15 @@ class Qwen36ModelArgs(ModelArgs):
         # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6.
         # TP=1: N=17408 (544 tiles) on 44 cores -> per_core_N=13 (prime, 1-wide subblock); 77 cores (11x7) ->
         # per_core_N=8 -> 4-wide subblock. Same subblock-rescue for w2 / wo / gdn_out below (44 cores -> 4/core).
-        _gu_cores = 77 if tp == 1 else 44
-        _rp_cores = 44 if tp == 1 else 33
+        # TP=1 grids re-swept on one BH die at the TP=1 shapes (lane C, decode_matmul_sweep_tp1_scratch.py, traced
+        # replays, every candidate checked bit-identical to the legacy grid -- fp32 dest accumulation makes the grid
+        # a pure partition of N): gate/up bf4 [5120,17408] 186.5 -> 177.3 us on the full 11x10 grid (per_core_N 5);
+        # down bf8 [17408,5120] 269 -> 249 us, wo [8192,5120] 130 -> 121 us and gdn_out [6144,5120] 99 -> 92 us on
+        # an 11x3 grid (per_core_N 5); qkvzab [5120,16480] 254 -> 244 us (11x10); attn qkv [5120,14336] 242 -> 215 us
+        # (11x9). ~4 ms of a ~74 ms fused-GDN decode step. Opt-in via QWEN36_TP1_DECODE_GRIDS=1 until validated e2e.
+        _tp1_grids = tp == 1 and os.environ.get("QWEN36_TP1_DECODE_GRIDS", "0") == "1"
+        _gu_cores = (110 if _tp1_grids else 77) if tp == 1 else 44
+        _rp_cores = (32 if _tp1_grids else 44) if tp == 1 else 33
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
@@ -336,12 +342,16 @@ class Qwen36ModelArgs(ModelArgs):
         # TP=1: the per-device N is 4x TP=4's (14336 = 448 tiles); on the 64-core grid per_core_N=7 (prime ->
         # 1-wide subblock). 56 cores (8x7) give per_core_N=8 -> a 4-wide subblock. Untuned otherwise.
         self.attn_qkv_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=56 if tp == 1 else 64
+            M,
+            self.dim,
+            self.attn_qkv_fused_dim_tp,
+            num_cores=(99 if _tp1_grids else 56) if tp == 1 else 64,
+            grid_w=self.decode_grid_w if _tp1_grids else 8,
         )
         # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
         # vs the old 8x5). On WH (decode_grid_w=8) this falls back to 8x6.
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44, grid_w=self.decode_grid_w
+            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=110 if _tp1_grids else 44, grid_w=self.decode_grid_w
         )
         # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
         # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.
