@@ -264,6 +264,12 @@ TIER_TRIAGE = {
     "deploy": ["host_side", "device_side"],
 }
 
+# Triage checks whose WARN is recorded as PASS, by bare (unprefixed) name. Both
+# count host state accumulated over a boot — correctable AER, kernel-log fault
+# lines — so they WARN on units everything else calls healthy, and one phase
+# WARN is a run WARN. FAIL continues to follow the normal triage gating policy.
+TRIAGE_ADVISORY_WARN = frozenset({"hostside_pcie_aer", "hostside_kernel_log"})
+
 # The scripts' home, relative to the repo root.
 TRIAGE_SUBDIR = "tools/scaleout/kmd_triage"
 
@@ -1806,11 +1812,21 @@ def normalize_external_check(
 
 
 def normalize_triage_check(payload: dict, gating: bool) -> Check:
-    """One triage-script finding as a Check. See normalize_external_check."""
+    """One triage-script finding as a Check. See normalize_external_check.
+
+    TRIAGE_ADVISORY_WARN checks record their WARN as PASS. Keyed on the status
+    the tool wrote, so an unparseable one still lands on WARN; independent of
+    ``--triage-gating``, which decides what a FAIL does and never gated a WARN.
+    """
+    name = str(payload.get("name") or "")
+    advisory_warn = (
+        str(payload.get("status") or "").upper() == WARN and name.removeprefix("triage_") in TRIAGE_ADVISORY_WARN
+    )
     return normalize_external_check(
         payload,
         prefix="triage_",
         hold_fail_at=None if gating else WARN,
+        hold_warn_at=PASS if advisory_warn else None,
         gating_flag="--triage-gating",
     )
 
@@ -1818,21 +1834,20 @@ def normalize_triage_check(payload: dict, gating: bool) -> Check:
 def normalize_qsfp_check(payload: dict, gating: bool) -> Check:
     """One QSFP-test finding as a Check. See normalize_external_check.
 
-    The phase reports PASS, FAIL or SKIP and never WARN, and until
-    ``--qsfp-gating`` says otherwise it does not report FAIL either: the tool is
-    still being validated against the fleet, and a finding it is not yet trusted
-    to have got right should not be the thing an operator's eye is drawn to.
-    Everything it found is still on the record — the details line is the tool's
-    own, the ``data`` is untouched, and the annotation says what was held — so
-    the fleet data needed to decide whether to turn gating on is collected
-    either way. It is one step, FAIL straight to PASS, so nothing lands on the
-    WARN this phase has undertaken not to raise.
+    Until ``--qsfp-gating`` says otherwise the phase reports only PASS and SKIP:
+    the tool is still being validated against the fleet, and a finding it is not
+    yet trusted to have got right should not be the thing an operator's eye is
+    drawn to. Everything it found is still on the record — the details line is
+    the tool's own, the ``data`` is untouched, and the annotation says what was
+    held — so the fleet data needed to decide whether to turn gating on is
+    collected either way. Both holds lift together; a held FAIL is one step,
+    straight to PASS, so nothing lands on the WARN the phase does not raise.
     """
     return normalize_external_check(
         payload,
         prefix="qsfp_",
         hold_fail_at=None if gating else PASS,
-        hold_warn_at=PASS,
+        hold_warn_at=None if gating else PASS,
         gating_flag="--qsfp-gating",
     )
 

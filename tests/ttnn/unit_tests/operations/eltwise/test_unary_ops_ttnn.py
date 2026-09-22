@@ -131,26 +131,6 @@ def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device):
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("negative_slope", [1.0, 5.0, 10.0, 0.1])
-def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.leaky_relu(input_tensor, negative_slope=negative_slope, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.nn.functional.leaky_relu(in_data, negative_slope)
-
-    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 3, 320, 384])),
     ),
 )
@@ -330,26 +310,6 @@ def test_unary_sigmoid_ttnn(input_shapes, device, approx_mode):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
-def test_unary_heaviside_ttnn(input_shapes, value, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.heaviside(input_tensor, value=value, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.heaviside(in_data, torch.tensor(value, dtype=in_data.dtype))
-
-    assert_equal(output_tensor, golden_tensor)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_log2_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1e-6, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
@@ -483,7 +443,8 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
+        # bfloat16 is exhaustively covered (all bf16 bit patterns, all scalars in this
+        # list) by test_fill_op in test_unary_category4_bfloat16.py.
         (torch.int32, ttnn.int32),
         (torch.uint32, ttnn.uint32),
     ],

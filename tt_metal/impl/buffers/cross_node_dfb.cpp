@@ -27,14 +27,12 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 void initialize_cross_node_dfb(
-    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     CoreRangeSet& sender_cores_out,
     CoreRangeSet& receiver_cores_out,
     CoreRangeSet& all_cores_out,
     uint32_t& num_receivers_out) {
-    TT_FATAL(device != nullptr, "Device cannot be null");
     TT_FATAL(receiver_cores.num_cores() > 0, "Sender core {} must have a non-empty receiver set", sender_core.str());
 
     sender_cores_out = CoreRangeSet(CoreRange(sender_core));
@@ -94,29 +92,29 @@ bool is_compatible_borrowed_device(distributed::MeshDevice* expected, IDevice* b
 }  // namespace
 
 CrossNodeDFB::CrossNodeDFB(
-    distributed::MeshDevice* device,
+    distributed::MeshDevice& device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries,
     BufferType buffer_type) :
-    device_(device), sender_core_(sender_core), entry_size_(entry_size), num_entries_(num_entries) {
+    device_(&device), sender_core_(sender_core), entry_size_(entry_size), num_entries_(num_entries) {
     initialize_cross_node_dfb(
-        device, sender_core, receiver_cores, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
+        sender_core, receiver_cores, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
 
     this->setup_buffers(buffer_type);
 }
 
 CrossNodeDFB::CrossNodeDFB(
-    distributed::MeshDevice* device,
+    distributed::MeshDevice& device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries,
     Buffer& data_buffer) :
-    device_(device), sender_core_(sender_core), entry_size_(entry_size), num_entries_(num_entries) {
+    device_(&device), sender_core_(sender_core), entry_size_(entry_size), num_entries_(num_entries) {
     initialize_cross_node_dfb(
-        device, sender_core, receiver_cores, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
+        sender_core, receiver_cores, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
 
     this->setup_buffers_with_borrowed_data(data_buffer);
 }
@@ -133,19 +131,18 @@ void CrossNodeDFB::allocate_config_buffer(BufferType config_buffer_type) {
     config_page_size_ = compute_config_page_layout(max_num_receivers_per_sender_, l1_alignment).page_size;
 
     auto shard_params = ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_all_cores, 1});
-    ShardedBufferConfig config = {
-        .device = device_,
-        .size = config_page_size_ * num_all_cores,
-        .page_size = config_page_size_,
-        .buffer_type = config_buffer_type,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(shard_params),
-    };
-    config_buffer_ = distributed::AnyBuffer::create(config);
+    config_buffer_ = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = config_page_size_ * num_all_cores},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = config_page_size_,
+            .buffer_type = config_buffer_type,
+            .sharding_args = BufferShardingArgs(std::move(shard_params), TensorMemoryLayout::HEIGHT_SHARDED),
+        },
+        device_);
 }
 
 void CrossNodeDFB::build_config_pages() {
-    TT_FATAL(config_buffer_.get_buffer() != nullptr, "CrossNodeDFB config buffer must exist before building pages");
+    TT_FATAL(config_buffer_ != nullptr, "CrossNodeDFB config buffer must exist before building pages");
     TT_FATAL(data_address_ != 0, "CrossNodeDFB data address must be set before building config pages");
 
     const auto context_id = extract_context_id(device_);
@@ -217,16 +214,15 @@ void CrossNodeDFB::setup_buffers(BufferType buffer_type) {
     const uint32_t ring_size = entry_size_ * num_entries_;
     auto shard_params_data =
         ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_all_cores, 1});
-    ShardedBufferConfig data_shard_cfg = {
-        .device = device_,
-        .size = ring_size * num_all_cores,
-        .page_size = ring_size,
-        .buffer_type = buffer_type,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(shard_params_data),
-    };
-    owned_dfb_buffer_ = distributed::AnyBuffer::create(data_shard_cfg);
-    data_address_ = static_cast<uint32_t>(owned_dfb_buffer_.get_buffer()->address());
+    owned_dfb_buffer_ = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = ring_size * num_all_cores},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = ring_size,
+            .buffer_type = buffer_type,
+            .sharding_args = BufferShardingArgs(std::move(shard_params_data), TensorMemoryLayout::HEIGHT_SHARDED),
+        },
+        device_);
+    data_address_ = static_cast<uint32_t>(owned_dfb_buffer_->address());
     allocate_config_buffer(buffer_type);
     build_config_pages();
 }
@@ -270,7 +266,7 @@ void CrossNodeDFB::validate_data_buffer(Buffer& data_buffer) const {
 
 void CrossNodeDFB::set_data_address(uint32_t data_address) {
     // Drop any CrossNode-owned ring before pointing at an external address.
-    owned_dfb_buffer_ = {};
+    owned_dfb_buffer_.reset();
     TT_FATAL(data_address != 0, "CrossNodeDFB data address must be non-zero");
     data_address_ = data_address;
 }
@@ -284,7 +280,7 @@ void CrossNodeDFB::setup_buffers_with_borrowed_data(Buffer& data_buffer) {
 
 void CrossNodeDFB::retarget_data_buffer(Buffer& data_buffer) {
     validate_data_buffer(data_buffer);
-    TT_FATAL(config_buffer_.get_buffer() != nullptr, "CrossNodeDFB config buffer must already exist for retarget");
+    TT_FATAL(config_buffer_ != nullptr, "CrossNodeDFB config buffer must already exist for retarget");
     set_data_address(static_cast<uint32_t>(data_buffer.address()));
     // Host-only rebuild; device L1 is unchanged until the next program launch.
     build_config_pages();
@@ -292,7 +288,7 @@ void CrossNodeDFB::retarget_data_buffer(Buffer& data_buffer) {
 
 // Accessors -------------------------------------------------------------------
 
-const Buffer& CrossNodeDFB::config_buffer() const { return *config_buffer_.get_buffer(); }
+const Buffer& CrossNodeDFB::config_buffer() const { return *config_buffer_->get_reference_buffer(); }
 uint32_t CrossNodeDFB::buffer_address() const { return data_address_; }
 uint32_t CrossNodeDFB::config_address() const { return static_cast<uint32_t>(config_buffer().address()); }
 const std::vector<uint32_t>& CrossNodeDFB::config_page(const CoreCoord& core) const {
@@ -310,7 +306,7 @@ const CoreRangeSet& CrossNodeDFB::all_cores() const { return all_cores_; }
 
 uint8_t CreateCrossNodeDFB(
     Program& program,
-    distributed::MeshDevice* device,
+    distributed::MeshDevice& device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
@@ -322,7 +318,7 @@ uint8_t CreateCrossNodeDFB(
 
 uint8_t CreateCrossNodeDFB(
     Program& program,
-    distributed::MeshDevice* device,
+    distributed::MeshDevice& device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,

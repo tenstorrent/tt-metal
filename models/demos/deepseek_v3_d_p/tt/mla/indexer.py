@@ -291,7 +291,6 @@ class TtIndexer:
         slot_num: int = 1,
         layer_num: int = 1,
         first_layer_idx: int | None = None,
-        tp_shard_kv: bool = False,
         output_tp_sequence_sharded: bool = False,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
@@ -316,7 +315,8 @@ class TtIndexer:
         self.output_tp_sequence_sharded = output_tp_sequence_sharded
         # KV dedup: index key cache sharded across SP*TP. Adds a TP-inner all-gather leg
         # (_tp_replicate_index_kbuf, which rebuilds the fused ring's k_local) and passes tp_axis to the write.
-        self.tp_shard_kv = tp_shard_kv
+        # The indexer exists only on the sparse (DSA) path, and that path always dedups its caches across
+        # SP*TP -- ttMLA derives the same thing. Not a constructor flag: there is no non-deduped indexer.
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
         self.weight_cache_path = weight_cache_path
@@ -448,9 +448,11 @@ class TtIndexer:
 
     @property
     def tp_shard_kv_axis(self):
-        """The tp_axis to hand the index-cache write, or None when that cache is TP-replicated. Mirrors
-        ttMLA.tp_shard_kv_axis so the axis and its enabling flag cannot drift apart."""
-        return self.tp_axis if self.tp_shard_kv else None
+        """The tp_axis to hand the cache-write ops. Always set: the indexer exists only on the sparse (DSA)
+        path and that path always dedups its caches across SP*TP, so there is no TP-replicated variant to
+        return None for. Kept as a property (rather than inlining self.tp_axis) so every
+        update_padded_kv_cache call site keeps reading the axis from one place."""
+        return self.tp_axis
 
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
@@ -583,6 +585,19 @@ class TtIndexer:
         so keys land at the same positions update_padded_kv_cache writes them to. For DS (half-split
         weights) self._rope_perm first reorders the rope half into the interleaved arrangement so this
         interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k)."""
+        if self._rope_perm is None:
+            assert x.shape[-1] == self.index_args.index_head_dim, "Indexer input width must match index_head_dim"
+            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                x,
+                rope_tensors["cos_matrix"],
+                rope_tensors["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                metadata[1] if metadata is not None else kv_actual_global,
+                cluster_axis=self.sp_axis,
+                seq_subshard_axis=seq_subshard_axis,
+                rotary_dim=64,
+            )
+        # DeepSeek's half-split permutation retains the established path.
         h, n = x.shape[1], x.shape[2]
         pe = ttnn.slice(x, [0, 0, 0, 0], [1, h, n, 64])
         nope = ttnn.slice(x, [0, 0, 0, 64], [1, h, n, self.index_args.index_head_dim])
@@ -946,19 +961,21 @@ class TtIndexer:
         # row). The SP leg -- the full-T gather that dominated this path -- stays fused and overlapped with
         # scoring rather than running as a blocking pre-pass. The rebuilt slab is batch-1, so the in-kernel
         # slot select is not needed (cache_batch_idx=None); everything else is identical to the dense path.
-        kv_deduped = self.tp_shard_kv and self.tp_factor > 1
-        k_local = (
-            self._tp_replicate_index_kbuf(
-                index_kv_cache,
-                cache_batch_idx,
-                # metadata[0] is the 1-element USER id; the gather recomposes user*layers + layer_idx
-                # on-device, exactly as the dense path's cache_batch_idx_tensor does below.
-                slot_id_tensor=metadata[0] if metadata is not None else None,
-                num_layers=self._index_cache_layers,
-                layer_idx=cache_layer_idx,
-            )
-            if kv_deduped
-            else index_kv_cache
+        # Unconditional: the sparse path always dedups, so the index cache is ALWAYS striped across SP*TP
+        # and always needs the TP-inner stage. (The old non-dedup route passed index_kv_cache straight
+        # through.) ttMLA asserts tp_factor > 1 at construction for every sparse build.
+        assert self.tp_factor > 1, (
+            f"the DSA indexer requires tp_factor > 1 (got {self.tp_factor}): its index-key cache is deduped "
+            "across SP*TP and there is no TP leg to reassemble at tp=1"
+        )
+        k_local = self._tp_replicate_index_kbuf(
+            index_kv_cache,
+            cache_batch_idx,
+            # metadata[0] is the 1-element USER id; the gather recomposes user*layers + layer_idx
+            # on-device, exactly as the dense path's cache_batch_idx_tensor did.
+            slot_id_tensor=metadata[0] if metadata is not None else None,
+            num_layers=self._index_cache_layers,
+            layer_idx=cache_layer_idx,
         )
         k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=self.sp_axis)
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
@@ -982,7 +999,9 @@ class TtIndexer:
             # cache_user_id=0. The KV write IS metadata-driven, so a multi-user traced request would write
             # user N's index-K and then score it against user 0's: wrong top-k, no error. Hand over the
             # 1-element user id and let the reader recompose user*layers + layer_idx on-device.
-            cache_batch_idx_tensor=metadata[0] if (metadata is not None and not kv_deduped) else None,
+            # Always None: a deduped run hands the op a rebuilt BATCH-1 slab, so there is no slot to
+            # select in-kernel. The slot was already resolved on-device by _tp_replicate_index_kbuf.
+            cache_batch_idx_tensor=None,
             index_cache_num_layers=self._index_cache_layers,
             # The REMAPPED local (self._cache_slot(...) above), which is exactly the term the scalar
             # cache_batch_idx is built from. self._index_layer_idx is only the same value when
@@ -990,13 +1009,11 @@ class TtIndexer:
             index_cache_layer_idx=cache_layer_idx,
             program_config=cfg,
             seq_subshard_axis=self.tp_axis if tpsp else None,
-            # Dropped for either reason: the metadata path selects the slot on-device from
-            # cache_batch_idx_tensor, and a kv_deduped run hands the op a rebuilt BATCH-1 slab with no
-            # slot to select at all.
-            cache_batch_idx=None if (metadata is not None or kv_deduped) else cache_batch_idx,
+            # Always dropped: the deduped path hands the op a rebuilt BATCH-1 slab with no slot to select.
+            cache_batch_idx=None,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
-            block_cyclic_cache_tp_sharded=kv_deduped,  # rebuilt slab is TP-stripe-major: decode sp*tp stripes
+            block_cyclic_cache_tp_sharded=True,  # rebuilt slab is TP-stripe-major: decode sp*tp stripes
             # Metadata path: kv_len is derived on-device as chunk_start + sp*chunk_local, i.e. end_pos --
             # NOT valid_pos. The two coincide on a full chunk; on a partial final chunk the scored window
             # runs past the real tokens. The WRITE is clamped to actual_end (valid_global in write_k), so

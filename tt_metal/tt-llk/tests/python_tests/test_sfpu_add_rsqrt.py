@@ -52,6 +52,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     SFPU_FAST_APPROX,
+    SFPU_TYPED_BF16_STORE,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
 )
@@ -131,6 +132,7 @@ def _build_add_rsqrt(
     approx=ApproximationMode.No,
     fast_approx=False,
     spec_A=None,
+    typed_bf16_store=False,
 ):
     """Build one variant without running it, returning (configuration, src_A).
 
@@ -154,6 +156,7 @@ def _build_add_rsqrt(
         templates=[
             APPROX_MODE(approx),
             SFPU_FAST_APPROX(fast_approx),
+            SFPU_TYPED_BF16_STORE(typed_bf16_store),
             SFPU_UNARY_SCALAR(_bits(addend)),
             VECTOR_MODE(VectorMode.RC),
         ],
@@ -200,10 +203,17 @@ def _run_add_rsqrt(
     approx=ApproximationMode.No,
     fast_approx=False,
     spec_A=None,
+    typed_bf16_store=False,
 ):
     """Compile+run one variant, returning (device_tensor, input_tensor) as fp32."""
     configuration, src_A = _build_add_rsqrt(
-        formats, dest_acc, addend, approx=approx, fast_approx=fast_approx, spec_A=spec_A
+        formats,
+        dest_acc,
+        addend,
+        approx=approx,
+        fast_approx=fast_approx,
+        spec_A=spec_A,
+        typed_bf16_store=typed_bf16_store,
     )
     return _finish_add_rsqrt(configuration, src_A, formats, dest_acc)
 
@@ -213,12 +223,15 @@ def _run_add_rsqrt(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     addend=list(ADDENDS),
     approx=[ApproximationMode.No, ApproximationMode.Yes],
+    typed_bf16_store=[False, True],
 )
-def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx):
+def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx, typed_bf16_store):
     """rsqrt(x + addend) over a strictly positive domain."""
     _skip_unsupported(formats, dest_acc)
 
-    device, seen = _run_add_rsqrt(formats, dest_acc, addend, approx=approx)
+    device, seen = _run_add_rsqrt(
+        formats, dest_acc, addend, approx=approx, typed_bf16_store=typed_bf16_store
+    )
 
     # Golden mirrors the functor: add in fp32, rsqrt, then the functor's own
     # convert<vFloat16b>(Nearest) when the dest is 16-bit.
