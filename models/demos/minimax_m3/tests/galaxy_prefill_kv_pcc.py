@@ -36,16 +36,21 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
                         iters=N            PREFILL_TPS_ITERS for this run                [default: env]
                         skip_pcc=0|1       PREFILL_SKIP_PCC for this run                 [default: env]
                         expected_tps=X perf_margin=F pcc_threshold=F                    [default: env]
+                        capacity=N         KV-cache capacity for this run (tokens; rounded up to a chunk
+                                           multiple)                          [default: PREFILL_MAX_SEQ_LEN or fit]
                         label=<str>        tag for the log lines / summary
   PREFILL_GOLDEN_ROOT dir that bare trace names resolve under   [default: dirname(PREFILL_TRACE_DIR)]
-  PREFILL_MAX_SEQ_LEN KV-cache capacity (tokens) the model is built and compiled for; every run's
-                      padded length must fit. [default: max over PREFILL_TRACE_DIR and the batch
-                      file's traces; REQUIRED for stdin / fifo unless PREFILL_TRACE_DIR is set]
+  PREFILL_MAX_SEQ_LEN when set, the FIXED KV-cache capacity (tokens) for every run without its own
+                      capacity=; when unset each run FITS the cache to its trace (padded length), as a
+                      standalone run would. [default: unset -> fit]
   PREFILL_RESULTS_JSONL  append one JSON line per run (perf + min PCC + status)         [default: unset]
-  The chunk size (PREFILL_CHUNK_SIZE) and the cache capacity are FIXED for the process: the MoE
-  dispatch buffers, the indexed RoPE tables and the JIT warm-up are all sized by them at build time.
-  Multi-run mode is therefore chunked-only (PREFILL_CHUNKED=0 is rejected); a one-shot run is just
-  a trace whose padded length equals the chunk size.
+  The chunk size (PREFILL_CHUNK_SIZE) is FIXED for the process: it is baked into the MoE dispatch
+  buffers at build time. Multi-run mode is therefore chunked-only (PREFILL_CHUNKED=0 is rejected); a
+  one-shot run is just a trace whose padded length equals the chunk size. The cache capacity is NOT
+  fixed: when a run needs a different capacity the KV cache is re-allocated, the indexed RoPE rebuilt
+  and the JIT buckets re-warmed (TtPrefillRuntime.reconfigure_capacity) — seconds to minutes, no
+  weight reload. Fitting matters: the dense layers' ring-joint SDPA gathers the whole cache shard per
+  chunk, so an over-sized cache costs real time (MSA layers are bounded by the valid prefix).
 
   # serve: weights load once, then from ANY shell on the node:
   PREFILL_TRACE_DIR=$GOLDEN/longbook_56320 PREFILL_RUNS=fifo:/tmp/m3_pcc.fifo \
@@ -202,6 +207,7 @@ class RunSpec:
     expected_tps: float | None = None
     perf_margin: float = 0.05
     pcc_threshold: float | None = None  # None -> PREFILL_STANDALONE_CHUNKED_PCC (0.88)
+    capacity: int | None = None  # KV-cache tokens for this run; None -> PREFILL_MAX_SEQ_LEN, else fit the trace
     label: str = ""
 
     @classmethod
@@ -215,6 +221,7 @@ class RunSpec:
             expected_tps=float(exp) if exp is not None else None,
             perf_margin=float(os.environ.get("PREFILL_PERF_MARGIN", "0.05")),
             pcc_threshold=float(thr) if thr is not None else None,
+            capacity=int(cap) if (cap := os.environ.get("PREFILL_MAX_SEQ_LEN")) else None,
         )
 
     @classmethod
@@ -246,6 +253,8 @@ class RunSpec:
                 spec.perf_margin = float(v)
             elif k == "pcc_threshold":
                 spec.pcc_threshold = float(v)
+            elif k == "capacity":
+                spec.capacity = int(v)
             elif k == "label":
                 spec.label = v
             else:
@@ -305,26 +314,47 @@ def iter_run_specs(source: str, golden_root: str | None):
         yield from parse_lines(fh)
 
 
-def run_one(runtime, kv_cache, mesh, spec: RunSpec, num_layers, hf_config) -> dict:
+def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) -> dict:
     """Prefill ``spec.trace_dir`` into slot 0 of the resident model, time it, gate it, PCC it. The chunk
-    size and cache capacity are the runtime's (fixed at build); the trace's padded length must fit."""
+    size is the runtime's (fixed at build). The KV-cache capacity is per run — ``spec.capacity`` or the
+    trace's padded length — and when it differs from the resident one the cache in ``state["kv_cache"]``
+    is re-allocated, the runtime re-targeted (reconfigure_capacity) and the JIT buckets re-warmed."""
+    from models.demos.minimax_m3.tt.attention import allocate_kv_caches
+
     chunk = runtime.config.chunk_size
-    capacity = runtime.config.max_seq_len
     token_ids = load_trace_tokens(spec.trace_dir)
     n_tokens = len(token_ids)
     n_chunks = max(1, math.ceil(n_tokens / chunk))
     total = n_chunks * chunk
+    capacity = math.ceil((spec.capacity or total) / chunk) * chunk
     assert total <= capacity, (
-        f"trace {spec.trace_dir} pads to {total} tokens ({n_chunks} x {chunk}) but the resident model's "
-        f"KV cache holds {capacity}; raise PREFILL_MAX_SEQ_LEN and restart"
+        f"trace {spec.trace_dir} pads to {total} tokens ({n_chunks} x {chunk}) but the requested capacity "
+        f"is {capacity} (capacity= / PREFILL_MAX_SEQ_LEN); drop it or raise it"
     )
     tps_iters = spec.tps_iters
     print(
         f"[prefill-pcc] === run '{spec.name}': golden={spec.trace_dir} n_tokens={n_tokens} "
-        f"chunk={chunk} n_chunks={n_chunks} total={total} (capacity {capacity}) tps_iters={tps_iters} "
+        f"chunk={chunk} n_chunks={n_chunks} total={total} capacity={capacity} tps_iters={tps_iters} "
         f"skip_pcc={spec.skip_pcc}",
         flush=True,
     )
+    recompile_s = 0.0
+    if capacity != runtime.config.max_seq_len or not runtime.compiled:
+        t0 = time.perf_counter()
+        print(
+            f"[prefill-pcc] capacity {runtime.config.max_seq_len} -> {capacity}: re-allocating the KV cache, "
+            f"rebuilding indexed RoPE, re-warming {capacity // chunk} JIT buckets (weights stay resident) ...",
+            flush=True,
+        )
+        state["kv_cache"].deallocate()
+        runtime.reconfigure_capacity(capacity)
+        state["kv_cache"] = allocate_kv_caches(
+            mesh, num_layers=num_layers, max_seq_len=capacity, num_users=1, head_dim=hf_config.head_dim
+        )
+        runtime.compile(state["kv_cache"])
+        recompile_s = time.perf_counter() - t0
+        print(f"[prefill-pcc] re-targeted at capacity {capacity} in {recompile_s:.1f} s", flush=True)
+    kv_cache = state["kv_cache"]
     if n_tokens < MSA_MIN_TOKENS:
         print(
             f"[prefill-pcc] WARNING: prompt is only {n_tokens} tokens (< MSA floor {MSA_MIN_TOKENS}); padded to "
@@ -394,6 +424,8 @@ def run_one(runtime, kv_cache, mesh, spec: RunSpec, num_layers, hf_config) -> di
         "n_tokens": n_tokens,
         "chunk": chunk,
         "n_chunks": n_chunks,
+        "capacity": capacity,
+        "recompile_s": recompile_s,
         "tps_iters": tps_iters,
         "whole_ms": w * 1000,
         "whole_tps": whole_tps,
@@ -431,7 +463,7 @@ def _fmt_result(r: dict) -> str:
     if r.get("status") != "ok":
         return f"{r['label']:<28} {r.get('status', '?'):<6} {r.get('error', '')}"
     return (
-        f"{r['label']:<28} ok     {r['n_tokens']:>6} tok  whole {r['whole_ms']:>9.1f} ms {r['whole_tps']:>8.1f} tok/s  "
+        f"{r['label']:<28} ok     {r['n_tokens']:>6} tok cap {r['capacity']:>6}  whole {r['whole_ms']:>9.1f} ms {r['whole_tps']:>8.1f} tok/s  "
         f"last {r['last_chunk_ms']:>8.1f} ms {r['last_chunk_tps']:>8.1f} tok/s  minPCC {pcc}"
     )
 
@@ -468,9 +500,9 @@ def main():
 
     # --- resolve the process-wide (chunk, capacity) and the run list -----------------------------
     # Single-run: exactly the historical behaviour (one-shot or chunked, capacity == padded length).
-    # Multi-run: chunked only; capacity = PREFILL_MAX_SEQ_LEN or the largest known trace, rounded up
-    # to a chunk multiple. Every later spec must fit, so pick the capacity for the biggest trace you
-    # intend to run (compile() warms one JIT bucket per chunk of capacity — 11 for 56320 @ 5120).
+    # Multi-run: chunked only. The capacity chosen here is only the INITIAL one (first build + warm-up):
+    # run_one re-targets the resident model whenever a spec needs a different capacity. Default it to
+    # the first known trace so the common case (PREFILL_TRACE_DIR == the first spec) needs no re-warm.
     batch_specs = None  # only for a regular runs file (known up front)
     if runs_source is None:
         if not golden_dir:
@@ -529,18 +561,13 @@ def main():
         if cap_env:
             capacity = math.ceil(int(cap_env) / chunk) * chunk
         elif known_totals:
-            capacity = max(known_totals)
+            capacity = known_totals[0]  # PREFILL_TRACE_DIR if set, else the first batch spec
         else:
-            print(
-                "ERROR: multi-run over stdin/fifo needs the KV-cache capacity up front: set PREFILL_MAX_SEQ_LEN "
-                "(tokens) or PREFILL_TRACE_DIR (its padded length is used)",
-                file=sys.stderr,
-            )
-            return 1
+            capacity = chunk  # nothing known yet (stdin / fifo): warm one bucket, first spec re-targets
         print(
-            f"[prefill-pcc] multi-run: source={runs_source} chunk={chunk} capacity={capacity} "
-            f"({capacity // chunk} chunks) golden_root={golden_root} "
-            f"specs={'stream' if batch_specs is None else len(batch_specs)}",
+            f"[prefill-pcc] multi-run: source={runs_source} chunk={chunk} initial capacity={capacity} "
+            f"({capacity // chunk} chunks) per-run capacity={'FIXED ' + cap_env if cap_env else 'fit to trace'} "
+            f"golden_root={golden_root} specs={'stream' if batch_specs is None else len(batch_specs)}",
             flush=True,
         )
     if chunk < MSA_MIN_TOKENS and (runs_source is not None or chunked):
@@ -639,19 +666,22 @@ def main():
 
         # The runtime is stateless w.r.t. the cache (engine-owned model): allocate it here and pass it
         # into every runtime call (compile / prefill_chunk / gather_layer), mirroring the prefill engine.
-        kv_cache = allocate_kv_caches(
-            mesh, num_layers=num_layers, max_seq_len=capacity, num_users=1, head_dim=hf_config.head_dim
-        )
+        # Held in a dict because run_one re-allocates it when a spec needs a different capacity.
+        state = {
+            "kv_cache": allocate_kv_caches(
+                mesh, num_layers=num_layers, max_seq_len=capacity, num_users=1, head_dim=hf_config.head_dim
+            )
+        }
 
-        print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32) ...", flush=True)
-        runtime.compile(kv_cache)
+        print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32, capacity {capacity}) ...", flush=True)
+        runtime.compile(state["kv_cache"])
 
         results_jsonl = os.environ.get("PREFILL_RESULTS_JSONL")
 
         def do_run(spec: RunSpec) -> dict:
             t0 = time.perf_counter()
             try:
-                r = run_one(runtime, kv_cache, mesh, spec, num_layers, hf_config)
+                r = run_one(runtime, state, mesh, spec, num_layers, hf_config)
                 r["status"] = "ok"
             except AssertionError as e:  # a gate (perf band / PCC threshold / capacity) failed
                 r = {"label": spec.name, "trace": spec.trace_dir, "status": "FAIL", "error": str(e)}

@@ -30,7 +30,7 @@ tests/galaxy_prefill_kv_pcc.py (cache readback + RoPE swizzle convention).
 """
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -183,6 +183,34 @@ class TtPrefillRuntime:
 
         rs = self.model.rope_setup
         self.rope_indexed = [build(rs.cos_matrix_prefill), build(rs.sin_matrix_prefill)]
+
+    def reconfigure_capacity(self, max_seq_len: int) -> None:
+        """Re-target the resident model at a different per-user KV-cache capacity WITHOUT rebuilding it.
+
+        Everything sized by ``max_seq_len`` lives outside the weights: the engine-owned KV cache (the
+        caller re-allocates it via ``allocate_kv_caches`` and passes the new handle into ``compile`` /
+        ``prefill_chunk``), the indexed RoPE tables (rebuilt here) and the config the asserts / compile
+        sweep / ``gather_layer`` un-rotation read (swapped here). The CCL scratch buffers are keyed by
+        shape, so a new capacity just adds an entry. ``chunk_size`` stays fixed: it is baked into the
+        MoE dispatch buffers at build time. Call ``compile(new_kv_cache)`` afterwards — the JIT buckets
+        for the new cache shapes are not warm.
+
+        Why: the dense layers' ring-joint SDPA gathers the WHOLE cache shard per chunk (independent of
+        the valid prefix), so a run in an over-sized cache pays for capacity it never reads. Fitting the
+        cache to each run keeps a resident-model sweep faithful to a standalone run.
+        """
+        assert self.model_built
+        assert (
+            max_seq_len % self.config.chunk_size == 0
+        ), f"max_seq_len ({max_seq_len}) must be a multiple of chunk_size ({self.config.chunk_size})"
+        if max_seq_len == self.config.max_seq_len:
+            return
+        logger.info(f"TtPrefillRuntime.reconfigure_capacity: max_seq_len {self.config.max_seq_len} -> {max_seq_len}")
+        for t in self.rope_indexed:
+            ttnn.deallocate(t)
+        self.config = replace(self.config, max_seq_len=max_seq_len)
+        self._build_indexed_rope()
+        self.compiled = False
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
