@@ -1,0 +1,17 @@
+{
+  "input_hashes": {
+    "config.json": "a5e74be5b35cb8fc2146942e3898d3187a630616d8cdf541def60b117b36402a",
+    "suite.json": "17cc3a9b9bb82c22296b41c72688f84b112360aca96710728f67c77117486099",
+    "inputs.npz": "92d0715c952b76e5acea8bead80349d553923faf809b6e93216a2bd169bdfd92"
+  },
+  "case_hashes": {
+    "short_b1.json": "2cb33eddd739662c3097c0c43b8ae5413d693927edb765b0779e68afcb4f5368",
+    "short_b2.json": "2615388bf156c55937c79446eeb58d45e31ecf861194a56385245a3f3f66d891",
+    "long_b1.json": "9e0285ca03c035bd5113f652cfe1ad0c327c9e0e13c8eedcae840bf8a3065d4a",
+    "long_b2.json": "94d657275f31c3284f7dcf7a2599706c98d38fb08045f16612a7b317c2d8dd46",
+    "source256_b1.json": "2571ed918cbba8aaa7f4116d318365ffc830549ea16c42616338585543b082ab",
+    "source256_b4.json": "c74bd6e1a0fa29ce58a886887f6719ac0dc4d6f293d5ef7dc4562d105b7e51a0"
+  },
+  "source": "public token inputs only; synthetic cases remain labeled",
+  "contains_oracle": false
+}
