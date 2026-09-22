@@ -91,6 +91,8 @@ class QwenModel:
             if self.prefill_sharded_residual
             else {}
         )
+        if os.getenv("QWEN_PREFILL_PACKED_SWIGLU", "0") == "1":
+            prefill_policy["prefill_packed_swiglu"] = True
         for i in self.layer_indices:
             print(f"LOAD_LAYER {i}", flush=True)
             self.layers.append(
