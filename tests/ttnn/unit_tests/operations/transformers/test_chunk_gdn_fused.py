@@ -11,8 +11,10 @@ to the phased op — any difference is a bug, not numerical noise.
 
 Path selection is QWEN_GDN_PATH ("fused"|"phased"|"mono"), read fresh per call where the prim is
 chosen (cache-safe: different prims hash to different program-cache entries). With no env set the
-default is fused iff (BH >= 24 and 2*BH fits the compute grid), else phased. Because fused and
-phased are bit-exact by design, torch.equal alone cannot prove WHICH path ran — every path proof
+default comes from the fused op's calibrated geometry cost model (chunk_gdn_fused_geometry): fused iff
+a fused geometry fits the compute grid and its predicted time beats the phased reference. The model
+itself, its feasibility predicate and the factory's core map are tested host-side, per grid, in
+test_chunk_gdn_fused_geometry.py. Because fused and phased are bit-exact by design, torch.equal alone cannot prove WHICH path ran — every path proof
 here rests on program-cache entry deltas (a new prim compiles a new program; a cache hit does not).
 """
 
@@ -263,31 +265,34 @@ def _cost_model_path(device, bh, nc):
     return "fused" if (nv >= 1 and pays) else "phased"
 
 
+@pytest.mark.parametrize("nc", [8, 64], ids=["NC8", "NC64"])
 @pytest.mark.parametrize(
     "num_k_heads, num_v_heads",
     [
-        (16, 48),  # BH=48: fits (96 cores) and pays -> fused
-        (4, 12),  # BH=12: the 27B TP-4 shape -> fused since Phase 2 (390 vs 706 us)
-        (1, 4),  # BH=4: chain-bound, fused
-        (16, 64),  # BH=64: no fused geometry on 110 cores (needs 128) -> phased
+        (16, 48),  # BH=48: the single-device shape
+        (4, 12),  # BH=12: the 27B TP-4 shape
+        (1, 4),  # BH=4: chain-bound
+        (16, 64),  # BH=64: no fused geometry on a 110-core grid (needs >= 128 cores) -> phased
     ],
     ids=["bh48", "bh12", "bh4", "bh64"],
 )
-def test_fused_default_dispatch(device, monkeypatch, num_k_heads, num_v_heads):
+def test_fused_default_dispatch(device, monkeypatch, num_k_heads, num_v_heads, nc):
     """With NO path env set, the dispatcher must pick what the calibrated cost model says (N7): fused
-    iff a fused geometry fits this grid and beats the phased reference. Since fused and phased are
-    bit-exact, torch.equal cannot discriminate paths: the proof that the default took the expected
-    path is a program-cache delta of ZERO after warming exactly that path explicitly (any other path
-    would compile at least one new prim program)."""
+    iff a fused geometry fits this grid and beats the phased reference. The choice depends on NC (the
+    fill cost is amortized over the chunks), so both a short and the production chunk count run: on
+    QB2 (11x10) the model picks fused for BH=48 at NC=8 and for BH in {4, 12, 48} at NC=64, and phased
+    for the rest. Since fused and phased are bit-exact, torch.equal cannot discriminate paths: the
+    proof that the default took the expected path is a program-cache delta of ZERO after warming
+    exactly that path explicitly (any other path would compile at least one new prim program)."""
     B = 1
     BH = B * num_v_heads
     grid = device.compute_with_storage_grid_size()
     if BH > grid.x * grid.y:
         pytest.skip(f"BH={BH} exceeds the {grid.x}x{grid.y} compute grid (scan needs a core per head)")
-    expected_path = _cost_model_path(device, BH, T_SMALL // CHUNK)
+    expected_path = _cost_model_path(device, BH, nc)
     _clear_gdn_env(monkeypatch)
 
-    _, tensors, s0 = _make_inputs(device, B, T_SMALL, num_k_heads, num_v_heads, True, seed=20260821)
+    _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, num_k_heads, num_v_heads, True, seed=20260821)
     const_tiles = _const_tiles(device)
 
     monkeypatch.setenv("QWEN_GDN_PATH", expected_path)
@@ -393,7 +398,7 @@ def test_fused_np_cache_identity(device, monkeypatch):
     _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, num_k_heads, num_v_heads, True, seed=20260824)
     const_tiles = _const_tiles(device)
 
-    o1, fs1 = _run_op(device, tensors, const_tiles, s0)  # NP unset -> np=1
+    o1, fs1 = _run_op(device, tensors, const_tiles, s0)  # NP unset -> the cost model's pick
     n1 = device.num_program_cache_entries()
 
     monkeypatch.setenv("QWEN_GDN_NP", "2")
@@ -414,7 +419,7 @@ def test_fused_np_cache_identity(device, monkeypatch):
     monkeypatch.delenv("QWEN_GDN_NP")
     _run_op(device, tensors, const_tiles, s0)
     n5 = device.num_program_cache_entries()
-    assert n5 - n4 == 0, f"np 2->unset (np=1, already compiled) compiled {n5 - n4} programs (expected 0)"
+    assert n5 - n4 == 0, f"np 2->unset (the model's pick, already compiled) compiled {n5 - n4} programs (expected 0)"
 
     # All NP variants of the same head must agree bit-for-bit with each other.
     assert torch.equal(o1, o2) and torch.equal(o1, o3), "o differs across NP values"
@@ -699,7 +704,7 @@ def test_fused_nv_cache_identity(device, monkeypatch):
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260927)
     const_tiles = _const_tiles(device)
 
-    o1, fs1 = _run_op(device, tensors, const_tiles, s0)  # NV unset -> nv=1
+    o1, fs1 = _run_op(device, tensors, const_tiles, s0)  # NV unset -> the cost model's NV for NP=2
     n1 = device.num_program_cache_entries()
     monkeypatch.setenv("QWEN_GDN_NV", "2")
     o2, fs2 = _run_op(device, tensors, const_tiles, s0)
@@ -716,7 +721,7 @@ def test_fused_nv_cache_identity(device, monkeypatch):
     monkeypatch.delenv("QWEN_GDN_NV")
     _run_op(device, tensors, const_tiles, s0)
     n6 = device.num_program_cache_entries()
-    assert n6 - n5 == 0, f"nv 2->unset (nv=1, already compiled) compiled {n6 - n5} programs (expected 0)"
+    assert n6 - n5 == 0, f"nv 2->unset (the model's pick, already compiled) compiled {n6 - n5} programs (expected 0)"
     assert torch.equal(o1, o2) and torch.equal(o1, o4), "o differs across NV values"
     assert torch.equal(fs1, fs2) and torch.equal(fs1, fs4), "final_state differs across NV values"
 
@@ -735,3 +740,127 @@ def test_fused_nv_repeats(device, monkeypatch):
         o_rep, fs_rep = _run_op(device, tensors, const_tiles, s0)
         assert torch.equal(o_rep, o_fu), f"fused NV=4 NP=5 o not reproducible on repeat {rep + 1}: race"
         assert torch.equal(fs_rep, fs_fu), f"fused NV=4 NP=5 final_state not reproducible on repeat {rep + 1}: race"
+
+
+@pytest.mark.parametrize(
+    "knob, a, b",
+    [
+        ("QWEN_GDN_HANDOFF_NBUF", "2", "3"),  # hand-off ring depth
+        ("QWEN_GDN_UNICAST", "1", "0"),  # per-receiver unicast vs linked multicast hand-off
+        ("QWEN_GDN_POSTED", "0", "1"),  # posted unicast data writes (requires UNICAST=1, the default)
+        ("QWEN_GDN_PLACEMENT", "0", "1"),  # row-major vs row-local core map
+    ],
+    ids=lambda v: str(v),
+)
+def test_fused_knob_cache_identity(device, monkeypatch, knob, a, b):
+    """N1 for the remaining geometry/transport knobs: each must be read at attrs construction AND
+    hashed, so a -> b compiles exactly one new fused program and every revisit is a cache hit. A knob
+    that is read but not hashed would serve a program built for the other setting — wrong answers
+    that depend on test order. NV/NP are pinned to a geometry both placements accept."""
+    hk, hv = NP_BH_KV_HEADS
+    nc, nv, np_producers = 8, 2, 3
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=0)
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=1)
+    _clear_gdn_env(monkeypatch)
+    monkeypatch.setenv("QWEN_GDN_PATH", "fused")
+    monkeypatch.setenv("QWEN_GDN_NV", str(nv))
+    monkeypatch.setenv("QWEN_GDN_NP", str(np_producers))
+    _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260929)
+    const_tiles = _const_tiles(device)
+
+    monkeypatch.setenv(knob, a)
+    o_a, fs_a = _run_op(device, tensors, const_tiles, s0)
+    n_a = device.num_program_cache_entries()
+    monkeypatch.setenv(knob, b)
+    o_b, fs_b = _run_op(device, tensors, const_tiles, s0)
+    n_b = device.num_program_cache_entries()
+    assert n_b - n_a == 1, f"{knob} {a}->{b} compiled {n_b - n_a} programs (expected 1: the knob must be hashed)"
+    monkeypatch.setenv(knob, a)
+    _run_op(device, tensors, const_tiles, s0)
+    monkeypatch.setenv(knob, b)
+    _run_op(device, tensors, const_tiles, s0)
+    n_rev = device.num_program_cache_entries()
+    assert n_rev - n_b == 0, f"{knob}: revisiting {a} and {b} compiled {n_rev - n_b} programs (expected 0: cache hits)"
+    assert torch.equal(o_a, o_b) and torch.equal(fs_a, fs_b), f"{knob}={a} and {knob}={b} disagree"
+
+
+@pytest.mark.parametrize(
+    "hk, hv, nv, np_producers, nc",
+    [
+        (4, 12, 2, 3, 8),  # BH=12: 1x2 rectangles, 5 heads per row
+        (4, 12, 4, 5, 16),  # BH=12 at NV=4: 2 heads per row, 3 stranded columns per receiver row
+        (4, 12, 2, 7, 64),  # BH=12 at the model's NV/NP, production chunk count
+        (4, 16, 4, 2, 8),  # BH=16 (397B TP-4): 8 receiver rows
+        (2, 8, 4, 8, 8),  # BH=8, producer-rich
+    ],
+    ids=lambda v: str(v),
+)
+def test_fused_nv_row_major_placement_bit_exact(device, monkeypatch, hk, hv, nv, np_producers, nc):
+    """N3 for placement 0. The op defaults to row-local placement whenever it is feasible, so the
+    row-major 1xNV rectangles — and their NOC_1 multicast orientation — only run when forced. A wrong
+    orientation lands on another head's receivers: finite, wrong, no hang; the per-V-block report
+    names the (head, vblock) slices that differ."""
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=0)
+    monkeypatch.setenv("QWEN_GDN_PLACEMENT", "0")
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260930 + hv
+    )
+    assert delta == 1, f"row-major fused(BH={hv},NV={nv},NP={np_producers}) compiled {delta} programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"row-major fused BH={hv} NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "row-major fused differs from phased"
+
+
+@pytest.mark.parametrize(
+    "hk, hv",
+    [(4, 12), (4, 16), (1, 4)],
+    ids=["bh12", "bh16", "bh4"],
+)
+def test_fused_default_geometry_repeats(device, monkeypatch, hk, hv):
+    """N5 at the geometry production actually runs: no NV/NP/PLACEMENT knob, so the op uses the cost
+    model's pick (on QB2 at BH=12: NV=2, NP=7, row-local). Bit-exact vs phased, then 8 repeats against
+    the first fused result — a handshake race is timing-dependent, so one comparison has little power."""
+    nc = 64
+    grid = device.compute_with_storage_grid_size()
+    from ttnn._ttnn.operations import transformer as _t
+
+    nv, np_producers, placement, _, _, _ = _t.chunk_gdn_fused_geometry(grid.x, grid.y, hv, nc, VDIM // 32)
+    if nv == 0:
+        pytest.skip(f"no fused geometry for BH={hv} on the {grid.x}x{grid.y} grid")
+    _clear_gdn_env(monkeypatch)
+    _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20260931 + hv)
+    const_tiles = _const_tiles(device)
+
+    monkeypatch.setenv("QWEN_GDN_PATH", "phased")
+    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0)
+    n_phased = device.num_program_cache_entries()
+    monkeypatch.setenv("QWEN_GDN_PATH", "fused")
+    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0)
+    assert device.num_program_cache_entries() - n_phased == 1, "the fused run did not compile the fused prim"
+    geom = f"BH={hv} NV={nv} NP={np_producers} placement={placement}"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"fused {geom}: o differs from phased in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"fused {geom} differs from phased"
+    for rep in range(8):
+        o_rep, fs_rep = _run_op(device, tensors, const_tiles, s0)
+        assert torch.equal(o_rep, o_fu), f"fused {geom}: o not reproducible on repeat {rep + 1}: race"
+        assert torch.equal(fs_rep, fs_fu), f"fused {geom}: final_state not reproducible on repeat {rep + 1}: race"
+
+
+def test_phased_selectors_agree(device, monkeypatch):
+    """QWEN_GDN_PATH=phased and the legacy QWEN_GDN_PHASED=1 must select the same prims: the second
+    selector compiles nothing new and reproduces the first bit for bit. Callers that still set the
+    legacy knob (and the prims tests) rely on it."""
+    hk, hv = NP_BH_KV_HEADS
+    _clear_gdn_env(monkeypatch)
+    _, tensors, s0 = _make_inputs(device, 1, T_SMALL, hk, hv, True, seed=20260932)
+    const_tiles = _const_tiles(device)
+    monkeypatch.setenv("QWEN_GDN_PATH", "phased")
+    o1, fs1 = _run_op(device, tensors, const_tiles, s0)
+    n1 = device.num_program_cache_entries()
+    monkeypatch.delenv("QWEN_GDN_PATH")
+    monkeypatch.setenv("QWEN_GDN_PHASED", "1")
+    o2, fs2 = _run_op(device, tensors, const_tiles, s0)
+    n2 = device.num_program_cache_entries()
+    assert n2 - n1 == 0, f"QWEN_GDN_PHASED=1 compiled {n2 - n1} programs after QWEN_GDN_PATH=phased (expected 0)"
+    assert torch.equal(o1, o2) and torch.equal(fs1, fs2), "the two phased selectors disagree"
