@@ -246,9 +246,16 @@ Handle each suite verdict as follows:
 Retry only while `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
 
 1. Call `execute_step_debug_feedback` with the first meaningful failure.
-2. Spawn `issue-worker.md` with the concrete failure class and raw-log path.
-   A missing selector or zero selected tests uses
-   `FAILURE_CLASS=MISSING_TEST_COVERAGE`.
+   For a compiler failure before execution, pass optional second argument
+   `COMPILE_FAILED` with the raw compiler log; this preserves caller diagnosis
+   without claiming an execution receipt or waiving final verification.
+   Stop if it rejects the retry. With a current reduction it records
+   `FAILURE_CLASS` and `VERIFICATION_RETRY_CONTEXT` in state; do not replace
+   those reasons with the compatibility verdict `TESTS_FAILED`.
+2. Spawn `issue-worker.md` with that class and the evidence paths. Pure coverage
+   errors use `VERIFICATION_PLAN_ERROR`; zero selected tests use
+   `MISSING_TEST_COVERAGE`. Actual candidate failures retain their raw evidence,
+   including mixed failures. Legacy runs use the concrete failure/log class.
 3. On `FIX_UPDATED`, rerun route verification and changed-file recording, then
    call `execute_step_bump_debug`.
 4. Return to functional verification using the updated route.

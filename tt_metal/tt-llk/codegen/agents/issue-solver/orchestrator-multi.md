@@ -129,10 +129,13 @@ When one or more architectures have `COMPILE_FAILED` or `TESTS_FAILED`:
 
 1. Build one failure summary containing the first meaningful failure for every
    failed architecture and suite.
-2. Call `execute_step_debug_feedback` once.
-3. Spawn one `issue-worker.md` retry with the combined evidence.
-   Use `FAILURE_CLASS=MISSING_TEST_COVERAGE` when any required suite had no
-   applicable selector or selected zero tests.
+2. Call `execute_step_debug_feedback` once; stop if it rejects the retry.
+   For a compiler failure before execution, use the single-arch optional
+   `COMPILE_FAILED` argument and retain the raw compiler log.
+3. Spawn one `issue-worker.md` with the recorded `FAILURE_CLASS` and
+   `VERIFICATION_RETRY_CONTEXT` evidence. Follow the single-arch typed routing;
+   preserve all failed leaves and do not hide a numerical failure behind a
+   coverage error from another architecture. Legacy runs retain caller routing.
 4. On `FIX_UPDATED`, rerun routing and changed-file recording, then call
    `execute_step_bump_debug`.
 5. Rerun the applicable tester once for all in-scope architectures.

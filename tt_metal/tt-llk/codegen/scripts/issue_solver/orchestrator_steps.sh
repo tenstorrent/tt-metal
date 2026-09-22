@@ -1246,9 +1246,41 @@ execute_step_feedback() {
 }
 
 # Convenience wrappers over execute_step_feedback for the three loops.
+execute_step_prepare_test_retry() {
+    local _L; _L="$(_LOG)"
+    local caller_verdict="${1:-}" context failure_class
+    case "$caller_verdict" in ""|COMPILE_FAILED) ;; *) echo "Unsupported retry verdict: $caller_verdict" >&2; return 2 ;; esac
+    # Legacy runs without a structured reduction retain caller-owned routing.
+    if [ -z "$caller_verdict" ] && [ ! -f "$_L/verification_reduction.json" ] && \
+        ! python -c 'import json,sys; sys.exit(json.load(open(sys.argv[1])).get("runner_pool") != "audit")' "$_L/run.json"; then
+        ss VERIFICATION_RETRY_CONTEXT '{}' --json || return $?
+        return 0
+    fi
+    context="$(rj verification-retry-context)" || {
+        [ "$caller_verdict" = COMPILE_FAILED ] || { printf '%s\n' "$context"; return 1; }
+        context='{}'
+    }
+    failure_class="$(python -c 'import json,sys; print(json.loads(sys.argv[1]).get("failure_class") or "")' "$context")" || return $?
+    # Compilation can fail before an execution receipt exists. Preserve the
+    # explicit caller diagnosis, but never overwrite trusted numerical evidence.
+    if [ "$caller_verdict" = COMPILE_FAILED ] && \
+        python -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(bool(d.get("retry_allowed")) or any(x["failed"] or x["xpassed"] or x["result_classification"] == "candidate_failure" for x in d.get("leaves", [])))' "$context"; then
+        context='{}'
+        failure_class=COMPILE_ERROR
+    fi
+    ss VERIFICATION_RETRY_CONTEXT "$context" --json || return $?
+    ss FAILURE_CLASS "$failure_class" || return $?
+    case "$failure_class" in
+        COMPILE_ERROR) echo "FAILURE_CLASS=COMPILE_ERROR (caller compiler evidence; no structured retry hint)" ;;
+        TESTS_FAILED|MISSING_TEST_COVERAGE|VERIFICATION_PLAN_ERROR)
+            echo "FAILURE_CLASS=$failure_class EVIDENCE=$_L/verification_reduction.json" ;;
+        *) echo "No repair retry authorized by the current reduction: ${failure_class:-SUCCESS}"; return 1 ;;
+    esac
+}
 execute_step_debug_feedback() {
     local _L; _L="$(_LOG)"
     local summary="$1" num dc mdc; num="$(sg ISSUE_NUMBER)"; dc="$(sg DEBUG_CYCLES)"; mdc="$(sg MAX_DEBUG_CYCLES)"
+    execute_step_prepare_test_retry "${2:-}" || return $?
     execute_step_feedback "tester" "tester" "$summary" \
         "Debugging test failure for issue #${num} (attempt $((dc+1))/${mdc})"
 }
@@ -1275,6 +1307,7 @@ execute_step_perf_feedback() {
 execute_step_review_round_feedback() {
     local _L; _L="$(_LOG)"
     local step="${1:-tester}" summary="$2" prnum dc mdc
+    [ "$step" != tester ] || execute_step_prepare_test_retry "${3:-}" || return $?
     prnum="$(sg PR_NUMBER)"; dc="$(sg DEBUG_CYCLES)"; mdc="$(sg MAX_DEBUG_CYCLES)"
     execute_step_feedback "$step" "$step" "$summary" \
         "Repairing the review fix on PR #${prnum} (attempt $((dc+1))/${mdc})"

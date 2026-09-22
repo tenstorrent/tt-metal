@@ -145,8 +145,12 @@ re-route. Never convert `missing` to `none`.
 
 Retry only while `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
 
-1. `execute_step_review_round_feedback tester "<first meaningful failure>"`
-2. Spawn `addresser.md` with the concrete failure class and raw-log path.
+1. `execute_step_review_round_feedback tester "<first meaningful failure>"`;
+   stop if it rejects the retry. For a compiler failure before execution, pass
+   optional third argument `COMPILE_FAILED` and retain the raw compiler log.
+2. Spawn `addresser.md` with the recorded `FAILURE_CLASS` and
+   `VERIFICATION_RETRY_CONTEXT` evidence, using the solve loop's typed routing.
+   Legacy runs retain their concrete failure class and raw-log path.
 3. On `FIX_UPDATED`, rerun `execute_step_record_review_dispositions`,
    `execute_step_route_verification`, and `execute_step_record_changed_files`,
    then `execute_step_bump_debug`.

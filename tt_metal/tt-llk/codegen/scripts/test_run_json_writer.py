@@ -5432,3 +5432,335 @@ def test_testing_setup_default_still_installs_hooks_and_rejects_bad_mode(tmp_pat
         assert invalid.returncode == 2
         assert "Usage:" in invalid.stderr
     assert log.read_text() == "install\n"
+
+
+def _retry_context_fixture(tmp_path, outcomes):
+    requirements = [_requirement(index=i + 1) for i in range(len(outcomes))]
+    manifest, manifest_path = _reducer_manifest(tmp_path, requirements)
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        manifest["run_id"],
+        "--kernel",
+        "issue_5",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "tester",
+        "--first-message",
+        "verify",
+    )
+    run_path = tmp_path / "run.json"
+    run = json.loads(run_path.read_text())
+    run["base_commit"] = manifest["expected_base_sha"]
+    run["required_verification"] = {
+        key: manifest[key] for key in ("manifest_id", "attempt_id")
+    }
+    run_path.write_text(json.dumps(run))
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    for requirement, outcome in zip(requirements, outcomes):
+        if outcome is not None:
+            receipt = _sealed_result(manifest, requirement, **outcome)
+            (results / f"{requirement['requirement_id']}.json").write_text(
+                json.dumps(receipt)
+            )
+    _reduce(tmp_path, manifest_path, scope="functional")
+    return manifest
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "failure_class", "retry"),
+    [
+        (
+            [{"selected": 48, "executed": 35, "passed": 35, "skipped": 13}],
+            "VERIFICATION_PLAN_ERROR",
+            True,
+        ),
+        (
+            [{"selected": 2, "executed": 1, "passed": 1, "skipped": 1}],
+            "VERIFICATION_PLAN_ERROR",
+            True,
+        ),
+        ([{"selected": 0, "executed": 0, "passed": 0}], "MISSING_TEST_COVERAGE", True),
+        ([{"passed": 0, "failed": 1, "returncode": 1}], "TESTS_FAILED", True),
+        (
+            [
+                {
+                    "selected": 48,
+                    "executed": 35,
+                    "passed": 34,
+                    "failed": 1,
+                    "skipped": 13,
+                    "returncode": 1,
+                }
+            ],
+            "TESTS_FAILED",
+            True,
+        ),
+        (
+            [
+                {"selected": 2, "executed": 1, "passed": 1, "skipped": 1},
+                {"passed": 0, "failed": 1, "returncode": 1},
+            ],
+            "TESTS_FAILED",
+            True,
+        ),
+        ([{}, {"patch_sha256": "e" * 64}], "ENV_ERROR", False),
+        ([None], "ENV_ERROR", False),
+        ([{"markers": ["tt_fatal"]}], "ENV_ERROR", False),
+        ([{"selected": 2, "executed": 1, "passed": 1}], "ENV_ERROR", False),
+        ([{}], None, False),
+    ],
+)
+def test_verification_retry_context_preserves_failure_kind(
+    tmp_path, outcomes, failure_class, retry
+):
+    manifest = _retry_context_fixture(tmp_path, outcomes)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    context = json.loads(_run(tmp_path, "verification-retry-context").stdout)
+    assert context["failure_class"] == failure_class
+    assert context["retry_allowed"] is retry
+    assert context["manifest_id"] == manifest["manifest_id"]
+    assert context["attempt_id"] == manifest["attempt_id"]
+    assert context["results_dir"] == str(tmp_path / "verification-results")
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert context["reason_codes"] == reduction["reason_codes"]
+    assert len(context["leaves"]) == sum(
+        leaf["classification"] != "success" for leaf in reduction["leaves"]
+    )
+    assert all(p.read_bytes() == contents for p, contents in before.items())
+
+
+@pytest.mark.parametrize(
+    "changed", ["run", "attempt", "manifest", "reduction_pointer", "scope"]
+)
+def test_verification_retry_context_rejects_stale_evidence(tmp_path, changed):
+    _retry_context_fixture(
+        tmp_path, [{"selected": 2, "executed": 1, "passed": 1, "skipped": 1}]
+    )
+    path = tmp_path / "run.json"
+    run = json.loads(path.read_text())
+    if changed == "run":
+        run["run_id"] = "another"
+    elif changed == "attempt":
+        run["required_verification"]["attempt_id"] = "attempt-002"
+    elif changed == "manifest":
+        run["required_verification"]["manifest_id"] = "f" * 64
+    elif changed == "reduction_pointer":
+        run["verification_reduction"]["reduction_id"] = "f" * 64
+    else:
+        _reduce(tmp_path, tmp_path / "required_verification_manifest.json", scope="all")
+        run = json.loads(path.read_text())
+    path.write_text(json.dumps(run))
+    before = path.read_bytes()
+    with pytest.raises(subprocess.CalledProcessError):
+        _run(tmp_path, "verification-retry-context")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("outcome", "advance"),
+    [
+        ({"selected": 48, "executed": 35, "passed": 35, "skipped": 13}, True),
+        (None, False),
+    ],
+)
+@pytest.mark.parametrize("review_round", [False, True])
+def test_feedback_wrapper_uses_typed_coverage_and_blocks_missing_receipts(
+    tmp_path, outcome, advance, review_round
+):
+    _retry_context_fixture(tmp_path, [outcome])
+    llk = tmp_path / "worktree/tt_metal/tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(tmp_path)}))
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "ISSUE_NUMBER": "5",
+                "PR_NUMBER": "9",
+                "DEBUG_CYCLES": 0,
+                "MAX_DEBUG_CYCLES": 3,
+            }
+        )
+    )
+    command = (
+        'execute_step_review_round_feedback tester "observed failure"'
+        if review_round
+        else 'execute_step_debug_feedback "observed failure"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", f'source "$1"; {command}', "bash", str(ORCHESTRATOR_STEPS)],
+        cwd=llk,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is advance, result.stdout + result.stderr
+    run = json.loads((tmp_path / "run.json").read_text())
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["FAILURE_CLASS"] == (
+        "VERIFICATION_PLAN_ERROR" if advance else "ENV_ERROR"
+    )
+    assert state["VERIFICATION_RETRY_CONTEXT"]["leaves"][0]["reason_codes"]
+    assert run["current_step"] == ("fix_tests" if advance else "tester")
+
+
+def test_feedback_wrapper_preserves_legacy_without_reduction(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "legacy",
+        "--kernel",
+        "issue_5",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "tester",
+        "--first-message",
+        "verify",
+    )
+    llk = tmp_path / "worktree/tt_metal/tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(tmp_path)}))
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "ISSUE_NUMBER": "5",
+                "DEBUG_CYCLES": 0,
+                "MAX_DEBUG_CYCLES": 3,
+                "FAILURE_CLASS": "COMPILE_ERROR",
+                "VERIFICATION_RETRY_CONTEXT": {"stale": True},
+            }
+        )
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_debug_feedback "compiler error"',
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=llk,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        json.loads((tmp_path / "run.json").read_text())["current_step"] == "fix_tests"
+    )
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["FAILURE_CLASS"] == "COMPILE_ERROR"
+    assert state["VERIFICATION_RETRY_CONTEXT"] == {}
+
+
+def test_feedback_wrapper_rejects_missing_audit_reduction(tmp_path):
+    _retry_context_fixture(
+        tmp_path, [{"selected": 2, "executed": 1, "passed": 1, "skipped": 1}]
+    )
+    path = tmp_path / "run.json"
+    run = json.loads(path.read_text())
+    run["runner_pool"] = "audit"
+    path.write_text(json.dumps(run))
+    before = path.read_bytes()
+    (tmp_path / "verification_reduction.json").unlink()
+    llk = tmp_path / "worktree/tt_metal/tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(tmp_path)}))
+    (tmp_path / "state.json").write_text(
+        json.dumps({"ISSUE_NUMBER": "5", "DEBUG_CYCLES": 0, "MAX_DEBUG_CYCLES": 3})
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_debug_feedback "missing evidence"',
+            "bash",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=llk,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("review_round", [False, True])
+@pytest.mark.parametrize("receipt", ["absent", "missing", "numerical"])
+def test_feedback_wrapper_preserves_explicit_pre_execution_compile_retry(
+    tmp_path, receipt, review_round
+):
+    outcome = (
+        {"selected": 2, "executed": 2, "passed": 1, "failed": 1}
+        if receipt == "numerical"
+        else None
+    )
+    _retry_context_fixture(tmp_path, [outcome])
+    path = tmp_path / "run.json"
+    run = json.loads(path.read_text())
+    run["runner_pool"] = "audit"
+    path.write_text(json.dumps(run))
+    if receipt == "absent":
+        (tmp_path / "verification_reduction.json").unlink()
+    llk = tmp_path / "worktree/tt_metal/tt-llk"
+    llk.mkdir(parents=True)
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(tmp_path)}))
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "ISSUE_NUMBER": "5",
+                "PR_NUMBER": "9",
+                "DEBUG_CYCLES": 0,
+                "MAX_DEBUG_CYCLES": 3,
+            }
+        )
+    )
+    (tmp_path / "compile.log").write_text("error: unknown type name\n")
+    # Same suite record emitted by the tester before entering the debug loop.
+    _run(
+        tmp_path,
+        "metric",
+        "--patch-json",
+        json.dumps(
+            {
+                "arch_results": {
+                    "blackhole": {
+                        "suite_results": {
+                            "llk": {
+                                "status": "done",
+                                "verdict": "COMPILE_FAILED",
+                                "tests_total": 0,
+                                "tests_passed": 0,
+                                "queue_jobs": [],
+                                "obstacle": str(tmp_path / "compile.log"),
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+    )
+    command = (
+        'execute_step_review_round_feedback tester "compile.log: unknown type" COMPILE_FAILED'
+        if review_round
+        else 'execute_step_debug_feedback "compile.log: unknown type" COMPILE_FAILED'
+    )
+    result = subprocess.run(
+        ["bash", "-c", f'source "$1"; {command}', "bash", str(ORCHESTRATOR_STEPS)],
+        cwd=llk,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["FAILURE_CLASS"] == (
+        "TESTS_FAILED" if receipt == "numerical" else "COMPILE_ERROR"
+    )
+    assert bool(state["VERIFICATION_RETRY_CONTEXT"]) is (receipt == "numerical")
+    run = json.loads(path.read_text())
+    assert run["current_step"] == "fix_tests"
+    assert run["status"] != "success"

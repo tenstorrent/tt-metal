@@ -196,10 +196,15 @@ runnable regression can be added inside the tt-metal worktree, return
 
 ## Debug/Retry Process
 
-1. Classify the evidence:
+1. Read `VERIFICATION_RETRY_CONTEXT` from run state when present. Its current
+   reduction/receipt IDs and per-leaf reasons distinguish plan coverage from
+   failing code; preserve every failed leaf, including mixed outcomes.
+   Classify the evidence:
 
    | Class | Evidence | Action |
    |---|---|---|
+   | `TESTS_FAILED` | actual candidate failure; inspect the referenced receipt/raw log | identify the assertion, numerical, compile or timeout cause below; do not infer it from the compatibility verdict |
+   | `VERIFICATION_PLAN_ERROR` | validated coverage/backend-plan evidence, including selected cases that did not execute | investigate selector/applicability and original requirements; correct the plan or add missing supported coverage, then reseal and reverify |
    | `COMPILE_ERROR` | compiler error, undefined symbol, bad include | inspect first real error and fix targeted code |
    | `TIMEOUT` | `TENSIX TIMED OUT`, hang block | inspect sync/MOP/reconfig |
    | `ASSERTION` | LLK/test assertion | inspect violated contract |
@@ -213,6 +218,12 @@ runnable regression can be added inside the tt-metal worktree, return
 
    The orchestrator does not send `SIM_ISA_GAP` or `ENV_ERROR` to the worker.
    If invoked with either, return `BLOCKED` without editing.
+   A skipped required case is an investigation hint, not proof that the skip is
+   legitimate. For existing unsupported inputs, cite the base/current source
+   constraint and retain all required capabilities in an explicit supported
+   selector with meaningful count bounds. Do not erase skip guards, accept
+   arbitrary skips, or narrow scope to observed passes. Missing receipts and
+   infrastructure failures are not requests to invent tests.
 2. Inspect the exact failing variant, raw evidence, and relevant current source.
    Use AutoDebug only when a specific hardware question or competing hypotheses
    remain unresolved; failure classification alone does not require escalation.
@@ -334,6 +345,12 @@ files, checks, and plan path.
 Use `execution: host` on a planned selector only when its module/node is
 explicitly `pytest.mark.llk_host`; predeclare it before sealing. Default device
 execution, required hardware coverage and cycle measurements remain unchanged.
+For a required legacy device-free check that lacks the marker, inspect its body
+and fixtures, add `pytest.mark.llk_host`, and declare `execution: host` before
+the first seal. Unsupported/device fixtures remain blockers; the tester must
+not convert a sealed device leaf after a failure. After sealing, the tester uses
+the existing versioned `run_test.sh host` adapter; inspect that supported path
+before proposing historical conftest/plugin changes.
 
 The Test Strategy is executable input, not explanatory prose. Keep explanations
 in surrounding fields; each `test` value must be one exact selector accepted by

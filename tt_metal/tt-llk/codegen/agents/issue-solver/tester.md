@@ -400,7 +400,9 @@ sealed manifest; then derive the compatibility suite summary from its structured
 evidence:
 
 - `classification=success` -> `SUCCESS`;
-- `candidate_failure|coverage_error` -> `TESTS_FAILED`;
+- `candidate_failure|coverage_error` -> `TESTS_FAILED` for compatibility; retain
+  the distinct classification, per-leaf reasons and receipt ID. The retry helper
+  uses these fields; selected skips do not prove numerical failure or exemption;
 - `infra_error|timed_out`, a missing/invalid result, or an identity mismatch ->
   `ENV_ERROR`.
 

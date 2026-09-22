@@ -3130,6 +3130,117 @@ def _load_verification_reduction(path: Path) -> dict[str, Any]:
     return reduction
 
 
+def cmd_verification_retry_context(args: argparse.Namespace) -> None:
+    """Describe a current failed reduction; never authorize success or a waiver."""
+    log_dir = Path(args.log_dir)
+    run = _load(log_dir)
+    manifest = _load_required_manifest(log_dir / "required_verification_manifest.json")
+    reduction_path = log_dir / "verification_reduction.json"
+    reduction = _load_verification_reduction(reduction_path)
+    if run.get("run_id") != manifest["run_id"]:
+        raise ValueError("retry manifest belongs to another run")
+    for field in ("run_id", "attempt_id", "manifest_id", "expected_base_sha"):
+        if reduction[field] != manifest[field]:
+            raise ValueError(f"retry reduction {field} mismatch")
+    current = run.get("required_verification") or {}
+    if any(current.get(key) != manifest[key] for key in ("manifest_id", "attempt_id")):
+        raise ValueError("retry manifest is not the current sealed attempt")
+    if (run.get("verification_reduction") or {}).get("reduction_id") != reduction[
+        "reduction_id"
+    ]:
+        raise ValueError("retry reduction is not current in run.json")
+    if run.get("base_commit") and run["base_commit"] != manifest["expected_base_sha"]:
+        raise ValueError("retry base differs from current run")
+    if reduction["scope"] != "functional":
+        raise ValueError("test retry requires the current functional reduction")
+    requirements = {
+        item["requirement_id"]: item
+        for item in manifest["requirements"]
+        if item["suite"] in {"llk", "metal", "ttnn"}
+    }
+    if {leaf["requirement_id"] for leaf in reduction["leaves"]} != set(requirements):
+        raise ValueError("retry reduction does not cover current functional leaves")
+    failed = []
+    for leaf in reduction["leaves"]:
+        requirement = requirements[leaf["requirement_id"]]
+        if any(leaf[key] != requirement[key] for key in ("architecture", "suite")):
+            raise ValueError("retry leaf identity differs from manifest")
+        if leaf["classification"] != "success":
+            failed.append(
+                {
+                    **{
+                        key: leaf[key]
+                        for key in (
+                            "requirement_id",
+                            "classification",
+                            "reason_codes",
+                            "result_id",
+                            "result_classification",
+                            "selected",
+                            "executed",
+                            "failed",
+                            "skipped",
+                            "xfailed",
+                            "xpassed",
+                        )
+                    },
+                    "architecture": requirement["architecture"],
+                    "suite": requirement["suite"],
+                    "backend": requirement["backend"],
+                    "selector": requirement["selector"],
+                }
+            )
+    # A missing/untrusted receipt is an evidence problem, not proof that the
+    # worker must invent a test. Genuine failures take precedence over skips.
+    coverage_reasons = {
+        "zero_selected",
+        "zero_executed",
+        "minimum_selected_not_met",
+        "minimum_executed_not_met",
+        "required_case_not_executed",
+    }
+    if reduction["classification"] in {"infra_error", "partial"} or any(
+        not leaf["result_id"]
+        or leaf["classification"] not in {"candidate_failure", "coverage_error"}
+        or (
+            leaf["classification"] == "coverage_error"
+            and not set(leaf["reason_codes"]) <= coverage_reasons
+        )
+        for leaf in failed
+    ):
+        failure_class, retry = "ENV_ERROR", False
+    elif not failed or reduction["classification"] == "success":
+        failure_class, retry = None, False
+    elif any(
+        leaf["failed"]
+        or leaf["xpassed"]
+        or leaf["result_classification"] == "candidate_failure"
+        for leaf in failed
+    ):
+        failure_class, retry = "TESTS_FAILED", True
+    elif all(leaf["selected"] == 0 for leaf in failed):
+        failure_class, retry = "MISSING_TEST_COVERAGE", True
+    else:
+        failure_class, retry = "VERIFICATION_PLAN_ERROR", True
+    print(
+        json.dumps(
+            {
+                "failure_class": failure_class,
+                "retry_allowed": retry,
+                "run_id": manifest["run_id"],
+                "attempt_id": manifest["attempt_id"],
+                "manifest_id": manifest["manifest_id"],
+                "reduction_id": reduction["reduction_id"],
+                "reduction_path": str(reduction_path),
+                "results_dir": str(log_dir / "verification-results"),
+                "reason_codes": reduction["reason_codes"],
+                "leaves": failed,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def cmd_reduce_verification(args: argparse.Namespace) -> int:
     """Reduce sealed leaves into deterministic suite/architecture/final state."""
     log_dir = Path(args.log_dir)
@@ -3957,6 +4068,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="candidate worktree used to reopen base-tracked waiver policy",
     )
     reduce_result.set_defaults(func=cmd_reduce_verification)
+
+    retry_context = sub.add_parser(
+        "verification-retry-context",
+        help="Read current functional failure routing evidence",
+    )
+    _add_common(retry_context)
+    retry_context.set_defaults(func=cmd_verification_retry_context)
 
     review = sub.add_parser(
         "review", help="Prepare, record or check a candidate-bound review"
