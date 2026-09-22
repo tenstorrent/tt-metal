@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN Chronos stubs."""
+"""TTNN Chronos-2 modules."""
 
 from models.experimental.chronos_forecast.tt.model import (
     TtChronos,

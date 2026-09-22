@@ -82,17 +82,7 @@ class TtEncoderBlock:
         return (_weight(weights.ff_wi), _weight(weights.ff_wo), rms_w)
 
     def forward_device(self, x, cos, sin, time_mask, group_mask):
-        """Device-to-device block. Borrowed tensors (cos/sin/masks) are NOT deallocated.
-
-        Args:
-            x: device (B, T, d) TILE.
-            cos / sin: device (B, 1, T, Dh) TILE (already unsqueezed).
-            time_mask: device (1, 1, T, T) TILE + DRAM.
-            group_mask: device (T, 1, B, B) TILE + DRAM.
-
-        Returns:
-            Device (B, T, d) tensor; caller owns it.
-        """
+        """Device (B,T,d) + cos/sin (B,1,T,Dh) + masks -> device (B,T,d); caller owns it."""
         import ttnn
 
         ff_wi, ff_wo, ff_rms = self._ff
@@ -126,14 +116,7 @@ class TtEncoderBlock:
         time_mask_host: torch.Tensor,
         group_mask_host: torch.Tensor,
     ) -> torch.Tensor:
-        """Forward starting from host inputs. Returns host torch (float32) for PCC.
-
-        Args:
-            x_host: (B, T, d) float.
-            cos_host / sin_host: (B, T, Dh) float32 from ``build_rope_cache``.
-            time_mask_host: (1, 1, T, T) additive.
-            group_mask_host: (T, 1, B, B) additive.
-        """
+        """Host (B,T,d) + cos/sin + masks -> host (B,T,d) float for PCC."""
         import ttnn
 
         _b, t, _d = x_host.shape

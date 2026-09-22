@@ -1,17 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-chip TTNN Chronos-2 model (input embed -> encoder -> output embed).
+"""Single-chip TTNN Chronos2Model (input embed -> encoder -> output embed).
 
-Device-only for embeddings and encoder; all preprocessing, mask building,
-RoPE cache, quantile rearrange, and (inverse) instance norm stay on host.
+reference : models/experimental/chronos_forecast/reference/chronos2/model.py
+    embeds = input_embed(patches) + REG + future_embeds  # host concat
+    hidden = encoder(embeds)                             # one upload/download
+    quantiles = output_embed(hidden[:, -O:])             # host rearrange + unscale
 
-Oracle: ``models/experimental/chronos_forecast/reference/chronos2/model.py``
-``Chronos2Model.encode`` / ``Chronos2Model.forward`` (eval mode).
-
-v1 scope: all-valid attention masks only (the PCC tests use all-valid
-inputs). Variable masks raise an informative error until the SDPA broadcast
-envelope beyond ``(1,1,L,L)`` is proven on device.
+v1: all-valid masks only (variable masks raise); embeddings/encoder on device, rest on host.
 """
 
 from __future__ import annotations

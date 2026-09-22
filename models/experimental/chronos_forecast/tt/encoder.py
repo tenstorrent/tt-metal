@@ -1,19 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-chip TTNN Chronos2Encoder (N x EncoderBlock + final RMSNorm).
+"""Single-chip TTNN Chronos2Encoder (N x block + final norm). One upload/download.
 
-Device-only. Activations stay on device across blocks: one host upload, one
-download. Masks and RoPE cos/sin are uploaded once and reused by every block.
-
-Oracle: ``models/experimental/chronos_forecast/reference/chronos2/model.py``
-``Chronos2Encoder`` (eval mode)::
-
-    h = dropout(embeds)              # no-op in eval
-    for block in blocks:
-        h = block(h, position_ids, time_mask, group_mask)
-    h = final_layer_norm(h)
-    h = dropout(h)                   # no-op in eval
+reference : models/experimental/chronos_forecast/reference/chronos2/model.py
+    h = block(h) for each block  # time + group + FF, masks/RoPE reused
+    h = final_layer_norm(h)      # eval: dropouts are no-ops
 """
 
 from __future__ import annotations
@@ -66,17 +58,7 @@ class TtEncoder:
         )
 
     def forward_device(self, x, cos, sin, time_mask, group_mask):
-        """Device-to-device encoder. Borrowed tensors are NOT deallocated.
-
-        Args:
-            x: device (B, T, d) TILE.
-            cos / sin: device (B, 1, T, Dh) TILE.
-            time_mask: device (1, 1, T, T) TILE + DRAM.
-            group_mask: device (T, 1, B, B) TILE + DRAM.
-
-        Returns:
-            Device (B, T, d) tensor; caller owns it.
-        """
+        """Device (B,T,d) + cos/sin (B,1,T,Dh) + masks -> device (B,T,d); caller owns it."""
         import ttnn
 
         for block in self.blocks:
@@ -92,14 +74,7 @@ class TtEncoder:
         time_mask_host: torch.Tensor,
         group_mask_host: torch.Tensor,
     ) -> torch.Tensor:
-        """Forward starting from host inputs. Returns host torch (float32) for PCC.
-
-        Args:
-            x_host: (B, T, d) float.
-            cos_host / sin_host: (B, T, Dh) float32 from ``build_rope_cache``.
-            time_mask_host: (1, 1, T, T) additive.
-            group_mask_host: (T, 1, B, B) additive.
-        """
+        """Host (B,T,d) + cos/sin + masks -> host (B,T,d) float for PCC."""
         import ttnn
 
         _b, t, _d = x_host.shape

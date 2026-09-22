@@ -1,20 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared single-chip TTNN MHA core for Chronos-2 encoder sublayers.
+"""Shared TTNN MHA core (time + group attention). Device-to-device, no residual.
 
-Device-to-device: callers upload host inputs, the core runs RMSNorm ->
-fused-QKV MHA (+ optional RoPE) -> output projection, and callers own the
-residual add and the host round-trip. Used by time attention (with RoPE) and
-group attention (without RoPE, transposed layout).
-
-Oracle math mirrors ``reference/chronos2/layers.py`` ``MHA`` (eval mode,
-no QKV/output bias, attention scale 1.0)::
-
-    x_norm = RMSNorm(x)
-    Q/K/V = x_norm @ Wq/Wk/Wv            # one fused matmul + head split
-    Q', K' = RoPE(Q, K) iff cos/sin given (V untouched)
-    ctx = softmax(Q' @ K'.T * 1.0 + mask) @ V   # one SDPA call
+reference : models/experimental/chronos_forecast/reference/chronos2/layers.py
+    x_norm = RMSNorm(x)                            # T5-style, no bias
+    Q/K/V = x_norm @ Wq/Wk/Wv                      # one fused matmul + head split
+    Q', K' = RoPE(Q, K) iff cos/sin given          # V untouched
+    ctx = softmax(Q' @ K'.T * 1.0 + mask) @ V      # scale 1.0, one SDPA call
     return merge(ctx) @ Wo
 """
 
@@ -81,16 +74,7 @@ class TtMhaCore:
         return ttnn.concat([ttnn.mul(x2, -1), x1], dim=-1)
 
     def forward(self, x, mask, cos=None, sin=None):
-        """Device-to-device MHA (no residual).
-
-        Args:
-            x: device tensor (B, S, d), TILE.
-            mask: device tensor (B|1, 1, S, S) additive, TILE + DRAM.
-            cos / sin: device tensors (B, 1, S, Dh) or None to skip RoPE.
-
-        Returns:
-            Device tensor (B, S, d): merged heads @ Wo.
-        """
+        """Device (B,S,d) + mask + cos/sin or None -> device (B,S,d). Borrowed inputs kept."""
         import ttnn
 
         wqkv, wo, rms_w = self._tt

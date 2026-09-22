@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side Chronos-2 input packing and (stub) weight conversion.
+"""Host-side Chronos-2 input packing + state_dict -> TtChronosWeights conversion.
 
-NOTE: Residual Block runs on host in Amazon impl, will benchmark them however assume residual add will be faster on TT
-if not will add back here
+reference : third_party/chronos-forecasting (Amazon preprocess) + reference/chronos2/model.py
 """
 
 from __future__ import annotations
@@ -176,37 +175,9 @@ def prepare_chronos2_inputs(
     use_arcsinh: bool = False,
     instance_norm_eps: float = 1e-5,
 ) -> Chronos2PackedInputs:
-    """Pack targets and covariates into V/W model tensors.
-
-    Numeric covariates are passed through. Bool / string / object covariates are
-    encoded: target encoding when ``use_target_encoding`` and there is one target
-    row, otherwise integer ordinal codes.
-
-    Parameters
-    ----------
-    target
-        One series as ``(T,)`` or ``(D, T)``, or a list of those (one per series).
-    prediction_length
-        Future horizon H. Required when ``future_covariates`` is omitted.
-    past_covariates
-        Optional ``(M, T)`` / ``(T,)``, a list of M rows for one series, or a list
-        of per-series payloads when ``target`` is a list. Known-future covariates
-        are the last ``M_f`` rows.
-    future_covariates
-        Optional ``(M_f, H)`` / ``(H,)`` (or per-series list). ``M_f`` is a suffix
-        of ``M``.
-    use_target_encoding
-        If True and each series has one target, categorical columns use per-item
-        smoothed target means. Multivariate targets fall back to ordinal codes.
-    apply_instance_norm
-        If True, standardize each packed row along time (Amazon InstanceNorm).
-        Future rows reuse the context loc/scale. Off by default so packing can
-        be checked against Amazon preprocess, which does not normalize.
-    use_arcsinh
-        If True, apply ``arcsinh`` after standardization.
-    instance_norm_eps
-        Replacement scale when a row has zero variance.
-    """
+    """Pack targets/covariates. target (T,)/(D,T) or per-series list; past (M,T);
+    future (M_f,H) suffix of past; H required if future omitted. Categorical:
+    target-encoded (1 target) else ordinal. Norm off by default (Amazon parity)."""
     target_is_batch = _is_nested_series_list(target)
     targets = _as_series_list(target, name="target")
     n_series = len(targets)
@@ -578,10 +549,7 @@ def target_encode(
     future_cat_codes: np.ndarray | None = None,
     smooth: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray | None]:
-    """Per-item smoothed target encoding (Amazon Chronos-2 ``_target_encode`` math).
-
-    encoded = (smooth * item_mean + category_sum) / (smooth + category_count)
-    """
+    """Per-item smoothed target means: (smooth*item_mean + cat_sum)/(smooth + cat_count)."""
     mask = np.isfinite(target)
     target_masked = np.where(mask, target, 0.0)
 

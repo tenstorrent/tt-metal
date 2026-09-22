@@ -1,22 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-chip TTNN GroupSelfAttention for Chronos-2 (encoder sublayer 2).
+"""Single-chip TTNN GroupSelfAttention (encoder sublayer 2). Wrapper over TtMhaCore.
 
-Device-only. Thin wrapper over the shared :class:`TtMhaCore`: transposes
-batch/time around the core (attention runs along the batch axis), no RoPE,
-per-step group mask. Data starts on host and moves host -> device inside
-``forward``.
-
-Oracle: ``models/experimental/chronos_forecast/reference/chronos2/layers.py``
-``GroupSelfAttention`` (eval mode)::
-
-    x_flip = rearrange(x, "b t d -> t b d")
-    x_norm = RMSNorm(x_flip)
-    Q/K/V = x_norm @ Wq/Wk/Wv (no bias)        # -> (T, H, B, Dh)
-    ctx = softmax(Q @ K.T * 1.0 + mask) @ V    # scale 1.0, mask (T,1,B,B)
-    out = merge(ctx) @ Wo (no bias)            # (T, B, d)
-    return x + rearrange(out, "t b d -> b t d")
+reference : models/experimental/chronos_forecast/reference/chronos2/layers.py
+    x = x + GroupSelfAttention(x)  # no RoPE, batch-axis, mask (T,1,B,B)
 """
 
 from __future__ import annotations
@@ -73,15 +61,7 @@ def build_group_mask(
     attention_mask: torch.Tensor,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
-    """Host group-time mask replicating ``Chronos2Encoder._construct_and_invert_group_time_mask``.
-
-    Args:
-        group_ids: (B,) long — rows with equal ids attend to each other.
-        attention_mask: (B, T) binary (1 = valid token).
-
-    Returns:
-        (T, 1, B, B) additive float (0 valid / finfo.min invalid).
-    """
+    """Host group-time mask. group_ids (B,), attn (B,T) binary -> (T,1,B,B) additive."""
     with torch.no_grad():
         group_mask = group_ids[:, None] == group_ids[None, :]
         group_time_mask = torch.einsum("qb,bt->qbt", group_mask, attention_mask)
@@ -98,12 +78,7 @@ class TtGroupAttention:
         self.core = TtMhaCore(device, weights.to_mha())
 
     def forward(self, x_host: torch.Tensor, mask_host: torch.Tensor) -> torch.Tensor:
-        """Forward starting from host inputs. Returns host torch (float32) for PCC.
-
-        Args:
-            x_host: (B, T, d) float.
-            mask_host: (T, 1, B, B) additive from :func:`build_group_mask`.
-        """
+        """Host (B,T,d) + mask (T,1,B,B) -> host (B,T,d) float for PCC."""
         import ttnn
 
         b, t, _d = x_host.shape

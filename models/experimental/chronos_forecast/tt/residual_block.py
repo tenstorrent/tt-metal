@@ -1,22 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-chip TTNN input-patch ResidualBlock for Chronos-2.
+"""Single-chip TTNN ResidualBlock (input + output patch embeddings).
 
-Input is the 48-d patched vector (``[time(16), values(16), mask(16)]``). Data
-starts on host and moves host -> device inside ``forward``.
-
-Oracle: ``models/experimental/chronos_forecast/reference/chronos2/layers.py``
-``ResidualBlock`` (eval mode, no LayerNorm for the input embedding)::
-
-    hid = relu(hidden_layer(x))   # (B, P, 48) -> (B, P, h)
-    out = output_layer(hid)       # (B, P, h)  -> (B, P, out)
-    res = residual_layer(x)       # (B, P, 48) -> (B, P, out)  (skip projection)
-    return out + res
-
-The sum is local to this block. The downstream consumer (not yet implemented)
-is ``Chronos2Encoder.block[0].TimeSelfAttention`` — see
-``reference/chronos2/model.py`` ``Chronos2Model.encode``.
+reference : models/experimental/chronos_forecast/reference/chronos2/layers.py
+    hid = relu(hidden(x))     # (B, P, in) -> (B, P, h)
+    out = output(hid)         # (B, P, h)  -> (B, P, out)
+    return out + residual(x)  # skip projection, no norm, eval
 """
 
 from __future__ import annotations

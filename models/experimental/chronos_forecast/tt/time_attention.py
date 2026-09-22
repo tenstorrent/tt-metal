@@ -1,21 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-chip TTNN TimeSelfAttention for Chronos-2 (encoder sublayer 1).
+"""Single-chip TTNN TimeSelfAttention (encoder sublayer 1). Wrapper over TtMhaCore.
 
-Device-only. Thin wrapper over the shared :class:`TtMhaCore`: builds RoPE
-cos/sin on host, delegates norm/QKV/attention/projection to the core, adds
-the residual. Data starts on host and moves host -> device inside ``forward``.
-
-Oracle: ``models/experimental/chronos_forecast/reference/chronos2/layers.py``
-``TimeSelfAttention`` (eval mode)::
-
-    x_norm = RMSNorm(x)                        # (B, T, d), T5-style, no bias
-    Q/K/V = x_norm @ Wq/Wk/Wv (no bias)        # -> (B, H, T, Dh)
-    Q', K' = RoPE(Q, K, position_ids)          # V untouched
-    ctx = softmax(Q' @ K'.T * 1.0 + mask) @ V  # scale is 1.0, NOT 1/sqrt(Dh)
-    out = merge(ctx) @ Wo (no bias)            # (B, T, d)
-    return x + out
+reference : models/experimental/chronos_forecast/reference/chronos2/layers.py
+    x = x + TimeSelfAttention(x)  # RMSNorm, RoPE Q/K, SDPA scale 1.0, mask (B,H,T,T)
 """
 
 from __future__ import annotations
@@ -71,15 +60,7 @@ class TtTimeAttentionWeights:
 def build_rope_cache(
     position_ids: torch.Tensor, inv_freq: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Host RoPE cos/sin replicating ``Chronos2RotaryEmbedding.forward`` (fp32).
-
-    Args:
-        position_ids: (B, T) long.
-        inv_freq: (Dh // 2,) float.
-
-    Returns:
-        (cos, sin), each (B, T, Dh) float32.
-    """
+    """Host RoPE cos/sin (fp32). position_ids (B,T), inv_freq (Dh//2) -> (cos, sin) (B,T,Dh)."""
     with torch.no_grad():
         inv_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         pos_expanded = position_ids[:, None, :].float()
@@ -103,13 +84,7 @@ class TtTimeAttention:
         sin_host: torch.Tensor,
         mask_host: torch.Tensor,
     ) -> torch.Tensor:
-        """Forward starting from host inputs. Returns host torch (float32) for PCC.
-
-        Args:
-            x_host: (B, T, d) float.
-            cos_host / sin_host: (B, T, Dh) float32 from :func:`build_rope_cache`.
-            mask_host: (1, 1, T, T) additive (0 valid / large-negative invalid).
-        """
+        """Host (B,T,d) + cos/sin (B,T,Dh) + mask (1,1,T,T) -> host (B,T,d) float for PCC."""
         import ttnn
 
         b, t, _d = x_host.shape
