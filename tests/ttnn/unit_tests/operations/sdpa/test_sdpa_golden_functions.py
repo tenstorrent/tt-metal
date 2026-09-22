@@ -329,3 +329,216 @@ def test_ring_joint_golden_cross_attention_uses_only_logical_keys():
         value[..., :3, :].repeat_interleave(2, dim=1),
     )
     torch.testing.assert_close(output, expected)
+
+
+def test_sdpa_decode_golden_uses_padded_per_head_sink():
+    torch.manual_seed(7)
+    batch, heads, dim, seq = 2, 2, 4, 3
+    query = torch.randn(1, batch, heads, dim)
+    key = torch.randn(batch, 1, seq, dim)
+    value = torch.randn(batch, 1, seq, dim)
+    sink = torch.zeros(heads, 32)
+    sink[:, 0] = torch.tensor([0.5, -1.25])
+
+    golden = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+    actual = golden(query, key, value, cur_pos=[seq - 1, seq - 1], is_causal=True, attention_sink=sink, scale=1.0)
+
+    attended_query = query.permute(1, 2, 0, 3).float()
+    attended_key = key.repeat_interleave(heads, dim=1).float()
+    attended_value = value.repeat_interleave(heads, dim=1).float()
+    scores = torch.matmul(attended_query, attended_key.transpose(-2, -1))
+    sink_logits = sink[:, :1].reshape(1, heads, 1, 1).expand(batch, heads, 1, 1)
+    probabilities = torch.softmax(torch.cat([scores, sink_logits], dim=-1), dim=-1)[..., :-1]
+    expected = torch.matmul(probabilities, attended_value).permute(2, 0, 1, 3)
+    torch.testing.assert_close(actual, expected)
+
+
+def test_sdpa_decode_golden_converts_device_mask_layout():
+    torch.manual_seed(8)
+    batch, heads, dim, keys = 2, 4, 4, 5
+    query = torch.randn(1, batch, heads, dim)
+    key = torch.randn(batch, 1, keys, dim)
+    value = torch.randn(batch, 1, keys, dim)
+    logical_mask = torch.zeros(batch, heads, 1, keys)
+    logical_mask[:, 0, :, 0] = -1.0e4
+    logical_mask[:, 1, :, 1] = -1.0e4
+    device_mask = logical_mask.transpose(1, 2).contiguous()
+
+    golden = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+    actual = golden(
+        query,
+        key,
+        value,
+        is_causal=False,
+        attn_mask=device_mask,
+        cur_pos=[keys - 1] * batch,
+        scale=1.0,
+    )
+
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query.permute(1, 2, 0, 3),
+        key.repeat_interleave(heads, dim=1),
+        value.repeat_interleave(heads, dim=1),
+        attn_mask=logical_mask,
+        scale=1.0,
+    ).permute(2, 0, 1, 3)
+    torch.testing.assert_close(actual, expected)
+
+
+def test_sdpa_decode_golden_broadcasts_a_single_mask_batch():
+    torch.manual_seed(13)
+    batch, heads, dim, keys = 3, 2, 4, 4
+    query = torch.randn(1, batch, heads, dim)
+    key = torch.randn(batch, 1, keys, dim)
+    value = torch.randn(batch, 1, keys, dim)
+    logical_row = torch.zeros(1, heads, 1, keys)
+    logical_row[:, 0, :, 2:] = -1.0e4
+    device_mask = logical_row.transpose(1, 2).contiguous()
+
+    golden = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+    actual = golden(
+        query,
+        key,
+        value,
+        is_causal=False,
+        attn_mask=device_mask,
+        cur_pos=[keys - 1] * batch,
+        scale=1.0,
+    )
+
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query.permute(1, 2, 0, 3),
+        key.repeat_interleave(heads, dim=1),
+        value.repeat_interleave(heads, dim=1),
+        attn_mask=logical_row.expand(batch, -1, -1, -1),
+        scale=1.0,
+    ).permute(2, 0, 1, 3)
+    torch.testing.assert_close(actual, expected)
+
+
+def test_paged_decode_golden_converts_circular_mask_layout():
+    query = torch.tensor([[[[1.0], [2.0]]]])
+    page_table = torch.tensor([[0, 1]], dtype=torch.int64)
+    key_pages = torch.tensor([[[[4.0], [5.0]]], [[[2.0], [3.0]]]])
+    value_pages = torch.tensor([[[[40.0], [50.0]]], [[[20.0], [30.0]]]])
+    logical_mask = torch.zeros(1, 2, 1, 6)
+    logical_mask[:, 0, :, 4] = -1.0e4
+    logical_mask[:, 1, :, 5] = -1.0e4
+    device_mask = logical_mask.transpose(1, 2).contiguous()
+
+    golden = ttnn.get_golden_function(ttnn.transformer.paged_scaled_dot_product_attention_decode)
+    actual = golden(
+        query,
+        key_pages,
+        value_pages,
+        page_table,
+        cur_pos_tensor=torch.tensor([5]),
+        sliding_window_size=2,
+        cache_position_modulo=4,
+        attn_mask=device_mask,
+        scale=1.0,
+    )
+
+    gathered_key = torch.tensor([[[[4.0], [5.0]]]])
+    gathered_value = torch.tensor([[[[40.0], [50.0]]]])
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query.permute(1, 2, 0, 3),
+        gathered_key.repeat_interleave(2, dim=1),
+        gathered_value.repeat_interleave(2, dim=1),
+        attn_mask=logical_mask[..., 4:6],
+        scale=1.0,
+    ).permute(2, 0, 1, 3)
+    torch.testing.assert_close(actual, expected)
+
+
+def test_ring_mla_golden_selects_cache_slot_when_batch_sizes_match():
+    torch.manual_seed(3)
+    query = torch.randn(4, 2, 3, 4)
+    kv = torch.randn(4, 1, 3, 6)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
+    output, _ = golden(query, kv, head_dim_v=3, logical_n=3, kv_cache_batch_idx=2)
+
+    key = kv[2:3, :, :3, :]
+    value = key[..., :3]
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query,
+        key.repeat_interleave(2, dim=1),
+        value.repeat_interleave(2, dim=1),
+        is_causal=True,
+    )
+    torch.testing.assert_close(output, expected)
+
+
+def test_ring_mla_golden_uses_runtime_slot_and_logical_prefix():
+    torch.manual_seed(9)
+    query = torch.randn(1, 2, 2, 4)
+    kv = torch.randn(4, 1, 8, 6)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
+    output, _ = golden(
+        query,
+        kv,
+        head_dim_v=3,
+        logical_n=8,
+        slot_id=torch.tensor([1]),
+        kv_actual_isl_tensor=torch.tensor([2]),
+        kv_cache_num_layers=2,
+        kv_cache_layer_idx=0,
+    )
+
+    key = kv[2:3, :, :4, :]
+    value = key[..., :3]
+    query_positions = torch.arange(2, 4).unsqueeze(1)
+    key_positions = torch.arange(4).unsqueeze(0)
+    causal_mask = (key_positions <= query_positions).reshape(1, 1, 2, 4)
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query,
+        key.repeat_interleave(2, dim=1),
+        value.repeat_interleave(2, dim=1),
+        attn_mask=causal_mask,
+    )
+    torch.testing.assert_close(output, expected)
+
+
+def test_flash_mla_prefill_golden_casts_kv_to_query_dtype():
+    torch.manual_seed(11)
+    query = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
+    key = torch.randn(1, 1, 4, 8, dtype=torch.float32)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.flash_mla_prefill)
+    actual = golden(query, key, head_dim_v=4, is_causal=True)
+
+    key_bf16 = key.to(query.dtype).repeat_interleave(2, dim=1)
+    value_bf16 = key[..., :4].to(query.dtype).repeat_interleave(2, dim=1)
+    expected = torch.nn.functional.scaled_dot_product_attention(query, key_bf16, value_bf16, is_causal=True)
+    torch.testing.assert_close(actual, expected)
+
+
+def test_sparse_sdpa_msa_golden_treats_unsigned_masked_index_as_sentinel():
+    torch.manual_seed(12)
+    query = torch.randn(1, 2, 3, 4)
+    key = torch.randn(1, 1, 4, 4)
+    value = torch.randn(1, 1, 4, 3)
+    signed = torch.tensor([[[[0, -1], [1, -1], [0, 1]]]], dtype=torch.int64)
+    unsigned = signed.clone()
+    unsigned[unsigned < 0] = 0xFFFFFFFF
+
+    golden = ttnn.get_golden_function(ttnn.transformer.sparse_sdpa_msa)
+    signed_output = golden(query, key, value, signed, block_size=2, scale=1.0)
+    unsigned_output = golden(query, key, value, unsigned, block_size=2, scale=1.0)
+    torch.testing.assert_close(unsigned_output, signed_output)
+
+
+def test_ring_ops_register_persistent_buffers_as_inplace_outputs():
+    exp_ring = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention
+    ring_joint = ttnn.transformer.ring_joint_scaled_dot_product_attention
+    ring_mla = ttnn.transformer.ring_mla
+
+    assert "persistent_output_buffer_k" in exp_ring.output_tensor_kwarg_names
+    assert "persistent_output_buffer_v" in exp_ring.output_tensor_kwarg_names
+    assert "persistent_output_buffer_k" in ring_joint.output_tensor_kwarg_names
+    assert "persistent_output_buffer_v" in ring_joint.output_tensor_kwarg_names
+    assert "persistent_output_buffer_joint_k" in ring_joint.output_tensor_kwarg_names
+    assert "persistent_output_buffer_joint_v" in ring_joint.output_tensor_kwarg_names
+    assert "persistent_output_buffer_kv" in ring_mla.output_tensor_kwarg_names

@@ -219,7 +219,10 @@ def _scaled_attention(
             scores = scores + explicit_mask
 
     sink = attention_sink.float()
-    if sink.ndim == 1:
+    if sink.ndim == 2 and sink.shape[0] == num_query_heads:
+        # Decode stores one value per head in column 0 of a [heads, TILE_WIDTH] tile.
+        sink = sink[:, :1].reshape(1, num_query_heads, 1, 1)
+    elif sink.ndim == 1:
         sink = sink.reshape(1, -1, 1, 1)
     elif sink.shape[-1] == num_query_heads and sink.shape[1] != num_query_heads:
         sink = sink.permute(0, 3, 1, 2)
@@ -346,7 +349,7 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
             start_idx = start_indices[i]
             attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
     else:
-        raise AssertionError("Non-causal attention is not supported in this function.")
+        raise ValueError("Non-causal attention is not supported in this function.")
 
     Q_slice = Q[:, :nh, :, :]  # b, nh, 1, d
     K_slice = K[:, :nkv, :padded_layer_len, :]  # b, nkv, S, d
@@ -382,6 +385,10 @@ def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=Tru
 
     SEQ_CHUNK = 4096
     HEAD_CHUNK = 16
+
+    # TTNN accepts mixed Q/K/V formats; PyTorch SDPA requires one dtype.
+    K = K.to(Q.dtype)
+    V = V.to(Q.dtype)
 
     B, nh, S, _ = Q.shape
     _, nkv, _, _ = V.shape
@@ -429,6 +436,20 @@ def _decode_layout(input_tensor_q, input_tensor_k):
     return input_tensor_q, False
 
 
+def _decode_attention_mask(mask, num_heads):
+    """Move a decode mask from [batch, 1, heads, keys] onto [batch, heads, query, keys]."""
+    if mask.ndim == 4 and mask.shape[1] == 1 and mask.shape[2] == num_heads:
+        return mask.permute(0, 2, 1, 3)
+    return mask
+
+
+def _decode_batch_sink(attention_sink, batch, batch_index):
+    # A rank-2 decode sink is [heads, TILE_WIDTH] and is shared across the batch.
+    if attention_sink is None or attention_sink.ndim < 3 or attention_sink.shape[0] != batch:
+        return attention_sink
+    return attention_sink[batch_index : batch_index + 1]
+
+
 def _decode_attention(
     input_tensor_q,
     input_tensor_k,
@@ -462,10 +483,13 @@ def _decode_attention(
         cache_batch = 0 if share_cache or input_tensor_k.shape[0] == 1 else batch_index
         key = input_tensor_k[cache_batch : cache_batch + 1, :, : position + 1]
         value = input_tensor_v[cache_batch : cache_batch + 1, :, : position + 1]
-        mask = None if attn_mask is None else attn_mask[batch_index : batch_index + 1, ..., : position + 1]
-        sink = attention_sink
-        if sink is not None and sink.shape[0] == batch:
-            sink = sink[batch_index : batch_index + 1]
+        mask = None
+        if attn_mask is not None:
+            # A mask batch of 1 is broadcast across KV batches, matching the decode reader.
+            mask_batch = batch_index % attn_mask.shape[0]
+            mask = attn_mask[mask_batch : mask_batch + 1, ..., : position + 1]
+            mask = _decode_attention_mask(mask, num_heads)
+        sink = _decode_batch_sink(attention_sink, batch, batch_index)
         outputs.append(
             _scaled_attention(
                 query[batch_index : batch_index + 1],
@@ -572,7 +596,7 @@ def _paged_circular_decode_attention(
 
         mask = None
         if attn_mask is not None:
-            mask_row = attn_mask[batch_index : batch_index + 1]
+            mask_row = attn_mask[batch_index % attn_mask.shape[0] : batch_index % attn_mask.shape[0] + 1]
             if mask_row.shape[-1] > position:
                 mask_indices = logical_positions
             elif mask_row.shape[-1] >= modulo:
@@ -580,10 +604,9 @@ def _paged_circular_decode_attention(
             else:
                 raise ValueError("Attention mask is too short for circular-cache logical or physical positions")
             mask = mask_row.index_select(-1, mask_indices.to(mask_row.device))
+            mask = _decode_attention_mask(mask, query_row.shape[1])
 
-        sink = attention_sink
-        if sink is not None and sink.shape[0] == batch:
-            sink = sink[batch_index : batch_index + 1]
+        sink = _decode_batch_sink(attention_sink, batch, batch_index)
         outputs.append(
             _scaled_attention(
                 query_row,
@@ -822,8 +845,10 @@ def sparse_attention_ref_msa(q, k, v, indices, scale, *, blk_kv=BLK_KV, causal=F
     # block_mask[b, g, s, blk] — set True only for valid (non-sentinel) selected blocks (flat index_put so a
     # sentinel clamped to block 0 can never overwrite a genuinely-selected block 0).
     block_mask = torch.zeros(B, n_kv, S, nblk, dtype=torch.bool)
-    valid = indices >= 0
-    idx_safe = torch.where(valid, indices, torch.zeros_like(indices)).long()
+    # Host references use signed -1. Comparison mode keeps the uint32 0xFFFFFFFF bits.
+    indices = indices.to(torch.int64)
+    valid = (indices >= 0) & (indices != MASKED_INDEX)
+    idx_safe = torch.where(valid, indices, torch.zeros_like(indices))
     flat_mask = block_mask.view(-1, nblk)
     flat_valid = valid.reshape(-1, topk)
     flat_idx = idx_safe.reshape(-1, topk)
@@ -1190,17 +1215,49 @@ def ring_mla_golden(
     logical_n,
     scale=None,
     kv_cache_batch_idx=None,
+    kv_actual_isl=None,
+    slot_id=None,
+    kv_actual_isl_tensor=None,
+    kv_cache_num_layers=None,
+    kv_cache_layer_idx=None,
     **_,
 ):
     import torch
 
-    cache_batch_idx = int(_scalar(kv_cache_batch_idx, 0))
-    if input_tensor_kv.shape[0] != input_tensor_q.shape[0]:
-        input_tensor_kv = input_tensor_kv[cache_batch_idx : cache_batch_idx + 1]
-    logical_n = int(_scalar(logical_n, input_tensor_kv.shape[-2]))
+    input_tensor_kv, _, actual_kv_length = _ring_runtime_cache_selection(
+        input_tensor_kv,
+        input_tensor_kv,
+        input_tensor_q,
+        kv_cache_batch_idx=kv_cache_batch_idx,
+        kv_actual_isl=kv_actual_isl,
+        slot_id=slot_id,
+        kv_actual_isl_tensor=kv_actual_isl_tensor,
+        kv_cache_num_layers=kv_cache_num_layers,
+        kv_cache_layer_idx=kv_cache_layer_idx,
+    )
+    query_length = input_tensor_q.shape[-2]
+    if actual_kv_length is not None:
+        inferred = actual_kv_length + query_length
+        logical_n = int(_scalar(logical_n, inferred))
+        # A host logical_n that still names the allocated capacity includes the unread tail.
+        if logical_n > inferred:
+            logical_n = inferred
+        if actual_kv_length + query_length > logical_n:
+            raise ValueError(
+                f"kv_actual_isl ({actual_kv_length}) plus query length ({query_length}) exceeds logical_n ({logical_n})"
+            )
+    else:
+        logical_n = int(_scalar(logical_n, input_tensor_kv.shape[-2]))
     key = input_tensor_kv[..., :logical_n, :]
     value = key[..., : int(head_dim_v)]
-    output = _scaled_attention(input_tensor_q, key, value, is_causal=True, scale=scale)
+    output = _scaled_attention(
+        input_tensor_q,
+        key,
+        value,
+        is_causal=True,
+        scale=scale,
+        query_start=actual_kv_length,
+    )
     scores = torch.matmul(
         input_tensor_q.float(), _repeat_kv_heads(key, input_tensor_q.shape[1]).transpose(-2, -1).float()
     )
@@ -1209,6 +1266,7 @@ def ring_mla_golden(
         input_tensor_q.shape[-2],
         key.shape[-2],
         is_causal=True,
+        query_start=actual_kv_length,
         device=input_tensor_q.device,
     )
     lse = torch.logsumexp(scores.masked_fill(~mask.reshape(1, 1, *mask.shape), float("-inf")), dim=-1, keepdim=True)
@@ -1280,11 +1338,11 @@ def recurrent_gated_delta_rule(
     v,
     beta,
     g,
-    scale: float = None,
+    scale: float | None = None,
     initial_state=None,
     output_final_state: bool = False,
     use_qk_l2norm: bool = False,
-):
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Token-by-token recurrent gated delta rule. Used for decode (T=1).
 
@@ -1366,11 +1424,11 @@ def chunk_gated_delta_rule(
     g,
     beta,
     chunk_size: int = 64,
-    scale: float = None,
+    scale: float | None = None,
     initial_state=None,
     output_final_state: bool = False,
     use_qk_l2norm: bool = False,
-):
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Chunked gated delta rule. Used for prefill (processing full sequences).
 

@@ -166,6 +166,10 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.transformer.exp_ring_joint_scaled_dot_product_attention,
     golden_function=exp_ring_joint_scaled_dot_product_attention_golden,
+    output_tensor_kwarg_names=(
+        "persistent_output_buffer_k",
+        "persistent_output_buffer_v",
+    ),
 )
 ttnn.attach_golden_function(
     ttnn.transformer.flash_mla_prefill,
@@ -198,10 +202,17 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.transformer.ring_joint_scaled_dot_product_attention,
     golden_function=ring_joint_scaled_dot_product_attention_golden,
+    output_tensor_kwarg_names=(
+        "persistent_output_buffer_k",
+        "persistent_output_buffer_v",
+        "persistent_output_buffer_joint_k",
+        "persistent_output_buffer_joint_v",
+    ),
 )
 ttnn.attach_golden_function(
     ttnn.transformer.ring_mla,
     golden_function=ring_mla_golden,
+    output_tensor_kwarg_names=("persistent_output_buffer_kv",),
 )
 ttnn.attach_golden_function(
     ttnn.transformer.scaled_dot_product_attention,
