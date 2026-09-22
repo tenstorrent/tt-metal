@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
         SetRuntimeArgs(program, sender, core_list[i], {cfg[i], tt_uva_t6_global_selector(0, 0, i, 1), 0u});
     }
 
-    MeshWorkload workload;
+    distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh->shape()), std::move(program));
     EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, /*blocking=*/false);
 
