@@ -325,9 +325,11 @@ On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
 ``vSMag`` to or from ``I32`` a conversion operation is inserted -- on
 Wormhole this is part of the load or store, on other architectures it
-is a separate operation. It is unspecified how 2's complement's most
-negative value converts to sign-magnitude.  Not all data
-representations are permitted for all types.
+is a separate operation. On all ISAs, loading or storing SM16 or SM8
+to or from vInt or related types will insert conversion operations.
+It is unspecified how 2's complement's most negative value converts to
+sign-magnitude.  Not all data representations are permitted for all
+types.
 
 The ``LO16`` layout transfers 16 bits to and from the low part of a
 ``vUInt`` or related type. The ``HI16`` layout reads 16 bits into the
