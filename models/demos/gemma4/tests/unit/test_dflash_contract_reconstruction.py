@@ -46,6 +46,18 @@ def test_storage_uses_configured_capacity_null_page_and_both_batches(model):
     assert all(buffer.releases == 0 for buffer in storage["allocated"])
 
 
+def test_allocator_supports_device_shapes_without_slice_indexing(model, expect_error):
+    serving = model.kv_cache[0][0][0]
+    with expect_error(TypeError, match="only supports integer indices"):
+        serving.shape[1:]
+    model._contract_release_rebuild_storage()
+    model._contract_prepare_rebuild_storage(model.kv_cache)
+    scratch = model._ct_rebuild_storage["kv_cache"][0][0][0]
+    assert scratch.shape == (17, 1, 64, 8)
+    assert scratch.padded_shape[1] == serving.padded_shape[1]
+    assert scratch.padded_shape[-1] == serving.padded_shape[-1]
+
+
 def test_non_power_of_two_context_and_effective_block_sizes(model):
     model._contract_release_rebuild_storage()
     model.model_args[0].max_seq_len = 1500

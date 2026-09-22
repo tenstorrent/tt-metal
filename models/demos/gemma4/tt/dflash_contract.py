@@ -145,7 +145,10 @@ class DFlashContractMixin:
                     pair = []
                     for serving in kv_cache[0][index]:
                         scratch = ttnn.from_torch(
-                            torch.zeros((columns + 1, *serving.shape[1:]), dtype=torch.bfloat16),
+                            torch.zeros(
+                                (columns + 1, serving.shape[1], serving.shape[2], serving.shape[3]),
+                                dtype=torch.bfloat16,
+                            ),
                             dtype=serving.dtype,
                             layout=ttnn.TILE_LAYOUT,
                             device=target.mesh_device,

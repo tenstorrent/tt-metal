@@ -43,10 +43,28 @@ def _serving_config():
     )
 
 
+class DeviceShape:
+    """The TT Shape interface accepts integer indices but rejects slices."""
+
+    def __init__(self, dimensions):
+        self.dimensions = tuple(dimensions)
+
+    def __getitem__(self, index):
+        if not isinstance(index, int):
+            raise TypeError("DeviceShape only supports integer indices")
+        return self.dimensions[index]
+
+    def __len__(self):
+        return len(self.dimensions)
+
+    def __eq__(self, other):
+        return self.dimensions == tuple(other)
+
+
 class ScratchTensor:
     def __init__(self, value):
         self.value = value.clone()
-        self.shape = self.padded_shape = tuple(value.shape)
+        self.shape = self.padded_shape = DeviceShape(value.shape)
         self.dtype = value.dtype
         self.releases = 0
 
