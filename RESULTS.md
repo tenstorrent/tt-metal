@@ -29,7 +29,7 @@ Independently corroborated on g03blx04, which measured 15.2 s for the same 8-for
 
 | Clip | Frames | Canvas | Fwd | Padded | Encoder | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | 9.4 | 3.6 | 1.2 | 14.5 | 2.80 | 37.53 | bh-glx-120-b09u02 |
+| 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | 11.3 | 3.9 | 1.1 | 16.8 | 3.25 | 37.38 | bh-glx-120-c02u14 |
 | 10 s | 243 | 1344x768 | 8 | 73472 | 0.4 | 23.1 | 7.3 | 1.3 | 32.1 | 3.17 | 36.94 | bh-glx-120-b09u02 |
 | 15 s | 362 | 1344x768 | 8 | 109312 | 0.4 | 43.7 | 11.3 | 1.5 | 56.9 | 3.77 | 35.19 | bh-glx-120-b09u02 |
 
@@ -77,15 +77,26 @@ g03blx04 is excluded entirely: it drops tray 1 (chips 8-15) under MiniMax-H3 loa
 times across two different source trees, while non-H3 matmul at 29.9 TFLOP/s per chip runs 180 s
 clean. A controlled A/B on the pre-change tree ruled out this branch's commits as the cause.
 
-### Grid configuration changed mid-sweep
+### Node variation is large, and it confounds the grid comparison
 
-Rows measured before 22:50 ran with SDPA and the VSA pooled matmuls clamped to an 11x10 core grid;
-rows after run unclamped at the device's full 12x10. The clamp was reverted because it broke
-ref2va -- at `padded_len` 89856 the SDPA circular buffers on 11x10 reach 1647616 B against L1's
-1572864 B, since a narrower grid gives each core more to hold. Matmuls were on 11x10 in both cases
-(`get_matmul_core_grid` has always clamped them), so the difference is confined to SDPA and the
-VSA stages, worth roughly 8 % more cores. Treat cross-row comparisons spanning that boundary as
-approximate until the early points are re-measured.
+Two grid configurations appear in this sweep: SDPA and the VSA pooled matmuls were clamped to an
+11x10 core grid for the earliest rows and run unclamped at the device's full 12x10 afterwards.
+(Matmuls were 11x10 throughout -- `get_matmul_core_grid` has always clamped them -- so the
+difference is confined to SDPA and the VSA stages.)
+
+**No clean measurement of that difference exists here**, because every clamped/unclamped pair also
+changes node:
+
+| point | clamped | unclamped |
+|---|---|---|
+| fl2va 10 s | 42.1 s (c06u08) | 36.1 s (b09u02) |
+| fl2va 15 s | 74.2 s (c06u08) | 61.9 s (b09u02) |
+| t2va 5 s | 14.5 s (b09u02) | 16.8 s (c02u14) |
+
+The first two make unclamping look 14-17 % faster; the third makes it 16 % slower. The consistent
+reading is not a grid effect at all but a **node effect** -- `b09u02` is simply faster than either
+`c06u08` or `c02u14` -- which is why the `Node` column belongs in the tables. Treat cross-node
+comparisons as carrying roughly 15 % of noise, and do not read a grid cost out of these numbers.
 
 ### ref2va: why it was blocked, and the fix
 
