@@ -284,6 +284,22 @@ All verified by reading the code; none implemented.
 5. **Trace the UniPC solver step, or stop blocking on `execute_trace`.** The solver runs outside
    the traced region while `execute_trace` blocks, so ~760 host-dispatched launches per
    generation happen with the device idle.
+
+   *Measured and dropped (2026-09-22, `test_step_gap_ti2v_5b.py`, 720p T2V, 40 traced steps,
+   stats over steps 2-39):*
+
+   | per step | ms |
+   |---|---|
+   | wall (production timeline) | 266.35 |
+   | `execute_trace` blocking | 258.52 |
+   | solver host dispatch | 5.89 |
+   | solver device tail after dispatch (sync) | 0.69 |
+   | host-only gap = wall - trace - solver device | **1.37** (0.5 %) |
+
+   The idle window a non-blocking trace could close is 1.4 ms/step strictly, 7.8 ms/step at
+   the outside (if the solver's dispatch-bound 6.5 ms overlapped completely). Both are under
+   the 10 ms/step bar set before measuring, so the ceiling is < 3 % and the realistic gain
+   ~1 %. Not built; the bench stays so the number can be re-taken if the trace gets shorter.
 6. **bf8 for the ring-SDPA K/V gather.** ~120GB/device/generation crosses the SP fabric in bf16
    and the `bfloat8_b` path already exists but is only enabled by a `QuantConfig` no 5B pipeline
    applies. Overlapped with compute, so precision-gate it and expect only what the fabric is
