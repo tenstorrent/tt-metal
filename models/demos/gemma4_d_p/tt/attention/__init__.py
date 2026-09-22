@@ -14,6 +14,7 @@ from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_
 from .operations import (
     apply_per_head_norm,
     apply_qkv_projection,
+    attn_mm_pc,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
@@ -299,11 +300,16 @@ class Gemma4Attention:
         # DIAG: GEMMA4_ATTN_MM_CFG -- same core_grid mechanism as mmanzoor's MLP change.
         # Helps at chunk 8192, costs ~1.5 ms at 2048; see _attn_mm_grid() in operations.py
         # for the measurement and why this stays gated off.
-        _cg = None
-        if __import__("os").environ.get("GEMMA4_ATTN_MM_CFG", "0").lower() in ("1", "true", "yes"):
-            _g = self.mesh_device.compute_with_storage_grid_size()
-            _cg = ttnn.CoreGrid(y=_g.y, x=_g.x)
-        projected = ttnn.linear(tt_out, self.weights.o_proj, **({"core_grid": _cg} if _cg is not None else {}))
+        # DIAG: GEMMA4_ATTN_MM_PC (Exp 7) takes precedence -- explicit blocking, not just a grid.
+        _pc = attn_mm_pc(tt_out, self.weights.o_proj)
+        if _pc is not None:
+            projected = ttnn.linear(tt_out, self.weights.o_proj, program_config=_pc)
+        else:
+            _cg = None
+            if __import__("os").environ.get("GEMMA4_ATTN_MM_CFG", "0").lower() in ("1", "true", "yes"):
+                _g = self.mesh_device.compute_with_storage_grid_size()
+                _cg = ttnn.CoreGrid(y=_g.y, x=_g.x)
+            projected = ttnn.linear(tt_out, self.weights.o_proj, **({"core_grid": _cg} if _cg is not None else {}))
         tt_out.deallocate(True)
         tt_out = ccl_allreduce(projected, self.mesh_config, self.ccl_manager)
 

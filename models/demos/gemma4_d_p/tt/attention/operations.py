@@ -17,6 +17,8 @@ Handles:
 
 import os
 
+from loguru import logger
+
 import ttnn
 
 from .weights import AttentionWeights
@@ -58,9 +60,75 @@ def _attn_mm_grid(t):  # DIAG: GEMMA4_ATTN_MM_CFG
         return None
 
 
+_ATTN_PC_LOGGED = set()
+
+
+def attn_mm_pc(act, weight):
+    """DIAG GEMMA4_ATTN_MM_PC: explicit program config for an attention projection.
+
+    Exp 7. Extends to the attention projections what Exp 6 established for the MLP ones:
+    a `core_grid` alone is only half the fix; `in0_block_w` plus explicit per-core
+    blocking is the other half. Exp 2 gave these four matmuls a grid and it helped only
+    at chunk 8192 -- the same "grid alone is partial" signature Exp 6 then explained.
+
+    Evidence this should work (P6 capture, chunk 2048, sliding layers):
+        MLP _x5376x5376 after Exp 6   122-140 us   105-121 TFLOPs
+        attention projections today   121-181 us    46-75  TFLOPs   <- 1.6-2.6x behind
+    Same op class, same widths, same grid. 18.06 ms of floor, ~20% of the in-layer total.
+
+    in0_block_w must divide k_tiles, and k_tiles differs per shape here (168 / 64 / 128),
+    so it is chosen per shape rather than fixed at the MLP's 14.
+    """
+    if os.environ.get("GEMMA4_ATTN_MM_PC", "0").lower() not in ("1", "true", "yes"):
+        return None
+    try:
+        g = act.device().compute_with_storage_grid_size()
+        gx, gy = g.x, g.y
+        m_tiles = act.shape[-2] // 32
+        k_tiles = act.shape[-1] // 32
+        n_tiles = weight.shape[-1] // 32
+    except Exception:
+        return None
+    if min(m_tiles, k_tiles, n_tiles) < 1:
+        return None
+    cap = int(os.environ.get("GEMMA4_ATTN_MM_PC_MAXBW") or 16)
+    bw = max(d for d in range(1, min(k_tiles, cap) + 1) if k_tiles % d == 0)
+    per_core_M = -(-m_tiles // gy)
+    per_core_N = -(-n_tiles // gx)
+    sh = 4
+    while sh > 1 and per_core_M % sh:
+        sh -= 1
+    sw = 2
+    while sw > 1 and per_core_N % sw:
+        sw -= 1
+    while sh * sw > 8 and sh > 1:  # subblock tile budget
+        sh -= 1
+    key = (m_tiles, k_tiles, n_tiles)
+    if key not in _ATTN_PC_LOGGED:
+        _ATTN_PC_LOGGED.add(key)
+        logger.info(
+            f"[DIAG] ATTN explicit mm cfg ENGAGED: {m_tiles}x{k_tiles}x{n_tiles} tiles "
+            f"grid={gx}x{gy} in0_block_w={bw} per_core_M={per_core_M} per_core_N={per_core_N} "
+            f"subblock={sh}x{sw}"
+        )
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=bw,
+        out_subblock_h=sh,
+        out_subblock_w=sw,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
     w_tensor = weights.wqk if kv_tied else weights.wqkv
+    _pc = attn_mm_pc(hidden_states, w_tensor)  # DIAG GEMMA4_ATTN_MM_PC (Exp 7)
+    if _pc is not None:
+        return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config, program_config=_pc)
     _cg = _attn_mm_grid(hidden_states)  # DIAG
     _kw = {"core_grid": _cg} if _cg is not None else {}
     return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config, **_kw)
