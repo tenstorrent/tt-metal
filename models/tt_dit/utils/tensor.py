@@ -822,7 +822,7 @@ def arange(
         memory_config=memory_config,
     )
 
-    return ttnn.cumsum(x, 0) + (start - step)
+    return ttnn.cumsum(x, 0) - (step - start)
 
 
 _tril_cache: dict[tuple, ttnn.Tensor] = {}
