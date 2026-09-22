@@ -13,6 +13,8 @@
 #include <numeric>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -22,6 +24,61 @@ namespace ttnn::operations::data_movement {
 bool is_nd_sharded_memory_config(const tt::tt_metal::MemoryConfig& mem_config) {
     return mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED ||
            (mem_config.nd_shard_spec().has_value() && !mem_config.shard_spec().has_value());
+}
+
+bool is_functionally_same_memory_config(
+    const tt::tt_metal::MemoryConfig& config_a, const tt::tt_metal::MemoryConfig& config_b) {
+    if (config_a == config_b) {
+        return true;  // same provenance, or interleaved: operator== is already exact
+    }
+    if (config_a.memory_layout() != config_b.memory_layout() || config_a.buffer_type() != config_b.buffer_type()) {
+        return false;
+    }
+    // The allocation flags change allocator semantics, so they are part of a layout's identity.
+    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+    namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+    if (per_core_allocation::is_per_core_allocation(config_a) !=
+            per_core_allocation::is_per_core_allocation(config_b) ||
+        range_lockstep_allocation::is_range_lockstep_allocation(config_a) !=
+            range_lockstep_allocation::is_range_lockstep_allocation(config_b)) {
+        return false;
+    }
+    // A genuinely ND layout is only described by its nd_shard_spec, which operator== already
+    // compared, so there is nothing left to relax. Not relaxed either: an ND-sharded *request*
+    // against a tensor whose ND spec normalized to 2D, which differs by memory_layout() above and
+    // so still reshards even though the distribution matches. Normalizing that equivalence is a
+    // wider change than a no-op gate warrants.
+    if (is_nd_sharded_memory_config(config_a) || is_nd_sharded_memory_config(config_b)) {
+        return false;
+    }
+    // Buffer creation follows the nd spec, so disagreeing nd specs allocate differently even when
+    // the 2D specs match. Only the one-sided case (no shadow spec yet) is relaxed.
+    if (config_a.nd_shard_spec().has_value() && config_b.nd_shard_spec().has_value() &&
+        config_a.nd_shard_spec() != config_b.nd_shard_spec()) {
+        return false;
+    }
+    // Layout-only sharded configs (no shard_spec) are deliberately not equal: reshape leaves those
+    // to its auto-derive path rather than treating them as a no-op.
+    return config_a.shard_spec().has_value() && config_a.shard_spec() == config_b.shard_spec();
+}
+
+tt::tt_metal::MemoryConfig drop_normalized_nd_shard_spec(const tt::tt_metal::MemoryConfig& mem_config) {
+    if (!mem_config.shard_spec().has_value() || !mem_config.nd_shard_spec().has_value()) {
+        return mem_config;
+    }
+    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+    namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+    const bool per_core = per_core_allocation::is_per_core_allocation(mem_config);
+    const bool range_lockstep = range_lockstep_allocation::is_range_lockstep_allocation(mem_config);
+    tt::tt_metal::MemoryConfig stripped{mem_config.memory_layout(), mem_config.buffer_type(), mem_config.shard_spec()};
+    // Mutually exclusive by construction, so at most one of these runs. Both require an L1 sharded
+    // config, which `stripped` still is.
+    if (per_core) {
+        per_core_allocation::set_per_core_allocation(stripped, true);
+    } else if (range_lockstep) {
+        range_lockstep_allocation::set_range_lockstep_allocation(stripped, true);
+    }
+    return stripped;
 }
 
 tt::tt_metal::MemoryConfig derive_nd_shard_spec_for_reshaped_output(

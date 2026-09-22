@@ -577,16 +577,19 @@ ttnn::Tensor ttnn::reshape(
         operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
     // No reshape required only when the shape AND the memory config are unchanged. A same-shape
     // request with a different config is a pure config conversion, handled by the short-circuit
-    // below. Default callers pass the input's own config, so they still take this no-op. Uses full
-    // equality (not the is_sharded()/is_l1() parity that this_is_view uses below): returning here
-    // skips to_memory_config entirely, so a genuinely different explicit shard spec (same
-    // is_sharded()/is_l1()) must still go through it and reshard, unlike this_is_view, which keeps
-    // the input's own buffer/config regardless. A provenance-different but functionally identical
-    // config (e.g. missing an equivalent-normalized nd_shard_spec) falls through to
-    // to_memory_config, which has this same equality-based no-op check itself.
+    // below. Default callers pass the input's own config, so they still take this no-op. Compared
+    // functionally rather than with operator==, which is provenance-sensitive: a tensor whose ND
+    // spec normalized to 2D carries both specs and so never compares equal to an explicit 2D config
+    // describing the same distribution, and to_memory_config's own no-op check uses that same
+    // operator==, so nothing downstream would catch it -- the request would reshard into a
+    // byte-identical layout on every call. Still stricter than the is_sharded()/is_l1() parity
+    // this_is_view uses below: returning here skips to_memory_config entirely, so a genuinely
+    // different explicit shard spec must go through it and reshard, unlike this_is_view, which
+    // keeps the input's own buffer/config regardless.
     const bool same_logical_and_padded =
         tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape;
-    const bool output_config_differs = mem_config != tensor.memory_config();
+    const bool output_config_differs =
+        !operations::data_movement::is_functionally_same_memory_config(mem_config, tensor.memory_config());
     if (same_logical_and_padded && !output_config_differs) {
         return tensor;
     }
@@ -635,6 +638,15 @@ ttnn::Tensor ttnn::reshape(
         }
     }
 
+    // A config normalized from an NdShardSpec carries both specs, and buffer creation always prefers
+    // the nd one, so a shape-changing reshape must drop the spec sized for the old shape or
+    // allocation aborts on its rank. Done here, at the one choke point every shape-changing path
+    // flows through, rather than in each: the explicit-config override below returns the caller's
+    // config verbatim, and the ND branch forwards it verbatim too. Deliberately after both no-op
+    // gates above -- stripping earlier would make a provenance-sensitive operator== report a
+    // difference and turn a free same-shape call into a reshard.
+    mem_config = operations::data_movement::drop_normalized_nd_shard_spec(mem_config);
+
     // ND-sharded input or output (shape-changing only; same-shape is handled above). The 2D sharded
     // paths can't express an ND spec, and view_device rejects an ND input outright, so reshape through
     // a DRAM interleaved intermediate and lay out the result via to_memory_config. Keying on both ends
@@ -643,6 +655,26 @@ ttnn::Tensor ttnn::reshape(
     // avoids OOMing an L1-only ND output.
     const bool nd_output = operations::data_movement::is_nd_sharded_memory_config(mem_config);
     const bool nd_input = operations::data_movement::is_nd_sharded_memory_config(tensor.memory_config());
+
+    // view_device does a logical-only update (padded shape unchanged) on an ND tensor zero-copy, so
+    // don't spend an L1->DRAM->L1 round trip on it. Compared against the padded shape PerformView
+    // would actually view with, not the requested one: for a TILE tensor whose logical inner dims
+    // are not tile multiples it substitutes compute_padded_shape, so comparing padded_shape here
+    // misses the common reduction output [N, C, 1, W] and sends a free view through the staging
+    // path instead. The last dim must match too, as this_is_view requires below: an equal padded
+    // shape alone does not make this a reinterpretation, and a view would return stale values.
+    const ttnn::Shape effective_view_padded_shape =
+        (tensor.layout() == ttnn::TILE_LAYOUT && logical_shape.rank() >= 2 &&
+         (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0))
+            ? operations::data_movement::compute_padded_shape(logical_shape, tile_first_dim, tile_second_dim)
+            : padded_shape;
+    if (nd_input && !output_config_differs && logical_shape.rank() > 1 &&
+        tensor.memory_config().nd_shard_spec().has_value() && effective_view_padded_shape == tensor.padded_shape() &&
+        shape_last_dim == tensor_shape_last_dim) {
+        return operations::data_movement::PerformView(
+            tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
+    }
+
     if (nd_output || nd_input) {
         // A genuinely ND-sharded input is first moved to interleaved so the intermediate reshape's
         // rank-normalizing view accepts it.

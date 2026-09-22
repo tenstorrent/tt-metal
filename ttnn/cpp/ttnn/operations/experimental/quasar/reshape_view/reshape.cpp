@@ -592,9 +592,12 @@ ttnn::Tensor ttnn::operations::experimental::quasar::reshape(
     // matches the input's; a differing (e.g. ND) requested config must still be applied below.
     // mem_config == tensor.memory_config() by construction for default callers, so defaults are
     // unaffected. Returning the input here is a genuine no-op (shape and config unchanged).
+    // Compared functionally, not with operator==, which is provenance-sensitive and would report a
+    // difference for a config describing the input's own distribution -- see the data_movement copy.
     const bool same_logical_and_padded =
         tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape;
-    const bool output_config_differs = mem_config != tensor.memory_config();
+    const bool output_config_differs =
+        !ttnn::operations::data_movement::is_functionally_same_memory_config(mem_config, tensor.memory_config());
     if (same_logical_and_padded && !output_config_differs) {
         return tensor;
     }
@@ -645,6 +648,13 @@ ttnn::Tensor ttnn::operations::experimental::quasar::reshape(
         }
     }
 
+    // A config normalized from an NdShardSpec carries both specs, and buffer creation always prefers
+    // the nd one, so a shape-changing reshape must drop the spec sized for the old shape or
+    // allocation aborts on its rank. Deliberately after both no-op gates above -- stripping earlier
+    // would make a provenance-sensitive operator== report a difference and turn a free same-shape
+    // call into a reshard. Mirrors the data_movement copy.
+    mem_config = ttnn::operations::data_movement::drop_normalized_nd_shard_spec(mem_config);
+
     // ND-sharded input or output. Reshape through a DRAM interleaved intermediate (safe staging that
     // avoids OOMing an L1-only ND output), then lay out the result via to_memory_config; a genuinely
     // ND-sharded input is first moved to interleaved so the intermediate reshape's rank-normalizing
@@ -654,6 +664,25 @@ ttnn::Tensor ttnn::operations::experimental::quasar::reshape(
     // data_movement/common so this stays in sync with the data_movement copy.
     const bool nd_output = ttnn::operations::data_movement::is_nd_sharded_memory_config(mem_config);
     const bool nd_input = ttnn::operations::data_movement::is_nd_sharded_memory_config(tensor.memory_config());
+
+    // view_device does a logical-only update (padded shape unchanged) on an ND tensor zero-copy, so
+    // don't spend an L1->DRAM->L1 round trip on it. Compared against the padded shape PerformView
+    // would actually view with, not the requested one: for a TILE tensor whose logical inner dims
+    // are not tile multiples it substitutes compute_padded_shape, so comparing padded_shape here
+    // misses the common reduction output [N, C, 1, W] and sends a free view through the staging
+    // path instead. The last dim must match too, as this_is_view requires below: an equal padded
+    // shape alone does not make this a reinterpretation, and a view would return stale values.
+    const ttnn::Shape effective_view_padded_shape =
+        (tensor.layout() == ttnn::TILE_LAYOUT && logical_shape.rank() >= 2 &&
+         (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0))
+            ? compute_padded_shape(logical_shape, tile_first_dim, tile_second_dim)
+            : padded_shape;
+    if (nd_input && !output_config_differs && logical_shape.rank() > 1 &&
+        tensor.memory_config().nd_shard_spec().has_value() && effective_view_padded_shape == tensor.padded_shape() &&
+        shape_last_dim == tensor_shape_last_dim) {
+        return PerformView(tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
+    }
+
     if (nd_output || nd_input) {
         Tensor working = tensor;
         if (nd_input) {
