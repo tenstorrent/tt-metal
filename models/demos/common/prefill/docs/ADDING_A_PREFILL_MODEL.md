@@ -168,6 +168,11 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `build_kv_chunk_table`. Implement it instead of `kv_migration_base_address` when your model
         migrates SEVERAL caches, or one whose layer numbering is not the model's global numbering."""
 
+    # If your merged table's second config is NOT a DSA index cache, override `cache_kind(config_id)`
+    # on the ADAPTER (default: 0 = "kvpe", 1 = "index", else "other") so the producer and the
+    # migration driver do not infer an index cache from the config count. Kimi-K3 publishes its KDA
+    # state as configs 1 and 2 this way (models/demos/deepseek_v3_d_p/tt/kda/KDA_STATE_MIGRATION.md).
+
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
         with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
