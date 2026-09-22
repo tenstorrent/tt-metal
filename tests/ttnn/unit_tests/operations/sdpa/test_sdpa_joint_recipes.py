@@ -109,6 +109,12 @@ def test_joint_recipe_cache_trace(device, variant):
         *upload(device, host, variant), is_causal=False, **options(variant, grid)
     )
     assert digest(outputs[-1]) == digest(ttnn.to_torch(expected))
+    other_split = [
+        upload(device, [x[..., start:end, :].contiguous() for x in host], variant)
+        for start, end in ((0, 256), (256, 512))
+    ]
+    assert digest(joined(joint(other_split, variant, grid))) == digest(outputs[-1])
+    assert digest(joined(joint(retained_inputs[-1], variant, grid))) == digest(outputs[-1])
     trace = ttnn.begin_trace_capture(device, cq_id=0)
     traced = joint(retained_inputs[-1], variant, grid)
     ttnn.end_trace_capture(device, trace, cq_id=0)
