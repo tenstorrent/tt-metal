@@ -63,9 +63,11 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 #      two under it and is also the value a plain Kimi 2-galaxy run settled on. It fails on rank 1 at
 #      MLA_START of layer 0, i.e. only once tokens flow -- never at init -- so a too-large value survives
 #      weight load and warmup before killing the run.
-#   PREFILL_NUM_USERS=1    -- unlike the verifier leg's 86 on sc4: the drafter cache is allocated at
-#      max_seq_len x num_users and slot 0 is the only slot with a golden behind it, so extra slots buy no
-#      coverage. Every one of these stays overridable -- the manifest is applied with setdefault.
+#   PREFILL_NUM_USERS=70   -- the sc4 serving ceiling with the drafter cache resident, so the leg fails
+#      on a capacity regression instead of passing at a count no deployment would run. It gates the
+#      allocation ceiling alone: slot 0 is the only slot with a golden behind it, so one request drives
+#      the run and the rest are allocated and idle.
+#      Every one of these stays overridable -- the manifest is applied with setdefault.
 case "${MODEL}" in
   kimi27) MANIFEST="${MANIFEST_DIR}/kimi27_dflash.json" ;;
   *)
@@ -91,6 +93,18 @@ case "${CONFIG}" in
   sc1|sc2|sc4) ;;
   *) echo "unknown config '${CONFIG}' (expected sc1, sc2 or sc4)" >&2; exit 2 ;;
 esac
+
+# The manifest count is the sc4 ceiling and no other SKU holds it -- sc1 puts all 61 layers on one rank,
+# which leaves far less DRAM for caches. Those SKUs gate plumbing rather than capacity, so they run the
+# single slot the golden covers. The export is explicit because the rank and producer shells receive a
+# fixed export list: a value exported into this script does not reach them on its own.
+NUM_USERS_OVERRIDE=""
+if [ "${CONFIG}" != sc4 ]; then
+  NUM_USERS_OVERRIDE="export PREFILL_NUM_USERS=1; "
+fi
+if [ -n "${PREFILL_NUM_USERS:-}" ]; then
+  NUM_USERS_OVERRIDE="export PREFILL_NUM_USERS=${PREFILL_NUM_USERS}; "
+fi
 
 # The CI descriptors are per-SKU, not per-model; sc2 has none, so fall back to the shared 2-galaxy one
 # the manual pipeline bindings already use (an 8x4 RING mesh per galaxy).
@@ -194,6 +208,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    ${NUM_USERS_OVERRIDE}\
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
@@ -287,6 +302,7 @@ set +e
     export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    ${NUM_USERS_OVERRIDE}\
     export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
