@@ -86,3 +86,37 @@ def test_time_attention_pcc(request):
     assert got.shape == x.shape
     log_golden("tt_time_attn/device_8", got)
     assert_with_pcc(expected.float(), got, pcc=0.99)
+
+
+def test_group_attention_pcc(request):
+    """TT GroupSelfAttention (tiny golden dims) vs reference oracle. Single-chip only."""
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.layers import (
+        GroupSelfAttention as RefGSA,
+    )
+    from models.experimental.chronos_forecast.tests.golden_helpers import tiny_config
+    from models.experimental.chronos_forecast.tt.group_attention import (
+        TtGroupAttention,
+        TtGroupAttentionWeights,
+    )
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    cfg = tiny_config()
+    torch.manual_seed(0)
+    layer = RefGSA(cfg).eval()
+    weights = TtGroupAttentionWeights.from_torch_layer(layer)
+    tt = TtGroupAttention(device=mesh_device, weights=weights)
+
+    torch.manual_seed(1)
+    x = torch.randn(2, 8, cfg.d_model)
+    expected = layer(x, attention_mask=torch.zeros(8, 1, 2, 2)).hidden_states
+
+    got = tt.forward(x, torch.zeros(8, 1, 2, 2))
+    assert got.shape == x.shape
+    log_golden("tt_group_attn/device_8", got)
+    assert_with_pcc(expected.float(), got, pcc=0.99)

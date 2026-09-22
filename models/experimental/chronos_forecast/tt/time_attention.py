@@ -1,13 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-chip TTNN TimeSelfAttention for Chronos-2 (encoder sublayer 1)
-x_norm = RMSNorm(x)                        # (B, T, d), T5-style, no bias
-Q/K/V = x_norm @ Wq/Wk/Wv (no bias)        # -> (B, H, T, Dh)
-Q', K' = RoPE(Q, K, position_ids)          # V untouched
-ctx = softmax(Q' @ K'.T * 1.0 + mask) @ V  # scale is 1.0, NOT 1/sqrt(Dh)
-out = merge(ctx) @ Wo (no bias)            # (B, T, d)
-return x + out
+"""Single-chip TTNN TimeSelfAttention for Chronos-2 (encoder sublayer 1).
+
+Device-only. Thin wrapper over the shared :class:`TtMhaCore`: builds RoPE
+cos/sin on host, delegates norm/QKV/attention/projection to the core, adds
+the residual. Data starts on host and moves host -> device inside ``forward``.
+
+Oracle: ``models/experimental/chronos_forecast/reference/chronos2/layers.py``
+``TimeSelfAttention`` (eval mode)::
+
+    x_norm = RMSNorm(x)                        # (B, T, d), T5-style, no bias
+    Q/K/V = x_norm @ Wq/Wk/Wv (no bias)        # -> (B, H, T, Dh)
+    Q', K' = RoPE(Q, K, position_ids)          # V untouched
+    ctx = softmax(Q' @ K'.T * 1.0 + mask) @ V  # scale is 1.0, NOT 1/sqrt(Dh)
+    out = merge(ctx) @ Wo (no bias)            # (B, T, d)
+    return x + out
 """
 
 from __future__ import annotations
@@ -15,6 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+
+from models.experimental.chronos_forecast.tt.mha_core import TtMhaCore, TtMhaWeights
 
 
 @dataclass(frozen=True)
@@ -46,6 +56,17 @@ class TtTimeAttentionWeights:
             eps=layer.layer_norm.variance_epsilon,
         )
 
+    def to_mha(self) -> TtMhaWeights:
+        """Shared-core view (drops the RoPE buffer, which the core never sees)."""
+        return TtMhaWeights(
+            wqkv=self.wqkv,
+            wo=self.wo,
+            rms_weight=self.rms_weight,
+            num_heads=self.num_heads,
+            head_dim=self.head_dim,
+            eps=self.eps,
+        )
+
 
 def build_rope_cache(
     position_ids: torch.Tensor, inv_freq: torch.Tensor
@@ -73,42 +94,7 @@ class TtTimeAttention:
     def __init__(self, device, weights: TtTimeAttentionWeights):
         self.device = device
         self.weights = weights
-        self._tt = self._move_weights_to_device(device, weights)
-
-    @staticmethod
-    def _move_weights_to_device(device, weights: TtTimeAttentionWeights):
-        import ttnn
-
-        def _weight(out_in: torch.Tensor):
-            # ttnn.linear expects (in, out); torch nn.Linear stores (out, in).
-            t = out_in.detach().to(torch.float32).t().contiguous()
-            return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        rms_w = ttnn.from_torch(
-            weights.rms_weight.detach().to(torch.float32).reshape(1, -1).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return (_weight(weights.wqkv), _weight(weights.wo), rms_w)
-
-    @staticmethod
-    def _rotate_half(x):
-        import ttnn
-
-        last_dim = x.shape[-1]
-        half = last_dim // 2
-        b, h, s = x.shape[0], x.shape[1], x.shape[2]
-        x1 = ttnn.slice(x, (0, 0, 0, 0), (b, h, s, half))
-        x2 = ttnn.slice(x, (0, 0, 0, half), (b, h, s, last_dim))
-        return ttnn.concat([ttnn.mul(x2, -1), x1], dim=-1)
+        self.core = TtMhaCore(device, weights.to_mha())
 
     def forward(
         self,
@@ -126,9 +112,7 @@ class TtTimeAttention:
         """
         import ttnn
 
-        wqkv, wo, rms_w = self._tt
         b, t, _d = x_host.shape
-
         x = ttnn.from_torch(
             x_host.detach().to(torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -136,42 +120,27 @@ class TtTimeAttention:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # 1. RMSNorm (T5-style: no mean subtraction, no bias).
-        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w)
-        # 2. Fused QKV + head split. transpose_key=False: SDPA needs K as [B,H,T,Dh].
-        xqkv = ttnn.linear(x_norm, wqkv, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(x_norm)
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            xqkv,
-            num_heads=self.weights.num_heads,
-            transpose_key=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+        # cos/sin (B,T,Dh) -> (B,1,T,Dh) broadcast over heads.
+        cos = ttnn.unsqueeze(
+            ttnn.from_torch(
+                cos_host.detach().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            1,
         )
-        ttnn.deallocate(xqkv)
-        # 3. RoPE on Q/K (V untouched). cos/sin (B,T,Dh) -> (B,1,T,Dh) broadcast.
-        cos = ttnn.from_torch(
-            cos_host.detach().to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        sin = ttnn.unsqueeze(
+            ttnn.from_torch(
+                sin_host.detach().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            1,
         )
-        sin = ttnn.from_torch(
-            sin_host.detach().to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        cos = ttnn.unsqueeze(cos, 1)
-        sin = ttnn.unsqueeze(sin, 1)
-        q_rot = ttnn.add(ttnn.mul(q, cos), ttnn.mul(self._rotate_half(q), sin))
-        k_rot = ttnn.add(ttnn.mul(k, cos), ttnn.mul(self._rotate_half(k), sin))
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(cos)
-        ttnn.deallocate(sin)
-        # 4-6. Scores + mask + softmax + context in one SDPA (scale=1.0, NOT 1/sqrt).
         mask = ttnn.from_torch(
             mask_host.detach().to(torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -179,38 +148,10 @@ class TtTimeAttention:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-            q_chunk_size=32,
-            k_chunk_size=32,
-            exp_approx_mode=True,
-        )
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-        ctx = ttnn.transformer.scaled_dot_product_attention(
-            q_rot,
-            k_rot,
-            v,
-            attn_mask=mask,
-            is_causal=False,
-            scale=1.0,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(q_rot)
-        ttnn.deallocate(k_rot)
-        ttnn.deallocate(v)
+        out = self.core(x, mask, cos, sin)
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
         ttnn.deallocate(mask)
-        # 7. Merge heads, output projection, residual add.
-        merged = ttnn.transformer.concatenate_heads(ctx, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(ctx)
-        out = ttnn.linear(merged, wo, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(merged)
         if out.memory_config() != x.memory_config():
             out = ttnn.to_memory_config(out, x.memory_config())
         y = ttnn.add(x, out, memory_config=x.memory_config())
