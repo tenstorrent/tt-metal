@@ -22,13 +22,11 @@ def fused_mtp_reference(
     hnorm_weight: torch.Tensor,
     eh_proj_weight: torch.Tensor,
     eps: float,
-    *,
-    positions: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """The MTP input projection: ``eh_proj(cat[enorm(embed), hnorm(hidden)])``.
 
     ``hidden`` is the previous level's state at the same position, taken after ``model.norm`` for
-    level 1. Rows at absolute position 0 have their embedding zeroed, so pass ``positions`` if chunked.
+    level 1.
     """
     seq = embed.shape[-2]
     hidden_size = embed.shape[-1]
@@ -37,10 +35,6 @@ def fused_mtp_reference(
         hidden_size,
         2 * hidden_size,
     ), f"eh_proj must be [hidden, 2*hidden] = [{hidden_size}, {2 * hidden_size}], got {tuple(eh_proj_weight.shape)}"
-
-    if positions is None:
-        positions = torch.arange(seq, device=embed.device)
-    embed = torch.where(positions.reshape(*positions.shape, 1) == 0, torch.zeros_like(embed), embed)
 
     e = rms_norm(embed, enorm_weight, eps)
     h = rms_norm(hidden, hnorm_weight, eps)
@@ -59,7 +53,6 @@ def glm_mtp_module_reference(
     *,
     ffn_weights: dict | None = None,
     moe_weights: dict | None = None,
-    positions: torch.Tensor | None = None,
     indexer_topk: torch.Tensor | None = None,
     return_indexer_topk: bool = False,
     mla_ref=None,
@@ -78,7 +71,6 @@ def glm_mtp_module_reference(
         mtp_weights["hnorm"],
         mtp_weights["eh_proj"],
         config.rms_norm_eps,
-        positions=positions,
     )
 
     layer_out = glm_decoder_layer_reference(
@@ -118,7 +110,6 @@ def glm_mtp_predictor_reference(
     moe_weights: dict | None = None,
     num_levels: int | None = None,
     index_share: bool = True,
-    positions: torch.Tensor | None = None,
     hiddens=None,
     mla_refs=None,
     actual_start: int = 0,
@@ -159,7 +150,6 @@ def glm_mtp_predictor_reference(
             seq_len,
             ffn_weights=ffn_weights,
             moe_weights=moe_weights,
-            positions=positions,
             indexer_topk=inject,
             return_indexer_topk=want_topk,
             mla_ref=None if mla_refs is None else mla_refs[k],
