@@ -332,7 +332,11 @@ def configure_spec_decode_smoke_env():
         if uses_ci_config_only_checkpoint():
             os.environ["HF_MODEL"] = "google/gemma-4-31B-it"
         os.environ.setdefault("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it")
-        os.environ.setdefault("GEMMA4_NUM_LAYERS", "4")
+        # Drafter layers are (sliding×3, full) and cross-attend the target's last
+        # layer of each type. Truncating the 31B target below the first full
+        # layer (index 5) leaves last_kv_layer_by_type without 'full_attention'
+        # and assistant.step raises KeyError. Need ≥6 (5 sliding + 1 full).
+        os.environ.setdefault("GEMMA4_NUM_LAYERS", "6")
 
     path = resolve_assistant_model_path(allow_download=(os.environ.get("CI") == "true"))
     if path:

@@ -14,7 +14,9 @@ These validate the speculative-decode contract:
 Device tests require a target (HF_MODEL) + matching drafter
 (GEMMA4_ASSISTANT_MODEL, e.g. google/gemma-4-31B-it-assistant) and are skipped
 otherwise. Use GEMMA4_NUM_LAYERS to shrink the target for a fast wiring check
-(equivalence still holds; acceptance becomes meaningless).
+(equivalence still holds; acceptance becomes meaningless). The truncated target
+must still include at least one ``full_attention`` layer — the drafter's last
+layer is full and cross-attends that KV (31B/12B/26B: GEMMA4_NUM_LAYERS>=6).
 """
 
 import math
@@ -1725,7 +1727,7 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 8)])
 def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     """Greedy spec-decode matches plain greedy decode, EXCEPT at target near-ties.
 
@@ -1734,7 +1736,16 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     test_verify_batchsize_invariance). That noise flips only near-tie tokens
     (top-2 logit gap < ~1), so spec-decode is token-identical to plain greedy up
     to the first such near-tie. A divergence at a CONFIDENT token (large top-2
-    gap) would indicate a real accept/commit/KV bug and fails here."""
+    gap) would indicate a real accept/commit/KV bug and fails here.
+
+    CI / multi-chip: Wormhole T3K (1x8) only. BH QuietBox 1x4 hits a fabric
+    AllGather unicast scatter-write hang on large RM pages (31B TP=4).
+    """
+    from models.common.utility_functions import is_wormhole_b0
+
+    if not is_wormhole_b0():
+        pytest.skip("MTP smoke (matches_greedy) is Wormhole T3K / 1x8 only")
+
     near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
@@ -1837,7 +1848,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4), (1, 8)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 8)])
 def test_verify_batchsize_invariance(mesh_device, reset_seeds):
     """Isolate batch-size numerics from spec accept logic.
 
@@ -1846,7 +1857,15 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
     per-user RoPE + batched SDPA + sequential-KV-write path). No acceptance logic.
     If the two greedy chains diverge, greedy spec-decode CANNOT be bit-identical
     to batch=1 decode — the divergence is batched-path numerics, expected at
-    near-tie tokens. Logs the first divergence and the target's top-2 logit gap."""
+    near-tie tokens. Logs the first divergence and the target's top-2 logit gap.
+
+    Same WH T3K / 1x8 gate as test_spec_decode_matches_greedy (BH fabric hang).
+    """
+    from models.common.utility_functions import is_wormhole_b0
+
+    if not is_wormhole_b0():
+        pytest.skip("MTP smoke (verify_batchsize) is Wormhole T3K / 1x8 only")
+
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder

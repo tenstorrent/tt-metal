@@ -179,6 +179,16 @@ class SpeculativeDecoder:
         # unallocated buffer (TT_FATAL is_allocated in the paged SDPA). Indexing
         # the passed cache by the same last-layer-per-type map is identical on
         # metal and correct on the server.
+        needed = set(getattr(assistant_model, "layer_types", ()) or ())
+        have = set(target_model.last_kv_layer_by_type)
+        missing = needed - have
+        if missing:
+            raise ValueError(
+                f"Target model is missing KV for assistant layer types {sorted(missing)} "
+                f"(last_kv_layer_by_type={target_model.last_kv_layer_by_type}). "
+                f"Increase GEMMA4_NUM_LAYERS so the truncated target includes at least "
+                f"one full_attention layer (31B/12B/26B need >= 6)."
+            )
         self._shared_kv = {lt: self.tt_kv_cache[idx] for lt, idx in target_model.last_kv_layer_by_type.items()}
         # Tracing: persistent I/O buffers + execute_trace replace per-op host
         # dispatch (the untraced loop is host-bound: ~77ms/decode vs a few ms
