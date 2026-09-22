@@ -70,18 +70,29 @@ def fused_moe_kernels_supported_on_arch():
     """Whether the fused MoE kernels (moe_gpt, all_to_all_dispatch_metadata,
     selective_reduce_combine, topk_router_gpt) are supported on the current arch.
 
-    These kernels shard K across the DRAM-bank-aligned matmul cores returned by
-    get_optimal_dram_bank_to_logical_worker_assignment(), and hardcode a 12-bank layout:
+    UPDATE: moe_gpt's own 12-bank hardcoding (tiles_per_core_table[12], combine_dm1.cpp's
+    RING_CORES_PER_COMBINE_COL) has been generalized -- moe_gpt_ring_common.h now derives its
+    per-core tile distribution and combine grid from the live DRAM bank count, reproducing the
+    original Wormhole (12-bank) numbers exactly via a compile-time-verified passthrough
+    (see MoeGptRingConfig::kLegacyWh12 and the static_asserts in moe_gpt_ring_common.h) and
+    using a general Euclidean-rhythm formula for any other ring size. This return value is
+    intentionally left `not is_blackhole()` regardless: selecting moe_gpt on Blackhole is a
+    separate model-integration decision (wiring mlp.py/experts_throughput/weights.py, which
+    still has its own independent 12-bank hardcoding in _FUSED_FULL_CORES/_FUSED_PAD_CORES,
+    not yet generalized) and end-to-end device validation on Blackhole is still pending --
+    see models/demos/gpt_oss's memory notes for what's been proven (the C++ compiles and its
+    Wormhole-equivalence static_asserts pass) versus what hasn't (a real BH numerical run;
+    the existing tests/ttnn/nightly/.../test_moe_gpt_e2e.py also hits an unrelated hardcoded
+    num_links=4 ethernet-fabric assumption on this topology before moe_gpt is even reached).
 
-      * moe_gpt_program_factory.cpp: `tiles_per_core_table[12] = {8,8,7,7,...}` sums to 90
-        (= 2880/32) only at 12 banks; the host-side split in experts_throughput/weights.py
-        (_FUSED_FULL_CORES / _FUSED_PAD_CORES) mirrors the same 12-entry layout.
-      * moe_gpt combine_dm1.cpp assumes RING_CORES_PER_COMBINE_COL = 12/3 = 4.
-      * topk_router_gpt_program_factory.cpp: TT_FATAL(num_cores >= 4*3).
+    topk_router_gpt_program_factory.cpp's TT_FATAL(num_cores >= 4*3) is UNCHANGED -- it is not
+    on moe_gpt's call path and was intentionally left out of this pass (a harvested-Blackhole
+    ring of 7 cores doesn't divide evenly into its fixed 4-groups-of-3 topology, which needs a
+    real algorithm decision, not just a parametrization).
 
-    Wormhole exposes 12 DRAM banks, Blackhole only 8 (soc_descriptors: 12 vs 8 dram_views),
-    so on Blackhole these kernels would silently cover 60 of 90 K-tiles, or TT_FATAL.
-    Blackhole therefore runs the dense throughput flow instead, which is numerically
-    equivalent and uses only generic ops.
+    Wormhole exposes 12 DRAM banks, Blackhole only 8 (soc_descriptors: 12 vs 8 dram_views).
+    Blackhole currently runs the dense throughput flow (or ttnn.experimental.moe_compute,
+    opt-in via GPT_OSS_MOE_COMPUTE=1), both numerically equivalent and already validated
+    end-to-end on Blackhole this session.
     """
     return not is_blackhole()

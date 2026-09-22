@@ -73,9 +73,10 @@ void kernel_main() {
     // Constants for MoEGPT
     constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;
     constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;
+    using Ring = moe_gpt_ring::MoeGptRingConfig<num_w0_w1_tiles_h, num_w2_tiles_h, num_cores>;
 
-    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
-    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
+    const uint32_t num_w0_w1_tiles_w = Ring::w0_w1_tiles_per_core_per_step[ring_core_id][0];  // 7 or 8
+    const uint32_t num_w2_tiles_w = Ring::w2_tiles_per_core[ring_core_id];                    // 7 or 8
 
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
@@ -96,8 +97,8 @@ void kernel_main() {
 
     std::array<uint32_t, 2 * height_shard_dim * width_shard_dim> output_shard_core_map = OUTPUT_SHARD_CORE_MAP;
 
-    // The number of tiles to send in each step (max of 7/8 = 8 for GPT-OSS)
-    constexpr uint32_t tiles_per_step = moe_gpt_ring::IN2_TILES_PER_STEP_A;  // 8
+    // The number of tiles to send in each step (max tiles held by any core)
+    constexpr uint32_t tiles_per_step = Ring::in2_tiles_per_step;
 
     // CB Aliases
     constexpr auto cb_c2s_out_id = tt::CBIndex::c_14;  // untilized ROW_MAJOR output
@@ -108,7 +109,7 @@ void kernel_main() {
     const auto k_start_tile = get_arg_val<uint32_t>(11);
     const auto output_base_l1_addr = get_arg_val<uint32_t>(12);
 
-    const uint32_t tiles_per_core = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];
+    const uint32_t tiles_per_core = Ring::w2_tiles_per_core[ring_core_id];
 
     //-------------------------------------------------------------------------
     // Init synchronization with tilize cores
@@ -154,19 +155,22 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Combine core output constants
     //-------------------------------------------------------------------------
-    constexpr uint32_t source_width_tiles = moe_gpt_ring::SOURCE_WIDTH_TILES;  // 8
+    constexpr uint32_t source_width_tiles = Ring::source_width_tiles;
     constexpr uint32_t tokens_per_chunk_combine = moe_gpt_ring::TOKENS_PER_CHUNK;
-    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_gpt_ring::RING_CORES_PER_COMBINE_COL;
+    // width_shard_dim comes from the host (operation_attributes.output_width_shard_dim, see
+    // moe_gpt_program_factory.cpp), not the header -- so this always agrees with whatever
+    // combine grid the host actually placed, instead of a separate hardcoded ring-size-12 value.
+    constexpr uint32_t RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim;
 
     const uint32_t output_width_tiles_core = tiles_per_core;
-    const uint32_t width_tile_base = moe_gpt_ring::COMBINE_W_OFFSET_PER_CORE_A[ring_core_id];
+    const uint32_t width_tile_base = Ring::combine_w_offset_per_core[ring_core_id];
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
 
     //-------------------------------------------------------------------------
     // Ring A2A setup
     //-------------------------------------------------------------------------
-    constexpr uint32_t num_a2a_iters = moe_gpt_ring::NUM_A2A_ITERS_A;     // 2
-    constexpr uint32_t num_a2a_steps_per_iter = moe_gpt_ring::NUM_CORES;  // 12
+    constexpr uint32_t num_a2a_iters = Ring::num_a2a_iters;
+    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
     Semaphore<> ring_sem(ring_semaphore_id);
     uint32_t semaphore_addr = get_semaphore(ring_semaphore_id);
@@ -185,7 +189,14 @@ void kernel_main() {
     const uint64_t neighbor_base_addr =
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, local_base_addr);
 
-    constexpr uint32_t NUM_A2A_BUFFERS = 6;
+    // Legacy Wormhole (num_cores==12) keeps its original, byte-identical 6-buffer cycling
+    // (NUM_CORES/NUM_A2A_ITERS = 12/2) so its L1 footprint for this CB is unchanged. That
+    // optimization assumed an even ring size cleanly halvable by NUM_A2A_ITERS, which does not
+    // generalize to e.g. a harvested-Blackhole ring of 7 cores, so other ring sizes fall back to
+    // one buffer per ring hop (simpler, always correct, and still a smaller absolute buffer
+    // count than Wormhole's 6 since Blackhole's ring itself is smaller). Must match the
+    // moe_gpt_program_factory.cpp CB sizing for cb_s2c_in2 exactly.
+    constexpr uint32_t NUM_A2A_BUFFERS = (num_cores == 12) ? 6u : num_cores;
     uint32_t LOCAL_BUFFER_OFFSET[NUM_A2A_BUFFERS];
     for (uint32_t i = 0; i < NUM_A2A_BUFFERS; ++i) {
         LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;

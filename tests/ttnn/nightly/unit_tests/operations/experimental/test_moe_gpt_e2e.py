@@ -45,14 +45,42 @@ from loguru import logger
 from models.common.utility_functions import comp_pcc, comp_allclose, profiler
 
 # Weight preparation helpers (inlined from experts_throughput/weights.py)
-_FUSED_MAX_TILES_PER_CORE = 8
-_FUSED_PAD_CORES = {2, 3, 6, 7, 10, 11}
-MAX_W0_W1_TILES_PER_CORE = _FUSED_MAX_TILES_PER_CORE
-PAD_CORES = _FUSED_PAD_CORES
+#
+# Ring-size-generalized: at num_cores==12 (Wormhole) this reproduces the original hardcoded
+# _FUSED_PAD_CORES boundary-paired distribution byte-for-byte; at any other num_cores (e.g.
+# Blackhole's 7 or 8) it uses a general round-robin Euclidean-rhythm formula, mirroring the
+# same split applied in the moe_gpt C++ kernel (see moe_gpt_ring_common.h::MoeGptRingConfig).
+_LEGACY_WH12_PAD_CORES = {2, 3, 6, 7, 10, 11}  # cores that get 7 tiles (rest get 8) at ring=12
 
 
-def _tiles_for_core(ring_pos: int) -> int:
-    return 7 if ring_pos in _FUSED_PAD_CORES else 8
+def _tiles_for_core(ring_pos: int, num_cores: int, n_tiles: int = 90) -> int:
+    if num_cores == 12 and n_tiles == 90:
+        return 7 if ring_pos in _LEGACY_WH12_PAD_CORES else 8
+    n_big = n_tiles % num_cores
+    small = n_tiles // num_cores
+    is_big = n_big > 0 and (ring_pos * n_big) % num_cores < n_big
+    return small + (1 if is_big else 0)
+
+
+def _max_tiles_per_core(num_cores: int, n_tiles: int = 90) -> int:
+    return max(_tiles_for_core(i, num_cores, n_tiles) for i in range(num_cores))
+
+
+def _auto_combine_grid(num_cores: int, hidden_size: int = 2880, tile_size: int = 32, max_width: int = 4):
+    """(COMBINE_W, COMBINE_H) for the moe_gpt combine grid, ring-size-generalized.
+
+    Mirrors ttnn.experimental.ccl.moe_gpt's C++ auto_width_shard_dim (see
+    moe_gpt_ring_common.h::auto_width_shard_dim): largest divisor of hidden_tiles that also
+    divides num_cores, capped at max_width. Reproduces the legacy Wormhole 3x4 grid exactly at
+    num_cores==12.
+    """
+    hidden_tiles = hidden_size // tile_size
+    width = 1
+    for d in range(max_width, 0, -1):
+        if hidden_tiles % d == 0 and num_cores % d == 0:
+            width = d
+            break
+    return width, num_cores // width
 
 
 def _prepare_w0_w1_tensor(
@@ -84,6 +112,7 @@ def _prepare_w0_w1_tensor(
     """
     num_cores = len(ring2cores)
     Nt = N // ttnn.TILE_SIZE
+    max_tiles = _max_tiles_per_core(num_cores)
 
     w0_chunks = torch_w0.view(L, E, K, Nt, ttnn.TILE_SIZE)
     w1_chunks = torch_w1.view(L, E, K, Nt, ttnn.TILE_SIZE)
@@ -94,21 +123,21 @@ def _prepare_w0_w1_tensor(
     each_shard = []
     start_tile = 0
     for ring_pos in range(num_cores):
-        num_tiles = _tiles_for_core(ring_pos)
+        num_tiles = _tiles_for_core(ring_pos, num_cores)
         shard = torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :]
         start_tile += num_tiles
 
-        if num_tiles < _FUSED_MAX_TILES_PER_CORE:
-            pad_tiles = _FUSED_MAX_TILES_PER_CORE - num_tiles
+        if num_tiles < max_tiles:
+            pad_tiles = max_tiles - num_tiles
             padding = torch.zeros(L, E, pad_tiles, K, 2 * ttnn.TILE_SIZE, dtype=torch_w0.dtype)
             shard = torch.cat([shard, padding], dim=2)
 
         each_shard.append(shard)
 
     torch_w0_w1_reordered = torch.cat(each_shard, dim=2)
-    groups_per_core = _FUSED_MAX_TILES_PER_CORE // 2  # 4
+    groups_per_core = max_tiles // 2
 
-    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, num_cores, _FUSED_MAX_TILES_PER_CORE, K, 2 * ttnn.TILE_SIZE)
+    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, num_cores, max_tiles, K, 2 * ttnn.TILE_SIZE)
     all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)
 
     torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(num_cores, L, E, groups_per_core, 2, K, 2 * ttnn.TILE_SIZE)
@@ -135,6 +164,7 @@ def _prepare_w0_b0_w1_b1_tensor(
     then performs the same interleave/shard/pad as _prepare_w0_w1_tensor.
     """
     num_cores = len(ring2cores)
+    max_tiles = _max_tiles_per_core(num_cores)
     torch_w0_b0 = torch.cat([torch_w0, torch_b0], dim=2)
     torch_w1_b1 = torch.cat([torch_w1, torch_b1], dim=2)
     K_new = torch_w0_b0.shape[2]  # K + K_b, e.g. 2912
@@ -149,21 +179,21 @@ def _prepare_w0_b0_w1_b1_tensor(
     each_shard = []
     start_tile = 0
     for ring_pos in range(num_cores):
-        num_tiles = _tiles_for_core(ring_pos)
+        num_tiles = _tiles_for_core(ring_pos, num_cores)
         shard = permuted[:, :, start_tile : start_tile + num_tiles, :, :]
         start_tile += num_tiles
 
-        if num_tiles < _FUSED_MAX_TILES_PER_CORE:
-            pad_tiles = _FUSED_MAX_TILES_PER_CORE - num_tiles
+        if num_tiles < max_tiles:
+            pad_tiles = max_tiles - num_tiles
             padding = torch.zeros(L, E, pad_tiles, K_new, 2 * ttnn.TILE_SIZE, dtype=torch_w0.dtype)
             shard = torch.cat([shard, padding], dim=2)
 
         each_shard.append(shard)
 
     reordered = torch.cat(each_shard, dim=2)
-    groups_per_core = _FUSED_MAX_TILES_PER_CORE // 2  # 4
+    groups_per_core = max_tiles // 2
 
-    all_groups = reordered.view(L, E, num_cores, _FUSED_MAX_TILES_PER_CORE, K_new, 2 * ttnn.TILE_SIZE)
+    all_groups = reordered.view(L, E, num_cores, max_tiles, K_new, 2 * ttnn.TILE_SIZE)
     all_groups = all_groups.permute(2, 0, 1, 3, 4, 5)
 
     pair_2_tiles = all_groups.view(num_cores, L, E, groups_per_core, 2, K_new, 2 * ttnn.TILE_SIZE)
@@ -224,7 +254,7 @@ def _prepare_w2_tensor(
     N_grouped = all_groups_per_bank.view(num_cores, L, E, 2, Nt, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE)
 
     core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
-    chunk_sizes = [_tiles_for_core(i) for i in range(num_cores)]
+    chunk_sizes = [_tiles_for_core(i, num_cores) for i in range(num_cores)]
     chunk_start_positions = torch.cat(
         [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
     )
@@ -296,7 +326,7 @@ def _prepare_w2_b2_tensor(
 
     # Ring-rotate ONLY the weight tile rows (same rotation as non-bias _prepare_w2_tensor)
     core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
-    chunk_sizes = [_tiles_for_core(i) for i in range(num_cores)]
+    chunk_sizes = [_tiles_for_core(i, num_cores) for i in range(num_cores)]
     chunk_start_positions = torch.cat(
         [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
     )
@@ -333,13 +363,15 @@ def _build_ring2cores(device) -> dict:
     core2dram = {core_coords: dram_bank_id for dram_bank_id, core_coords in enumerate(in0_core_coords)}
 
     in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+    num_cores = len(in0_core_coords_sorted)
+    max_tiles = _max_tiles_per_core(num_cores)
 
     ring2cores = {}
     for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
         ring2cores[ring_pos] = (
             core_coord,
             core2dram[core_coord],
-            1 if ring_pos in _FUSED_PAD_CORES else 0,
+            1 if _tiles_for_core(ring_pos, num_cores) < max_tiles else 0,
         )
     return ring2cores
 
@@ -996,7 +1028,7 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
 
     ring2cores = build_ring2cores(mesh_device)
     num_cores = len(ring2cores)
-    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    groups_per_core = _max_tiles_per_core(num_cores) // 2
     dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
 
@@ -1345,7 +1377,7 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
 
     ring2cores = build_ring2cores(mesh_device)
     num_cores = len(ring2cores)
-    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    groups_per_core = _max_tiles_per_core(num_cores) // 2
     dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
 
@@ -1500,6 +1532,7 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     tt_sparse = ttnn.reshape(tt_sparse, [total_tokens, hidden_size])
 
     # --- moe_gpt: pass HEIGHT_SHARDED indices/scores from dispatch directly ---
+    _combine_w, _combine_h = _auto_combine_grid(num_cores, hidden_size)
     moe_gpt_outputs = ttnn.experimental.moe_gpt(
         tt_sparse,
         expert_indices=tt_idx,
@@ -1507,6 +1540,9 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
         expert_mapping=tt_moe_gpt_mapping,
         w0_w1_tensor=tt_w0_w1,
         w2_tensor=tt_w2,
+        output_height_shard_dim=_combine_h,
+        output_width_shard_dim=_combine_w,
+        hidden_size=hidden_size,
         cluster_axis=cluster_axis,
     )
     ttnn.synchronize_device(mesh_device)
@@ -1640,8 +1676,7 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     experts_per_ring = experts_total // num_clusters  # 16 ring-local experts per ring
     global_experts = experts_total  # 128
 
-    COMBINE_H = 4  # token_parallel_core_dim (rows)
-    COMBINE_W = 3  # data_parallel_core_dim (cols)
+    COMBINE_W, COMBINE_H = _auto_combine_grid(num_cores, hidden_size)  # data_parallel, token_parallel dims
     combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
         mesh_device, COMBINE_W, COMBINE_H
     )
@@ -1804,7 +1839,7 @@ def run_test_moe_gpt_e2e(
     in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
     ring2cores = {}
     for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in PAD_CORES else 0)
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in _LEGACY_WH12_PAD_CORES else 0)
 
     dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
     dram_core_range = [ttnn.CoreRange(c, c) for c in dram_core_coords]
@@ -1813,7 +1848,7 @@ def run_test_moe_gpt_e2e(
     w_dtype = ttnn.bfloat4_b
     L = 1
 
-    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    groups_per_core = _max_tiles_per_core(num_cores) // 2
     K_bias = K + 32  # K + 1 bias tile row
     N_bias = N + 32
     w0_w1_shard_height = L * E * groups_per_core * K_bias
@@ -2532,7 +2567,7 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
 
     ring2cores = build_ring2cores(mesh_device)
     num_cores = len(ring2cores)
-    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    groups_per_core = _max_tiles_per_core(num_cores) // 2
     dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
 
@@ -2866,7 +2901,7 @@ def run_test_full_pipeline_multi_iter(
 
     ring2cores = build_ring2cores(mesh_device)
     num_cores = len(ring2cores)
-    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    groups_per_core = _max_tiles_per_core(num_cores) // 2
     dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
 

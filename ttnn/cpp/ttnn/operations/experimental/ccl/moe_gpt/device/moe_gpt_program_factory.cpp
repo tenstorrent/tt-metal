@@ -4,6 +4,7 @@
 
 #include "moe_gpt_program_factory.hpp"
 #include "moe_gpt_device_operation_types.hpp"
+#include "kernels/moe_gpt_ring_common.h"
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
@@ -80,13 +81,28 @@ MoEGPTMeshWorkloadFactory::create_at(
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
+    // Max tiles any single core holds for the 90-tile W0/W1/W2 weight dimension, at whatever
+    // ring size this device actually has. This is ceil(90/num_cores) regardless of which
+    // specific cores get the "big" share (the legacy Wormhole boundary-paired distribution and
+    // the general round-robin distribution used for other ring sizes always agree on the max,
+    // even though they disagree on which cores hold it) -- so no legacy/general branch is
+    // needed here, only for the exact per-core assignment used inside the kernels.
+    const uint32_t source_width_tiles = (moe_gpt_ring::NUM_W0_W1_TILES_H + num_cores - 1) / num_cores;
+    // dm1.cpp cycles ring A2A transfers through NUM_A2A_BUFFERS buffers. The legacy Wormhole
+    // value (6 = NUM_CORES/NUM_A2A_ITERS = 12/2) is preserved exactly at num_cores==12 to avoid
+    // doubling this CB's L1 footprint on an already-working configuration; other ring sizes use
+    // one buffer per ring hop (simpler, always correct, and a smaller absolute buffer count
+    // than Wormhole's anyway since Blackhole's ring is smaller). Must match dm1.cpp's own
+    // NUM_A2A_BUFFERS exactly.
+    const uint32_t num_a2a_buffers = (num_cores == moe_gpt_ring::legacy_wh12::kNumCores) ? 6u : num_cores;
+
     std::map<std::string, tt::tt_metal::CBHandle> cb_handles_sharded;
 
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
         {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp4_b, true, 14 * 2 * 3},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 8 * 6},
+        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, source_width_tiles * num_a2a_buffers},
         {"cb_c2c_ones_tile", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 1},
     };
 
@@ -112,8 +128,7 @@ MoEGPTMeshWorkloadFactory::create_at(
 
     // c_14 (untilized ROW_MAJOR output buffer) on matmul cores
     {
-        constexpr uint32_t SOURCE_WIDTH_TILES = 8;
-        constexpr uint32_t c14_page_size = SOURCE_WIDTH_TILES * 32 * 2;  // 512 bytes
+        const uint32_t c14_page_size = source_width_tiles * 32 * 2;      // 512 bytes at source_width_tiles==8
         const uint32_t c14_num_pages = 32 * num_experts;                 // 128 pages = 64 KB
         const auto cb_config = tt::tt_metal::CircularBufferConfig(
                                    c14_num_pages * c14_page_size, {{tt::CBIndex::c_14, tt::DataFormat::Float16_b}})
@@ -199,13 +214,23 @@ MoEGPTMeshWorkloadFactory::create_at(
 
         cb_handles_sharded_combine["cb_combine_out"] = sharded_output_cb_handle;
 
-        // Combine dm1 kernel
+        // Combine dm1 kernel. Needs num_cores/width_shard_dim to compute
+        // RING_CORES_PER_COMBINE_COL itself -- both are already known at this point in the
+        // function (num_cores from the DRAM-bank assignment above, COMBINE_W directly from
+        // operation_attributes), so pass them explicitly rather than relying on a hardcoded
+        // ring-size-12 assumption baked into the kernel header.
+        std::unordered_map<std::string, uint32_t> combine_dm1_named_compile_time_args = {
+            {"num_cores", static_cast<uint32_t>(num_cores)},
+            {"width_shard_dim", COMBINE_W},
+        };
         combine_dm1_handle = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/combine_dm1.cpp",
             combine_core_range_set,
             tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1});
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::NOC_1,
+                .named_compile_args = combine_dm1_named_compile_time_args});
 
         // NOTE: Combine semaphore is created later (after ring_semaphore) to avoid
         // semaphore slot 0 which conflicts with dispatch infrastructure on combine cores.
@@ -361,8 +386,25 @@ MoEGPTMeshWorkloadFactory::create_at(
         bank2ring_pos[this_bank] = {ring_pos, next_bank};
     }
 
-    constexpr uint32_t tiles_per_core_table[12] = {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7};
-    uint32_t k_start_tiles[12] = {0};
+    // Per-core tile counts for the 90-tile W2 dimension, sized to the LIVE num_cores rather than
+    // a fixed-12 array (the original array here was declared [12] but indexed up to num_cores,
+    // silently reading the wrong -- Wormhole-shaped -- values for any other ring size instead
+    // of crashing). At num_cores==12 this reproduces the original literal
+    // {8,8,7,7,8,8,7,7,8,8,7,7} byte-for-byte (legacy boundary-paired distribution, untouched);
+    // at any other num_cores it uses the general round-robin formula also used by the kernels
+    // (moe_gpt_ring::shard_tiles), so host and device agree on every core's exact tile count,
+    // not just the max.
+    std::vector<uint32_t> tiles_per_core_table(num_cores);
+    if (num_cores == moe_gpt_ring::legacy_wh12::kNumCores) {
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            tiles_per_core_table[i] = moe_gpt_ring::legacy_wh12::kW2TilesPerCore[i];
+        }
+    } else {
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            tiles_per_core_table[i] = moe_gpt_ring::shard_tiles(moe_gpt_ring::NUM_W0_W1_TILES_H, i, num_cores);
+        }
+    }
+    std::vector<uint32_t> k_start_tiles(num_cores, 0);
     for (uint32_t i = 1; i < num_cores; ++i) {
         k_start_tiles[i] = k_start_tiles[i - 1] + tiles_per_core_table[i - 1];
     }

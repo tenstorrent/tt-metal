@@ -91,9 +91,10 @@ void kernel_main() {
     // GPT-OSS: K=2880 -> 90 tiles height, N=2880 -> 90 tiles
     constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;  // 90
     constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;        // 90
+    using Ring = moe_gpt_ring::MoeGptRingConfig<num_w0_w1_tiles_h, num_w2_tiles_h, num_cores>;
 
-    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
-    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
+    const uint32_t num_w0_w1_tiles_w = Ring::w0_w1_tiles_per_core_per_step[ring_core_id][0];  // 7 or 8
+    const uint32_t num_w2_tiles_w = Ring::w2_tiles_per_core[ring_core_id];                    // 7 or 8
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -105,8 +106,7 @@ void kernel_main() {
     constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;             // 10
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 10 * 2 = 20
     constexpr uint32_t w0_w1_blocks_per_expert = moe_gpt_ring::W0_B0_W1_B1_BLOCKS_PER_EXPERT;
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        w0_w1_blocks_per_expert / (moe_gpt_ring::IN2_TILES_PER_STEP_A / 2);
+    constexpr uint32_t w0_w1_blocks_per_two_elt_tile = w0_w1_blocks_per_expert / (Ring::in2_tiles_per_step / 2);
 
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;                     // 2
@@ -121,13 +121,13 @@ void kernel_main() {
     // Ring setup
     //-------------------------------------------------------------------------
     // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_gpt_ring::NUM_A2A_ITERS_A;  // 2
+    constexpr uint32_t num_a2a_iters = Ring::num_a2a_iters;
 
     // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_gpt_ring::NUM_CORES;  // 12
+    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
-    // The number of tiles to send in each step (max of 7/8 = 8)
-    constexpr uint32_t tiles_per_step = moe_gpt_ring::IN2_TILES_PER_STEP_A;  // 8
+    // The number of tiles to send in each step (max tiles held by any core)
+    constexpr uint32_t tiles_per_step = Ring::in2_tiles_per_step;
 
     //-------------------------------------------------------------------------
     // Compute
@@ -199,7 +199,7 @@ void kernel_main() {
     uint32_t chunk_ready_wait_value = 1;
     bool use_second_half_buffer = false;
 
-    constexpr uint32_t source_width_tiles = moe_gpt_ring::SOURCE_WIDTH_TILES;  // 8
+    constexpr uint32_t source_width_tiles = Ring::source_width_tiles;
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
@@ -291,7 +291,7 @@ void kernel_main() {
 
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 uint32_t dm1_step = 0;
-                uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+                uint32_t dm1_tiles_remaining = Ring::w0_w1_tiles_per_core_per_step[ring_core_id][0];
                 cb_w2c_rdy.wait_front(1);
 
                 // 6-buffer cycling: each A2A step uses buf (step % 6)
@@ -311,8 +311,7 @@ void kernel_main() {
                         if (dm1_tiles_remaining == 0) {
                             cb_w2c_rdy.pop_front(1);
                             cb_w2c_rdy.wait_front(1);
-                            dm1_tiles_remaining =
-                                moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                            dm1_tiles_remaining = Ring::w0_w1_tiles_per_core_per_step[ring_core_id][++dm1_step];
                             in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
                             in2_offset = in2_buf * tiles_per_step;
                             in2_index = in2_offset;
@@ -448,7 +447,7 @@ void kernel_main() {
         uint32_t out_tile_index = expert_id * num_w0_w1_tiles_h;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
-            uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+            uint32_t dm1_tiles_remaining = Ring::w0_w1_tiles_per_core_per_step[ring_core_id][0];
             cb_w2c_rdy.wait_front(1);
 
             uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
@@ -467,7 +466,7 @@ void kernel_main() {
                     if (dm1_tiles_remaining == 0) {
                         cb_w2c_rdy.pop_front(1);
                         cb_w2c_rdy.wait_front(1);
-                        dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                        dm1_tiles_remaining = Ring::w0_w1_tiles_per_core_per_step[ring_core_id][++dm1_step];
                         in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
                         in2_offset = in2_buf * tiles_per_step;
                         in2_index = in2_offset;

@@ -82,9 +82,15 @@ void kernel_main() {
     // Constants for MoEGPT
     constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_PLUS_BIAS_H;  // 91 (90 weight + 1 bias)
     constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_PLUS_BIAS_H;        // 91 (90 weight + 1 bias)
+    // Ring/shard distribution is over the weight-only tile counts (90), not the bias-inclusive
+    // DMA block counts (91) above -- must match the SAME MoeGptRingConfig<90,90,num_cores>
+    // instantiation dm1.cpp/compute.cpp use, so all three kernels agree on which core owns
+    // which tiles.
+    using Ring =
+        moe_gpt_ring::MoeGptRingConfig<moe_gpt_ring::NUM_W0_W1_TILES_H, moe_gpt_ring::NUM_W2_TILES_H, num_cores>;
 
-    const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
-    const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
+    const uint32_t num_w0_w1_tiles_w = Ring::w0_w1_tiles_per_core_per_step[ring_core_id][0];  // 7 or 8
+    const uint32_t num_w2_tiles_w = Ring::w2_tiles_per_core[ring_core_id];                    // 7 or 8
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -112,16 +118,18 @@ void kernel_main() {
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
     // Offsets for layer_id
-    // GPT-OSS: W0/W1 per expert = 90 height * 8 max width per core * tile_size (for W0 alone)
-    // w0_w1_total = 2 * that (interleaved W0+W1)
-    constexpr uint32_t w0_size_per_expert = num_w0_w1_tiles_h * 8 * w0_w1_tile_size;  // 90 * 8
+    // GPT-OSS: W0/W1 per expert = 90 height * (max tiles/core for this ring size) * tile_size
+    // (for W0 alone); w0_w1_total = 2 * that (interleaved W0+W1). The DRAM buffer this reads
+    // from pads every core's shard to Ring::source_width_tiles (8 on Wormhole's 12-core ring;
+    // a different value on other ring sizes), matching the host-side weight-prep convention --
+    // NOT a fixed literal 8, since that convention is itself ring-size-dependent.
+    constexpr uint32_t w0_size_per_expert = num_w0_w1_tiles_h * Ring::source_width_tiles * w0_w1_tile_size;
     constexpr uint32_t w0_w1_total_size_per_expert = 2 * w0_size_per_expert;
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
-    // GPT-OSS: W2 per expert = 90 height * 8 max width per core * tile_size
-    // 90 height (no padding needed: 90/10=9 exact), 8 max tiles/core
-    constexpr uint32_t w2_total_size_per_expert = num_w2_tiles_h * 8 * w2_tile_size;  // 90 * 8
+    // GPT-OSS: W2 per expert = 90 height * (max tiles/core for this ring size) * tile_size
+    constexpr uint32_t w2_total_size_per_expert = num_w2_tiles_h * Ring::source_width_tiles * w2_tile_size;
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
