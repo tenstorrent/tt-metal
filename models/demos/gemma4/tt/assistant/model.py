@@ -78,6 +78,7 @@ class Gemma4AssistantModel:
         tensor_cache_path=None,
         mesh_config=None,
         max_local_batch_size=1,
+        bounded_sliding_kv_cache=False,
     ):
         self.mesh_device = mesh_device
         self.max_local_batch_size = max_local_batch_size
@@ -108,6 +109,14 @@ class Gemma4AssistantModel:
         state_dict = _inject_zero_kv_weights(dict(state_dict), self.text_args)
 
         # Decoder layers (reuse the target's layer, MoE disabled, KV-shared).
+        #
+        # Bounded target KV: the drafter cross-attends into the TARGET's caches,
+        # so when those sliding layers are a bounded ring the drafter's SDPA has
+        # to wrap absolute positions the same way. Its attention configs pick up
+        # cache_position_modulo from the same flag the target layers use (the
+        # assistant's own sliding_window matches the target's -- 1024 for both
+        # 12B and 31B -- so the ring size agrees). It still allocates NO KV of
+        # its own: every layer runs is_kv_shared=True.
         self.layers = []
         for i in range(self.text_args.num_hidden_layers):
             layer = Gemma4DecoderLayer(
@@ -121,6 +130,7 @@ class Gemma4AssistantModel:
                 mesh_config=mesh_config,
                 max_seq_len=self.text_args.max_seq_len,
                 max_local_batch_size=max_local_batch_size,
+                bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             )
             self.layers.append(layer)
 

@@ -30,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t q_out_c = get_compile_time_arg_val(3);
     constexpr uint32_t kv_out_c = get_compile_time_arg_val(4);
     constexpr bool head_parallel = get_compile_time_arg_val(5) != 0;
-    constexpr auto q_args = TensorAccessorArgs<6>();
+    constexpr uint32_t split_width = get_compile_time_arg_val(6);  // zero keeps the full Q output
+    constexpr auto q_args = TensorAccessorArgs<7>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
@@ -59,14 +60,36 @@ void kernel_main() {
     uint32_t v_out_tensor_current_tile_id;  // need this to update v_out_tensor_tile_id
     uint32_t out_tensor_current_tile_id_along_c;
 
+    // Keep reader/work partitioning in full-head coordinates; route each tile once at the writer.
+    const auto write_q_tile = [&](uint32_t source, uint32_t full_tile_id) {
+        if constexpr (split_width > 0) {
+            constexpr uint32_t left_width = split_width;
+            constexpr uint32_t right_width = q_out_w_tiles - left_width;
+            const uint32_t row = full_tile_id / q_out_w_tiles;
+            const uint32_t col = full_tile_id % q_out_w_tiles;
+            if (col < left_width) {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(source), sq, tile_bytes_qv, {}, {.page_id = row * left_width + col});
+            } else {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(source),
+                    sk,
+                    tile_bytes_qv,
+                    {},
+                    {.page_id = row * right_width + col - left_width});
+            }
+        } else {
+            noc.async_write(CoreLocalMem<uint32_t>(source), sq, tile_bytes_qv, {}, {.page_id = full_tile_id});
+        }
+    };
+
     if constexpr (head_parallel) {
         constexpr uint32_t transfer_tiles = q_out_w_tiles % 4 == 0 ? 4 : (q_out_w_tiles % 2 == 0 ? 2 : 1);
         for (uint32_t tile = 0; tile < num_blocks * q_out_w_tiles; tile += transfer_tiles) {
             cb_qv.wait_front(transfer_tiles);
             uint32_t source = cb_qv.get_read_ptr();
             for (uint32_t j = 0; j < transfer_tiles; ++j) {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(source), sq, tile_bytes_qv, {}, {.page_id = q_out_tensor_tile_id++});
+                write_q_tile(source, q_out_tensor_tile_id++);
                 source += tile_bytes_qv;
             }
             noc.async_write_barrier();
@@ -81,12 +104,7 @@ void kernel_main() {
                 for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; w_dim++) {
                     cb_qv.wait_front(out_num_tiles_read);
                     l1_read_addr = cb_qv.get_read_ptr();
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(l1_read_addr),
-                        sq,
-                        tile_bytes_qv,
-                        {},
-                        {.page_id = q_out_tensor_current_tile_id});
+                    write_q_tile(l1_read_addr, q_out_tensor_current_tile_id);
 
                     noc.async_write_barrier();
                     cb_qv.pop_front(out_num_tiles_read);

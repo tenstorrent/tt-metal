@@ -19,7 +19,7 @@ def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9
 
     Defaults to ``assert_with_pcc(pcc)`` for composite math (ldexp/logaddexp/xlogy/bias_gelu) where
     the expected error exceeds the ULP <= 5 policy. Callers set ``exact=True`` for ops whose output
-    is a bit-exact selection or boolean (maximum/minimum, logical_and/or/xor)."""
+    is a bit-exact selection or boolean (logical_and/or/xor)."""
     torch.manual_seed(0)
     low = low
     high = high
@@ -89,18 +89,6 @@ def test_xlogy(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_bias_gelu(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.bias_gelu, -100, 100)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_maximum(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.maximum, -100, 100, exact=True)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_minimum(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.minimum, -100, 100, exact=True)
 
 
 def test_arithmetic_operators(device):

@@ -4,6 +4,7 @@
 
 #include "fabric_tensix_builder_impl.hpp"
 
+#include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -969,25 +970,32 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
             break;
         }
         case ChannelTypes::ROUTER_CHANNEL: {
-            // Router channels: topology-based fabric router stream IDs (only in Legacy MUX mode)
+            // Router channels: the free-slot registers of the fabric router's producer slots, read
+            // from the fabric's shared stream assignment in FabricBuilderContext -- this mux
+            // decrements them across the link, so the two must agree by construction, not by
+            // sharing a constant table. (Legacy MUX mode only; express + MUX is
+            // guarded-unsupported.)
             const auto topology = fabric_context.get_fabric_topology();
+            const StreamAssignment& assignment =
+                fabric_context.get_builder_context().get_stream_assignment(local_fabric_node_id_.mesh_id);
             switch (topology) {
                 case tt::tt_fabric::Topology::NeighborExchange:
                     TT_THROW("NeighborExchange topology has not been tested in MUX mode");
                     break;
                 case tt::tt_fabric::Topology::Linear:
                 case tt::tt_fabric::Topology::Ring:
-                    fabric_stream_ids = {
-                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id};
+                    // 1D: the single forwarding producer's free-slot register.
+                    fabric_stream_ids = {assignment.id(StreamRole::SENDER_FREE_SLOTS, 0, 1)};
                     break;
                 case tt::tt_fabric::Topology::Mesh:
                 case tt::tt_fabric::Topology::Torus:
+                    // 2D: the three non-self cardinal producers' free-slot registers.
                     fabric_stream_ids = {
-                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id,
-                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_2_free_slots_stream_id,
-                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_3_free_slots_stream_id};
+                        assignment.id(StreamRole::SENDER_FREE_SLOTS, 0, 1),
+                        assignment.id(StreamRole::SENDER_FREE_SLOTS, 0, 2),
+                        assignment.id(StreamRole::SENDER_FREE_SLOTS, 0, 3)};
                     break;
-                default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
+                default: TT_THROW("Unknown fabric topology: {}", enchantum::to_string(topology)); break;
             }
             break;
         }

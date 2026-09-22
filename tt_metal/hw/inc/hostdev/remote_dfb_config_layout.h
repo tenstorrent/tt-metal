@@ -73,7 +73,7 @@ inline constexpr uint32_t CROSS_NODE_DFB_CFG_NOC_XY_OFFSET = 5;
 inline constexpr uint32_t CROSS_NODE_DFB_CFG_PAGES_SENT_OFFSET = 6;
 inline constexpr uint32_t CROSS_NODE_DFB_CFG_PAGES_ACKED_OFFSET = 7;
 
-inline constexpr uint32_t cross_node_dfb_noc_xy_byte_offset() {
+constexpr uint32_t cross_node_dfb_noc_xy_byte_offset() {
     return CROSS_NODE_DFB_CONFIG_HEADER_WORDS * static_cast<uint32_t>(sizeof(uint32_t));
 }
 
@@ -113,6 +113,6 @@ inline constexpr uint32_t PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN = 64;
 // ring_units is a power of two. Only lane 0's sent slot carries this cursor.
 inline constexpr uint32_t PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD = 1;
 
-inline constexpr uint32_t prefetcher_pipe_noc_xy_byte_offset() {
+constexpr uint32_t prefetcher_pipe_noc_xy_byte_offset() {
     return PREFETCHER_PIPE_CONFIG_HEADER_WORDS * static_cast<uint32_t>(sizeof(uint32_t));
 }
