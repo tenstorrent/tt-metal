@@ -7,6 +7,7 @@
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
 #include "sliding_halo_layout.hpp"
+#include "ring_joint_sdpa_schedule.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
@@ -2416,10 +2417,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Only multicast groups share a row-wide barrier: linear chains do not have
     // the same per-row cost. Use the live shared-K or GQA K/V multicast family.
-    struct LockstepGroup {
-        std::vector<uint32_t> members;  // core indices in mcast rectangle order
-        uint32_t injector_pos = 0;      // index INTO members, not a core index
-    };
     std::vector<ChainConfig>* rotated_mcast_configs = nullptr;
     if (k_mcast_enabled) {
         rotated_mcast_configs = &batch_chain_configs;
@@ -2427,7 +2424,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         rotated_mcast_configs = &gqa_chain_configs;
     }
     // Both multicast families cover full logical rows.
-    std::vector<LockstepGroup> rotated_groups;
+    std::vector<ring_joint::RotatedQLockstepGroup> rotated_groups;
     std::string rotated_group_reject;
     if (rotated_mcast_configs == nullptr) {
         rotated_group_reject = "no row-wide mcast family is live";
@@ -2435,7 +2432,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         rotated_group_reject = "mcast family is not built per core";
     } else {
         for (uint32_t row = 0; row < grid_size.y && rotated_group_reject.empty(); ++row) {
-            LockstepGroup group;
+            ring_joint::RotatedQLockstepGroup group;
             group.members.reserve(grid_size.x);
             bool injector_found = false;
             for (uint32_t col = 0; col < grid_size.x; ++col) {
@@ -2502,17 +2499,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Every core needs a real chunk: padded reader slots decode my_count - 1.
         rotated_base_chunks >= 1;
 
-    struct RotatedIterSched {
-        std::vector<uint32_t> my_chunks;       // flat chunk ids; base chunks first, float (if any) last
-        uint32_t group_slot_count = 0;         // group max chunk count this iteration = mcast slots to run
-        uint32_t float_migrated_in = 0;        // 1 if the last chunk was owned by another core last iteration
-        uint32_t float_dest = kRotatedNoDest;  // packed physical core owning this float next iteration
-    };
-    std::vector<std::vector<RotatedIterSched>> rotated_sched;  // [core][ring_iter]
+    ring_joint::RotatedQSchedule rotated_sched;
     std::vector<uint32_t> rotated_handoff_sem_ids;
     // Appends one iteration's chunk-id list padded to the fixed rotated_max_slots length, so every
     // ring iteration occupies the same number of runtime args and the kernels can index by stride.
-    const auto append_rot_chunk_ids = [&](CheckedRuntimeArgList& args_out, const RotatedIterSched& sched) {
+    const auto append_rot_chunk_ids = [&](CheckedRuntimeArgList& args_out, const ring_joint::RotatedQIteration& sched) {
         for (uint32_t slot = 0; slot < rotated_base_chunks + 1; ++slot) {
             args_out.push_back(slot < sched.my_chunks.size() ? sched.my_chunks[slot] : 0);
         }
@@ -2520,65 +2511,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     if (use_rotated_q_split) {
         const uint32_t num_groups = static_cast<uint32_t>(rotated_groups.size());
         const uint32_t groups_needed = rotated_groups_needed;
-        // Put the first remainder on the injector so it never runs padded slots.
-        // Rotate groups each iteration; each core owns at most one remainder.
-        auto float_owner = [&](uint32_t ring_iter, uint32_t float_idx) {
-            const uint32_t first_group = ring_iter * groups_needed;
-            const uint32_t float_group_offset = float_idx / rotated_group_size;
-            const uint32_t group_idx = (first_group + float_group_offset) % num_groups;
-            const auto& group = rotated_groups[group_idx];
-            const uint32_t pos_in_group = float_idx % rotated_group_size;
-            const uint32_t injector_pos = group.injector_pos;
-            const bool is_injector_slot = pos_in_group == 0;
-            const uint32_t member_idx =
-                is_injector_slot ? injector_pos : (pos_in_group <= injector_pos ? pos_in_group - 1 : pos_in_group);
-            return group.members[member_idx];
-        };
-        rotated_sched.assign(num_cores, std::vector<RotatedIterSched>(ring_size));
-        for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-                auto& sched = rotated_sched[core_idx][ring_iter];
-                sched.my_chunks.reserve(rotated_base_chunks + 1);
-                for (uint32_t b = 0; b < rotated_base_chunks; ++b) {
-                    sched.my_chunks.push_back(core_idx * rotated_base_chunks + b);
-                }
-            }
-        }
-        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            for (uint32_t float_idx = 0; float_idx < rotated_float_chunks; ++float_idx) {
-                const uint32_t owner = float_owner(ring_iter, float_idx);
-                auto& sched = rotated_sched[owner][ring_iter];
-                sched.my_chunks.push_back(rotated_base_chunks * num_cores + float_idx);
-                // (row, pos) is unique per float within an iteration, so a core holds at most one
-                // float and these two fields are assigned at most once each.
-                TT_ASSERT(sched.my_chunks.size() == rotated_base_chunks + 1);
-                if (ring_iter > 0) {
-                    const uint32_t previous_owner = float_owner(ring_iter - 1, float_idx);
-                    if (previous_owner != owner) {
-                        // Record both ends of this handoff together.
-                        const auto& dest_phys = core_work[owner].physical_core;
-                        TT_FATAL(
-                            dest_phys.y < 256 && dest_phys.x < (1u << 24),
-                            "Rotated Q split cannot pack physical core ({}, {}) into a handoff dest",
-                            dest_phys.x,
-                            dest_phys.y);
-                        sched.float_migrated_in = 1;
-                        rotated_sched[previous_owner][ring_iter - 1].float_dest =
-                            rotated_pack_dest(dest_phys.x, dest_phys.y);
-                    }
-                }
-            }
-            // Every core in a group runs the group's max slot count, so padded members still relay
-            // the mcast handshakes.
-            for (const auto& group : rotated_groups) {
-                // The injector owns the first remainder, so its count is the group maximum.
-                const uint32_t group_max =
-                    static_cast<uint32_t>(rotated_sched[group.members[group.injector_pos]][ring_iter].my_chunks.size());
-                for (const uint32_t ci : group.members) {
-                    rotated_sched[ci][ring_iter].group_slot_count = group_max;
-                }
-            }
-        }
+        rotated_sched = ring_joint::build_rotated_q_schedule(
+            num_cores, ring_size, rotated_base_chunks, rotated_float_chunks, rotated_groups);
         // The mcast injector's forward gate (q_iter_local < next_core_q_chunks) must cover the
         // +1-slot iterations of every group, not just the injector's static flat-split count.
         // Patched on whichever family the groups came from -- batch for latent-V, gqa for GQA.
@@ -3126,7 +3060,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 const auto& sched = rotated_sched[i][ring_iter];
                 writer_args.push_back(static_cast<uint32_t>(sched.my_chunks.size()));
                 writer_args.push_back(sched.float_migrated_in);
-                writer_args.push_back(sched.float_dest);
+                uint32_t float_dest = kRotatedNoDest;
+                if (sched.float_dest_core != kRotatedNoDest) {
+                    const auto& dest_phys = core_work[sched.float_dest_core].physical_core;
+                    TT_FATAL(
+                        dest_phys.y < 256 && dest_phys.x < (1u << 24),
+                        "Rotated Q split cannot pack physical core ({}, {}) into a handoff dest",
+                        dest_phys.x,
+                        dest_phys.y);
+                    float_dest = rotated_pack_dest(dest_phys.x, dest_phys.y);
+                }
+                writer_args.push_back(float_dest);
                 append_rot_chunk_ids(writer_args, sched);
             }
         }
