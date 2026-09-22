@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <cstdlib>
 #include <optional>
 #include <map>
@@ -53,7 +54,7 @@ public:
         uint32_t k8 = 0;  // the line's slope in eighths of a wall tick per refclk tick at a point; 0 at a raw instant
         bool close = false;  // a line's last instant
     };
-    std::vector<Instant> pts;  // in refclk order
+    std::deque<Instant> pts;   // in refclk order; a deque, so growth never copies on the sync thread
     uint64_t points = 0;       // instants received, those behind the frontier included
     uint64_t transitions = 0;  // closes
     // The pusher's own check of each line against its samples: the largest residual any point reported, in wall
@@ -327,9 +328,12 @@ public:
     struct Node {
         double H, root, r, tangent;
     };
-    // One chip's series; `last_r` is the refclk of the newest instant published.
+    // One chip's series: its newest node and how many went before it (the map holds them; a vector of them here
+    // doubled into a 45 ms copy on the sync thread at two million nodes, and every drainer's ring overflowed
+    // meanwhile), and `last_r`, the refclk of the newest instant published.
     struct Series {
-        std::vector<Node> nodes;
+        Node last{};
+        size_t count = 0;
         double last_r = -1.0;
         size_t dropped = 0;  // nodes refused: behind the frozen series, or not a rate
     };
@@ -351,7 +355,7 @@ public:
     }
     bool has_nodes(uint32_t dev) const {
         const Series* s = series(dev);
-        return s != nullptr && !s->nodes.empty();
+        return s != nullptr && s->count != 0;
     }
 
 private:

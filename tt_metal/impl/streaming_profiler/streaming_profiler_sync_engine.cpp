@@ -702,10 +702,11 @@ std::map<uint32_t, RootXf> LinkSolver::root_transforms(uint32_t root, std::vecto
 
 void SeriesPublisher::push_node(Series& s, uint32_t chip, const Node& n) {
     const int64_t wall = static_cast<int64_t>(std::llround(n.H));
-    if (!s.nodes.empty() && wall <= static_cast<int64_t>(std::llround(s.nodes.back().H))) {
+    if (s.count != 0 && wall <= static_cast<int64_t>(std::llround(s.last.H))) {
         return;  // within the tick of the last node: the placement cannot differ measurably there
     }
-    s.nodes.push_back(n);
+    s.last = n;
+    s.count++;
     s.last_r = std::max(s.last_r, n.r);
     map_.append(chip, SyncNode{.at = wall, .value = n.root, .tangent = n.tangent});
 }
@@ -715,7 +716,7 @@ void SeriesPublisher::push_node(Series& s, uint32_t chip, const Node& n) {
 // knot). Shifting fresh nodes to meet the frozen tail and fading that shift over a quarter second is worse: every
 // discrepancy at a join becomes a level the map carries for 250 ms, 30-60 ns during DVFS dithering at 1 ms.
 void SeriesPublisher::append_node(Series& s, uint32_t chip, const Node& n) {
-    const double end_H = s.nodes.empty() ? -1.0 : s.nodes.back().H;
+    const double end_H = s.count == 0 ? -1.0 : s.last.H;
     if (n.H >= end_H && n.H < end_H + 1.0) {
         return;  // the series' end re-derived, or a knot within the tick of it: the same node
     }
@@ -739,8 +740,8 @@ void SeriesPublisher::append_node(Series& s, uint32_t chip, const Node& n) {
 
 bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final) {
     Series& s = series_[dev];
-    const std::vector<LocalClockModel::Instant>& pts = fit.pts;
-    const size_t before = s.nodes.size();
+    const auto& pts = fit.pts;
+    const size_t before = s.count;
     const auto root_at = [&](const LocalClockModel::Instant& p) { return xf.scale * p.r + xf.shift; };
     auto it = std::upper_bound(
         pts.begin(), pts.end(), s.last_r, [](double x, const LocalClockModel::Instant& p) { return x < p.r; });
@@ -773,7 +774,7 @@ bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel
         append_node(s, chip, Node{it->w, root, it->r, tangent});
         s.last_r = it->r;
     }
-    return s.nodes.size() > before;
+    return s.count > before;
 }
 
 bool SyncEngine::publish_dev(uint32_t dev, bool final) {
@@ -865,7 +866,7 @@ void SyncEngine::log_clock_models() const {
             smax > 0.0 ? smin * to_ghz : 0.0,
             smax * to_ghz,
             anchor_ghz,
-            series_.series(dev) != nullptr ? series_.series(dev)->nodes.size() : 0,
+            series_.series(dev) != nullptr ? series_.series(dev)->count : 0,
             l.max_resid_ticks / ns_ghz,
             l.resid_warn_points,
             LocalClockModel::kResidWarnTicks / ns_ghz);
@@ -1245,32 +1246,9 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
                           : "");
 }
 
-// The five worst rounds, how far each sits from a correction node of either chip, and its two glitch indicators: a
-// map error has a small stamp residual; a stamp glitch has a large one and often a shifted round trip.
+// The five worst rounds and their two glitch indicators: a map error has a small stamp residual; a stamp glitch has a
+// large one and often a shifted round trip.
 void SyncEngine::log_worst_rounds(const CaptureContext::Link& L, const LinkErrors& e) const {
-    std::vector<double> node_a_us(e.pts.size(), -1.0), node_b_us(e.pts.size(), -1.0);
-    for (const auto& [dev, out] : {std::pair{L.dev_a, &node_a_us}, std::pair{L.dev_b, &node_b_us}}) {
-        const SeriesPublisher::Series* ps = series_.series(dev);
-        if (ps == nullptr) {
-            continue;
-        }
-        const std::vector<SeriesPublisher::Node>& nodes = ps->nodes;
-        const double ghz = std::max(ctx_.devices[dev].frequency_ghz, 0.1);
-        for (size_t i = 0; i < e.pts.size(); i++) {
-            const double wall = dev == L.dev_a ? e.terms[i].wall_a : e.terms[i].wall_b;
-            const auto up = std::lower_bound(
-                nodes.begin(), nodes.end(), wall, [](const SeriesPublisher::Node& nd, double h) { return nd.H < h; });
-            for (const auto* nd : {up != nodes.end() ? &*up : nullptr, up != nodes.begin() ? &*(up - 1) : nullptr}) {
-                if (nd == nullptr) {
-                    continue;
-                }
-                const double d = std::abs(nd->H - wall) / ghz / 1e3;
-                if ((*out)[i] < 0.0 || d < (*out)[i]) {
-                    (*out)[i] = d;
-                }
-            }
-        }
-    }
     std::vector<size_t> order(e.pts.size());
     for (size_t i = 0; i < order.size(); i++) {
         order[i] = i;
@@ -1284,14 +1262,9 @@ void SyncEngine::log_worst_rounds(const CaptureContext::Link& L, const LinkError
         const size_t i = order[k];
         const PlotPoint& p = e.pts[i];
         worst += fmt::format(
-            " {:+.0f} ns at {:.3f} s (nearest node: chip {} {:.0f} us, chip {} {:.0f} us; stamp resid {:+.0f} ns, path "
-            "{:+.1f} ns vs median);",
+            " {:+.0f} ns at {:.3f} s (stamp resid {:+.0f} ns, path {:+.1f} ns vs median);",
             p.value,
             static_cast<double>(SteadyView::mono_ns(p.tsc) - SteadyView::mono_ns(e.pts.front().tsc)) / 1e9,
-            L.chip_a,
-            node_a_us[i],
-            L.chip_b,
-            node_b_us[i],
             e.resid[i],
             e.path[i] - e.path_med);
     }
