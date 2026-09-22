@@ -28,6 +28,30 @@ import tempfile
 from pathlib import Path
 
 # Structural reference handed to the LLM (the seamless bounded-perf pattern, generic-ized).
+def prompt_ids_for_isl(tokenizer, n_tokens):
+    """EXACTLY ``n_tokens`` real token ids from the model's own tokenizer, for use as the ISL
+    measurement condition. Generated perf tests import this so the input length is the tool's
+    choice, not an example sentence baked into each test. Model-agnostic: a seed sentence is
+    encoded with the model's tokenizer and cycled, then truncated, to the requested length.
+
+    Generated tests carry this SAME contract as an inline fallback (``try: import ... except:
+    def ...``). Exporting it here means a plain top-level ``from ...perf_test_gen import
+    prompt_ids_for_isl`` resolves too, so a generated test that omits the guard still collects
+    instead of failing the whole directory's collection with an ImportError."""
+    import torch
+
+    text = "The quick brown fox jumps over the lazy dog and keeps on running. "
+    try:
+        seed = tokenizer.encode(text, add_special_tokens=False)
+    except TypeError:
+        seed = tokenizer.encode(text)
+    seed = [int(x) for x in seed] or [1]
+    ids = []
+    while len(ids) < int(n_tokens):
+        ids.extend(seed)
+    return torch.tensor(ids[: int(n_tokens)], dtype=torch.long)
+
+
 _SKELETON_REF = """
 import os
 import time
