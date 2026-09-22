@@ -296,4 +296,4 @@ omitted or set to `{}`; measured performance is still reported.
 |----------|----------|
 | PR Gate | [`PR Gate`](../.github/workflows/pr-gate.yaml) |
 | Merge Gate | [`Merge Gate`](../.github/workflows/merge-gate.yaml) |
-| Galaxy stress tests | [`(Galaxy) Stress`](../.github/workflows/galaxy-stress-tests.yaml) |
+| Stress tests | [`Stress tests`](../.github/workflows/stress-tests.yaml) |

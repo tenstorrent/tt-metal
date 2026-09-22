@@ -1,0 +1,74 @@
+# Stress tests matrix: Galaxy fabric stability, T3K trace stress and ttnn SDPA stress. See stress-tests-impl.yaml.
+
+# Keys per entry:
+#   id: Stable slug for workflow_dispatch / jq filtering.
+#   name: Job display name.
+#   cmd: Shell command(s) from TT_METAL_HOME (/work).
+#   team: Required for time_budget verification.
+#   skus: SKU -> { timeout } (minutes).
+#   owner_id: Slack owner (optional).
+
+# Max timeouts: .github/time_budget.yaml (workflow key: stress)
+
+- id: galaxy-fabric-stability-stress
+  name: Galaxy Fabric Stability Tests
+  team: scaleout
+  budget_type: stress
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal
+  cmd: |
+    # 0 disables the metal per-op timeout (overrides setup-job's 5s default), which
+    # else false-fails legitimately slow subtests (size_4096 unicast ~6.2s). A real
+    # hang is bounded by the SKU job timeout below.
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short'
+  skus:
+    wh_galaxy_perf:
+      timeout: 100
+
+- name: t3k_trace_stress_tests
+  id: t3k-trace-stress
+  # Moved from t3k_integration_tests.yaml. The T3K integration impl sourced this
+  # script before every cmd; the stress impl runs cmd as written, thus the source is
+  # explicit here.
+  cmd: |
+    source tests/scripts/t3000/run_t3000_integration_tests.sh
+    run_t3000_trace_stress_tests
+  skus:
+    wh_llmbox:
+      timeout: 30
+  owner_id: U0709049XNK # Aditya Saigal
+  team: scaleout
+  budget_type: stress
+
+- name: ttnn nightly sdpa stress tests
+  id: ttnn-sdpa-stress
+  # Moved from ops_unit_tests.yaml (category sdpa). The ops impl set
+  # TT_MM_THROTTLE_PERF=5 on Wormhole; it is set here in cmd instead.
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
+       tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py \
+       -xv --timeout=600
+  skus:
+    wh_n150_civ2:
+      timeout: 55
+    wh_n300_civ2:
+      timeout: 55
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: stress
+
+- name: ttnn nightly sdpa stress tests (blackhole)
+  id: ttnn-sdpa-stress-bh
+  # Same tests on Blackhole. The ops impl gave bh_p150b_civ2 TT_MM_THROTTLE_PERF=0
+  # and TT_GH_CI_INFRA=1, and no HF_HUB_CACHE.
+  cmd: |
+    export TT_MM_THROTTLE_PERF=0 TT_GH_CI_INFRA=1
+    pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
+       tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py \
+       -xv --timeout=600
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: stress

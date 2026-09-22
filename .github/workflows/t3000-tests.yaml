@@ -43,7 +43,6 @@ on:
         options:
           - all
           - tteager
-          - trace stress
       platform:
         required: false
         type: choice

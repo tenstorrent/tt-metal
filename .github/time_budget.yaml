@@ -149,6 +149,10 @@ ttnn:
     wh_n300: 120
     bh_p150b_civ2: 120
     wh_galaxy: 120
+  stress:
+    wh_n150_civ2: 55
+    wh_n300_civ2: 55
+    bh_p150b_civ2: 55
 
 train:
   merge_gate:
@@ -219,6 +223,7 @@ scaleout:
     bh_quietbox_2: 195
   stress:
     wh_galaxy_perf: 120
+    wh_llmbox: 30
   integration:
     wh_llmbox: 40
   health:

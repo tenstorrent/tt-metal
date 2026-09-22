@@ -1,8 +1,10 @@
-name: "(Galaxy) Stress"
+name: "Stress tests"
+
+run-name: "Stress tests Tests[${{ github.event_name == 'schedule' && 'all' || inputs.test-selection }}]"
 
 on:
   schedule:
-    - cron: "0 3 * * 6" # Run @ 3am every Saturday
+    - cron: "0 3 * * *" # Run every day at 3am UTC
   workflow_dispatch:
     inputs:
       platform:
@@ -30,13 +32,16 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
       test-selection:
-        description: "Run all stress suites or one id (see tests/pipeline_reorg/galaxy_stress_tests.yaml)"
+        description: "Run all stress suites or one id (see tests/pipeline_reorg/stress_tests.yaml)"
         required: false
         type: choice
         default: "all"
         options:
           - all
           - galaxy-fabric-stability-stress
+          - t3k-trace-stress
+          - ttnn-sdpa-stress
+          - ttnn-sdpa-stress-bh
       extra-tag:
         required: false
         type: string
@@ -60,16 +65,17 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  galaxy-stress-test:
+  stress-tests:
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
-    uses: ./.github/workflows/galaxy-stress-tests-impl.yaml
+    uses: ./.github/workflows/stress-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: wh_galaxy_perf
+      # Every SKU any stress entry names; prepare_test_matrix.py resolves the literal.
+      enabled-skus: ALL_SKUS_IN_TESTS
       test-selection: ${{ github.event_name == 'workflow_dispatch' && inputs.test-selection || 'all' }}
       extra-tag: ${{ github.event_name == 'workflow_dispatch' && inputs.extra-tag || 'in-service' }}
       topology: topology-6u

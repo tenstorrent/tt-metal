@@ -455,7 +455,7 @@ def main():
         "galaxy-tests.yaml",
         "galaxy-sanity.yaml",
         "galaxy-profiler-tests.yaml",
-        "galaxy-stress-tests.yaml",
+        "stress-tests.yaml",
         # Blackhole
         "blackhole-demo-tests.yaml",
         "blackhole-e2e-tests.yaml",

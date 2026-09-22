@@ -18,32 +18,3 @@
   team: ttnn
   budget_type: integration
   model-name: tteager
-
-
-- name: t3k_trace_stress_tests
-  cmd: run_t3000_trace_stress_tests
-  skus:
-    wh_llmbox:
-      timeout: 30
-  owner_id: U0709049XNK # Aditya Saigal
-  team: scaleout
-  budget_type: integration
-  model-name: trace stress
-
-# - name: t3k_llama3.2-vision_tests
-#   cmd: run_t3000_llama3.2-11b-vision_freq_tests
-#   skus:
-#     wh_llmbox:
-#       timeout: 20
-#   owner_id: U06UEFWB4P9 # Colman Glagovich
-#   team: models
-#   model-name: llama3.2-vision
-
-# - name: t3k_n300_mesh_llama3.2-vision_tests
-#   cmd: run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
-#   skus:
-#     wh_llmbox:
-#       timeout: 20
-#   owner_id: U06UEFWB4P9 # Colman Glagovich
-#   team: models
-#   model-name: n300 mesh llama3.2-vision

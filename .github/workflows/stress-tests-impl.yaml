@@ -1,4 +1,4 @@
-name: "[internal] Galaxy stress tests impl"
+name: "[internal] Stress tests impl"
 
 on:
   workflow_call:
@@ -34,7 +34,7 @@ jobs:
     outputs:
       matrix: ${{ steps.apply-runner-labels.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_stress_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/stress_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -65,7 +65,7 @@ jobs:
           else
             FILTERED=$(echo "$MATRIX" | jq -c --arg id "${{ inputs.test-selection }}" '[.[] | select(.id == $id)]')
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for test-selection '${{ inputs.test-selection }}'. Ensure id matches tests/pipeline_reorg/galaxy_stress_tests.yaml and enabled-skus includes the needed SKU."
+              echo "::error::No tests found for test-selection '${{ inputs.test-selection }}'. Ensure id matches tests/pipeline_reorg/stress_tests.yaml and enabled-skus includes the needed SKU."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
@@ -88,8 +88,9 @@ jobs:
           echo "$UPDATED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-  galaxy-stress-tests:
+  stress-tests:
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
@@ -103,11 +104,14 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: wormhole_b0
+        # bh_* SKUs run on Blackhole, anything else on Wormhole, as the ops impl derives it.
+        ARCH_NAME: ${{ startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        # As the ops impl sets it: no cache on bh_p150b_civ2.
+        HF_HUB_CACHE: ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '' || '/mnt/MLPerf/huggingface/hub' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
