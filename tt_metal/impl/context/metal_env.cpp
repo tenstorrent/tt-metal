@@ -767,13 +767,10 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         l1_bank_remap,
         worker_l1_size);
     if (context_guard.holds_context() && !result.empty()) {
-        // Devices are live: release even without a parent, so the context outlives them.
-        context_guard.release();
         const auto& parent = result.begin()->second->get_parent_mesh();
-        TT_ASSERT(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
-        if (parent) {
-            parent->impl().set_destroy_metal_context_instance_on_close(true);
-        }
+        TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
+        parent->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
     }
     return result;
 }
