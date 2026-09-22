@@ -88,10 +88,13 @@ struct DfbSizes {
     }
 };
 
-// Max-volume DST-filling subblock, no divisibility required: the C slice is rounded up to subblock
-// multiples and the overshoot is clipped on write. Ties prefer the least padding waste.
+// Max-volume DST-filling subblock among the shapes the caller's fits predicate accepts (the L1 check
+// stays external): the C slice is rounded up to subblock multiples and the overshoot is clipped on
+// write. Ties prefer the least padding waste; 1x1 (no padding) if nothing fits, and the caller's
+// DFB sizing FATALs with the full breakdown.
+template <typename FitsSubblock>
 std::pair<uint32_t, uint32_t> maximize_subblock_size(
-    uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, uint32_t dst_capacity_tiles) {
+    uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, uint32_t dst_capacity_tiles, FitsSubblock&& fits) {
     std::pair<uint32_t, uint32_t> best{1, 1};
     uint64_t best_volume = 0;
     uint64_t best_padded_area = UINT64_MAX;
@@ -99,7 +102,8 @@ std::pair<uint32_t, uint32_t> maximize_subblock_size(
         for (uint32_t w = 1; h * w <= dst_capacity_tiles; ++w) {
             const uint64_t volume = h * w;
             const uint64_t padded_area = (uint64_t)tt::round_up(C_slice_M_tiles, h) * tt::round_up(C_slice_N_tiles, w);
-            if (volume > best_volume || (volume == best_volume && padded_area < best_padded_area)) {
+            const bool better = volume > best_volume || (volume == best_volume && padded_area < best_padded_area);
+            if (better && fits(h, w)) {
                 best = {h, w};
                 best_volume = volume;
                 best_padded_area = padded_area;
@@ -248,41 +252,18 @@ UnifiedMatmulPlan plan_unified_matmul(
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
     const bool packer_l1_acc =
         std::get<3>(get_compute_kernel_config_args(A.device()->arch(), attributes.compute_kernel_config.value()));
-    const uint32_t dst_capacity_tiles_for_choice = fp32_dest_acc_en ? 4 : 8;
-    if (config.subblock_M_tiles == 0 && config.subblock_N_tiles == 0) {
-        // A sharded C is packed straight into the shard only when subblocks span the C slice width and
-        // tile its height exactly; prefer that when it fits DST.
-        if (attributes.output_mem_config.is_sharded() && plan.C_slice_N_tiles <= dst_capacity_tiles_for_choice) {
-            plan.subblock_N_tiles = plan.C_slice_N_tiles;
-            plan.subblock_M_tiles =
-                std::min(dst_capacity_tiles_for_choice / plan.C_slice_N_tiles, plan.C_slice_M_tiles);
-            while (plan.C_slice_M_tiles % plan.subblock_M_tiles != 0) {
-                --plan.subblock_M_tiles;
-            }
-        } else {
-            std::tie(plan.subblock_M_tiles, plan.subblock_N_tiles) =
-                maximize_subblock_size(plan.C_slice_M_tiles, plan.C_slice_N_tiles, dst_capacity_tiles_for_choice);
-        }
-    } else {
-        TT_FATAL(
-            config.subblock_M_tiles > 0 && config.subblock_N_tiles > 0,
-            "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto)");
-        plan.subblock_M_tiles = config.subblock_M_tiles;
-        plan.subblock_N_tiles = config.subblock_N_tiles;
-    }
-    plan.C_slice_M_padded_tiles = tt::round_up(plan.C_slice_M_tiles, plan.subblock_M_tiles);
-    plan.C_slice_N_padded_tiles = tt::round_up(plan.C_slice_N_tiles, plan.subblock_N_tiles);
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
-    TT_FATAL(
-        plan.subblock_M_tiles * plan.subblock_N_tiles <= dst_capacity_tiles,
-        "subblock {}x{} holds {} tiles; DST fits {} (fp32 accumulation: {})",
-        plan.subblock_M_tiles,
-        plan.subblock_N_tiles,
-        plan.subblock_M_tiles * plan.subblock_N_tiles,
-        dst_capacity_tiles,
-        fp32_dest_acc_en);
 
-    // ---- Borrowing: which operands are already sitting in L1 exactly as the DFBs would hold them ----
+    plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
+    plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
+    plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
+    const uint32_t l1_base = A.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t l1_ceiling =
+        A.device()->lowest_occupied_compute_l1_address().value_or(A.device()->l1_size_per_core());
+    TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
+    const uint64_t l1_budget = l1_ceiling - l1_base;
+
+    // ---- Borrowing prerequisites that do not depend on the subblock ----
     // A shard matches when the tensor is L1-sharded with that shard shape and its grid lists the active
     // cores in assignment order (so shard i lives on the core that produces C slice i).
     auto shard_matches = [&](const ttnn::Tensor& tensor, uint32_t shard_M_tiles, uint32_t shard_N_tiles) {
@@ -301,31 +282,75 @@ UnifiedMatmulPlan plan_unified_matmul(
     const uint32_t A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
     // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy path
     // zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
-    const bool A_borrowable = one_C_slice_per_core_no_batch && C_slices_across_N == 1 &&
-                              plan.C_slice_M_padded_tiles == plan.C_slice_M_tiles && A_last_K_tile_valid_columns == 0 &&
-                              shard_matches(A, plan.C_slice_M_tiles, plan.K_tiles);
+    const bool A_shard_borrowable = one_C_slice_per_core_no_batch && C_slices_across_N == 1 &&
+                                    A_last_K_tile_valid_columns == 0 &&
+                                    shard_matches(A, plan.C_slice_M_tiles, plan.K_tiles);
     // B: the C slice's columns for all of K; C slices must span M.
-    const bool B_borrowable = one_C_slice_per_core_no_batch && C_slices_down_M == 1 &&
-                              plan.C_slice_N_padded_tiles == plan.C_slice_N_tiles &&
-                              shard_matches(B, plan.K_tiles, plan.C_slice_N_tiles);
+    const bool B_shard_borrowable =
+        one_C_slice_per_core_no_batch && C_slices_down_M == 1 && shard_matches(B, plan.K_tiles, plan.C_slice_N_tiles);
     // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order.
     const bool C_shard_matches = output.has_value()
                                      ? shard_matches(output.value(), plan.C_slice_M_tiles, plan.C_slice_N_tiles)
                                      : (attributes.output_mem_config.is_sharded() &&
                                         attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1);
-    const bool C_borrowable = C_shard_matches && one_C_slice_per_core_no_batch &&
-                              plan.subblock_N_tiles == plan.C_slice_N_tiles &&
+    const bool C_shard_borrowable = C_shard_matches && one_C_slice_per_core_no_batch;
+
+    // L1 check for one subblock candidate, exact at the K chunk the search below bottoms out at, so an
+    // accepted candidate is guaranteed to fit. Borrowing needs padded == true dims per operand.
+    const uint32_t K_chunk_floor = config.K_chunk_tiles == 0 ? 1 : config.K_chunk_tiles;
+    const auto subblock_fits_l1 = [&](uint32_t subblock_M_tiles, uint32_t subblock_N_tiles) {
+        UnifiedMatmulPlan candidate = plan;
+        candidate.C_slice_M_padded_tiles = tt::round_up(plan.C_slice_M_tiles, subblock_M_tiles);
+        candidate.C_slice_N_padded_tiles = tt::round_up(plan.C_slice_N_tiles, subblock_N_tiles);
+        const bool M_unpadded = candidate.C_slice_M_padded_tiles == plan.C_slice_M_tiles;
+        const bool N_unpadded = candidate.C_slice_N_padded_tiles == plan.C_slice_N_tiles;
+        return size_dfbs(
+                   candidate,
+                   K_chunk_floor,
+                   fp32_dest_acc_en,
+                   packer_l1_acc,
+                   A_shard_borrowable && M_unpadded,
+                   B_shard_borrowable && N_unpadded,
+                   C_shard_borrowable && M_unpadded && subblock_N_tiles == plan.C_slice_N_tiles)
+            .fits(l1_budget);
+    };
+
+    if (config.subblock_M_tiles == 0 && config.subblock_N_tiles == 0) {
+        // A sharded C is packed straight into the shard only when subblocks span the C slice width and
+        // tile its height exactly; prefer that when it fits DST.
+        if (attributes.output_mem_config.is_sharded() && plan.C_slice_N_tiles <= dst_capacity_tiles) {
+            plan.subblock_N_tiles = plan.C_slice_N_tiles;
+            plan.subblock_M_tiles = std::min(dst_capacity_tiles / plan.C_slice_N_tiles, plan.C_slice_M_tiles);
+            while (plan.C_slice_M_tiles % plan.subblock_M_tiles != 0) {
+                --plan.subblock_M_tiles;
+            }
+        } else {
+            std::tie(plan.subblock_M_tiles, plan.subblock_N_tiles) = maximize_subblock_size(
+                plan.C_slice_M_tiles, plan.C_slice_N_tiles, dst_capacity_tiles, subblock_fits_l1);
+        }
+    } else {
+        TT_FATAL(
+            config.subblock_M_tiles > 0 && config.subblock_N_tiles > 0,
+            "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto)");
+        plan.subblock_M_tiles = config.subblock_M_tiles;
+        plan.subblock_N_tiles = config.subblock_N_tiles;
+    }
+    plan.C_slice_M_padded_tiles = tt::round_up(plan.C_slice_M_tiles, plan.subblock_M_tiles);
+    plan.C_slice_N_padded_tiles = tt::round_up(plan.C_slice_N_tiles, plan.subblock_N_tiles);
+    TT_FATAL(
+        plan.subblock_M_tiles * plan.subblock_N_tiles <= dst_capacity_tiles,
+        "subblock {}x{} holds {} tiles; DST fits {} (fp32 accumulation: {})",
+        plan.subblock_M_tiles,
+        plan.subblock_N_tiles,
+        plan.subblock_M_tiles * plan.subblock_N_tiles,
+        dst_capacity_tiles,
+        fp32_dest_acc_en);
+    const bool A_borrowable = A_shard_borrowable && plan.C_slice_M_padded_tiles == plan.C_slice_M_tiles;
+    const bool B_borrowable = B_shard_borrowable && plan.C_slice_N_padded_tiles == plan.C_slice_N_tiles;
+    const bool C_borrowable = C_shard_borrowable && plan.subblock_N_tiles == plan.C_slice_N_tiles &&
                               plan.C_slice_M_padded_tiles == plan.C_slice_M_tiles;
 
-    // ---- Formats, K chunk and DFB sizing ----
-    plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
-    plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
-    plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
-    const uint32_t l1_base = A.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint32_t l1_ceiling =
-        A.device()->lowest_occupied_compute_l1_address().value_or(A.device()->l1_size_per_core());
-    TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
-    const uint64_t l1_budget = l1_ceiling - l1_base;
+    // ---- K chunk and DFB sizing ----
     std::optional<DfbSizes> chosen;
     if (config.K_chunk_tiles == 0) {
         // A resident A shard is only borrowable with a single K chunk, so try that first (main pins
