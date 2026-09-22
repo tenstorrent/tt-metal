@@ -199,6 +199,7 @@ bool HostProbe::burst(BurstPoint& out) {
     for (const Read& r : reads) {
         rtt_min = std::min(rtt_min, r.rtt);
     }
+    rtt_floor_ = std::min(rtt_floor_, rtt_min);
     const int64_t cut = rtt_min + static_cast<int64_t>(kRttSlackNs * ticks_per_ns_);
     const int64_t tsc_ref = reads.front().mid;
     const uint64_t ref_ref = reads.front().refclk;
@@ -373,12 +374,13 @@ void HostProbe::run() {
     }
     log_info(
         tt::LogMetal,
-        "[streaming profiler] host probe chip {}: {} bursts, {} of {} reads kept; final refclk period {:.6f} ns, "
-        "residual {:.1f} ns; steady_clock {:.9f} ns per tick",
+        "[streaming profiler] host probe chip {}: {} bursts, {} of {} reads kept, read round trip floor {:.0f} ns; "
+        "final refclk period {:.6f} ns, residual {:.1f} ns; steady_clock {:.9f} ns per tick",
         chip_id_,
         bursts_,
         kept_,
         reads_,
+        reads_ != 0 ? static_cast<double>(rtt_floor_) / ticks_per_ns_ : 0.0,
         line().ok ? line().b / ticks_per_ns_ : 0.0,
         line().sigma_ns,
         steady().ns_per_tick);

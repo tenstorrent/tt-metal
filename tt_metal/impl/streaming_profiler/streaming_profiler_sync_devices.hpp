@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <ctime>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -111,6 +112,7 @@ private:
     tt::umd::TlbWindow* window_ = nullptr;
     uint32_t cfr_hi_ = 0, cfr_lo_last_ = 0;
     double ticks_per_ns_ = 0.0;
+    int64_t rtt_floor_ = std::numeric_limits<int64_t>::max();  // fastest read round trip seen, TSC ticks
     std::deque<BurstPoint> points_;
     std::deque<std::pair<int64_t, int64_t>> pairs_;  // (tsc, mono)
     mutable std::mutex mu_;
