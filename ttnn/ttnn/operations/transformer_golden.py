@@ -36,23 +36,65 @@ def _repeat_kv_heads(tensor, num_query_heads):
     return tensor.repeat_interleave(num_query_heads // num_kv_heads, dim=1)
 
 
-def _paged_to_contiguous(cache, page_table, *, cache_position_modulo=None):
-    import torch
-
-    """Reconstruct logical [B, H, S, D] cache rows from [P, H, block, D] pages."""
-    if cache.shape[0] == page_table.shape[0] and cache.ndim == 4 and cache.shape[2] > page_table.shape[-1]:
+def _paged_cache_view(cache, paged_cache_geometry, head_dim):
+    """Apply an explicit logical view to a physically shared paged-cache buffer."""
+    if paged_cache_geometry is None:
         return cache
 
+    block_size = int(paged_cache_geometry.block_size)
+    num_kv_heads = int(paged_cache_geometry.num_kv_heads)
+    if block_size == 0 and num_kv_heads == 0:
+        return cache
+    if block_size <= 0 or num_kv_heads <= 0:
+        raise ValueError("paged_cache_geometry requires positive block_size and num_kv_heads")
+
+    expected_elements = num_kv_heads * block_size * int(head_dim)
+    actual_elements = cache.shape[1] * cache.shape[2] * cache.shape[3]
+    if expected_elements != actual_elements:
+        raise ValueError(
+            "paged_cache_geometry must preserve elements per page: "
+            f"view has {expected_elements}, cache has {actual_elements}"
+        )
+    return cache.reshape(cache.shape[0], num_kv_heads, block_size, int(head_dim))
+
+
+def _paged_to_contiguous(cache, page_table):
+    """Reconstruct logical [B, H, S, D] cache rows from [P, H, block, D] pages."""
+    import torch
+
+    if cache.ndim != 4:
+        raise ValueError(f"Paged cache must have rank 4 [P,H,B,D], got shape {tuple(cache.shape)}")
+    if page_table.ndim < 2:
+        raise ValueError(f"Page table must have rank >= 2, got shape {tuple(page_table.shape)}")
     page_table = page_table.long().reshape(page_table.shape[0], -1)
     num_pages, num_heads, block_size, head_dim = cache.shape
     rows = []
     for page_row in page_table:
-        physical_pages = page_row.clamp(0, num_pages - 1)
+        if torch.any((page_row < 0) | (page_row >= num_pages)):
+            raise ValueError(f"Page table contains an index outside [0, {num_pages})")
+        physical_pages = page_row
         row = cache[physical_pages].permute(1, 0, 2, 3).reshape(num_heads, -1, head_dim)
-        if cache_position_modulo is not None:
-            row = row[:, : int(cache_position_modulo)]
         rows.append(row)
     return torch.stack(rows)
+
+
+def _gather_paged_cache_positions(cache, page_row, cache_positions):
+    """Gather one user's cache positions in the requested logical order."""
+    import torch
+
+    page_row = page_row.long().reshape(-1)
+    cache_positions = cache_positions.long().reshape(-1)
+    block_size = cache.shape[2]
+    logical_pages = torch.div(cache_positions, block_size, rounding_mode="floor")
+    if torch.any((logical_pages < 0) | (logical_pages >= page_row.numel())):
+        raise ValueError("Requested cache position is outside the page-table capacity")
+
+    physical_pages = page_row[logical_pages]
+    if torch.any((physical_pages < 0) | (physical_pages >= cache.shape[0])):
+        raise ValueError(f"Page table contains an index outside [0, {cache.shape[0]})")
+    offsets = cache_positions.remainder(block_size)
+    tokens = [cache[int(physical_page), :, int(offset), :] for physical_page, offset in zip(physical_pages, offsets)]
+    return torch.stack(tokens, dim=1).unsqueeze(0)
 
 
 def _window_mask(
@@ -218,7 +260,10 @@ def _chunked_paged_attention(
     chunk_start_idx,
     *,
     scale=None,
+    paged_cache_geometry=None,
 ):
+    input_tensor_k = _paged_cache_view(input_tensor_k, paged_cache_geometry, input_tensor_q.shape[-1])
+    input_tensor_v = _paged_cache_view(input_tensor_v, paged_cache_geometry, input_tensor_q.shape[-1])
     key = _paged_to_contiguous(input_tensor_k, page_table_tensor)
     value = _paged_to_contiguous(input_tensor_v, page_table_tensor)
     chunk_start_idx = int(_scalar(chunk_start_idx, 0))
@@ -242,6 +287,7 @@ def chunked_scaled_dot_product_attention_golden(
     *,
     chunk_start_idx_tensor=None,
     scale=None,
+    paged_cache_geometry=None,
     **_,
 ):
     runtime_start = chunk_start_idx_tensor if chunk_start_idx_tensor is not None else chunk_start_idx
@@ -252,6 +298,7 @@ def chunked_scaled_dot_product_attention_golden(
         page_table_tensor,
         runtime_start,
         scale=scale,
+        paged_cache_geometry=paged_cache_geometry,
     )
 
 
@@ -444,6 +491,95 @@ def scaled_dot_product_attention_decode_golden(
     )
 
 
+def _paged_circular_decode_attention(
+    input_tensor_q,
+    input_tensor_k,
+    input_tensor_v,
+    page_table_tensor,
+    *,
+    cur_pos_tensor,
+    cache_position_modulo,
+    attn_mask,
+    is_causal,
+    scale,
+    sliding_window_size,
+    attention_sink,
+):
+    import torch
+
+    if cur_pos_tensor is None:
+        raise ValueError("cache_position_modulo requires cur_pos_tensor to define logical cache order")
+
+    batch = page_table_tensor.shape[0]
+    transposed = input_tensor_q.shape[0] == 1 and input_tensor_q.shape[1] == batch
+    query = input_tensor_q.permute(1, 2, 0, 3) if transposed else input_tensor_q
+    if query.shape[0] != batch:
+        raise ValueError(f"Query batch size {query.shape[0]} does not match page-table batch size {batch}")
+
+    positions = cur_pos_tensor.reshape(-1).tolist()
+    if len(positions) not in (1, batch):
+        raise ValueError(f"cur_pos_tensor must contain 1 or {batch} positions, got {len(positions)}")
+
+    modulo = int(cache_position_modulo)
+    block_size = input_tensor_k.shape[2]
+    page_capacity = page_table_tensor.reshape(batch, -1).shape[-1] * block_size
+    if modulo <= 0 or modulo % block_size != 0 or modulo > page_capacity:
+        raise ValueError(f"cache_position_modulo must be positive, block-aligned, and <= {page_capacity}; got {modulo}")
+    window = modulo if sliding_window_size is None else int(sliding_window_size)
+    if window <= 0 or window > modulo:
+        raise ValueError(f"sliding_window_size must be in [1, {modulo}], got {window}")
+
+    outputs = []
+    for batch_index in range(batch):
+        position = int(positions[batch_index % len(positions)])
+        query_row = query[batch_index : batch_index + 1]
+        if position < 0:
+            outputs.append(torch.zeros_like(query_row))
+            continue
+
+        logical_start = max(0, position + 1 - window)
+        logical_positions = torch.arange(
+            logical_start,
+            position + 1,
+            dtype=torch.long,
+            device=page_table_tensor.device,
+        )
+        cache_positions = logical_positions.remainder(modulo)
+        key = _gather_paged_cache_positions(input_tensor_k, page_table_tensor[batch_index], cache_positions)
+        value = _gather_paged_cache_positions(input_tensor_v, page_table_tensor[batch_index], cache_positions)
+
+        mask = None
+        if attn_mask is not None:
+            mask_row = attn_mask[batch_index : batch_index + 1]
+            if mask_row.shape[-1] > position:
+                mask_indices = logical_positions
+            elif mask_row.shape[-1] >= modulo:
+                mask_indices = cache_positions
+            else:
+                raise ValueError("Attention mask is too short for circular-cache logical or physical positions")
+            mask = mask_row.index_select(-1, mask_indices.to(mask_row.device))
+
+        sink = attention_sink
+        if sink is not None and sink.shape[0] == batch:
+            sink = sink[batch_index : batch_index + 1]
+        outputs.append(
+            _scaled_attention(
+                query_row,
+                key,
+                value,
+                attn_mask=mask,
+                # The gathered keys already contain only the permitted logical
+                # prefix/window in chronological order.
+                is_causal=False,
+                scale=scale,
+                attention_sink=sink,
+            )
+        )
+
+    output = torch.cat(outputs, dim=0)
+    return output.permute(2, 0, 1, 3) if transposed else output
+
+
 def paged_scaled_dot_product_attention_decode_golden(
     input_tensor_q,
     input_tensor_k,
@@ -456,11 +592,29 @@ def paged_scaled_dot_product_attention_decode_golden(
     attention_sink=None,
     scale=None,
     sliding_window_size=None,
+    paged_cache_geometry=None,
     cache_position_modulo=None,
     **_,
 ):
-    key = _paged_to_contiguous(input_tensor_k, page_table_tensor, cache_position_modulo=cache_position_modulo)
-    value = _paged_to_contiguous(input_tensor_v, page_table_tensor, cache_position_modulo=cache_position_modulo)
+    input_tensor_k = _paged_cache_view(input_tensor_k, paged_cache_geometry, input_tensor_q.shape[-1])
+    input_tensor_v = _paged_cache_view(input_tensor_v, paged_cache_geometry, input_tensor_q.shape[-1])
+    if cache_position_modulo is not None:
+        return _paged_circular_decode_attention(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            page_table_tensor,
+            cur_pos_tensor=cur_pos_tensor,
+            cache_position_modulo=cache_position_modulo,
+            attn_mask=attn_mask,
+            is_causal=is_causal,
+            scale=scale,
+            sliding_window_size=sliding_window_size,
+            attention_sink=attention_sink,
+        )
+
+    key = _paged_to_contiguous(input_tensor_k, page_table_tensor)
+    value = _paged_to_contiguous(input_tensor_v, page_table_tensor)
     return _decode_attention(
         input_tensor_q,
         key,
@@ -767,38 +921,94 @@ def torch_sdpa_reference(q, k, v, is_causal=False, attention_sink=None):
     return attn_out
 
 
-def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
-    """Ring-merge reference migrated from ``test_ring_joint_attention.py``."""
+def _ring_runtime_cache_selection(
+    input_tensor_k,
+    input_tensor_v,
+    input_tensor_q,
+    *,
+    kv_cache_batch_idx,
+    kv_actual_isl,
+    slot_id,
+    kv_actual_isl_tensor,
+    kv_cache_num_layers,
+    kv_cache_layer_idx,
+):
+    metadata_supplied = slot_id is not None or kv_actual_isl_tensor is not None
+    if metadata_supplied and (slot_id is None or kv_actual_isl_tensor is None):
+        raise ValueError("slot_id and kv_actual_isl_tensor must be supplied together")
+    if metadata_supplied and (kv_cache_batch_idx is not None or kv_actual_isl is not None):
+        raise ValueError(
+            "slot_id/kv_actual_isl_tensor replace kv_cache_batch_idx/kv_actual_isl; pass one form, not both"
+        )
+
+    if metadata_supplied:
+        num_layers = int(_scalar(kv_cache_num_layers, 1))
+        layer_idx = int(_scalar(kv_cache_layer_idx, 0))
+        if num_layers <= 0 or not 0 <= layer_idx < num_layers:
+            raise ValueError(f"Invalid cache layer {layer_idx} for {num_layers} layers")
+        cache_batch_idx = int(_scalar(slot_id, 0)) * num_layers + layer_idx
+        actual_kv_length = int(_scalar(kv_actual_isl_tensor, 0))
+    else:
+        cache_batch_idx = int(_scalar(kv_cache_batch_idx, 0))
+        actual_kv_length = None if kv_actual_isl is None else int(_scalar(kv_actual_isl))
+
+    indexed_cache = metadata_supplied or kv_cache_batch_idx is not None
+    if indexed_cache or input_tensor_k.shape[0] != input_tensor_q.shape[0]:
+        if not 0 <= cache_batch_idx < input_tensor_k.shape[0]:
+            raise ValueError(
+                f"KV cache batch index {cache_batch_idx} is outside cache batch size {input_tensor_k.shape[0]}"
+            )
+        input_tensor_k = input_tensor_k[cache_batch_idx : cache_batch_idx + 1]
+        input_tensor_v = input_tensor_v[cache_batch_idx : cache_batch_idx + 1]
+
+    return input_tensor_k, input_tensor_v, actual_kv_length
+
+
+def _ring_attention_with_lse(
+    query,
+    key,
+    value,
+    *,
+    is_causal,
+    scale,
+    attention_sink,
+    sliding_window_size,
+    query_start,
+):
     import torch
 
-    scale = k.size(-1) ** -0.5
-    seq_len = k.size(2)
-    slice_seq_len = seq_len // num_devices
-    out = None
-    lse = None
-    lse_list = []
-    Q = torch.cat([q, joint_q], dim=2)
-    for ring_id in range(num_devices):
-        k_slice = k[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
-        v_slice = v[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
-        if ring_id == num_devices - 1:
-            k_slice = torch.cat([k_slice, joint_k], dim=2)
-            v_slice = torch.cat([v_slice, joint_v], dim=2)
-        attn_weights = torch.matmul(Q, k_slice.transpose(-2, -1)) * scale
-        cur_max, _ = torch.max(attn_weights, dim=-1, keepdim=True)
-        attn_weights = torch.exp(attn_weights - cur_max)
-        cur_sum = torch.sum(attn_weights, dim=-1, keepdim=True)
-        cur_out = torch.matmul(attn_weights, v_slice) / cur_sum
-        cur_lse = cur_max + torch.log(cur_sum)
-        if ring_id == 0:
-            out = cur_out
-            lse = cur_lse
-        else:
-            sig = torch.nn.functional.sigmoid(cur_lse - lse)
-            out = out - sig * (out - cur_out)
-            lse = lse - torch.nn.functional.logsigmoid(lse - cur_lse)
-        lse_list.append(lse)
-    return out, lse_list
+    num_query_heads = query.shape[1]
+    key = _repeat_kv_heads(key, num_query_heads)
+    value = _repeat_kv_heads(value, num_query_heads)
+    query_length = query.shape[-2]
+    key_length = key.shape[-2]
+    scale = query.shape[-1] ** -0.5 if scale is None else scale
+
+    scores = torch.matmul(query.float(), key.transpose(-2, -1).float()) * scale
+    if is_causal or sliding_window_size is not None:
+        mask = _window_mask(
+            query_length,
+            key_length,
+            is_causal=is_causal,
+            sliding_window_size=sliding_window_size,
+            query_start=query_start,
+            device=query.device,
+        )
+        scores = scores.masked_fill(~mask.reshape(1, 1, query_length, key_length), float("-inf"))
+
+    logits = scores
+    if attention_sink is not None:
+        sink = attention_sink.float()
+        if sink.ndim == 1:
+            sink = sink.reshape(1, -1, 1, 1)
+        elif sink.shape[-1] == num_query_heads and sink.shape[1] != num_query_heads:
+            sink = sink.permute(0, 3, 1, 2)
+        sink = sink.expand(scores.shape[0], num_query_heads, query_length, 1) * scale
+        logits = torch.cat([scores, sink], dim=-1)
+
+    probabilities = torch.softmax(logits, dim=-1)[..., :key_length]
+    output = torch.matmul(probabilities, value.float()).to(query.dtype)
+    return output, torch.logsumexp(logits, dim=-1, keepdim=True)
 
 
 def _ring_joint_golden(
@@ -817,18 +1027,42 @@ def _ring_joint_golden(
     attention_sink=None,
     sliding_window_size=None,
     kv_cache_batch_idx=None,
-    **_,
+    kv_actual_isl=None,
+    is_cross=False,
+    circular_kv_cache=False,
+    slot_id=None,
+    kv_actual_isl_tensor=None,
+    kv_cache_num_layers=None,
+    kv_cache_layer_idx=None,
+    **_execution_options,
 ):
     import torch
 
     if joint_strategy != "rear":
         raise ValueError(f"Only joint_strategy='rear' is supported, got {joint_strategy!r}")
-    cache_batch_idx = int(_scalar(kv_cache_batch_idx, 0))
-    if input_tensor_k.shape[0] != input_tensor_q.shape[0]:
-        input_tensor_k = input_tensor_k[cache_batch_idx : cache_batch_idx + 1]
-        input_tensor_v = input_tensor_v[cache_batch_idx : cache_batch_idx + 1]
+    if is_cross and is_causal:
+        raise ValueError("is_cross=True requires non-causal attention")
+    if circular_kv_cache:
+        raise NotImplementedError(
+            "The ring golden does not model the device's block-cyclic circular KV layout; "
+            "use a logically ordered cache or omit comparison for this mode"
+        )
+
+    input_tensor_k, input_tensor_v, actual_kv_length = _ring_runtime_cache_selection(
+        input_tensor_k,
+        input_tensor_v,
+        input_tensor_q,
+        kv_cache_batch_idx=kv_cache_batch_idx,
+        kv_actual_isl=kv_actual_isl,
+        slot_id=slot_id,
+        kv_actual_isl_tensor=kv_actual_isl_tensor,
+        kv_cache_num_layers=kv_cache_num_layers,
+        kv_cache_layer_idx=kv_cache_layer_idx,
+    )
 
     logical_n = int(_scalar(logical_n, input_tensor_k.shape[-2]))
+    if logical_n < 0:
+        raise ValueError(f"logical_n must be non-negative, got {logical_n}")
     input_tensor_k = input_tensor_k[..., :logical_n, :]
     input_tensor_v = input_tensor_v[..., :logical_n, :]
     input_length = input_tensor_q.shape[-2]
@@ -844,7 +1078,15 @@ def _ring_joint_golden(
     else:
         query, key, value = input_tensor_q, input_tensor_k, input_tensor_v
 
-    output = _scaled_attention(
+    query_start = actual_kv_length
+    if query_start is not None and query_start + input_length > logical_n:
+        raise ValueError(
+            f"kv_actual_isl ({query_start}) plus query length ({input_length}) exceeds logical_n ({logical_n})"
+        )
+    if has_joint and query_start is not None:
+        raise NotImplementedError("kv_actual_isl with joint tensors is not modeled by the ring golden")
+
+    output, lse = _ring_attention_with_lse(
         query,
         key,
         value,
@@ -852,19 +1094,8 @@ def _ring_joint_golden(
         scale=scale,
         attention_sink=attention_sink,
         sliding_window_size=sliding_window_size,
+        query_start=query_start,
     )
-    scores = torch.matmul(query.float(), _repeat_kv_heads(key, query.shape[1]).transpose(-2, -1).float())
-    scores *= query.shape[-1] ** -0.5 if scale is None else scale
-    if is_causal:
-        mask = _window_mask(
-            query.shape[-2],
-            key.shape[-2],
-            is_causal=True,
-            sliding_window_size=sliding_window_size,
-            device=query.device,
-        )
-        scores = scores.masked_fill(~mask.reshape(1, 1, *mask.shape), float("-inf"))
-    lse = torch.logsumexp(scores, dim=-1, keepdim=True)
     joint_output = output[..., input_length:, :] if has_joint else output[..., :0, :]
     return output[..., :input_length, :], joint_output, lse
 
@@ -946,7 +1177,7 @@ def ring_distributed_scaled_dot_product_attention_golden(
     return torch.cat([first_chunk, second_chunk], dim=-2)
 
 
-def l2_norm(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
+def l2_norm(x, dim: int = -1, eps: float = 1e-6):
     """L2 normalization along a given dimension."""
     import torch
 
@@ -1166,6 +1397,5 @@ __all__ = [
     "sparse_mla",
     "sparse_sdpa_golden",
     "sparse_sdpa_msa_golden",
-    "torch_sdpa",
     "torch_sdpa_reference",
 ]
