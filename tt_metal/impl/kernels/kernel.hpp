@@ -71,6 +71,11 @@ KernelHandle CreateKernelFromString(
     const EthernetConfig& config);
 
 struct DramConfig {
+    // The kernel can only initiate NOC transactions on a NIU firmware left in stream mode. NOC0
+    // qualifies on every DRAM core; NOC1 only on cores that are no DRAM view's NOC1 endpoint. A
+    // kernel that drives both NOCs regardless of this field (the streaming profiler's relay reads on
+    // the one it does not write on) has to pick its core off
+    // metal_SocDescriptor::get_dram_endpoint_noc_mask. See tt_metal/hw/inc/experimental/drisc_mode.h.
     NOC noc = NOC::NOC_0;
     std::vector<uint32_t> compile_args;
     std::map<std::string, std::string> defines;
