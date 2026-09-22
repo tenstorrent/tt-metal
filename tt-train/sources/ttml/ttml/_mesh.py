@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import functools, operator, os, re
+import functools, gc, operator, os, re
 from typing import Iterable
 import ttnn
 import ttml
@@ -210,6 +210,16 @@ def close_device_mesh() -> None:
         ttml.autograd.AutoContext.get_instance().close_device()
     finally:
         _mesh = None
+
+
+def reset_metal_env() -> None:
+    """Close the device mesh and release ownership of the process-global ``MetalEnv``."""
+    # Device tensors caught in reference cycles (e.g. a test frame held by a caught exception's
+    # traceback) must be freed while the MetalEnv is alive. This may be due to a use-after-free
+    # bug in ReleaseOwnership() https://github.com/tenstorrent/tt-metal/issues/57798.
+    gc.collect()
+    close_device_mesh()
+    ttml.core.distributed.release_metal_env()
 
 
 def maybe_mesh() -> Mesh | None:

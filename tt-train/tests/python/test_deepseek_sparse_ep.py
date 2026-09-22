@@ -103,13 +103,6 @@ pytestmark = [
 ]
 
 
-def _close_device_quietly() -> None:
-    try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
     """Point TT_MESH_GRAPH_DESC_PATH at a bundled MGD if unset. Returns the old value."""
     previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
@@ -129,7 +122,7 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
 
 
 @pytest.fixture(scope="module")
-def ep_mesh(skip_if_host_too_small):
+def ep_mesh(skip_if_host_too_small, reset_metal_env_quietly):
     """Open the ``[8, 4]`` galaxy mesh with axes ``("dp", "ep")``.
 
     Skips on a host too small for the shape. A host that has enough but
@@ -139,23 +132,21 @@ def ep_mesh(skip_if_host_too_small):
     skip_if_host_too_small(shape, f"sparse_ep tests ('ep' axis = {EP_AXIS_SIZE})")
     previous_mgd = _ensure_mgd_path(shape)
 
-    _close_device_quietly()
+    # The host-size check above already created the process-wide MetalEnv, and a MetalEnv
+    # reads TT_MESH_GRAPH_DESC_PATH only once, when it is created. Drop it now that
+    # _ensure_mgd_path has set the descriptor, so the open below builds a new one from it;
+    # otherwise the fabric control plane is built from the wrong descriptor.
+    ttml.reset_metal_env()
     try:
         ttml.open_device_mesh(ttml.Mesh(shape, ("dp", "ep")))
     except Exception:  # noqa: BLE001
-        _close_device_quietly()
+        reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
 
     yield ttml.mesh()
 
-    _close_device_quietly()
-    try:
-        import ttml._mesh as _mesh_mod  # type: ignore[import-not-found]
-
-        _mesh_mod._mesh = None
-    except Exception:  # noqa: BLE001
-        pass
+    reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)
 
 
