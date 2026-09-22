@@ -27,13 +27,7 @@ from models.demos.gemma4_d_p.tt.runners.kv_validation import (
 GPU_PCC_THRESHOLD = 0.91
 
 
-@pytest.fixture(params=["mock", "loopback"])
-def migration_environment(request, tmp_path):
-    gate = request.param
-    if gate == "loopback" and os.getenv("GEMMA4_TEST_LOOPBACK") != "1":
-        pytest.skip("Start the migration endpoint and set GEMMA4_TEST_LOOPBACK=1")
-    adapter = Gemma4PrefillAdapter()
-    trace_dir = Path(os.getenv("PREFILL_TRACE_DIR", adapter.prefill_trace_default))
+def verify_inputs(adapter, trace_dir):
     metadata = json.loads((trace_dir / "metadata.json").read_text())
     assert metadata["model_id"] == adapter.hf_model_id
     assert metadata["layout"] in ("chunked_group_a_v1", PREPARED_GPU_TRACE_LAYOUT)
@@ -66,6 +60,16 @@ def migration_environment(request, tmp_path):
         Gemma4Precision.load(adapter.hf_model_id),
     )
     assert weight_cache_is_complete(cache, **identity), f"Missing or incompatible TT weight cache: {cache}"
+
+
+@pytest.fixture(params=["mock", "loopback"])
+def migration_environment(request, tmp_path):
+    gate = request.param
+    if gate == "loopback" and os.getenv("GEMMA4_TEST_LOOPBACK") != "1":
+        pytest.skip("Start the migration endpoint and set GEMMA4_TEST_LOOPBACK=1")
+    adapter = Gemma4PrefillAdapter()
+    trace_dir = Path(os.getenv("PREFILL_TRACE_DIR", adapter.prefill_trace_default))
+    verify_inputs(adapter, trace_dir)
 
     output_dir = tmp_path
     if summaries := os.getenv("PREFILL_SUMMARIES"):
