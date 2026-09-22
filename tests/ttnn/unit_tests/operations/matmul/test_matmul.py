@@ -4576,7 +4576,56 @@ def test_matmul_batched_weights_optional_input_slot(device):
             global_cb=gcb,
             sub_device_id=ttnn.SubDeviceId(0),
         )
-        assert len(outs) == 1
+        assert len(outs) == 1, f"Expected one output tensor, got {len(outs)}"
+        assert_with_pcc(torch_a.float() @ torch_b.float(), ttnn.to_torch(outs[0]).float(), 0.99)
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(mgr)
+
+
+def test_quasar_matmul_batched_weights_optional_input_slot(device):
+    """Quasar vector prim::matmul must pass a size-1 optional-input slot (bias unused)."""
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar-only API")
+    qsr = ttnn.experimental.quasar
+    torch.manual_seed(0)
+    m, k, n = 32, 32, 32
+    torch_a = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    torch_b = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+    in0 = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = qsr.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fuse_batch=True,
+    )
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 2:
+        pytest.skip("Need 2 rows for dummy global CB")
+    gcb = ttnn.create_global_circular_buffer(
+        device,
+        [(ttnn.CoreCoord(0, 0), ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1))}))],
+        3200,
+    )
+    worker = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    mgr = device.create_sub_device_manager([ttnn.SubDevice([worker])], 0)
+    device.load_sub_device_manager(mgr)
+    try:
+        outs = qsr.matmul_batched_weights(
+            in0,
+            [in1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=program_config,
+            global_cb=gcb,
+            sub_device_id=ttnn.SubDeviceId(0),
+        )
+        assert len(outs) == 1, f"Expected one output tensor, got {len(outs)}"
         assert_with_pcc(torch_a.float() @ torch_b.float(), ttnn.to_torch(outs[0]).float(), 0.99)
     finally:
         device.reset_sub_device_stall_group()
