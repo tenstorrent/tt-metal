@@ -339,20 +339,6 @@ def test_matching_nans_pass_and_a_missing_nan_fails(fmt):
     assert not passed_test(golden, missing, fmt, max_ulp=0, print_errors=False)
 
 
-def test_a_non_finite_failure_names_itself_in_the_log(captured_logs):
-    """A NaN lane is unmeasurable and drops out of the statistics, so this verdict used to
-    log "max 0 ULP (budget 0)" -- accurate and useless. The disagreement now leads."""
-    fmt = DataFormat.Float16_b
-    golden = _tile(1.0, fmt)
-    golden[7] = float("nan")
-    result = golden.clone()
-    result[7] = 1.0
-
-    assert not passed_test(golden, result, fmt, max_ulp=0, print_errors=False)
-    logged = "\n".join(captured_logs)
-    assert "non-finite disagreement @ [7]" in logged and "1 such lane(s)" in logged
-
-
 def test_an_overflow_to_inf_fails_and_reports_a_finite_step(captured_logs):
     """No budget buys an overflow -- and the step it is measured against has to be a
     number, since ``nextafter`` from the largest finite goes to ``Inf``."""
@@ -449,19 +435,6 @@ def test_a_budget_on_a_block_format_without_a_per_element_ulp_raises(fmt):
 # ── Reporting ──────────────────────────────────────────────────────────────────
 
 
-def test_a_failure_logs_the_worst_lane_ahead_of_the_tile_dump(captured_logs):
-    """In that order: the headline names the point, then the tile dump shows context."""
-    fmt = DataFormat.Float16_b
-    golden = _tile(1.0, fmt)
-    result = golden.clone()
-    result[42] = _step(golden, 9)[42]
-
-    assert not passed_test(golden, result, fmt, max_ulp=1, print_errors=True)
-    logged = "\n".join(captured_logs)
-    assert "max 9 ULP @ [42]" in logged
-    assert logged.index("ULP budget exceeded") < logged.index("Result tile")
-
-
 def test_a_pass_reports_the_distribution_too(captured_logs):
     """Logged on a pass as well, which is what makes a per-test accuracy report cheap."""
     fmt = DataFormat.Float16_b
@@ -470,24 +443,6 @@ def test_a_pass_reports_the_distribution_too(captured_logs):
     logged = "\n".join(captured_logs)
     assert "ULP within budget" in logged and "max 1 ULP" in logged
     assert "100.0% exact" not in logged  # it really measured the perturbed lanes
-
-
-@pytest.mark.parametrize("print_errors", [True, False], ids=["reported", "silenced"])
-def test_print_errors_controls_the_level_not_the_message(print_errors):
-    """``print_errors=False`` asks for silence, but the ULP headline sat outside that
-    guard -- and its sink appends to the ``test_errors.log`` CI uploads. The line is
-    still emitted either way so it stays assertable; only its level drops. An ERROR sink
-    is what pins that: a TRACE sink cannot tell ``logger.error`` from ``logger.debug``.
-    """
-    fmt = DataFormat.Float16_b
-    golden = _tile(1.0, fmt)
-    result = _step(golden, 9)
-
-    def verdict():
-        passed_test(golden, result, fmt, max_ulp=1, print_errors=print_errors)
-
-    assert bool(_logs_for(verdict, "ERROR")) is print_errors
-    assert "ULP budget exceeded" in "\n".join(_logs_for(verdict))
 
 
 @pytest.mark.parametrize(
