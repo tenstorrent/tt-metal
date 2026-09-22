@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>  // for std::memcpy
 #include <variant>  // Added include
@@ -79,14 +80,21 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         NocVirtualChannel noc_vc : 4;
         uint8_t payload_chunks;
         uint8_t posted : 1;
-        uint8_t reserved : 7;
+        // Preserve the original low byte and posted bit on the wire. Previously
+        // reserved bits extend the payload range from 8,160B to 1,048,544B;
+        // old captures have zero here and remain readable by the new decoder.
+        uint8_t payload_chunks_high : 7;
 
         void setAttributes(uint32_t num_bytes, bool p) {
-            uint32_t bytes_rounded_up = (num_bytes + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE;
-            payload_chunks = std::min(uint32_t(std::numeric_limits<uint8_t>::max()), bytes_rounded_up);
+            const uint32_t rounded_chunks = num_bytes / PAYLOAD_CHUNK_SIZE + (num_bytes % PAYLOAD_CHUNK_SIZE != 0);
+            const uint32_t chunks = std::min<uint32_t>(0x7fff, rounded_chunks);
+            payload_chunks = chunks & 0xffu;
+            payload_chunks_high = chunks >> 8;
             posted = p;
         }
-        uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
+        uint32_t getNumBytes() const {
+            return (uint32_t(payload_chunks) | (uint32_t(payload_chunks_high) << 8)) * PAYLOAD_CHUNK_SIZE;
+        }
     };
 
     // Expected to come after a LocalNocEvent when NoC Debug Mode is enabled.
