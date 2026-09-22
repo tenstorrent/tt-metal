@@ -1,0 +1,70 @@
+name: "LLK perf nightly gate (non speed-of-light)"
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      perf_run_id:
+        description: "Compare THIS run's perf artifacts instead of measuring"
+        required: false
+        type: string
+      baseline_pipeline:
+        description: "Baseline source: 'baseline' (pinned) or 'nightly' (rolling)"
+        required: false
+        default: baseline
+        type: string
+      notify_on_success:
+        description: "Post to Slack even when nothing regressed"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+  packages: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: "Measure the suite (non speed-of-light)"
+    if: ${{ inputs.perf_run_id == '' }}
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: all
+      speed-of-light: false
+      upload-to-warehouse: true
+      pipeline: nightly
+    secrets: inherit
+
+  gate:
+    name: "Gate ${{ matrix.arch }} (non speed-of-light)"
+    needs: measure
+    if: ${{ always() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: blackhole
+            threshold: 0.02
+            run_types: L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE
+          - arch: wormhole
+            threshold: 0.08
+            run_types: L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE
+    uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      arch: ${{ matrix.arch }}
+      perf_run_id: ${{ inputs.perf_run_id }}
+      baseline_pipeline: ${{ inputs.baseline_pipeline || 'baseline' }}
+      speed_of_light: "false"
+      run_types: ${{ matrix.run_types }}
+      threshold: ${{ matrix.threshold }}
+      min_cycles: 30
+      notify_on_success: ${{ inputs.notify_on_success != false }}
+    secrets: inherit
