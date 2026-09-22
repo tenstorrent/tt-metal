@@ -64,7 +64,7 @@ def _rp_cache_tag(source_tensor, args):
     plus rope_tp.ROPE_PERM_VERSION plus the dims that shape the permutation. Two runs land on the
     same tag iff both the checkpoint weight bytes and the permutation construction code are
     unchanged, so a cache built by an older/different construction can never be silently reused --
-    ttnn.as_tensor just misses under the new name and rebuilds. See README-N300-9B.md's "warm
+    ttnn.as_tensor just misses under the new name and rebuilds. See the main README's "warm
     weight cache hides..." known limitation for the blind spot this closes."""
     h = hashlib.sha256()
     h.update(rope_tp.ROPE_PERM_VERSION.encode())
@@ -86,25 +86,11 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     tw = {}
     # GQA KV replication (TP > n_kv_heads, e.g. TP=8 on T3K with 4 KV heads): expand k/v from
     # [n_kv_heads*head_dim, in] to [TP*head_dim, in] so every device owns ONE WHOLE KV head instead
-    # of a fraction of one. Devices sharing a KV head recompute identical K/V into their own local
-    # cache (caches are per-device and never gathered), so this is correct, not just convenient.
-    # No-op when TP <= n_kv_heads, so the validated TP<=n_kv_heads layouts are byte-for-byte
-    # unchanged. Device d lands on KV head (d*n_kv_heads)//TP, which matches HF's q-head grouping
-    # (q head h -> kv head h//(n_heads/n_kv_heads)) because q heads shard contiguously.
     k_proj = tpc.replicate_kv_weight(state_dict["k_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
     v_proj = tpc.replicate_kv_weight(state_dict["v_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
 
     # Permuted-head_dim RoPE (attention/rope_tp.py's rope_channel_perm): fold the head_dim
     # channel permutation into the weights FEEDING the rotary; no runtime op.
-    # q_proj is [q_head0 | gate_head0 | q_head1 | ...], hence stride=2*head_dim to permute only each
-    # head's q half; the gate stays in HF order, multiplying the unpermuted
-    # output. k_proj is plain per-head blocks. V and o_proj are deliberately untouched: nothing about
-    # V is rotated and the output must reach o_proj in HF channel order. q/k NORM
-    # weights are per-channel over head_dim, so they permute with it.
-    # Cache files get a ".rp.<hash>" tag: <hash> is a content hash of the PRE-permutation source
-    # weight plus rope_tp.ROPE_PERM_VERSION (see _rp_cache_tag), so these differ from the HF-order
-    # tensors AND self-invalidate if the checkpoint weights or the permutation construction code
-    # change -- a stale cache is never served from (or written to) the same entry as a fresh one.
     rope_permuted = getattr(args, "rope_permuted_enabled", False)
     q_proj = state_dict["q_proj.weight"]
     q_norm_w = state_dict["q_norm.weight"].to(torch.float32) + 1.0
@@ -227,8 +213,6 @@ class TPAttention:
         self.compute_cfg = tpc.COMPUTE_HIFI2
         # bf8 SDPA: bf8 Q + bf8 KV, HiFi2 (HiFi4 was slower). Default ON for N300,
         # override with QWEN_SDPA_BF8=0/1 — see tp_common.sdpa_bf8_enabled for the measurements.
-        # Must agree with model.py's allocate_kv_caches (same helper), which sets the paged cache's
-        # dtype to match what this flag casts K/V to before the fill.
         self._sdpa_bf8 = tpc.sdpa_bf8_enabled(args)
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
@@ -237,9 +221,6 @@ class TPAttention:
         self._qg_deint = self._fused_qkv
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
-        # BH-only: all_gather_matmul_prefill's grid assumes BH's taller (9-10 row) compute grid; WH
-        # tops out at 8 rows, so this fusion is unvalidated there. Must match layer.py's
-        # _fuse_norm_agmm gate. Falls back to the unfused AG + matmul path on WH.
         self._fuse_agmm = self._fused_qkv and tpc.is_blackhole()
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
@@ -426,17 +407,7 @@ class TPAttention:
         if not self._wo_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
                 # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
-                # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide) + the
-                # existing L1-out. See test_mlp_matmul_sweep_prefill.
-                #
-                # WORMHOLE ONLY: attn_wo_prefill_progcfg (None on BH) swaps in the one-K-pass factory,
-                # same fix as the fused-QKV in-proj above. At K=attn_out_dim_tp=2048, N=dim=4096, 8
-                # cols -> per_core_N=16: fp32 dest acc on caps out_subblock_w at 4 (16%4==0, blk_w=8,
-                # TWO K passes); off, the cap rises to 8 (16%8==0, blk_w=16) -- ONE pass.
-                # MEASURED (N300, M=2048 K=2048 N=4096; tests/perf/test_attn_qkv_inproj_sweep.py):
-                #     baseline fp32T/pkT in0=DRAM   558.6us   <- today (matches the 531-536us layer profile)
-                #     kpass1   fp32F/pkT in0=DRAM   517.2us   -7.4%   pcc=0.99993 (vs 0.99997 baseline)
-                # in0=L1 measured within noise (-0.6pp more), not worth the added CB-clash risk for it.
+                # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide)
                 _wo_kpass1 = getattr(self.args, "attn_wo_prefill_progcfg", None)
                 if _wo_kpass1 is not None:
                     pc = _wo_kpass1(x.shape[-2], weight.shape[-2], weight.shape[-1])
@@ -452,19 +423,7 @@ class TPAttention:
                         tuning=getattr(self.args, "prefill_tuning", None),
                     )
                     ck = self.compute_cfg
-                # MODEL-GATED (27B on Wormhole). Emit bf8 so the row-parallel reduce-scatter that
-                # consumes this carries half the bytes -- as the matmul's OUTPUT DTYPE, not a
-                # typecast afterwards, which would be a whole extra pass over [1,S,dim].
-                #
-                # Third instance of the same win in this layer -- all three reduce-scatter a
-                # [1,1,2048,5120] row-parallel partial, and bf8 lands them at the same ~550-590us
-                # floor. MEASURED (T3K TP=8, 27B, seq 2048): wo matmul 419 -> 277us, reduce-scatter
-                # 1021 -> 548us = -610us/layer. Accuracy measured, not assumed, since this op has a
-                # dtype cliff on Blackhole at TP=4 (see gdn/tp.py): test_attention_tp_prefill
-                # 0.9993245 -> 0.9991838, matching the GDN out-proj's cost.
-                #
-                # Gated to the 27B because that cliff proves the safe dtype here is TP- and
-                # model-dependent, and TP=8/dim=5120 is the only configuration measured.
+                # MODEL-GATED (27B on Wormhole).
                 _wo_bf8 = self.args.dim > 4096 and not tpc.is_blackhole()
                 return ttnn.linear(
                     x,
@@ -501,16 +460,6 @@ class TPAttention:
             gate_flat = kp
             # SINGLE-TENSOR nlp_create_qkv_heads: hand it the contiguous [q|k|v] block whole and let
             # it do the split in-kernel, instead of slicing q and kv out first to feed the two-tensor
-            # (input, input_kv) overload. The op's fused form handles the GQA asymmetry -- it derives
-            # the q/k/v boundaries from num_heads/num_kv_heads, so a (NH + 2*NKV)*HD = 1280-wide input
-            # is accepted even though the docstring's shape reads 3*head_dim*num_heads.
-            #
-            # VERIFIED BIT-EXACT against the two-slice form: q/k/v all torch.equal, max|diff| == 0.0
-            # (NH=3, NKV=1, HD=256, S=128 -- the 27B TP=8 head geometry).
-            # MEASURED (T3K TP=8, 27B, seq 2048, layer3_fullattn single-layer profile): removes the
-            # two slices, 20.8us (1280->768, q) + 15.8us (1280->512, k|v) = -36.6us and -2 device ops.
-            # Both were running at ~100-130 GB/s, i.e. at bandwidth -- so this is not a slow-op fix,
-            # it is one fewer full pass over the tensor.
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
                 qg,
                 num_heads=NH,
@@ -753,20 +702,6 @@ class TPAttention:
         attn = self._concat_heads(attn)
         # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
         # CCL activation risks clashing with its CBs).
-        # MODEL-GATED (27B on Wormhole). Emit `gated` as bf8 so the wo matmul is BFP8 x BFP8.
-        # `gated` is attn * sigmoid(gate) -- an independent tensor with no KV-cache involvement, so
-        # unlike the attention_norm gather (see layer.py's ATTEMPTED AND REJECTED note) nothing
-        # blocks narrowing it.
-        # MEASURED (T3K TP=8, 27B, seq 2048, layer3_fullattn):
-        #     wo matmul 2048x768x5120   275 -> 261us   (-14)
-        #     gated multiply             36 ->  31us   (-5)
-        #                                              = -22us/layer
-        #     PCC (test_attention_tp_prefill, S=64)  0.9991838 -> 0.9991558
-        # SMALL, and the reason is worth recording: the MLP's down-proj runs the same BFP8 x BFP8
-        # shape at 50.1% of peak against this op's 25.1%, which suggests a much bigger prize -- but
-        # wo's K is 768 (24 tiles) against the down-proj's 2176 (68), so it is load/store-bound and
-        # halving in0's bytes cannot buy what it buys there. Do not extrapolate FLOPs% between
-        # matmuls with very different K.
         gated = ttnn.multiply(
             attn,
             ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG),
@@ -779,9 +714,6 @@ class TPAttention:
         ttnn.deallocate(gated)
         # PREFILL CCL tuning (chunks_per_sync/num_workers_per_link): mlp.py's and gdn/tp.py's
         # reduce-scatters already pass tpc.prefill_ccl_tuning() here; this call site never did --
-        # an oversight, not an architecture split (that helper's tuning already ships unconditionally
-        # on both WH and BH for MLP/GDN). See tp_common.prefill_ccl_tuning for the measurements
-        # (~-230us on this op's mean, and it tightens the run-to-run spread ~6x).
         _ccl_kw = {}
         if S > tpc.TILE_SIZE:
             _cps, _wpl = tpc.prefill_ccl_tuning()
@@ -874,21 +806,10 @@ class TPAttention:
 
         if self._use_nlp_decode_heads:
             # The per-head test/generate_tp oracle path below (use_paged=False, k_caches loop) slices
-            # v per-KV-head, which wants it interleaved -- only the paged production path can take it
-            # natively sharded straight into the cache write. SCOPED TO WORMHOLE 9B ON N300
-            # (tpc.wh_9b_n300): the shard-spec equality this relies on was verified on that config,
-            # and _make_heads_decode's runtime guard makes a mismatch fall back safely anyway.
-            # gate comes back FLAT ([1,1,B,NH*HD]) here; it is applied after _concat_heads_decode,
-            # which is where that layout is already the right one (see _make_heads_decode).
             q, gate, k, v = self._make_heads_decode(
                 qg, kp, vp, B, skip_v_reshard=use_paged and tpc.wh_9b_n300(self.args)
             )
             # SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300) like the other decode changes: applying
-            # the gate after the concat instead of before is elementwise-identical (concat-heads is a
-            # pure permutation and the gate is head-major to match), and prefill's _make_heads has
-            # done exactly this for longer, but was only measured and PCC-checked on
-            # config, so every other mesh/model keeps the original pre-concat multiply by reshaping
-            # the flat gate back to [1,B,NH,HD] here.
             gate_is_flat = tpc.wh_9b_n300(self.args)
             if not gate_is_flat:
                 gate_r = ttnn.reshape(gate, (1, B, NH, HD), memory_config=_L1)
@@ -932,16 +853,6 @@ class TPAttention:
 
         # REVERTED Q+K merged RoPE (was here briefly): an isolated microbenchmark measured -2.3%
         # (172.3us -> 168.4us) for concatenating Q+K before rotating once. A REAL full-layer Tracy
-        # capture (test_profile_single_layer_attention_decode.py, tt-perf-report) caught what the
-        # isolated test missed: NH=16 + NKV=4 = 20 heads is no clean tile multiple,
-        # so the concat forces Untilize -> Concat -> TilizeWithValPadding round-trips on BOTH sides of
-        # the merge (6+5+1+18+9+22 = 61us of new ops) that the synthetic benchmark's tensors never
-        # hit. In the real layer this section went 46us -> 98us (+113%), swamping
-        # every other win this session found. Lesson: an isolated op-shape microbenchmark cannot
-        # decide a change like this -- the exact same caution mlp.py's _CKC_MLP_KPASS1 comment already
-        # gives ("the isolated sweep... CANNOT decide this... trust the full-layer capture"). Confirm
-        # any future attempt at this fusion against a full-layer Tracy capture, not just the isolated
-        # op timing.
         q, k = self._rope_decode(q, k, cos_tt, sin_tt, B)
 
         # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
@@ -965,13 +876,6 @@ class TPAttention:
             keys, values = self.paged_k, self.paged_v
             # N300-9B drops the pad to [1,B,32,HD] (see _WH_KV_PAD_NOTE); everyone else (Blackhole,
             # and now T3K/N150 too) keeps the original pad-then-reshard sequence verbatim.
-            #
-            # DELIBERATE narrowing (Wormhole gating audit, item 8): this used to be tpc.is_blackhole(),
-            # so T3K/N150 rode the no-pad path along with N300. _WH_KV_PAD_NOTE's own measurements are
-            # "Controlled 2x2 on N300" and explicitly unverified beyond that config, so T3K/N150 are
-            # narrowed back to the safe pad-then-reshard branch on purpose -- not because they're
-            # Blackhole, but because the no-pad fix has no validation there. Don't revert this to
-            # is_blackhole() without measuring the no-pad path on T3K/N150 first.
             _kv_cfg = self._kv_shard_cfg(B)
             if not tpc.wh_9b_n300(self.args):
                 k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
@@ -982,37 +886,15 @@ class TPAttention:
                 ttnn.deallocate(v_p)
                 # Free the pad's INPUT only after the reshard has consumed the pad's output --
                 # _WH_KV_PAD_NOTE's "dealloc late" ordering. Freeing k/v immediately after the pad
-                # hands that L1 back while the pad's write is still in flight, which measured
-                # B=32 10-13/32 users correct (B=8 was unaffected, which is why it hid here).
                 ttnn.deallocate(k)
                 ttnn.deallocate(v)
                 # This branch PREPARES k_sh/v_sh; it must still write them. Both sibling branches
                 # below issue their own write, so omitting it here silently skipped the KV update
-                # on every config except N300-9B -- decode then attended over a cache holding only
-                # the prefill tokens, with the new token's slot left at zero.
                 ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
                 ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             elif getattr(self.args, "kv_cache_write_fused_enabled", False):
                 # Fused K+V cache write (paged_fused_update_cache): needs K and V on DISJOINT shard
                 # grids. V is pointed at the NATURAL half -- the grid nlp_create_qkv_heads_decode
-                # already emits -- so the equality guard below short-circuits and V pays NO reshard,
-                # exactly as before the fused write existed; K takes the SHIFTED half,
-                # free for K because it arrives interleaved from RoPE and owes a reshard either way.
-                # See model_config.py's kv_cache_write_{k,v}_shard_cfg for why this assignment (and
-                # not the reverse) is the cheap one, and for the NaN footgun in making
-                # head split emit onto the shifted half instead.
-                # VERIFIED (test_kv_cache_sdpa_decode_sweep.py + test_attn_head_split_v_reshard_sweep.py
-                # ::test_kv_write_grid_swap_removes_v_reshard, N300, per-user-distinct paged cache):
-                # bit-identical cache contents, 20.3us (2 separate writes) -> 18.3us fused (-9.9%),
-                # then 26.7us/4 programs -> 26.0us/3 programs (-3.0%) from this grid assignment.
-                # With permuted RoPE, K is ALREADY on this grid -- the sharded rotary copies its
-                # output shard spec from its input, and _rope_decode fed it rope_k_shard_cfg (this
-                # config) precisely so the write needs no reshard. Same guard style as V's below.
-                #
-                # Re-cut to the ACTIVE width B (bucketed decode), not max_batch_size: the fused op
-                # activates every core in the supplied grid, so at the precomputed max-batch grid a
-                # smaller active B leaves cores past B reading update_idxs_tensor/page_table out of
-                # range. _kv_fused_shard_cfgs(B) mirrors _kv_shard_cfg(B) below for this fused path.
                 _fused_k_cfg, _fused_v_cfg = self._kv_fused_shard_cfgs(B)
                 if k.memory_config() == _fused_k_cfg:
                     k_sh = k
@@ -1041,16 +923,6 @@ class TPAttention:
                     ttnn.deallocate(v)
                 # DECODE K/V MUST BE bf16/fp32 HERE, AND MUST MATCH THE CACHE -- which is what makes a
                 # bf8 KV cache impossible on this op. paged_update_cache asserts BOTH
-                #   input.dtype == FLOAT32 || input.dtype == BFLOAT16
-                #       (paged_update_cache_device_operation.cpp:296)
-                #   input.dtype == cache.dtype  ("Input and cache tensors must have same dtype!")
-                # so against a bf8 cache a bf16 input fails the second and a bf8 input fails the first.
-                # There is no dtype that satisfies both; a cast does not help (tried, it just moves
-                # which assert fires). paged_fill_cache, which PREFILL uses, has the LOOSER contract
-                # (input==FP32 || input==BF16 || cache==BFP8 || cache==BFP4) -- which is exactly why a
-                # bf8 cache passes every prefill-only profile, every module test and the 64k demo while
-                # failing 5 of 20 test_model_tp cases (every one that decodes after a prefill).
-                # Enabling a bf8 KV cache needs a C++ change to paged_update_cache, not a Python cast.
                 ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
                 ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             ttnn.deallocate(k_sh)
@@ -1071,10 +943,6 @@ class TPAttention:
         else:
             # Internal per-head KV caches. Wormhole reshards the [1,B,1,HD] single-head slice
             # directly; Blackhole keeps the original pad-to-32 sequence verbatim (_WH_KV_PAD_NOTE).
-            #
-            # This oracle path slices K/V per KV-head, which needs them interleaved -- permuted RoPE
-            # leaves K height-sharded (that layout is what the PAGED write wants), so undo it here.
-            # Costs one op on a test/demo-only path rather than on the production paged one.
             if k.is_sharded():
                 k = ttnn.sharded_to_interleaved(k, _L1)
             if v.is_sharded():
@@ -1133,10 +1001,6 @@ class TPAttention:
 
         # Sigmoid gate. When the head split left it FLAT ([1,1,B,NH*HD], as it
         # the QKV projection), it is applied INSIDE _concat_heads_decode -- after the concat, where
-        # the attention output is back in that same flat layout. That removes the [1,1,B,NH*HD] ->
-        # [1,B,NH,HD] gate reshape entirely (a real 7us/8-core op per layer) instead of paying it just
-        # to line the two operands up. Elementwise-identical either side of the concat; see
-        # _concat_heads_decode. The non-flat branches keep the original pre-concat multiply.
         if gate_is_flat:
             gated_flat = self._concat_heads_decode(attn_out, B, gate_flat=gate)
         else:
@@ -1151,9 +1015,6 @@ class TPAttention:
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         # DECODE reduce-scatter tuning: checked wpl in {1,2,4,8} at this shape
         # (test_attn_output_reduce_sweep.py). wpl=1 and wpl=8 are consistently worse across repeated
-        # runs; wpl=2 (upstream default) vs wpl=4 FLIPS direction run-to-run (+-4-7% either way across
-        # 5 repeated measurements) -- that comparison is noise, not signal, so it stays at upstream's
-        # default (wpl=2, implicit) rather than "fixing" something that isn't broken.
         return tt_all_reduce(
             wo_partial,
             self.mesh,
@@ -1224,11 +1085,6 @@ class TPAttention:
 
         # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
         # makes the KV cache bf8 -> full bf8 matmul. TESTED mixed dtype (bf16 Q vs
-        # cache/K/V): PASSES correctness (PCC actually a hair better, 0.99979 vs 0.99969) but SDPA
-        # itself measures ~24us SLOWER (507us vs 483-485us) — full bf8 both operands is faster on
-        # this hardware, matching the same BF16-activation-vs-BFP8-both pattern seen on the other
-        # matmuls (e.g. wo_proj). Keeping the typecast: it's a one-time ~46us cost per chunk against
-        # a per-call SDPA win, not a wash to remove.
         if self._sdpa_bf8:
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             ttnn.deallocate(q)
@@ -1244,20 +1100,6 @@ class TPAttention:
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
         # ASYMMETRIC K-CHUNK (MODEL-GATED, 27B on Wormhole). Every config here had set
         # q_chunk_size == k_chunk_size; decoupling them is worth -7.2% on this op. The Q chunk is what
-        # bounds the CB footprint (q_chunk >= 256 fails outright -- see below), but K can be doubled
-        # for free because the K/V blocks stream.
-        # MEASURED (T3K TP=8, 27B, seq 2048, layer3_fullattn single-layer profile, device kernel time):
-        #     q=128 k=128  490.1us   <- was (and what the "128 beats 64/256" note above compared)
-        #     q=128 k=256  455.0us   -35.1us  <- used
-        #     q= 64 k=128  532.5us
-        #     q=256 k=256 / q=256 k=128 / q=512 k=128   all FAIL (CB overflow)
-        #     q=128 k=512 / k=1024 / k=2048             all FAIL (CB overflow)
-        # exp_approx_mode was swept at the same time and is a WASH -- 488.9us at k=128 and 455.5us at
-        # k=256, both within noise of exp_approx_mode=False -- so it stays off and costs no accuracy.
-        # Gated because the CB headroom that makes k=256 fit is specific to this head geometry
-        # (NH=3, NKV=1, HD=256 at TP=8) and this chunk length.
-        # LENGTH-CAPPED at the production chunk: at S=4096 the doubled K chunk overflows CBs
-        # (layer3_fullattn-seq4096 fails), same shape of limit as tp_common.PREFILL_FULL_GRID_MAX_M.
         _kc = (
             qk_chunk * 2
             if (
@@ -1275,10 +1117,6 @@ class TPAttention:
 
         # Pad page table for Q+offset and stick-size % 32 (extra blocks masked).
         # ttnn.pad instead of zeros+concat: same result (verified via ttnn.to_torch, byte-identical),
-        # 1 program dispatch instead of 4 -- ttnn's ROW_MAJOR concat path for this shape decomposes
-        # into a Concat plus TWO internal Permute-kernel dispatches (visible in the build log as
-        # writer/reader_permute_interleaved_rm_blocked_generic), which is exactly where the profile's
-        # tiny PermuteDeviceOperation/ConcatDeviceOperation rows on the INT32 page table came from.
         sdpa_page_table = page_table
         needed_blocks = (S + chunk_start_idx + block_size - 1) // block_size
         target_blocks = max(needed_blocks, page_table.shape[-1])
@@ -1314,20 +1152,6 @@ class TPAttention:
         attn = self._concat_heads(attn)
         # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
         # CCL activation risks clashing with its CBs).
-        # MODEL-GATED (27B on Wormhole). Emit `gated` as bf8 so the wo matmul is BFP8 x BFP8.
-        # `gated` is attn * sigmoid(gate) -- an independent tensor with no KV-cache involvement, so
-        # unlike the attention_norm gather (see layer.py's ATTEMPTED AND REJECTED note) nothing
-        # blocks narrowing it.
-        # MEASURED (T3K TP=8, 27B, seq 2048, layer3_fullattn):
-        #     wo matmul 2048x768x5120   275 -> 261us   (-14)
-        #     gated multiply             36 ->  31us   (-5)
-        #                                              = -22us/layer
-        #     PCC (test_attention_tp_prefill, S=64)  0.9991838 -> 0.9991558
-        # SMALL, and the reason is worth recording: the MLP's down-proj runs the same BFP8 x BFP8
-        # shape at 50.1% of peak against this op's 25.1%, which suggests a much bigger prize -- but
-        # wo's K is 768 (24 tiles) against the down-proj's 2176 (68), so it is load/store-bound and
-        # halving in0's bytes cannot buy what it buys there. Do not extrapolate FLOPs% between
-        # matmuls with very different K.
         gated = ttnn.multiply(
             attn,
             ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG),
@@ -1340,9 +1164,6 @@ class TPAttention:
         ttnn.deallocate(gated)
         # PREFILL CCL tuning (chunks_per_sync/num_workers_per_link): mlp.py's and gdn/tp.py's
         # reduce-scatters already pass tpc.prefill_ccl_tuning() here; this call site never did --
-        # an oversight, not an architecture split (that helper's tuning already ships unconditionally
-        # on both WH and BH for MLP/GDN). See tp_common.prefill_ccl_tuning for the measurements
-        # (~-230us on this op's mean, and it tightens the run-to-run spread ~6x).
         _ccl_kw = {}
         if S > tpc.TILE_SIZE:
             _cps, _wpl = tpc.prefill_ccl_tuning()

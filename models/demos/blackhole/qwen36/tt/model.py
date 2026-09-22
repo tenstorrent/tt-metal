@@ -82,9 +82,6 @@ class Qwen36Model:
 
         # Per-request vision grid (t,h,w), stashed by get_image_features / get_video_features so the
         # prefill paths can build the multimodal 3D RoPE (M-RoPE) position ids without threading
-        # grid_thw through every prefill signature. Exactly one is non-None for a multimodal request
-        # (image XOR video); both None => text-only. The active one also selects which placeholder
-        # token id (image_token_id vs video_token_id) the vision-splice paths look for.
         self._req_image_grid_thw = None
         self._req_video_grid_thw = None
 
@@ -193,9 +190,6 @@ class Qwen36Model:
 
         # Trace-safe vision splice (traced serving path). The chunk/masked-bucket forwards run a
         # FIXED-shape ttnn.where(mask, vision, text) over these persistent buffers — compiled once
-        # at warmup, then updated per request via copy_host_to_device, so no per-request program
-        # ever compiles to clobber a parked trace. Allocated (single device only) in
-        # capture_prefill_trace_chunked; None means "no traced path" -> the where is skipped.
         self._vis_buf = None  # [1, chunk_size, dim] bf16, image rows placed at their positions
         self._vis_mask_buf = None  # [1, chunk_size, 1] bf16, 1 at image positions else 0
         self._vis_zero_mask_host = None  # cached host zero mask for the clear (text/tail) path
@@ -259,8 +253,6 @@ class Qwen36Model:
         image_features = self.vision_model.forward(pixel_values, grid_thw=image_grid_thw)
         # The vision tower returns [1, B, S, H]; flatten the leading (batch/seq) dims to the
         # packed [num_image_tokens, H] rows the text-model splice (_scatter_vision_tokens /
-        # _set_vision_merge) expects. The hidden dim is unchanged so the mesh hidden-fracture
-        # is preserved. B == 1 for now.
         hidden = image_features.shape[-1]
         return ttnn.reshape(image_features, (-1, hidden))
 
@@ -445,10 +437,7 @@ class Qwen36Model:
             f"segment exceeds {int(vision_tokens.shape[0])} packed vision rows"
         )
         # Gather the (hidden-fractured on a mesh) vision rows to full [num_image_tokens, Hg] on
-        # host, then take this segment's slice. The placement is along the SEQ dim, orthogonal to
-        # the hidden fracture, so the round-trip gather->place->reshard preserves the per-device
-        # columns. ConcatMeshToTensor(dim=1) over the 2D [rows, dim/TP] is the inverse of the
-        # dims=(None,-1) hidden shard used on re-upload.
+        # host, then take this segment's slice.
         if tp:
             vis_host = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
                 torch.bfloat16
@@ -555,21 +544,16 @@ class Qwen36Model:
         Single device: plain matmul."""
         logits = ttnn.linear(x, self.lm_head_weight)
         if self._lmhead_vocab_sharded:
-            from models.demos.blackhole.qwen36.tt import tp_common as tpc
+            pass
 
             # ~8 MB/device (B=32, vocab/tp=124160, bf16) puts this in the PREFILL-gather size band, not
-            # the tiny decode-norm/reduce-scatter one -- upstream's wpl=2/cps=10 fallback is tuned for
-            # the latter. Measured on N300 (test_vocab_all_gather_sweep.py), repeatable across runs:
-            # wpl=2 cps=10 (fallback) ~1,305us -> wpl=4 cps=10 ~1,078us (-17%) -> wpl=4 cps=25
-            # ~1,027us (-21%), matching the prefill AG's wpl=4 win. cps beyond 25 keeps inching down
-            # (cps=60 -> -23%) but that's untested territory elsewhere in this codebase; 25 already
-            # has precedent (test_attn_norm_decode_sweep.py) and captures nearly all of the win.
-            # tuned_vocab_all_gather is a local copy of ccl.tt_all_gather's cluster_axis=None branch
-            # with these two knobs exposed -- this model does not edit the shared ccl.py.
-            logits = tpc.tuned_vocab_all_gather(
+            from models.tt_transformers.tt.ccl import tt_all_gather
+
+            logits = tt_all_gather(
                 logits,
                 self.mesh_device,
                 self.tt_ccl,
+                cluster_axis=None,
                 dim=len(logits.shape) - 1,
                 topology=self.args.ccl_topology(),
                 num_workers_per_link=4,
@@ -838,8 +822,6 @@ class Qwen36Model:
 
         # Placement index: the dim-0 rows of the flattened [rows, H] embedding to fill,
         # repeated across the hidden dim so the whole hidden vector at each row is written.
-        # ttnn.scatter mirrors torch.scatter: out[index[i, h], h] = src[i, h], with
-        # index/src/input the same rank.
         index = pos.view(n, 1).expand(n, hidden).contiguous().to(torch.int32)
         # where-predicate: [rows, 1], broadcasts over hidden in ttnn.where.
         mask_col = mask_bool.view(rows, 1)
@@ -847,8 +829,6 @@ class Qwen36Model:
         if self.num_devices > 1:
             # Shard the index along hidden the same way the embedding shards its
             # activations, so each device's [n, H/TP] index matches its local x/vision
-            # shard (the hidden columns are identical, so splitting is free). The predicate
-            # broadcasts over the sharded hidden dim, so it is replicated.
             index_tt = ttnn.from_torch(
                 index,
                 dtype=ttnn.int32,
@@ -938,8 +918,6 @@ class Qwen36Model:
         for layer_idx, layer in enumerate(self.layers):
             # GDN chunk length drives the chunk-seq kernel's L1-resident output relayout; cap it on
             # N300 (see _GDN_MASKED_SEG, measured single-device). Chunking is exact — state
-            # carries between chunks. Narrowed from is_blackhole() — confirmed not needed on T3K,
-            # whose higher TP splits Nv further (Wormhole gating audit, item 12).
             _gdn_cs = chunk_size if not tpc.wh_9b_n300(self.args) else min(chunk_size, self._GDN_MASKED_SEG)
             layer_chunk_size = attn_chunk_size if layer.is_full_attention else _gdn_cs
 
@@ -1385,9 +1363,6 @@ class Qwen36Model:
 
         # Rope inside the trace: the replay loop then DMAs only this [1, chunk_size] position
         # index, never dispatching an op between replays. Other SKUs keep the cos/sin buffers.
-        # vision_model is None: a multimodal request's M-RoPE comes from 3D (t,h,w) positions that a
-        # 1D index cannot express, and the graph is baked here while multimodality is per-request.
-        # init_vision_model() always runs before capture, so a tower attached now rules this out.
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._chunk_rope_idx_buf = None
@@ -2220,14 +2195,6 @@ class Qwen36Model:
 
     # Longest sequence handed to the GDN chunk-seq kernel in ONE call on Wormhole. The kernel
     # relayouts its output as [B*Nv, L, Dv] fp32 in L1 (hardcoded in ttnn_delta_rule_seq.py, no
-    # memory_config exposed), so L1 demand is linear in L. Measured single-device (Nv=32, Dv=128):
-    # L=1024 -> 16.8MB fits, L=2048 -> 33.5MB OOMs.
-    #
-    # 1024 and not smaller: each distinct GDN sequence length compiles its own program, and 256
-    # multiplied the variants 8x, stalling trace capture for 30+ min at 100% host CPU (the
-    # bounded-program-set design in prefill_masked_bucket's docstring exists to prevent exactly that).
-    # Applied ONLY to non-traced prefill paths: the traced path keeps its
-    # single program per chunk.
     _GDN_MASKED_SEG = 1024
 
     def _gdn_masked_forward(self, layer, x, bucket, valid_len=None):
@@ -2400,8 +2367,6 @@ class Qwen36Model:
 
         # Stage the trace-safe vision buffers (host->device copy only). A segment splices its own
         # slice of the packed vision rows (vis_row_offset); a segment with no image placeholders
-        # (text-only prompt, or a tail past the image) clears the mask inside _set_vision_merge so
-        # the where is the identity. No-op without buffers.
         self._set_vision_merge(token_buf, vision_tokens, vis_row_offset)
 
         hidden = self._forward_prefill_chunk_masked(
@@ -2550,8 +2515,6 @@ class Qwen36Model:
 
         # Stage the per-request RoPE once for the whole prompt (M-RoPE for multimodal, 1D for text).
         # The chunk-replay loops + the masked tail then slice this sequence-indexed table by chunk
-        # position, and decode offsets by the stored rope_delta. (The num_full==0 short path below
-        # re-stages it inside prefill_masked_bucket; that is idempotent.)
         self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
 
         # Short prompt (no full chunks): route the whole prompt through the SAME masked
@@ -2659,9 +2622,6 @@ class Qwen36Model:
 
             # Stage the trace-safe vision buffers: each chunk splices its own slice of the packed
             # vision rows (vis_row_offset = image tokens before cs); a chunk with no image tokens
-            # clears the mask so the captured where is the identity. host->device copy only (no
-            # compile), so the parked trace is untouched. Handles a large image whose placeholders
-            # span multiple chunks.
             self._set_vision_merge(
                 token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
             )
@@ -2843,8 +2803,6 @@ class Qwen36Model:
 
             # Stage the hidden-sharded vision buffers: each chunk splices its own slice of the
             # packed vision rows (vis_row_offset = image tokens before cs); a chunk with no image
-            # tokens clears the mask so the captured where is the identity. host->device copy only
-            # (no compile), so the parked trace is untouched.
             self._set_vision_merge(
                 token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
             )
@@ -3204,17 +3162,7 @@ class Qwen36Model:
         assert all(v <= bucket for v in vlens), "every valid_len must fit the single-pass bucket"
 
         # The fused chunk_gated_delta_rule op caps the group by its SCAN, which maps one (head,
-        # v-block) row per core: BH = B*Nv_tp must stay <= the grid. Unlike the
-        # gated_delta_attn_seq kernel this is bucket-independent (SCAN L1 is state-sized, not
-        # chunk-count-sized). Validated bit-exact vs per-user at B=8 for bucket 128 and 256
-        # (test_gdn_fused_batch: ceiling + large-group). Buckets >256 aren't produced here (callers
-        # route T>256 to per-user), so cap them at 1 defensively.
-        #
-        # Derive the ceiling from the ACTUAL grid and Nv_tp, not a hardcoded 8.
-        # A P150 at TP=4 has Nv_tp=8 against ~140 cores, so 8 was always safe;
-        # an N300 at TP=2 has Nv_tp=16 against 64 cores (8x8), where a group of 8
-        # "num_heads 128 exceeds compute cores 64" (chunk_gdn_phased_program_factory.cpp:137). 8 stays
-        # the validated ceiling; this only lowers it where the grid demands it.
+        # v-block) row per core: BH = B*Nv_tp must stay <= the grid.
         _g = self.device.compute_with_storage_grid_size()
         _bh_max_bg = max(1, (_g.x * _g.y) // max(1, self.args.gdn_nv_tp))
         gdn_max_bg = min(8, _bh_max_bg) if bucket <= 2 * gdn_chunk else 1
@@ -3534,17 +3482,7 @@ class Qwen36Model:
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
         rope_pos_vec = pos_vec + self.rope.rope_delta
         # The rope slot carries the per-user POSITION INDEX, not host-computed cos/sin: the trig is
-        # done on device in _rope_from_idx() by gathering the resident tables. Same tuple arity and
-        # the same copy_host_to_device path, but per step the bus carries a [B]
-        # int32 index, not a [2,B,1,rope_dim] bf16 cos+sin blob, and no host trig.
-        # Build the tables here (host side, outside any trace): materialising them lazily inside the
-        # traced forward would be a host write during capture, which TT_FATALs.
-        # Size to max_seq_len, the SAME row count _rope_from_idx() asks for. Sizing to
-        # max(pos)+1 here would leave the table short whenever max_seq_len exceeds the 4096 floor,
-        # and _rope_from_idx would then grow it -- a from_torch (host write) reached from inside
-        # the traced forward, i.e. "TT_FATAL: Writes are not supported during trace capture".
-        # Today that is masked by the warmup forward happening to run first; matching the sizes
-        # makes it correct by construction instead of by luck.
+        # done on device in _rope_from_idx() by gathering the resident tables.
         if not tpc.wh_9b_n300(self.args):
             # BH and T3K/N150 keep the original host-computed, host-packed cos/sin: unchanged
             # flow. Narrowed from is_blackhole() -- confirmed not needed on T3K (Wormhole gating

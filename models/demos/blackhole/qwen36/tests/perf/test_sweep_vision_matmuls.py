@@ -720,7 +720,6 @@ def sweep_family(bench: FamilyBench, spec: MatmulSpec, passes: int) -> list[Resu
         if work is None:
             logger.info("  no legal 2D program config for this shape; keeping the auto path")
             break
-        # chunk size -- reflow per_core_*, they are derived from it
         cands = [
             fix_subblock(spec, bench, reflow(work.cand, chunk=c)) for c in chunk_options(spec) if c != work.cand.chunk
         ]

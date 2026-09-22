@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Checkpoint-free PCC gate and device-perf profile for the Qwen3.5 / 3.6 VISION TOWER.
 
-``test_wrapped_model.py`` is the tower's REAL-WEIGHT PCC test. It needs ``dummy_weights=True``, which
-routes the CONFIG through ``ModelArgs.LOCAL_HF_PARAMS``; that table used to have no ``Qwen3.5-9B``
-entry, so the 9B raised ``KeyError: 'Qwen3.5-9B'`` before reaching the device and had no runnable
-gate at all. It now has one (``model_params/Qwen3.5-9B/config.json``), so PREFER IT for numerics.
+``test_wrapped_model.py`` is the tower's REAL-WEIGHT PCC test and is preferred for numerics. Its
+``dummy_weights=True`` build reads the config from ``LOCAL_HF_PARAMS`` if the model has an entry,
+else from ``CKPT_DIR``.
 
 This test builds the HF reference from ``vision_config`` alone (``Qwen3_5VisionModel(vcfg)``, random
 weights), which needs no checkpoint and makes it cheap to run anywhere.
@@ -28,7 +27,7 @@ TWO CASES, EACH AT THE DEPTH THAT SUITS IT
     block every block op appears exactly once, so the perf report needs no dividing and no "read the
     second instance" caveat. A window is ``head + depth x block + tail``, so window totals are only
     comparable at equal depth -- keeping the profiled depth pinned at 1 is what makes the numbers in
-    ``../README-N300-9B.md`` ("Tower kernel tuning") mean the same thing run to run.
+    the main README ("Tower kernel tuning") mean the same thing run to run.
 
 ``fulldepth`` -- ALL ``vision_config.depth`` blocks, no warmup, no signposts. Depth matters for
     numerics: error compounds block over block, so a shallow check flatters the tower -- on the 9B,
@@ -77,25 +76,7 @@ from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionMo
 from models.tt_transformers.tt.ccl import TT_CCL
 
 # (grid, depth, pcc_required, profile). depth=None means the config's full depth.
-#
 # The thresholds are MEASURED values with a little margin, not aspirations. Demo grid, config-init
-# weights:
-#
-#              depth 1    depth 27 (full)
-#   9B  / N300  0.99977    0.99929
-#   27B / T3K   0.99965    0.99903
-#
-# These are HIGH because config-init weights have no activation outliers, not because the tower is
-# accurate to 4 nines on real input -- the real-weight numbers are ~0.988 (9B) and ~0.998 (27B), in
-# test_wrapped_model.py. A drop below these floors still means a real numerical regression, so they
-# are worth keeping; they just cannot be the only gate.
-#
-# The full-depth number was once ~0.985 here, and that was NOT bfloat8_b weight error as previously
-# assumed -- it was the sequence padding: the tower ran SDPA with `is_causal=False` and no
-# `attn_mask`, so the pad rows acted as unmasked keys and every real query summed `exp(0)` over each
-# of them. Tightening the pad from a 2048 multiple to the 128 the tower actually requires (see
-# `DropInVisionTransformer.forward`) fixed it. Note depth 1 barely moved: that error only appears
-# once compounded over depth, which is why the shallow case cannot be the gate.
 CASES = [
     ((1, 86, 128), 1, 0.999, True),
     ((1, 86, 128), None, 0.998, False),

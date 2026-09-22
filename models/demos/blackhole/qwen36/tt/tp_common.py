@@ -36,19 +36,7 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 # Same fidelity, fp32 destination accumulation OFF. Used ONLY by the GDN prefill in-projection (see
-# create_prefill_kpass1_matmul_program_config). Turning fp32 dest acc off does two things for that
-# matmul: it halves the intermediate CB and raises the output-subblock ceiling
-# from 4 to 8. Both are what make a ONE-K-PASS blocking (out_block_w ==
-# on, every one-pass variant is rejected with "circular buffers grow to 1524288/1615808/1798848 B
-# beyond max L1 size of 1499136 B".
-#
-# MEASURED (N150, M=2048 K=4096, DEVICE KERNEL DURATION; tests/perf/test_gdn_inproj_sweep.py):
-#     N=6912 cols=8 sub_w=3 blk_w=9  fp32_acc ON   3 K-passes  1493us   <- previous config
-#     N=6176 cols=8 sub_w=5 blk_w=25 fp32_acc OFF  1 K-pass    1255us   -16.0%
-# Accuracy cost is small but real: PCC vs fp32 torch 0.99997 -> 0.99992.
-# Deliberately a SEPARATE constant, not a change to COMPUTE_HIFI2, which is
-# MLP down-proj and both attention projections, which were tuned with fp32 dest accumulation on and
-# are not covered by the sweep above.
+# create_prefill_kpass1_matmul_program_config).
 COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=True,
@@ -57,18 +45,7 @@ COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
 )
 
 
-# LoFi + no fp32 dest acc, for the two attention prefill matmuls on Wormhole. Paired with
-# create_prefill_kpass1_matmul_program_config, exactly like COMPUTE_HIFI2_NO_FP32_ACC -- the
-# one-K-pass blocking requires fp32_dest_acc_en=False.
-#
-# LoFi is free here because both shapes take a BFLOAT8_B weight, whose 8-bit mantissa already
-# dominates the product's error, so HiFi2's ~2x math passes were paying for precision the operands
-# cannot represent. MEASURED (N300, M=2048, one K pass, tests/perf/test_all_matmuls_sweep.py):
-#     qkv 2048x4096x5120  1007.8 -> 887.3us  -12.0%   pcc 0.99992 -> 0.99985
-#     wo  2048x2048x4096   402.6 -> 328.9us  -18.3%   pcc 0.99987 -> 0.99981
-#
-# Kept SEPARATE from COMPUTE_HIFI2_NO_FP32_ACC rather than changing it: that constant is also the
-# GDN in-proj's, tuned at HiFi2 and not covered by this sweep.
+# LoFi + no fp32 dest acc, for the two attention prefill matmuls on Wormhole.
 COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=True,
@@ -227,20 +204,7 @@ def prefill_grid_default():
 # grid, but harvested P150s expose only 11, so tuning to 12 would not port. 11 x 10 = 110 cores.
 PREFILL_MAX_COLS_PORTABLE = 11
 
-# Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
 #   * widest_cols -- `_best_prefill_cols` ranks widths by (out_subblock_w, cols), subblock first.
-#     At TP=8 the halved N makes wide grids yield a narrow subblock, so that ranking retreats to
-#     fewer columns and leaves cores idle. Device time is monotonically decreasing in column count
-#     instead: attn_wo 1944us @ 60 cores -> 700us @ 110. Take the width.
-#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` tracks the per-device K, which halves.
-#     in0_block_w only has to DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo
-#     @ 11 cols: bw2 786us, bw4 719us, bw6 700us, bw8 705us).
-#
-# in0_block_w_cap is L1-BOUND, not just a legality bound: it sizes the in0 circular buffer, and
-# `_wo_proj` / the MLP prefill arm write their OUTPUT to L1, so the CBs and a resident L1 output
-# compete for the same 1536 KB. cap=8 overflows and test_model_tp_long_prefill dies on a CB/L1
-# clash. A standalone per-op sweep CANNOT see this -- in isolation the only L1 tenant is the op
-# under test -- so any raise of this cap must be validated by that test, not by the sweep.
 _PREFILL_TUNING = {
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
@@ -529,13 +493,6 @@ def _largest_divisor_le(n, cap):
 
 # Longest prefill M the full-grid MLP config below is used at. 2048 is the production chunk-outer
 # chunk size (demo/text_demo.py PREFILL_CHUNK, model.capture_prefill_trace_chunked), so the MLP never
-# sees more than this in production -- longer prompts arrive as multiple 2048 chunks. Above it, both
-# per_core_M and therefore every CB scale linearly and the one-K-pass + in0_block_w=8 blocking
-# overflows L1: MEASURED at m=4096 (per_core_M 8 -> 16) the down-proj asks for 2,398,912 B against
-# Wormhole's 1,499,136 B limit. Rather than de-tune the shape production actually runs, fall back to
-# the shared factory above this length -- the same "gate it at the only size it was measured safe at"
-# call gdn/tp.py makes for its L1 placement. The seq4096 case in
-# tests/perf/test_profile_single_layer_prefill.py is a scaling probe, not a served shape.
 PREFILL_FULL_GRID_MAX_M = 2048
 
 
@@ -908,7 +865,7 @@ def prefill_ccl_tuning():
     ~12.5 GB/s Wormhole link -- 55-65% efficiency, i.e. real headroom.
 
     Used by BOTH prefill collectives: the reduce-scatters (tt_all_reduce call sites in gdn/tp.py and
-    mlp.py) and the all-gathers (via tt/prefill_norm_tuned.py).
+    mlp.py) and the all-gathers (via the norm's prefill_ag_tuning).
 
     MEASURED on N300 at seq 2048, device times straight out of tt-perf-report:
 
@@ -1318,38 +1275,6 @@ def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
         v_s = v_part[s * v_per * dv : (s + 1) * v_per * dv, :]
         shards.append(torch.cat([q_s, k_s, v_s], dim=0))
     return torch.cat(shards, dim=0)
-
-
-def tuned_vocab_all_gather(input_tensor, mesh_device, tt_ccl, dim, topology, num_workers_per_link, chunks_per_sync):
-    """The LM-head vocab-sharded logits all-gather, with num_workers_per_link/chunks_per_sync as
-    real parameters (upstream's models.tt_transformers.tt.ccl.tt_all_gather hardcodes 2/10).
-
-    A local copy of that function's cluster_axis=None branch instead of a change to the shared
-    file: this model must not edit ccl.py (other models depend on it). Kept in sync with upstream
-    by inspection; if upstream's all_gather_async call shape changes, re-diff tt_all_gather here.
-    """
-    if list(mesh_device.shape) == [1, 1]:
-        return input_tensor
-    num_links = tt_ccl.get_num_links(None)
-    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-    if input_tensor.dtype != ttnn.bfloat16:
-        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-    gathered = ttnn.experimental.all_gather_async(
-        input_tensor,
-        persistent_output_buffer=None,
-        dim=dim,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-        num_links=num_links,
-        topology=topology,
-        memory_config=None,
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=2,
-        subdevice_id=None,
-    )
-    input_tensor.deallocate(True)
-    return gathered
 
 
 def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):

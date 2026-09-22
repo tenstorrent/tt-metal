@@ -284,6 +284,8 @@ def tt_all_gather(
     topology=ttnn.Topology.Linear,
     dtype=ttnn.bfloat16,
     subdevice_id=None,
+    chunks_per_sync=10,
+    num_workers_per_link=2,
 ):
     """
     Perform an all-gather operation across devices in a mesh.
@@ -332,8 +334,8 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
@@ -348,8 +350,8 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )

@@ -35,14 +35,6 @@ class Qwen36DecoderLayer:
 
         # Zero-centered RMSNorm (Qwen3.5): output = x_normed * (1 + weight), with the +1 applied
         # inside the framework RMSNorm via add_unit_offset=True.
-        #
-        # Under TP the residual stream is fractured along the hidden dim, so each norm is wrapped in
-        # DistributedNorm, which all-gathers (prefill: distributed rmsnorm + gather; decode:
-        # gather-then-norm) to hand the modules a replicated full-dim input. Prefill fuses that
-        # gather into the in-proj matmul for GDN qkvzab and full-attn QKV, and attention_norm then
-        # skips its post-norm AG; these gates must match the module-side _fuse_agmm gates.
-        # BH-only -- the fused grid assumes BH's taller 9-10 row compute grid, so WH falls back to
-        # unfused AG + matmul.
         self._fuse_norm_agmm = (
             self.num_devices > 1
             and is_blackhole()
@@ -51,24 +43,7 @@ class Qwen36DecoderLayer:
                 or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
             )
         )
-        # bf8 attention_norm prefill all-gather: done for GDN layers (see _attn_gather_dtype in
-        # forward()), NOT for full-attention layers -- paged_fill_cache rejects bf8 K/V against a
-        # bf16 cache, which needs a C++ change (see the contract note in attention/tp.py). That
-        # leaves 16 full-attention layers x 1,144us = 18.3ms/chunk on the table.
-        #
-        # The GDN blocker was ttnn.linear defaulting its out dtype to in0's, so a bf8 in0 silently
-        # made the whole qkvzab in-proj bf8 and the depthwise FIR's addcmul then rejected the mixed
-        # dtypes. The in-proj is now pinned to bf16 (gdn/tp.py _project_qkvzab), keeping the
-        # recurrent path bit-for-bit on its old dtypes.
-        #
-        # MEASURED (T3K TP=8, 27B, GDN layer, seq 2048): the gather 1,144 -> 698us, the whole layer
-        # 7,353 -> 6,889us (-6.3%), MLP control unchanged = -21.4ms per 2048-token chunk over 48 GDN
-        # layers. Cost: test_gdn_tp_prefill PCC 0.9992650 -> 0.9991681.
-        #
-        # The in-proj itself won only 14us (at 59% FPU it is compute-bound, not DRAM-bound). Its
-        # larger -149us would come from letting the narrowing cascade downstream, which the pin
-        # declines -- a real lever, but it lands on a/b -> sigmoid/softplus -> the recurrent decay,
-        # so it needs a demo-level accuracy gate.
+        # bf8 attention_norm prefill all-gather:
         self.attention_norm = self._make_norm(
             mesh_device,
             args,
@@ -185,22 +160,21 @@ class Qwen36DecoderLayer:
             ),
         )
         if self.num_devices > 1:
-            # PrefillTunedDistributedNorm == DistributedNorm except that the PREFILL all-gather gets
-            # tuned chunks_per_sync / num_workers_per_link (and, for ff_norm, a narrowed dtype).
-            # Upstream only honours the per-op CCL configs for mode == "decode" and hardcodes 10/2
-            # otherwise, which left the 9B's pre-norm gather at ~1,245us/layer; tuned it is ~1,015us.
-            # The 27B takes the other branch (post-norm gather) -- see tt/prefill_norm_tuned.py.
-            # Decode and TG delegate to upstream unchanged.
-            from models.demos.blackhole.qwen36.tt.prefill_norm_tuned import PrefillTunedDistributedNorm
+            from models.demos.blackhole.qwen36.tt import tp_common as tpc
+            from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
-            return PrefillTunedDistributedNorm(
+            # prefill_ag_tuning from tp_common.prefill_ccl_tuning() -- (10, 4) on Wormhole, the
+            # upstream (10, 2) on Blackhole. wpl=8 hangs 27B long prefill.
+            # The gathered dtype rides norm_config's distributed_output_dtype.
+            self._prefill_gather_dtype = prefill_gather_dtype
+            return DistributedNorm(
                 norm,
                 args,
                 tt_ccl=tt_ccl,
                 TG=args.is_galaxy,
                 ag_config_key=ag_key,
                 enable_all_gather=enable_all_gather,
-                prefill_gather_dtype=prefill_gather_dtype,
+                prefill_ag_tuning=(None, *tpc.prefill_ccl_tuning()),
             )
         return norm
 
@@ -228,14 +202,7 @@ class Qwen36DecoderLayer:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
             # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
-            #
             # MODEL-GATED on dim. This full-width [S, dim] output stays L1-resident across the whole
-            # layer, including the GDN chunk kernel. At S=2048 that is 262 KB/core for the 9B
-            # (dim 4096) and 328 KB/core for the 27B (dim 5120) over a Wormhole's 64 cores; the 27B
-            # figure leaves the chunk kernel ~20 KB short of placing its own CBs and it dies with
-            # "circular buffers ... clash with L1 buffers". Blackhole has both the larger L1 and ~110
-            # cores, so it keeps the tuned path. Gate on dim rather than model_name: HF_MODEL is often
-            # a hashed snapshot directory.
             _norm_l1_fits = self.args.dim <= 4096 or is_blackhole()
             if _norm_mode == Mode.PREFILL and _norm_l1_fits:
                 _attn_norm_config = {**_attn_norm_config, "distributed_output_mem_config": ttnn.L1_MEMORY_CONFIG}
@@ -252,27 +219,7 @@ class Qwen36DecoderLayer:
             _attn_norm_config = _ff_norm_config = (
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
-        # PER-CALL bf16 -> bf8 narrowing of attention_norm's prefill gather. This gather is the
-        # largest single line item in whole-model prefill (73.1ms/chunk, 16.7%), it is bytes-bound at
-        # TP=8, and bf8 is free inside the norm -- see prefill_norm_tuned.py and the __init__ block
-        # above for the measurements and for the two blockers that kept it bf16 until now.
-        #
-        # WHY PER CALL AND NOT A CONSTRUCTOR ARG (which is how ff_norm's is wired): the FIR blocker is
-        # a property of the CALL, not the layer. ttnn.addcmul needs all three operands to share a
-        # dtype, but the MAC FIR only runs on MASKED chunks; a full chunk takes ttnn.conv1d, which has
-        # no addcmul. At 64k that is 31 of 32 chunks. Same norm object, different answer per chunk.
-        #
-        # The gate is the GDN module's OWN predicate rather than a re-derivation: prefill_uses_native_
-        # conv1d() IS the expression forward_prefill uses for _use_native_conv1d. Out of sync, this
-        # crashes in ternary.cpp on exactly the masked tail chunk that no single-layer perf test
-        # reaches -- test_demo_text is the gate that matters. The batched-group prefill path in
-        # model.py calls attention_norm directly (no kwarg -> bf16), which is also correct: its GDN
-        # always takes the FIR because valid_lens is a per-row list.
-        #
-        # Full-attention layers stay bf16 (blocker 1, the KV cache). is_distributed_norm keeps this to
-        # the POST-norm gather -- the 27B, prefill, never the 9B and never decode -- because only that
-        # gather sends the norm's OUTPUT, where the dtype is a norm kwarg. Blackhole never gathers
-        # here at all (fused into the in-proj AGMM).
+        # PER-CALL bf16 -> bf8 narrowing of attention_norm's prefill gather.
         _attn_gather_dtype = None
         if (
             self.num_devices > 1
@@ -282,8 +229,11 @@ class Qwen36DecoderLayer:
             and self.attention.prefill_uses_native_conv1d(x.shape[-2], valid_len)
         ):
             _attn_gather_dtype = ttnn.bfloat8_b
-        _attn_norm_kw = {"prefill_gather_dtype": _attn_gather_dtype} if self.num_devices > 1 else {}
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config, **_attn_norm_kw)
+        # Narrow the gathered activation INSIDE the norm: rms_norm_post_all_gather takes a dtype,
+        # so this costs nothing versus a separate typecast after the collective.
+        if _attn_gather_dtype is not None and self.num_devices > 1:
+            _attn_norm_config = {**(_attn_norm_config or {}), "distributed_output_dtype": _attn_gather_dtype}
+        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
@@ -345,6 +295,9 @@ class Qwen36DecoderLayer:
         h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
+        _ffn_dtype = getattr(self, "_prefill_gather_dtype", None)
+        if _ffn_dtype is not None and self.num_devices > 1:
+            _ff_norm_config = {**(_ff_norm_config or {}), "distributed_output_dtype": _ffn_dtype}
         ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
         ff_output = self.feed_forward.forward(ff_input, mode=mode)

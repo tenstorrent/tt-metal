@@ -697,7 +697,7 @@ def test_decode_step_host_overhead(mesh_device, reset_seeds, ensure_gc):
     ttnn.synchronize_device(mesh_device)
     replay_ms = (time.perf_counter() - t0) * 1000.0 / ITERS
 
-    # (b) device + our per-step host input prep, exactly as always-refresh does it
+    # (b)
     t0 = time.perf_counter()
     for k in range(ITERS):
         pos_k = torch.full((WIDTH,), CTX - 64 + k, dtype=torch.int32)

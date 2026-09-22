@@ -462,8 +462,6 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     oracle_pf, oracle_rec, oracle_dec = [], [], [[] for _ in range(B)]
     # Token actually fed at each oracle decode step, replayed into the batched path below so both
     # sides consume IDENTICAL tokens. Without this each path follows its OWN argmax, and a single
-    # tie-flip (1e-4 numerics) makes the later-step PCC measure token divergence, not correctness --
-    # the ~0.52-0.65 decode1 artifact this file documents in test_model_tp_prefill_chunked_batched.
     oracle_fed = [[] for _ in range(B)]
     for u in range(B):
         lg = omodel.prefill_traced_chunked(torch.tensor([prompts[u]], dtype=torch.long), opt, actual_len=T)
@@ -526,12 +524,6 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     pos = list(prompt_lens)
     # TEACHER-FORCED from the oracle's chain (oracle_fed above), matching what
     # test_model_tp_decode_batched and test_model_tp_prefill_paged_slots already do.
-    # SCOPED to Wormhole (test_factory.validated_on_wormhole) -- every WH mesh and both models.
-    # Teacher forcing CHANGES WHAT THIS TEST MEASURES, but self-feeding is not a usable baseline:
-    # on random-token prompts one flipped argmax makes step s+1 compare two different continuations
-    # (~0.52-0.65 at decode1 against a 0.97 gate), so the fix is needed wherever that was seen.
-    # Blackhole keeps the previously shipped self-fed chain -- it takes different fused paths and
-    # the artifact was not reproduced there.
     _tf = validated_on_wormhole()
     _fed = None if _tf else [int(torch.argmax(batched_pf[u])) for u in range(B)]
     for s in range(N_DEC):
@@ -829,19 +821,9 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     pos = list(prompt_lens)
     # TEACHER-FORCED from the oracle chain, matching test_model_tp_decode_batched. Letting each
     # stack feed its own argmax makes the per-step PCC meaningless: the prompts are random tokens
-    # (torch.randint over the whole vocab), so the logit distribution is near-flat and the argmax is
-    # a coin flip. One flipped token at decode s makes step s+1 a comparison of two DIFFERENT
-    # continuations -- measured PCC ~0.52-0.65 at decode1 while decode0 was >=0.97, which reads as a
-    # catastrophic model bug and is purely the harness diverging in token space. Feeding the oracle's
-    # tokens keeps "batch scratch-swap + state assembly + batched-decode routing" the only delta,
-    # which is what this test claims to isolate.
     tok_divergence = []  # (user, step, oracle_tok, batched_tok) — reported, not fatal
     # SCOPED to Wormhole (test_factory.validated_on_wormhole) -- every WH mesh and both models.
     # Teacher forcing CHANGES WHAT THIS TEST MEASURES, but self-feeding is not a usable baseline:
-    # on random-token prompts one flipped argmax makes step s+1 compare two different continuations
-    # (~0.52-0.65 at decode1 against a 0.97 gate), so the fix is needed wherever that was seen.
-    # Blackhole keeps the previously shipped self-fed chain -- it takes different fused paths and
-    # the artifact was not reproduced there.
     _tf = validated_on_wormhole()
     _fed = None if _tf else [int(torch.argmax(batched_pf[u])) for u in range(B)]
     for s in range(N_DEC):
