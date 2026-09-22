@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_moe_fused_swiglu
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_fused_swiglu REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_fused_swiglu TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_moe_fused_swiglu)
 
 set_target_properties(
