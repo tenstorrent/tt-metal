@@ -11,11 +11,10 @@ Both tests run on TT hardware using input tokens and reference KV from a GPU cap
 
 From the repository root, apply the [environment setup](PREFILL_SERVICE.md). Set `PREFILL_TRACE_DIR` to select a GPU capture, or use the adapter's default.
 
-Run mock tests:
+Run the mock test:
 
 ```bash
-pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py \
-    -k mock -sv --basetemp=/tmp/gemma4-migration-mock
+pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-256k] -sv
 ```
 
 For loopback, first [build and start the migration endpoint](PREFILL_TEST_FLOWS.md#loopback-16k), then run:
@@ -25,13 +24,13 @@ GEMMA4_TEST_LOOPBACK=1 pytest models/demos/gemma4_d_p/tests/test_prefill_migrati
     -k loopback -sv --basetemp=/tmp/gemma4-migration-loopback
 ```
 
-These commands run all cases for the selected mode. List available cases with:
+The loopback command runs all loopback cases. List available cases with:
 
 ```bash
 pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py --collect-only -q
 ```
 
-To run one case, pass its quoted node ID instead of the file path and `-k` filter.
+Use a quoted node ID from this list to select another case.
 
 ## Reported metrics
 
@@ -45,4 +44,4 @@ The test prints a table with one row per layer and an overall row, pooling all c
 
 The JSON report also includes per-head PCC, minimum PCC by cache type, and validation timings. Pass/fail criteria are defined in the [test](../tests/test_prefill_migration.py).
 
-Each case saves `runner.log`, `producer.log`, and `gemma4_slot*.json` beneath `--basetemp`. Follow `runner.log` for live progress; the metrics table appears in the pytest console after validation.
+Each case saves `runner.log`, `producer.log`, and `gemma4_slot*.json` in its pytest temporary directory. Follow `runner.log` for live progress; the metrics table appears in the pytest console after validation.
