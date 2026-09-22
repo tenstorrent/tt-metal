@@ -46,7 +46,19 @@ def metrics(actual, expected):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mode", choices=("baseline", "swiglu", "mlp", "mlp_reduce", "mlp_tail", "norm_mlp_tail"), required=True
+        "--mode",
+        choices=(
+            "baseline",
+            "swiglu",
+            "mlp",
+            "mlp_reduce",
+            "mlp_tail",
+            "norm_mlp_tail",
+            "gather_norm_mlp_tail",
+            "post_attention",
+            "attention_tail",
+        ),
+        required=True,
     )
     parser.add_argument("--context", type=int, default=128)
     parser.add_argument("--tokens", type=int, default=32)

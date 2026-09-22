@@ -61,8 +61,21 @@ def copy_to(value, target, mesh):
         ("mlp_reduce", False),
         ("mlp_tail", False),
         ("norm_mlp_tail", False),
+        ("gather_norm_mlp_tail", False),
+        ("post_attention", False),
+        ("attention_tail", False),
     ],
-    ids=["swiglu", "mlp", "mlp_shared", "mlp_reduce", "mlp_tail", "norm_mlp_tail"],
+    ids=[
+        "swiglu",
+        "mlp",
+        "mlp_shared",
+        "mlp_reduce",
+        "mlp_tail",
+        "norm_mlp_tail",
+        "gather_norm_mlp_tail",
+        "post_attention",
+        "attention_tail",
+    ],
 )
 def test_fused_layer_real_weights(qb2_mesh, mode, reuse_scratch):
     torch.set_num_threads(8)

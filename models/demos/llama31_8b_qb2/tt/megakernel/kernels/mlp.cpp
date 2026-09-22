@@ -21,8 +21,15 @@ constexpr auto product_args = TensorAccessorArgs<packed_args.next_compile_time_a
 constexpr auto output_args = TensorAccessorArgs<product_args.next_compile_time_args_offset()>();
 constexpr auto table_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
+#ifdef FUSE_OUTPUT
+constexpr auto o_weight_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
+constexpr auto o_input_args = TensorAccessorArgs<o_weight_args.next_compile_time_args_offset()>();
+constexpr unsigned coord_start = 8;
+#else
+constexpr unsigned coord_start = 7;
+#endif
 uint64_t worker_address(uint32_t worker, uint32_t address) {
-    return get_noc_addr(get_arg_val<uint32_t>(7 + 2 * worker), get_arg_val<uint32_t>(8 + 2 * worker), address);
+    return get_noc_addr(get_arg_val<uint32_t>(coord_start + 2 * worker), get_arg_val<uint32_t>(coord_start + 1 + 2 * worker), address);
 }
 
 void wait_phase(uint32_t id) {
@@ -68,6 +75,20 @@ void kernel_main() {
     noc_async_read(table.get_noc_addr(get_arg_val<uint32_t>(6)), scratch, 128);
     noc_async_read_barrier();
     const auto* addresses = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+#ifdef FUSE_OUTPUT
+    if (bank < 8) {
+#ifdef FUSE_ATTENTION
+        {
+            DeviceZoneScopedN("MLP-WAIT-ATTENTION");
+            wait_phase(14);
+        }
+#endif
+        DeviceZoneScopedN("MLP-O-READ");
+        const auto attn = TensorAccessor(o_input_args, get_arg_val<uint32_t>(7), 2048);
+        const auto weight = TensorAccessor(o_weight_args, addresses[2], 1088);
+        stream_projection<6, 7, 4, 16, 32, 8>(attn, weight, bank);
+    }
+#endif
 #ifdef FUSE_NORM
     {
         DeviceZoneScopedN("MLP-WAIT-NORM");
@@ -99,6 +120,24 @@ void kernel_main() {
 #elif defined(PROJECTION) && defined(WRITER)
 void kernel_main() {
     const uint32_t bank = get_arg_val<uint32_t>(0);
+#ifdef FUSE_OUTPUT
+    if (bank < 8) {
+        DeviceZoneScopedN("MLP-O-WRITE");
+        cb_wait_front(17, 16);
+        const auto output = TensorAccessor(output_args, get_arg_val<uint32_t>(4), 2048);
+        for (uint32_t tile = 0; tile < 16; ++tile) {
+            noc_async_write_page(bank * 16 + tile, output, get_read_ptr(17) + tile * 2048);
+        }
+        noc_async_write_barrier();
+        cb_pop_front(17, 16);
+        notify_coordinator(10);
+        if (bank == 0) {
+            noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(10)), 8);
+            release_workers(11, GU_WORKERS + 16, GU_WORKERS + 18);
+        }
+        noc_async_atomic_barrier();
+    }
+#endif
     cb_wait_front(16, gu_width);
     notify_coordinator(0);
     if (bank == 0) {
@@ -228,6 +267,13 @@ void projection() {
 }
 
 void kernel_main() {
+#ifdef FUSE_OUTPUT
+    if (get_arg_val<uint32_t>(0) < 8) {
+        DeviceZoneScopedN("MLP-O-MATH");
+        compute_kernel_hw_startup<SrcOrder::Reverse>(6, 7, 25);
+        projection<6, 7, 17, 25, 4, 16, 32>();
+    }
+#endif
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 24);
     {
         DeviceZoneScopedN("MLP-GU-MATH");

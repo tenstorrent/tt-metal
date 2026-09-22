@@ -6,7 +6,8 @@ This experimental body preserves the checkpoint's selected quantized weights.
 It has eight projection workers and sixteen independent SFPU workers. The
 same compiled body and scratch allocations are reused for every layer; a
 device DRAM table selects weights. Optional four-chip reduction shares the
-program; normalization and attention remain outside this body.
+program. Optional stages include native RMSNorm, all-gather and the output
+projection; attention remains outside this body.
 """
 
 from pathlib import Path
@@ -34,7 +35,18 @@ class FusedMLP:
     valid only until the next invocation, matching the decoder workspace rule.
     """
 
-    def __init__(self, layers, *, reuse_scratch=False, fuse_reduce=False, gu_workers=8, fuse_norm=False):
+    def __init__(
+        self,
+        layers,
+        *,
+        reuse_scratch=False,
+        fuse_reduce=False,
+        gu_workers=8,
+        fuse_norm=False,
+        fuse_gather=False,
+        fuse_output=False,
+        fuse_attention=False,
+    ):
         if not layers or len(layers) > 32:
             raise ValueError("Provide one to 32 decoder layers")
         if gu_workers not in (8, 16):
@@ -44,6 +56,16 @@ class FusedMLP:
         self.reuse_scratch = reuse_scratch
         self.fuse_reduce = fuse_reduce
         self.fuse_norm = fuse_norm
+        self.fuse_gather = fuse_gather
+        self.fuse_output = fuse_output
+        self.fuse_attention = fuse_attention
+        if fuse_attention and not fuse_output:
+            raise ValueError("Attention composition requires the full post-attention body")
+        if fuse_output and not fuse_gather:
+            raise ValueError("Output projection composition requires the gathered MLP tail")
+        if fuse_gather and not (fuse_norm and fuse_reduce):
+            raise ValueError("All-gather composition requires norm and reduction")
+        self.gather_output = layers[0].decode_workspace.buffers["mlp"] if fuse_gather else None
         self.mesh = layers[0].mesh_device
         if self.mesh.arch() != ttnn.device.Arch.BLACKHOLE or self.mesh.dram_grid_size().x != 8:
             raise ValueError("Fused MLP requires Blackhole with eight DRAM banks")
@@ -78,10 +100,11 @@ class FusedMLP:
                 raise ValueError("All layers must share the same down-input layout")
             if layer.mesh_device is not self.mesh or layer.decode_workspace.batch != 1:
                 raise ValueError("All layers must share this mesh and a batch-one decode workspace")
-            for role, shape, dtype in (
+            roles = (
                 ("gate_up", (4096, 7168), ttnn.bfloat4_b),
                 ("down", (3584, 4096), ttnn.bfloat8_b),
-            ):
+            ) + ((("o", (1024, 4096), ttnn.bfloat8_b),) if fuse_output else ())
+            for role, shape, dtype in roles:
                 weight = layer.decode_weights[role]
                 if tuple(weight.shape) != shape or weight.dtype != dtype:
                     raise ValueError(f"Unsupported {role} weight shape/precision")
@@ -113,6 +136,11 @@ class FusedMLP:
             from .norm import FusedNorm
 
             self.normalizer = FusedNorm(self.mesh, layers[0].decode_inputs["gate_up"], layers[0].eps)
+        self.attention_stage = None
+        if fuse_attention:
+            from .attention import FusedAttention
+
+            self.attention_stage = FusedAttention(layers[0])
         self.reduction = None
         if fuse_reduce:
             from .reduce_scatter import CompactReduceScatter
@@ -149,6 +177,8 @@ class FusedMLP:
         for i, layer in enumerate(layers):
             addresses[i, 0] = layer.decode_weights["gate_up"].buffer_address()
             addresses[i, 1] = layer.decode_weights["down"].buffer_address()
+            if fuse_output:
+                addresses[i, 2] = layer.decode_weights["o"].buffer_address()
         self.address_table = ttnn.from_torch(
             addresses,
             dtype=ttnn.uint32,
@@ -158,7 +188,7 @@ class FusedMLP:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
 
-    def descriptor(self, normalized, layer_index):
+    def descriptor(self, normalized, layer_index, attention=None):
         if not 0 <= layer_index < len(self.layers):
             raise ValueError("Layer index outside the address table")
         if tuple(normalized.shape) != (1, 1, 1, 4096) or normalized.dtype != ttnn.bfloat16:
@@ -174,6 +204,10 @@ class FusedMLP:
             self.output,
             self.address_table,
         )
+        if self.fuse_output:
+            if tuple(attention.shape) != (1, 1, 1, 1024) or attention.dtype != ttnn.bfloat16:
+                raise ValueError("Expected batch-one concatenated BF16 attention")
+            tensors = (*tensors, self.layers[0].decode_weights["o"], attention)
         ct = []
         for tensor in tensors:
             ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
@@ -191,6 +225,8 @@ class FusedMLP:
             self.address_table.buffer_address(),
             layer_index,
         ]
+        if self.fuse_output:
+            common.append(attention.buffer_address())
         for bank, core in enumerate(self.projection_cores):
             rt_projection[core.x][core.y] = [bank, *common, *coord_args]
         for rank, core in enumerate(self.sfpu_cores):
@@ -228,7 +264,9 @@ class FusedMLP:
                         runtime_args=rt,
                         defines=[(role, "1"), (risc, "1"), ("GU_WORKERS", str(self.gu_workers))]
                         + ([("FUSE_REDUCE", "1")] if self.fuse_reduce else [])
-                        + ([("FUSE_NORM", "1")] if self.fuse_norm else []),
+                        + ([("FUSE_NORM", "1")] if self.fuse_norm else [])
+                        + ([("FUSE_OUTPUT", "1")] if self.fuse_output else [])
+                        + ([("FUSE_ATTENTION", "1")] if self.fuse_attention else []),
                         config=config,
                     )
                 )
@@ -259,6 +297,9 @@ class FusedMLP:
             (25, 16, ttnn.bfloat16),
         ):
             cb(index, tiles, dtype, self.projection_grid)
+        if self.fuse_output:
+            cb(6, 8, ttnn.bfloat16, self.projection_grid)
+            cb(7, 128, ttnn.bfloat8_b, self.projection_grid)
         cb(31, 1, ttnn.uint32, self.projection_grid)
         for index in (0, 1, 2):
             cb(index, 4, ttnn.bfloat16, self.sfpu_grid)
@@ -269,38 +310,63 @@ class FusedMLP:
             )
         )
         semaphores = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_grid, initial_value=0)
-            for i in range(10 if self.fuse_norm else 6 if self.fuse_reduce else 4)
+            ttnn.SemaphoreDescriptor(
+                id=i,
+                core_ranges=(
+                    self.all_grid
+                    if i < 6 or (self.fuse_output and i in (11, 13))
+                    else _grid(self.projection_cores + self.sfpu_cores + self.norm_cores)
+                ),
+                initial_value=0,
+            )
+            for i in range(
+                14
+                if self.fuse_output
+                else 13 if self.fuse_gather else 10 if self.fuse_norm else 6 if self.fuse_reduce else 4
+            )
         ]
         return ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
 
-    def __call__(self, normalized, layer_index, residual=None):
+    def __call__(self, normalized, layer_index, residual=None, attention_inputs=None):
         if residual is not None and self.reduction is None:
             raise ValueError("Residual fusion requires four-chip reduction")
-        norm_input = normalized
+        attention = self.attention_stage.output if self.fuse_attention else normalized if self.fuse_output else None
+        norm_input = self.gather_output if self.fuse_gather else normalized
         if self.normalizer is not None:
             normalized = self.normalizer.output
         if self.reduction is None:
-            descriptor = self.descriptor(normalized, layer_index)
+            descriptor = self.descriptor(normalized, layer_index, attention)
             if self.normalizer is not None:
                 descriptor = self.normalizer.append(descriptor, norm_input, self.projection_cores)
         else:
             descriptor = ttnn.MeshProgramDescriptor()
             for rank in range(4):
                 coord = ttnn.MeshCoordinate(0, rank)
-                local = self.descriptor(normalized, layer_index)
+                local = self.descriptor(normalized, layer_index, attention)
                 if self.normalizer is not None:
-                    local = self.normalizer.append(local, norm_input, self.projection_cores)
+                    local = self.normalizer.append(
+                        local, norm_input, self.projection_cores, wait_for_gather=self.fuse_gather
+                    )
+                if self.attention_stage is not None:
+                    local = self.attention_stage.append(local, attention_inputs, self.projection_cores)
                 descriptor[ttnn.MeshCoordinateRange(coord, coord)] = self.reduction.append(
                     local,
                     self.output,
                     rank,
                     wait_for_mlp=True,
                     residual=residual,
+                    gathered=self.gather_output,
+                    norm_cores=self.norm_cores,
+                    fuse_output=self.fuse_output,
                 )
         # Keep every table-referenced weight resident; the returned scratch is
         # consumed by reduce-scatter before the next decoder invokes this body.
         io = [normalized, self.address_table, self.packed, self.product, *self.scratch_storage]
+        if self.attention_stage is not None:
+            io.extend([*attention_inputs, self.attention_stage.heads])
+        if self.fuse_output:
+            io.append(attention)
+            io.extend(layer.decode_weights["o"] for layer in self.layers)
         if self.normalizer is not None:
             io.append(norm_input)
         if residual is not None:

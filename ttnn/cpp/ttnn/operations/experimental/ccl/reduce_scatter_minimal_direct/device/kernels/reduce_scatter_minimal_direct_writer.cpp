@@ -18,6 +18,10 @@
 
 #include "cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_common.hpp"
 
+#ifdef FUSED_PREFIX_HEADER
+#include "tools/profiler/kernel_profiler.hpp"
+#endif
+
 using address_t = uint32_t;
 
 // Direct (one-shot) reduce-scatter writer: owns the fabric, sends this core's tile range of local input
@@ -172,6 +176,12 @@ void kernel_main() {
         // Free function: init_sem arrives as a GlobalSemaphore address. See the reader's note.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_sem), (invocation + 1) * num_dests);
     }
+
+    // Composed producer phase shares these open fabric connections, after
+    // every peer enters this invocation and before reduction payloads.
+#ifdef FUSED_PREFIX_HEADER
+#include FUSED_PREFIX_HEADER
+#endif
 
     for (uint32_t dst = 0; dst < num_dests; ++dst) {
         const uint8_t hops = static_cast<uint8_t>(get_arg_val<uint32_t>(dest_hops + dst));

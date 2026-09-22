@@ -14,11 +14,44 @@
 #include <nanobind/stl/variant.h>
 
 #include "sdpa_decode.hpp"
+#include "device/sdpa_decode_device_operation.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::transformer {
 
 void bind_sdpa_decode(nb::module_& mod) {
+    // Experimental composition hook: builds the current native descriptor without
+    // enqueueing. All tensors must outlive any generic program/trace using it.
+    mod.def(
+        "_create_paged_sdpa_decode_descriptor",
+        [](const Tensor& q,
+           const Tensor& k,
+           const Tensor& v,
+           const Tensor& page_table,
+           const Tensor& current_pos,
+           Tensor output,
+           const SDPAProgramConfig& program_config,
+           const DeviceComputeKernelConfig& compute_kernel_config) {
+            TT_FATAL(program_config.k_chunk_size > 0, "Descriptor composition requires an explicit K chunk size");
+            ttnn::prim::SdpaDecodeParams attributes{
+                .is_causal = true,
+                .paged_attention = true,
+                .output_mem_config = output.memory_config(),
+                .program_config = program_config,
+                .compute_kernel_config = compute_kernel_config,
+                .k_chunk_size = program_config.k_chunk_size,
+            };
+            ttnn::prim::SdpaDecodeInputs inputs{
+                .q = q, .k = k, .v = v, .cur_pos_tensor = current_pos, .page_table_tensor = page_table};
+            using Operation = ttnn::prim::SdpaDecodeDeviceOperation;
+            Operation::validate_on_program_cache_miss(attributes, inputs);
+            TT_FATAL(
+                output.tensor_spec() == Operation::compute_output_specs(attributes, inputs),
+                "Output specification must match native paged SDPA decode");
+            return Operation::create_descriptor(attributes, inputs, output);
+        },
+        nb::arg("q"), nb::arg("k"), nb::arg("v"), nb::arg("page_table"), nb::arg("current_pos"),
+        nb::arg("output"), nb::arg("program_config"), nb::arg("compute_kernel_config"));
     const auto* const doc =
         R"doc(
         A version of scaled dot product attention specifically for decode.

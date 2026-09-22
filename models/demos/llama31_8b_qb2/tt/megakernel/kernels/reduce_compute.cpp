@@ -8,7 +8,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-void kernel_main() {
+void reduce_add_phase() {
     compute_kernel_hw_startup(1, 1, 17);
     const auto* generation_read = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(2));
     invalidate_l1_cache();
@@ -48,4 +48,11 @@ void kernel_main() {
     }
     auto* generation = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(2));
     PACK((*generation = invocation + 1));
+}
+
+void kernel_main() {
+    reduce_add_phase();
+#ifdef FUSE_OUTPUT
+    reduce_add_phase();
+#endif
 }

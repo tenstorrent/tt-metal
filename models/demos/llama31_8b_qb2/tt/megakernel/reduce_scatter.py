@@ -33,11 +33,22 @@ class CompactReduceScatter:
         )
         # Native contract: arrivals[4], reader_gen, writer_gen, compute_gen,
         # init_sync. Keep these alive through all cached programs and traces.
-        self.semaphores = [ttnn.create_global_semaphore(mesh, self.grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(8)]
+        self.semaphores = [ttnn.create_global_semaphore(mesh, self.grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(9)]
         self.addresses = [ttnn.get_global_semaphore_address(s) for s in self.semaphores]
         ttnn.synchronize_device(mesh)
 
-    def append(self, program, input_tensor, rank, *, wait_for_mlp=False, residual=None):
+    def append(
+        self,
+        program,
+        input_tensor,
+        rank,
+        *,
+        wait_for_mlp=False,
+        residual=None,
+        gathered=None,
+        norm_cores=(),
+        fuse_output=False,
+    ):
         if tuple(input_tensor.shape) != (1, 1, 1, 4096) or input_tensor.dtype != ttnn.bfloat16:
             raise ValueError("Expected BF16 batch-one four-way reduction input")
         # All descriptors in this body use disjoint worker cores. The local MLP
@@ -54,6 +65,16 @@ class CompactReduceScatter:
         if residual is not None:
             reader_ct += accessor(residual)
         writer_ct = [2048, 8, 4, 32, 4, 4, 0, 16, 1, 0, 1] + accessor(self.output) + accessor(self.output)
+        gather_ct_offset = len(writer_ct)
+        writer_defines = [("LOCAL_STAGING_CB", "1")] + ([("FUSE_OUTPUT", "1")] if fuse_output else [])
+        if gathered is not None:
+            if residual is None or len(norm_cores) != 8 or gathered.memory_config().shard_spec.shape != [32, 512]:
+                raise ValueError("Gather prefix requires residual and eight 512-column output shards")
+            writer_ct += accessor(gathered)
+            writer_defines += [
+                ("FUSED_PREFIX_HEADER", '"models/demos/llama31_8b_qb2/tt/megakernel/kernels/all_gather_prefix.hpp"'),
+                ("AG_CT_OFFSET", str(gather_ct_offset)),
+            ]
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         kernel_base = len(program.kernels)
         additions = [
@@ -63,19 +84,24 @@ class CompactReduceScatter:
                     [("FUSE_RESIDUAL", "1"), ("RESIDUAL_CT_OFFSET", str(residual_offset))]
                     if residual is not None
                     else []
-                ),
+                )
+                + ([("FUSE_OUTPUT", "1")] if fuse_output else []),
                 core_ranges=self.grid,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=native + "reduce_scatter_minimal_direct_writer.cpp",
+                kernel_source=(
+                    str(Path(__file__).with_name("kernels") / "reduce_writer.cpp")
+                    if fuse_output
+                    else native + "reduce_scatter_minimal_direct_writer.cpp"
+                ),
                 core_ranges=self.grid,
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
-                defines=[("LOCAL_STAGING_CB", "1")],
+                defines=writer_defines,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=(
@@ -84,6 +110,7 @@ class CompactReduceScatter:
                     else native + "reduce_scatter_minimal_direct_compute.cpp"
                 ),
                 core_ranges=self.grid,
+                defines=[("FUSE_OUTPUT", "1")] if fuse_output else [],
                 compile_time_args=[8, 4, 1, 16, 0],
                 runtime_args=compute_rt,
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False),
@@ -136,6 +163,8 @@ class CompactReduceScatter:
             ]
             if residual is not None:
                 reader_rt[core.x][core.y] = [*reader_rt[core.x][core.y], residual.buffer_address()]
+                if fuse_output:
+                    reader_rt[core.x][core.y] = [*reader_rt[core.x][core.y], self.output.buffer_address()]
             compute_rt[core.x][core.y] = [2, 16, self.addresses[6]]
             args = [
                 0,
@@ -169,12 +198,30 @@ class CompactReduceScatter:
                     core,
                 )
             )
+            if gathered is not None:
+                gather_rt_offset = len(args)
+                coordinator = self.mesh.worker_core_from_logical_core(self.cores[0])
+                coords = [self.mesh.worker_core_from_logical_core(c) for c in norm_cores]
+                args.extend(
+                    [
+                        gathered.buffer_address(),
+                        self.addresses[8],
+                        coordinator.x,
+                        coordinator.y,
+                        *[v for c in coords for v in (c.x, c.y)],
+                    ]
+                )
             writer_rt[core.x][core.y] = args
         # Descriptor bindings copy RuntimeArgs; apply after population. Preserve
         # fabric setup's added defines and semaphore descriptors.
         kernels = list(program.kernels)
         for kernel, rt in zip(kernels[kernel_base:], (reader_rt, writer_rt, compute_rt)):
             kernel.runtime_args = rt
+        if gathered is not None:
+            kernels[kernel_base + 1].defines = [
+                *kernels[kernel_base + 1].defines,
+                ("AG_RT_OFFSET", str(gather_rt_offset)),
+            ]
         program.kernels = kernels
         return program
 

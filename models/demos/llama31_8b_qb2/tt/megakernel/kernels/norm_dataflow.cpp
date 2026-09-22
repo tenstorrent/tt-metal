@@ -12,6 +12,12 @@ uint64_t norm_address(uint32_t rank, uint32_t addr) {
 void kernel_main() {
     const uint32_t rank=get_arg_val<uint32_t>(0);
 #ifdef READER
+#ifdef FUSE_GATHER
+    {
+        DeviceZoneScopedN("MLP-NORM-WAIT-GATHER");
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(12)),1);
+    }
+#endif
     // Reduction packing writes only the statistic column. Clear masked lanes
     // before publishing input so later full-row reduction cannot see old L1.
     for (uint32_t cb : {7u, 8u, 11u}) {

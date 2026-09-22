@@ -12,7 +12,38 @@ from .swiglu import fused_swiglu
 
 
 class ExperimentalDecoder(LlamaDecoder):
+    def decode_forward(self, x, *, current_pos, page_table, kv_cache, rotary_pos=None):
+        if self.fusion_mode != "attention_tail":
+            return super().decode_forward(
+                x, current_pos=current_pos, page_table=page_table, kv_cache=kv_cache, rotary_pos=rotary_pos
+            )
+        self._validate_cache(page_table, kv_cache)
+        if tuple(x.shape) != (1, 1, 1, self.hidden):
+            raise ValueError("Fused attention supports only batch-one decode")
+        if tuple(current_pos.shape) != (1,) or current_pos.dtype != ttnn.int32 or page_table.shape[0] != 1:
+            raise ValueError("Expected one device position and page-table row")
+        residual = ttnn.to_memory_config(x, self.local_residual_memcfg)
+        normalized = self._norm_input(residual, decode=True, site="attn")
+        q, k, v = self._create_decode_heads(self._decode_linear(normalized, "qkv"), 1)
+        cos, sin = self._rope_tables(current_pos if rotary_pos is None else rotary_pos, 1, q.memory_config())
+        q = self._decode_rope(q, cos, sin)
+        k = self._decode_rope(k, cos, sin)
+        self._update_cache(k, v, current_pos, page_table, kv_cache)
+        # Preserve the native cache contract for chunks extending past the
+        # logical page-table row; masked reads still need a valid physical page.
+        pages_per_chunk = max(1, 256 // self.page_size)
+        tail_pages = (-page_table.shape[1]) % pages_per_chunk
+        attention_table = ttnn.pad(page_table, ((0, 0), (0, tail_pages)), value=0) if tail_pages else page_table
+        return self.fused_body(
+            q,
+            self.fused_layer_index,
+            residual=residual,
+            attention_inputs=(q, kv_cache[0], kv_cache[1], current_pos, attention_table),
+        )
+
     def _decode_finish(self, residual, attention):
+        if self.fusion_mode == "post_attention":
+            return self.fused_body(attention, self.fused_layer_index, residual=residual)
         projected = self._output_projection(attention, "o")
         residual = ttnn.add(
             residual,
@@ -20,18 +51,42 @@ class ExperimentalDecoder(LlamaDecoder):
             memory_config=self.local_residual_memcfg,
         )
         normalized = (
-            self._ag(residual, decode=True, site="mlp")
-            if self.fusion_mode == "norm_mlp_tail"
-            else self._norm_input(residual, decode=True, site="mlp")
+            residual
+            if self.fusion_mode == "gather_norm_mlp_tail"
+            else (
+                self._ag(residual, decode=True, site="mlp")
+                if self.fusion_mode == "norm_mlp_tail"
+                else self._norm_input(residual, decode=True, site="mlp")
+            )
         )
-        normalized = ttnn.to_memory_config(normalized, self.decode_inputs["gate_up"])
-        if self.fusion_mode in ("mlp", "mlp_reduce", "mlp_tail", "norm_mlp_tail"):
+        if self.fusion_mode != "gather_norm_mlp_tail":
+            normalized = ttnn.to_memory_config(normalized, self.decode_inputs["gate_up"])
+        if self.fusion_mode in (
+            "mlp",
+            "mlp_reduce",
+            "mlp_tail",
+            "norm_mlp_tail",
+            "gather_norm_mlp_tail",
+            "post_attention",
+            "attention_tail",
+        ):
             local_down = self.fused_body(
                 normalized,
                 self.fused_layer_index,
-                residual=residual if self.fusion_mode in ("mlp_tail", "norm_mlp_tail") else None,
+                residual=(
+                    residual
+                    if self.fusion_mode
+                    in ("mlp_tail", "norm_mlp_tail", "gather_norm_mlp_tail", "post_attention", "attention_tail")
+                    else None
+                ),
             )
-            if self.fusion_mode in ("mlp_tail", "norm_mlp_tail"):
+            if self.fusion_mode in (
+                "mlp_tail",
+                "norm_mlp_tail",
+                "gather_norm_mlp_tail",
+                "post_attention",
+                "attention_tail",
+            ):
                 return local_down
             down = local_down if self.fusion_mode == "mlp_reduce" else self._rs(local_down, decode=True, site="down")
         else:
@@ -53,16 +108,29 @@ def experimental_layers(layers, *, mode="mlp", reuse_scratch=False, gu_workers=8
     resulting layers and must retain them until all referencing traces release.
     Prefill is inherited unchanged. This does not fuse the complete decoder.
     """
-    if mode not in ("swiglu", "mlp", "mlp_reduce", "mlp_tail", "norm_mlp_tail"):
-        raise ValueError("mode must be swiglu, mlp, mlp_reduce or mlp_tail")
+    if mode not in (
+        "swiglu",
+        "mlp",
+        "mlp_reduce",
+        "mlp_tail",
+        "norm_mlp_tail",
+        "gather_norm_mlp_tail",
+        "post_attention",
+        "attention_tail",
+    ):
+        raise ValueError(f"Unknown experimental decode mode: {mode}")
     if not layers or any(layer.decode_workspace.batch != 1 for layer in layers):
         raise ValueError("Experimental decode supports only prepared batch-one layers")
     body = (
         FusedMLP(
             layers,
             reuse_scratch=reuse_scratch,
-            fuse_reduce=mode in ("mlp_reduce", "mlp_tail", "norm_mlp_tail"),
-            fuse_norm=mode == "norm_mlp_tail",
+            fuse_reduce=mode
+            in ("mlp_reduce", "mlp_tail", "norm_mlp_tail", "gather_norm_mlp_tail", "post_attention", "attention_tail"),
+            fuse_norm=mode in ("norm_mlp_tail", "gather_norm_mlp_tail", "post_attention", "attention_tail"),
+            fuse_gather=mode in ("gather_norm_mlp_tail", "post_attention", "attention_tail"),
+            fuse_output=mode in ("post_attention", "attention_tail"),
+            fuse_attention=mode == "attention_tail",
             gu_workers=gu_workers,
         )
         if mode != "swiglu"
