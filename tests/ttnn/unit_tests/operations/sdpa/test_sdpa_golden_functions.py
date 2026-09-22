@@ -46,6 +46,23 @@ def test_scaled_dot_product_attention_golden_matches_torch_gqa_causal():
     torch.testing.assert_close(actual, expected)
 
 
+def test_sdpa_decode_golden_supports_mixed_query_and_kv_dtypes():
+    torch.manual_seed(6)
+    query = torch.randn(1, 1, 2, 4, dtype=torch.bfloat16)
+    key = torch.randn(1, 1, 3, 4, dtype=torch.float32)
+    value = torch.randn(1, 1, 3, 4, dtype=torch.float32)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+    actual = golden(query, key, value, cur_pos=[2])
+
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query.permute(1, 2, 0, 3),
+        key.to(query.dtype).repeat_interleave(2, dim=1),
+        value.to(query.dtype).repeat_interleave(2, dim=1),
+    ).permute(2, 0, 1, 3)
+    torch.testing.assert_close(actual, expected)
+
+
 def test_paged_decode_golden_reconstructs_logical_cache():
     torch.manual_seed(1)
     batch, num_query_heads, num_kv_heads, head_dim = 2, 4, 2, 8
@@ -167,7 +184,7 @@ def test_sparse_sdpa_golden_honors_masked_index_and_attention_sink():
 
     logits = torch.tensor([1.0, -1.0, 0.25])
     weights = torch.softmax(logits, dim=0)[:2]
-    expected = (weights * torch.tensor([1.0, -1.0])).reshape(1, 1, 1, 1)
+    expected = (weights * torch.tensor([1.0, -1.0])).sum().reshape(1, 1, 1, 1)
     torch.testing.assert_close(actual, expected)
 
 

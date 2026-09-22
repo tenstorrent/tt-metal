@@ -195,6 +195,9 @@ def _scaled_attention(
                 explicit_mask = explicit_mask.masked_fill(~position_mask, float("-inf"))
 
     if attention_sink is None:
+        # TTNN accepts mixed Q/K/V formats, while PyTorch SDPA requires one dtype.
+        key = key.to(query.dtype)
+        value = value.to(query.dtype)
         return torch.nn.functional.scaled_dot_product_attention(
             query,
             key,
