@@ -39,7 +39,7 @@ struct UnifiedMatmulPlan {
     uint32_t C_slices_per_batch = 0;
     bool row_major_cores = true;
     std::vector<tt::tt_metal::CoreCoord> cores;
-    uint32_t max_C_slices_per_core = 0;  // sizes the rings and gates partials aliasing
+    uint32_t max_C_slices_per_core = 0;  // sizes the DFBs and gates partials aliasing
 
     // Borrowed operand: its L1 shard on each active core is bound as the DFB itself, no copy.
     // Needs batch 1, one C slice per core, and a shard grid in assignment order.

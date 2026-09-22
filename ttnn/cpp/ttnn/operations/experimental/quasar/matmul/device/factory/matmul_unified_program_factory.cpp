@@ -48,9 +48,9 @@ const KernelSpecName WRITER_KERNEL{"writer"};
 
 constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/";
 
-// TRISC-visible DFB ring extent is a uint16_t of 16-byte units (validate_ring_extent); enforced on
+// A TRISC-visible DFB's extent is a uint16_t of 16-byte units (validate_ring_extent); enforced on
 // every arch so a Wormhole-legal config never FATALs on Quasar.
-constexpr uint64_t MAX_DFB_RING_BYTES = 65535ull * 16ull;
+constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 
 uint64_t l1_budget_bytes(tt::tt_metal::IDevice* device) {
@@ -95,7 +95,7 @@ struct DfbSizes {
             (uint64_t)C_slice_entries * C_entry_bytes,
             (uint64_t)C_partials_entries * C_partials_entry_bytes};
         for (uint64_t bytes : dfb_bytes) {
-            if (bytes > MAX_DFB_RING_BYTES) {
+            if (bytes > MAX_DFB_EXTENT_BYTES) {
                 return false;
             }
         }
@@ -126,13 +126,13 @@ DfbSizes size_dfbs(
     r.C_partials_entries = C_slice_tiles;
 
     // Copied operands double-buffer when more than one slice passes through; a borrowed DFB is the
-    // resident shard itself. A is borrowable only when one K chunk covers K and the shard fits the ring.
+    // resident shard itself. A is borrowable only when one K chunk covers K and the shard fits the extent limit.
     const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * r.num_K_chunks > 1;
     const uint32_t slice_buffering_factor = more_than_one_slice ? 2 : 1;
     r.borrow_A = borrowable.A && r.num_K_chunks == 1 &&
-                 (uint64_t)plan.C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_RING_BYTES;
+                 (uint64_t)plan.C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_EXTENT_BYTES;
     r.borrow_B = borrowable.B &&
-                 (uint64_t)plan.K_tiles * plan.C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_RING_BYTES;
+                 (uint64_t)plan.K_tiles * plan.C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
     r.borrow_C = borrowable.C;
     r.A_entry_bytes = tt::tile_size(plan.A_format);
     r.B_entry_bytes = tt::tile_size(plan.B_format);
@@ -285,7 +285,7 @@ UnifiedMatmulPlan plan_unified_matmul(
         dst_capacity_tiles,
         fp32_dest_acc_en);
 
-    // ---- Borrowing: which operands are already sitting in L1 exactly as the rings would hold them ----
+    // ---- Borrowing: which operands are already sitting in L1 exactly as the DFBs would hold them ----
     // A shard matches when the tensor is L1-sharded with that shard shape and its grid lists the active
     // cores in assignment order (so shard i lives on the core that produces C slice i).
     auto shard_matches = [&](const ttnn::Tensor& tensor, uint32_t shard_M_tiles, uint32_t shard_N_tiles) {
@@ -304,7 +304,7 @@ UnifiedMatmulPlan plan_unified_matmul(
     const uint32_t A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
     Borrowable borrowable;
     // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy path
-    // zeroes A's K padding in the ring; a borrowed shard is never written, so K must be a tile multiple.
+    // zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
     borrowable.A = one_C_slice_per_core_no_batch && C_slices_across_N == 1 && A_last_K_tile_valid_columns == 0 &&
                    shard_matches(A, plan.C_slice_M_tiles, plan.K_tiles);
     // B: the C slice's columns for all of K; C slices must span M.
@@ -317,7 +317,7 @@ UnifiedMatmulPlan plan_unified_matmul(
                                         attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1);
     borrowable.C = C_shard_matches && one_C_slice_per_core_no_batch && plan.subblock_N_tiles == plan.C_slice_N_tiles;
 
-    // ---- Formats, K chunk and ring sizing ----
+    // ---- Formats, K chunk and DFB sizing ----
     plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
     plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
@@ -332,7 +332,7 @@ UnifiedMatmulPlan plan_unified_matmul(
                 chosen = candidate;
             }
         }
-        // Otherwise the largest divisor of K_tiles (capped) whose rings fit; 1 is the floor and must fit.
+        // Otherwise the largest divisor of K_tiles (capped) whose DFBs fit; 1 is the floor and must fit.
         for (uint32_t K_chunk_tiles = std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_CHUNK_TILES);
              !chosen.has_value() && K_chunk_tiles >= 1;
              --K_chunk_tiles) {
@@ -347,11 +347,11 @@ UnifiedMatmulPlan plan_unified_matmul(
         TT_FATAL(
             chosen.has_value(),
             "MatmulUnifiedProgramConfig: a {}x{}-tile C slice does not fit L1 even with K_chunk_tiles=1 "
-            "(budget {} B, max ring {} B); shrink C_slice_M_tiles / C_slice_N_tiles",
+            "(budget {} B, max DFB extent {} B); shrink C_slice_M_tiles / C_slice_N_tiles",
             plan.C_slice_M_tiles,
             plan.C_slice_N_tiles,
             l1_budget,
-            MAX_DFB_RING_BYTES);
+            MAX_DFB_EXTENT_BYTES);
     } else {
         TT_FATAL(
             plan.K_tiles % config.K_chunk_tiles == 0,
@@ -361,14 +361,14 @@ UnifiedMatmulPlan plan_unified_matmul(
         chosen = size_dfbs(plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
         TT_FATAL(
             chosen->fits(l1_budget),
-            "MatmulUnifiedProgramConfig: rings for a {}x{}-tile C slice with K_chunk_tiles={} do not fit "
-            "(needs {} B, budget {} B, max ring {} B: A slice {} B, B slice {} B, C slice {} B, C partials {} B)",
+            "MatmulUnifiedProgramConfig: DFBs for a {}x{}-tile C slice with K_chunk_tiles={} do not fit "
+            "(needs {} B, budget {} B, max DFB extent {} B: A slice {} B, B slice {} B, C slice {} B, C partials {} B)",
             plan.C_slice_M_tiles,
             plan.C_slice_N_tiles,
             chosen->K_chunk_tiles,
             chosen->l1_bytes,
             l1_budget,
-            MAX_DFB_RING_BYTES,
+            MAX_DFB_EXTENT_BYTES,
             (uint64_t)chosen->A_slice_entries * chosen->A_entry_bytes,
             (uint64_t)chosen->B_slice_entries * chosen->B_entry_bytes,
             (uint64_t)chosen->C_slice_entries * chosen->C_entry_bytes,
@@ -453,7 +453,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         TensorParameter{.unique_id = C_TENSOR, .spec = C.tensor_spec()},
     };
 
-    // ---- Dataflow-buffer rings ----
+    // ---- Dataflow buffers ----
     const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
     log_debug(
         tt::LogOp,
@@ -488,7 +488,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             .tile_format_metadata = A.tensor_spec().tile(),
         };
         if (plan.borrow_A) {
-            A_slice_dfb.borrowed_from = A_TENSOR;  // the resident A shard is the ring
+            A_slice_dfb.borrowed_from = A_TENSOR;  // the resident A shard is the DFB
         }
         DataflowBufferSpec B_slice_dfb{
             .unique_id = B_SLICE_DFB,
@@ -498,7 +498,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             .tile_format_metadata = B.tensor_spec().tile(),
         };
         if (plan.borrow_B) {
-            B_slice_dfb.borrowed_from = B_TENSOR;  // the resident B shard is the ring
+            B_slice_dfb.borrowed_from = B_TENSOR;  // the resident B shard is the DFB
         }
         DataflowBufferSpec C_slice_dfb{
             .unique_id = C_SLICE_DFB,
