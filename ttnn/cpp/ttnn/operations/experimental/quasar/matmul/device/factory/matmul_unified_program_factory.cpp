@@ -121,51 +121,51 @@ DfbSizes size_dfbs(
     bool A_borrowable,
     bool B_borrowable,
     bool C_borrowable) {
-    DfbSizes r;
-    r.K_chunk_tiles = K_chunk_tiles;
-    r.num_K_chunks = plan.K_tiles / K_chunk_tiles;
+    DfbSizes sizes;
+    sizes.K_chunk_tiles = K_chunk_tiles;
+    sizes.num_K_chunks = plan.K_tiles / K_chunk_tiles;
 
     // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
     // to pay off (the last K chunk spills and reloads either way, so more than two).
-    r.packer_l1_acc_en = packer_l1_acc && r.num_K_chunks > 2;
-    r.C_partials_format = r.packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
-    r.C_entry_bytes = tt::tile_size(plan.C_format);
-    r.C_partials_entry_bytes = tt::tile_size(r.C_partials_format);
+    sizes.packer_l1_acc_en = packer_l1_acc && sizes.num_K_chunks > 2;
+    sizes.C_partials_format = sizes.packer_l1_acc_en
+                                  ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                  : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
+    sizes.C_entry_bytes = tt::tile_size(plan.C_format);
+    sizes.C_partials_entry_bytes = tt::tile_size(sizes.C_partials_format);
 
     const uint32_t C_slice_tiles = plan.C_slice_M_padded_tiles * plan.C_slice_N_padded_tiles;
-    r.C_slice_entries = C_slice_tiles;
-    r.C_partials_entries = C_slice_tiles;
+    sizes.C_slice_entries = C_slice_tiles;
+    sizes.C_partials_entries = C_slice_tiles;
 
     // Copied operands double-buffer when more than one slice passes through; a borrowed DFB is the
-    // resident shard itself. A is borrowable only when one K chunk covers K and the shard fits the extent limit.
-    const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * r.num_K_chunks > 1;
+    // resident shard itself. A is borrowable only when one K chunk covers K.
+    const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * sizes.num_K_chunks > 1;
     const uint32_t slice_buffering_factor = more_than_one_slice ? 2 : 1;
-    r.borrow_A = A_borrowable && r.num_K_chunks == 1 &&
-                 (uint64_t)plan.C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_EXTENT_BYTES;
-    r.borrow_B = B_borrowable &&
-                 (uint64_t)plan.K_tiles * plan.C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
-    r.borrow_C = C_borrowable;
-    r.A_entry_bytes = tt::tile_size(plan.A_format);
-    r.B_entry_bytes = tt::tile_size(plan.B_format);
-    r.A_slice_entries = r.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles
-                                   : plan.C_slice_M_padded_tiles * K_chunk_tiles * slice_buffering_factor;
-    r.B_slice_entries = r.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles
-                                   : K_chunk_tiles * plan.C_slice_N_padded_tiles * slice_buffering_factor;
+    sizes.borrow_A = A_borrowable && sizes.num_K_chunks == 1;
+    sizes.borrow_B = B_borrowable;
+    sizes.borrow_C = C_borrowable;
+    sizes.A_entry_bytes = tt::tile_size(plan.A_format);
+    sizes.B_entry_bytes = tt::tile_size(plan.B_format);
+    sizes.A_slice_entries = sizes.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles
+                                           : plan.C_slice_M_padded_tiles * K_chunk_tiles * slice_buffering_factor;
+    sizes.B_slice_entries = sizes.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles
+                                           : K_chunk_tiles * plan.C_slice_N_padded_tiles * slice_buffering_factor;
 
     // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
     // (else compute packs slice i+1's partials over slice i before the writer drains it).
-    const bool partials_ever_written = r.num_K_chunks > 1;
+    const bool partials_ever_written = sizes.num_K_chunks > 1;
     const bool one_C_slice_per_core = plan.batch_size == 1 && plan.max_C_slices_per_core == 1;
-    r.alias_C_partials_onto_C_slice =
-        (r.C_partials_format == plan.C_format) && (!partials_ever_written || one_C_slice_per_core);
+    sizes.alias_C_partials_onto_C_slice =
+        (sizes.C_partials_format == plan.C_format) && (!partials_ever_written || one_C_slice_per_core);
 
     // Borrowed DFBs are the tensors' own memory and cost nothing here.
-    r.l1_bytes = (r.borrow_A ? 0 : (uint64_t)r.A_slice_entries * r.A_entry_bytes) +
-                 (r.borrow_B ? 0 : (uint64_t)r.B_slice_entries * r.B_entry_bytes) +
-                 (r.borrow_C ? 0 : (uint64_t)r.C_slice_entries * r.C_entry_bytes) +
-                 (r.alias_C_partials_onto_C_slice ? 0 : (uint64_t)r.C_partials_entries * r.C_partials_entry_bytes);
-    return r;
+    sizes.l1_bytes =
+        (sizes.borrow_A ? 0 : (uint64_t)sizes.A_slice_entries * sizes.A_entry_bytes) +
+        (sizes.borrow_B ? 0 : (uint64_t)sizes.B_slice_entries * sizes.B_entry_bytes) +
+        (sizes.borrow_C ? 0 : (uint64_t)sizes.C_slice_entries * sizes.C_entry_bytes) +
+        (sizes.alias_C_partials_onto_C_slice ? 0 : (uint64_t)sizes.C_partials_entries * sizes.C_partials_entry_bytes);
+    return sizes;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -282,12 +282,14 @@ UnifiedMatmulPlan plan_unified_matmul(
     const uint32_t A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
     // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy path
     // zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
-    const bool A_shard_borrowable = one_C_slice_per_core_no_batch && C_slices_across_N == 1 &&
-                                    A_last_K_tile_valid_columns == 0 &&
-                                    shard_matches(A, plan.C_slice_M_tiles, plan.K_tiles);
+    const bool A_shard_borrowable =
+        one_C_slice_per_core_no_batch && C_slices_across_N == 1 && A_last_K_tile_valid_columns == 0 &&
+        shard_matches(A, plan.C_slice_M_tiles, plan.K_tiles) &&
+        (uint64_t)plan.C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_EXTENT_BYTES;
     // B: the C slice's columns for all of K; C slices must span M.
     const bool B_shard_borrowable =
-        one_C_slice_per_core_no_batch && C_slices_down_M == 1 && shard_matches(B, plan.K_tiles, plan.C_slice_N_tiles);
+        one_C_slice_per_core_no_batch && C_slices_down_M == 1 && shard_matches(B, plan.K_tiles, plan.C_slice_N_tiles) &&
+        (uint64_t)plan.K_tiles * plan.C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
     // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order.
     const bool C_shard_matches = output.has_value()
                                      ? shard_matches(output.value(), plan.C_slice_M_tiles, plan.C_slice_N_tiles)
