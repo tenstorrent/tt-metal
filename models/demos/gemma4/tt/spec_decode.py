@@ -750,7 +750,7 @@ class SpeculativeDecoder:
                     self._pv_pages_t[lt] = row.to(torch.int64)
         self._pv_ready = True
 
-    def _pv_tables_per_layer(self, S_k):
+    def _pv_tables_per_layer(self, S_k, packed_p=None):
         """Per-layer page tables for the packed verify, each trimmed so its
         WIDTH matches its layer type's mask width.
 
@@ -763,8 +763,12 @@ class SpeculativeDecoder:
         with zero-K/V columns -- the packed path's small greedy divergence.)
 
         Sliding (ring) width is fixed; full width follows the S_k bucket.
-        Device tensors cached by (type, width); layers of a type share one.
+        Device tensors cached by (type, width, batch); layers of a type share one.
+
+        ``packed_p`` is P. Row count follows ``_pv_page_table_batch``: batch-SDPA
+        and sequential KV writes need the user row replicated P times.
         """
+        batch = self._pv_page_table_batch(int(packed_p or 1))
         cache = getattr(self, "_pv_pt_cache", None)
         if cache is None:
             cache = {}
@@ -775,10 +779,13 @@ class SpeculativeDecoder:
             width = (ring // self._pv_bs) if ring else max(1, S_k // self._pv_bs)
             row = self._pv_pages_t[lt]
             width = min(width, int(row.shape[0]))
-            key = (lt, width)
+            key = (lt, width, batch)
             t = cache.get(key)
             if t is None:
-                t = self._pv_from_torch(row[:width].to(torch.int32).reshape(1, width), ttnn.int32)
+                tbl = row[:width].to(torch.int32).reshape(1, width)
+                if batch > 1:
+                    tbl = tbl.repeat(batch, 1)
+                t = self._pv_from_torch(tbl, ttnn.int32)
                 cache[key] = t
             per_layer.append(t)
         return per_layer
@@ -796,6 +803,7 @@ class SpeculativeDecoder:
         if ring:
             return ring // self._pv_bs
         return int(self._pv_pages_t[lt].shape[0])
+
     def _seq_kv_enabled(self):
         """Serialized ``paged_update_cache`` instead of staging fill (default).
 
@@ -803,7 +811,6 @@ class SpeculativeDecoder:
         taken there can never disagree about the same env flag.
         """
         return _packed_seq_kv_enabled()
-
 
     def _batch_sdpa_enabled(self):
         """Native decode-batch SDPA for packed verify (default); see ``_seq_kv_enabled``."""
@@ -1158,7 +1165,7 @@ class SpeculativeDecoder:
             # packed SDPA attends the TABLE width, so each layer's table must be
             # exactly as wide as its type's mask. Applies unbounded too -- the
             # full-width flat table's unwritten tail diluted softmax.
-            page_tables_per_layer=self._pv_tables_per_layer(dev["S_k"]),
+            page_tables_per_layer=self._pv_tables_per_layer(dev["S_k"], packed_p=P),
         )
 
     def _fused_verify_c_p(self, anchor_pos):
@@ -1217,7 +1224,12 @@ class SpeculativeDecoder:
         """Eager packed verify of in-graph ``verify_x`` [1, P] at anchor ``c``."""
         h = self._pv_prepare(c, P)
         # ``verify_x`` is produced in-graph by the caller, so it is not ours to free.
-        dev = {"x": verify_x, **self._pv_device_tensors(h), "c": c, "pt": self._page_table(self._pv_page_table_batch(P))}
+        dev = {
+            "x": verify_x,
+            **self._pv_device_tensors(h),
+            "c": c,
+            "pt": self._page_table(self._pv_page_table_batch(P)),
+        }
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
         self._pv_dealloc(dev, include_x=False)
@@ -1831,7 +1843,7 @@ class SpeculativeDecoder:
                 embed_idx_sliding=tr["pv_embed"].get("sliding_attention"),
                 hot_pt_full=tr["pv_hot"].get("full_attention"),
                 hot_pt_sliding=tr["pv_hot"].get("sliding_attention"),
-                page_tables_per_layer=tr["pv_ptl"],
+                page_tables_per_layer=tr.get("pv_ptl"),
             )
             if mask_full is not None:
                 mask_full.deallocate(True)
@@ -1949,7 +1961,9 @@ class SpeculativeDecoder:
             )
             tr["pv_embed"] = {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()}
             tr["pv_hot"] = {lt: self._pv_from_torch(t, ttnn.int32) for lt, t in h["hot_t"].items()}
-            tr["pv_ptl"] = self._pv_tables_per_layer(s_k_cap)
+            # Hybrid ring: width-matched per-layer tables, P rows for seq-KV.
+            # Unbounded: packed verify uses the P-row ``v_pt`` instead.
+            tr["pv_ptl"] = self._pv_tables_per_layer(s_k_cap, packed_p=P_v) if any(self._pv_ring.values()) else None
             if self._batch_sdpa_enabled() or self._seq_kv_enabled():
                 tr["pv_pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
             _lg.info(f"[spec-trace] fused verify: PACKED (S_k={s_k_cap}, ring={self._pv_ring})")
@@ -2096,9 +2110,7 @@ class SpeculativeDecoder:
                 ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
                 d_hpu.deallocate(True)
                 d_hpi.deallocate(True)
-                v_pos = (
-                    [cur_pos + j for j in range(K + 1)]
-                )
+                v_pos = [cur_pos + j for j in range(K + 1)]
                 v_hpu, v_hpi = self._host_pos(v_pos)
                 ttnn.copy_host_to_device_tensor(v_hpu, tr["v_pu"])
                 ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
@@ -2198,9 +2210,9 @@ class SpeculativeDecoder:
             ),
             "pv_embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
             "pv_hot": {lt: self._pv_from_torch(t, ttnn.int32) for lt, t in h["hot_t"].items()},
-            "pv_ptl": self._pv_tables_per_layer(s_k),
+            "pv_ptl": self._pv_tables_per_layer(s_k, packed_p=P_v),
         }
-        if self._batch_sdpa_enabled():
+        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
             out["pv_pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         return out
 

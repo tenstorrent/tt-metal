@@ -1494,7 +1494,9 @@ class Gemma4Model:
 
         # Same per-layer page-table contract as ttnn_verify_forward: bounded
         # sliding runs hybrid tables where each layer addresses its own pool.
-        if page_tables_per_layer is None:
+        # A packed `page_table` is already P-row; do not replace it with the
+        # batch-1 serving stash (seq-KV requires ``page_table.shape[0] == P``).
+        if page_tables_per_layer is None and page_table is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
 
