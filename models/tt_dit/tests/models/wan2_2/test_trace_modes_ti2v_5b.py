@@ -13,9 +13,12 @@ Three ways to execute the captured per-step trace (`WanPipeline.configure_trace_
 
 None of them changes what is computed, so the gate is `torch.equal` on the final latents at a
 fixed seed. The test opens the mesh with two command queues (needed for `2cq`) and also prints
-`compute_with_storage_grid_size()`: the swept DiT matmul tables are keyed on the 1-queue grid, so
-a second queue that costs Tensix dispatch cores would be a perf regression by construction and
-this number must match the 1-queue grid the perf logs report (11x10 on the 4x8 BH Galaxy).
+`compute_with_storage_grid_size()`: the swept DiT matmul tables are keyed on grids derived from
+the 1-queue device grid, so a second queue that cost Tensix dispatch cores would be a perf
+regression by construction. The 1-queue grid on the 4x8 BH Galaxy is 12x10 (the perf logs'
+`Conv3dConfig(... compute_with_storage_grid_size=12-10)`); the tables' "11x10" is
+`_BH_GALAXY_MAX_CORE_GRID` (a cap) and "12x9" is `agmm_worker_grid` (one row reserved), not the
+device grid. Measured 2026-09-22: 12x10 with two queues as well, so nothing moves.
 
     pytest models/tt_dit/tests/models/wan2_2/test_trace_modes_ti2v_5b.py -sv --timeout=0 | grep ^TRACEMODE
 """
@@ -61,7 +64,7 @@ def test_trace_modes_bit_identical(mesh_device, mesh_shape, topology):
 
     grid = mesh_device.compute_with_storage_grid_size()
     print(f"TRACEMODE compute_with_storage_grid_size with 2 command queues: {grid.x}x{grid.y}")
-    expected_grid = os.environ.get("WAN5B_EXPECT_GRID", "11x10")
+    expected_grid = os.environ.get("WAN5B_EXPECT_GRID", "12x10")  # the 1-queue grid, see the docstring
     grid_ok = f"{grid.x}x{grid.y}" == expected_grid
 
     height = int(os.environ.get("WAN5B_TM_HEIGHT", 704))
