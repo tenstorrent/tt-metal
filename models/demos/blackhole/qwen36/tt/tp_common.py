@@ -87,6 +87,13 @@ def prefill_tuning(num_devices):
     return _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
 
 
+def tp1_prefill_opt_enabled():
+    """QWEN36_TP1_PREFILL_OPT (default on): the TP=1 prefill device-time optimizations (lane A, 2026-09-22):
+    head-major GDN output relayout, per-shape 2D/1D matmul configs, SDPA chunking. =0 restores the pre-tuning
+    TP=1 path byte-for-byte (rollback / A-B switch). TP>1 never reads it."""
+    return os.environ.get("QWEN36_TP1_PREFILL_OPT", "1") == "1"
+
+
 def _prefill_2d_cb_bytes(out_block_h, per_core_N, in0_block_w, weight_tile_bytes):
     """Static CB footprint of one core of the 2D mcast matmul (matmul_multicore_reuse_mcast_2d_program_factory):
     in0 = out_block_h x in0_block_w tiles double-buffered (bf16), in1 = in0_block_w x per_core_N (out_block_w ==
@@ -344,6 +351,67 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
+# TP=1 (27B on one P150 die), per-shape prefill matmul configs for the 2048-token serving chunk, measured with
+# tests/test_prefill_matmul_sweep_tp1_scratch.py (lane A, 2026-09-22; profiles/p1d1_opt/laneA_RESULTS.md). Every entry
+# keeps the generic config's in0_block_w (4) on the HiFi2 bf8 matmuls -- a different K block changes the bf16 result
+# (measured max-abs 0.0078) -- and was verified bit-identical to the generic config on random data; the LoFi MLP
+# matmuls (packer_l1_acc) are bit-identical for any in0_block_w. Key: (M, K, N).
+#   "2d": MatmulMultiCoreReuseMultiCastProgramConfig (grid cols x rows, out block h x w, subblock h x w)
+#   "1d": MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0 (every core reads its own N slice of the weight instead of
+#         one sender per grid column: the weight-heavy wide-N in-projections were bound by the column senders).
+# Measured S=2048 device us, generic -> this:
+#   attn qkv   5120x14336 bf8 HiFi2: 3190 -> 2060 (1D, 103 cores, per-core N 5 tiles, out block 16x5, bw 4)
+#   gdn qkvzab 5120x16480 bf8 HiFi2: 3030 -> 2168 (1D, 103 cores, per-core N 5 tiles, out block 16x5, bw 4)
+#   mlp gate/up 5120x17408 bf4 LoFi: 3534 -> 2183 (2D 11x8, per-core 8x50, out block 2x50, subblock 2x2, bw 2)
+_TP1_PREFILL_PROGCFG_2048 = {
+    # attention fused [q|k|v|gate] in-projection
+    (2048, 5120, 14336): dict(kind="1d", grid=(11, 9), per_core_N=5, in0_block_w=4, out_block_h=16, sub=(1, 1)),
+    # GDN fused [qkv|z|a|b] in-projection
+    (2048, 5120, 16480): dict(kind="1d", grid=(11, 10), per_core_N=5, in0_block_w=4, out_block_h=16, sub=(1, 1)),
+    # MLP gate / up (bf4, LoFi, packer_l1_acc)
+    (2048, 5120, 17408): dict(kind="1d", grid=(11, 9), per_core_N=6, in0_block_w=8, out_block_h=16, sub=(1, 3)),
+}
+
+
+def _tp1_override_progcfg(m, k, n, fused_activation):
+    """The measured TP=1 config for (m, k, n) or None (generic path)."""
+    spec = _TP1_PREFILL_PROGCFG_2048.get((m, k, n))
+    if spec is None or not tp1_prefill_opt_enabled():
+        return None
+    if spec["kind"] == "2d":
+        cols, rows = spec["grid"]
+        per_core_M = math.ceil(m / TILE_SIZE / rows)
+        per_core_N = math.ceil(n / TILE_SIZE / cols)
+        obh, obw = spec.get("out_block", (per_core_M, per_core_N))
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(cols, rows),
+            in0_block_w=spec["in0_block_w"],
+            out_subblock_h=spec["sub"][0],
+            out_subblock_w=spec["sub"][1],
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=fused_activation,
+            fuse_batch=False,
+            out_block_h=obh,
+            out_block_w=obw,
+        )
+    cols, rows = spec["grid"]
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=spec["in0_block_w"],
+        out_subblock_h=spec["sub"][0],
+        out_subblock_w=spec["sub"][1],
+        out_block_h=spec["out_block_h"],
+        out_block_w=spec["per_core_N"],
+        per_core_M=math.ceil(m / TILE_SIZE),
+        per_core_N=spec["per_core_N"],
+        fuse_batch=True,
+        fused_activation=fused_activation,
+        mcast_in0=True,
+    )
+
+
 def create_prefill_mlp_matmul_program_config(
     m, k, n, fused_activation=None, max_cols=None, tuning=None, weight_tile_bytes=TILE_BYTES_BFP8
 ):
@@ -360,6 +428,11 @@ def create_prefill_mlp_matmul_program_config(
     TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
+    if tuning is _PREFILL_TUNING[1]:
+        # TP=1: measured per-shape config for the serving chunk (see _TP1_PREFILL_PROGCFG_2048); other shapes generic.
+        _ov = _tp1_override_progcfg(m, k, n, fused_activation)
+        if _ov is not None:
+            return _ov
     limit = max_cols or grid[0]
     if tuning["widest_cols"]:
         # Cap the width at PREFILL_MAX_COLS_PORTABLE (harvested parts expose 11, not 12) and never

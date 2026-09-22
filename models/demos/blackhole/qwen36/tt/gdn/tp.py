@@ -408,11 +408,22 @@ class TPGatedDeltaNet:
         # go to DRAM (`_pf_mc`) and the in-proj runs as a plain 2D matmul (tpc.prefill_matmul_plain).
         self._tp1 = getattr(args, "tp1", False)
         self._pf_mc = ttnn.DRAM_MEMORY_CONFIG if self._tp1 else ttnn.L1_MEMORY_CONFIG
+        # nlp_concat_heads groups for the head-major fuse-out: its CBs are sized by heads x Dv tiles (x2, fp32 tiles),
+        # 1.5 MB at Nv=48 > L1, so at TP=1 the relayout runs per group of <= 24 heads (768 KB) and the [1,1,T,group*Dv]
+        # pieces are concatenated. 1 (TP=4/8: Nv <= 12) is the unchanged single call.
+        self._concat_heads_groups = 1
         if self._tp1:
-            # The head-major fuse-out ends in nlp_concat_heads on the [1,Nv,T,Dv] fp32 o, whose CBs are sized by
-            # Nv x Dv tiles (x2): 1.68 MB at Nv=48 > the 1.5 MB L1 (measured TT_THROW at first prefill compile).
-            # Take the fused op's token-major [1,T,Nv,Dv] output instead: per-head rms_norm + a free reshape.
-            self._gdn_fuse_out = False
+            if tpc.tp1_prefill_opt_enabled():
+                # TP=1 prefill (lane A): keep the fused scan's head-major [Nv,T,Dv] fp32 output, per-head rms_norm on it
+                # and relayout with nlp_concat_heads in 2 groups of 24 heads. The former token-major route (op-internal
+                # untilize + permute, tilize that pads Nv 48->64, rms_norm on the padded tensor and a 5.7 ms
+                # ReshapeView [1,T,64,128]->[1,T,6144]) cost 7.5 ms per GDN layer at S=2048; this chain is 1.6 ms and
+                # bit-identical (relayout only; tests/test_prefill_matmul_sweep_tp1_scratch.py::test_gdn_out_chain_tp1).
+                self._concat_heads_groups = -(-self.Nv // 24)
+            else:
+                # Rollback (QWEN36_TP1_PREFILL_OPT=0): the fused op's token-major [1,T,Nv,Dv] output, per-head rms_norm
+                # + reshape.
+                self._gdn_fuse_out = False
         # QWEN36_GDN_PROJ_CHUNKS (default 0 = off): let the in-proj AGMM write qkv | z | ab as three
         # tensors instead of one wide tensor + three ttnn.slice ops. Read once here so it matches the
         # (env-gated) tile padding load_gdn_weights_tp applied to tw["qkvz"]; the padded-width check
@@ -1269,7 +1280,21 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             n = ttnn.reshape(n, (1, Nv, T, Dv))
             # Fused head->token relayout: [1,Nv,T,Dv] -> [1,1,T,Nv*Dv].
-            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1)
+            if self._concat_heads_groups > 1:
+                # TP=1: per group of heads (fp32 CBs of one call must fit L1), then concat the token-major pieces.
+                _dram = ttnn.DRAM_MEMORY_CONFIG
+                _g = -(-Nv // self._concat_heads_groups)
+                parts = []
+                for _i in range(self._concat_heads_groups):
+                    _sl = ttnn.slice(n, (0, _i * _g, 0, 0), (1, min(Nv, (_i + 1) * _g), T, Dv), memory_config=_dram)
+                    parts.append(ttnn.experimental.nlp_concat_heads(_sl, memory_config=_dram))
+                    ttnn.deallocate(_sl)
+                ttnn.deallocate(n)
+                n = ttnn.concat(parts, dim=-1, memory_config=_dram)
+                for _p in parts:
+                    ttnn.deallocate(_p)
+            else:
+                n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1)
             out_f = ttnn.reshape(n, (1, T, self.value_dim_tp))
         else:
             out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
