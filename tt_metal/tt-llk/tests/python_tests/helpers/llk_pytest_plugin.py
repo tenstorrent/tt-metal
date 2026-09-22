@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import signal
+import time
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -630,7 +631,19 @@ def _select_tests_by_op(config, items):
 
 
 @pytest.hookimpl(tryfirst=True)
+def _apply_order_file(config, items):
+    """Select and order the items from PERF_ORDER_FILE."""
+    path = os.environ.get("PERF_ORDER_FILE")
+    if not path:
+        return
+    with open(path) as fh:
+        want = [ln.strip() for ln in fh if ln.strip()]
+    by_id = {it.nodeid: it for it in items}
+    items[:] = [by_id[n] for n in want if n in by_id]
+
+
 def pytest_collection_modifyitems(config, items):
+    _apply_order_file(config, items)
     _select_tests_by_op(config, items)
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
@@ -860,8 +873,25 @@ def pytest_runtest_makereport(item, call):
 _reset_simulator_pending = False
 
 
+def _log_core_for_test(item):
+    """Append nodeid, core, worker and finish time; one file per worker."""
+    path = os.environ.get("PERF_CORE_LOG")
+    if not path:
+        return
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    try:
+        with open(f"{path}.{worker}.tsv", "a") as fh:
+            fh.write(
+                f"{item.nodeid}\t{TestConfig.TENSIX_LOCATION}\t"
+                f"{worker}\t{time.time():.3f}\n"
+            )
+    except OSError:
+        pass
+
+
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
+    _log_core_for_test(item)
     if not TestConfig.TEST_TARGET.reset_simulator_per_test:
         return
     if nextitem is None:
