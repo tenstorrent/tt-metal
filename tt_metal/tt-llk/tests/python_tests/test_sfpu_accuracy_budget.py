@@ -517,6 +517,56 @@ EXACT_BY_CONSTRUCTION = (
 )
 
 
+#: Ops whose correct result is the *only* result: a predicate writing 1.0/0.0, a
+#: selection that passes an operand through or zeroes it, a constant fill, a clamp, an
+#: integer-valued result, or a single IEEE add. Unlike EXACT_BY_CONSTRUCTION above, one
+#: step of slack is not the pack path here -- it is the contract breaking. Listed by what
+#: the op computes, deliberately not derived from the table: a set read back out of the
+#: rows would agree with them by construction and pin nothing.
+EXACT_ZERO_BY_CONSTRUCTION = (
+    MathOperation.Floor,
+    MathOperation.Ceil,
+    MathOperation.Trunc,
+    MathOperation.Fill,
+    MathOperation.Threshold,
+    MathOperation.Isfinite,
+    MathOperation.Isinf,
+    MathOperation.Isnan,
+    MathOperation.Isneginf,
+    MathOperation.Isposinf,
+    MathOperation.LogicalNot,
+    MathOperation.Signbit,
+    MathOperation.UnaryEq,
+    MathOperation.UnaryNe,
+    MathOperation.SfpuElwEq,
+    MathOperation.SfpuElwNe,
+    MathOperation.SfpuElwGt,
+    MathOperation.SfpuElwGe,
+    MathOperation.SfpuElwLt,
+    MathOperation.SfpuElwLe,
+    MathOperation.SfpuIsclose,
+    MathOperation.SfpuMask,
+    MathOperation.SfpuAddTopRow,
+)
+
+
+@pytest.mark.parametrize("op", EXACT_ZERO_BY_CONSTRUCTION, ids=lambda op: op.name)
+def test_an_exactly_rounded_op_carries_a_zero_budget(op):
+    """ "Any drift at all is a regression" is this stack's claim for these ops, and a
+    budget of 1 would retire it silently -- the provenance guard permits a measured 0 to
+    be written as 1, so nothing else here would notice."""
+    seen = False
+    for fmt, contract in _every_variant(op):
+        if contract.metric == Metric.ULP:
+            seen = True
+            assert contract.max_ulp == 0, (
+                f"{op.name} on {fmt.name} carries max_ulp={contract.max_ulp}. This op is "
+                "exactly rounded by construction, so a step of slack is not the pack "
+                "path -- it is the contract going away. Re-measure before widening it."
+            )
+    assert seen, f"{op.name} resolves to no ULP contract at all; the row was dropped"
+
+
 def _refuses(match, kind=ValueError):
     """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
     return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test

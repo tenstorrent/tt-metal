@@ -437,8 +437,10 @@ SfpuXlogy:
 #
 # Measured on Wormhole 2026-09-18 over the standard unary sweep with --ulp-report.
 # These ops are exactly rounded by construction -- a predicate writing 1.0/0.0, a
-# constant fill, a clamp, or a subtraction the hardware does in one step -- so the
-# budget is 0 and any drift at all is a regression.
+# constant fill, a clamp, or a subtraction the hardware does in one step -- so the budget
+# is 0 and any drift at all is a regression. The exception is the 16-bit outputs of
+# ReluMax, ReluMin and Frac, which carry 1: the op is still exact, and the step is the
+# output rounding on the way out of Dest, as the rows there record.
 #
 # Every row names an output format that was actually measured. Nothing is enrolled on
 # Bfp8_b: its shared block exponent quantises a small element in a wide block to zero,
@@ -523,7 +525,10 @@ Heaviside:
 # ── Binary and ternary SFPU, and the remaining unary approximations ─────────
 #
 # Measured on Wormhole 2026-09-18 with --ulp-report over each driver's own sweep.
-# Budget = 1.25x the measured worst lane, as everywhere else in this file. A budget is
+# Budget = 1.25x the sweep's p99.9, rounded up and floored at 1, as everywhere else in
+# this file -- not 1.25x the worst lane, which would widen every row by the one unluckiest
+# sample. The `max` each row records is the worst lane, so a budget sitting at or a little
+# under 1.25x that number is the rule working, not a row that lost its margin. A budget is
 # only written where it is *tighter* than the tolerance it replaces: the usable ceiling
 # is 419430 steps on Float32, 51 on Float16 and 6 on Float16_b, and an op past it is
 # recorded as tolerance with its measurement so nobody re-derives it.
@@ -576,7 +581,9 @@ SfpuElwLe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {out: Float16_b, max_ulp: 0}
   - {out: Float16, max_ulp: 0}
 
-# isclose and mask are also 1.0/0.0 (mask passes the operand through or zeroes it).
+# isclose writes 1.0/0.0 too. Mask does not -- its golden returns the data operand where
+# the mask is nonzero -- but it is exact for the same reason: it selects an input or zero
+# and never computes a new value.
 SfpuIsclose:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 3 variants / 81920 lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 0}     # 0 ULP, 3 variants / 81920 lanes, 2026-09-18
