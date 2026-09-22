@@ -4,19 +4,20 @@
 # Shared prefill integration milestones
 
 Follow [Adding a prefill model](../common/prefill/docs/ADDING_A_PREFILL_MODEL.md).
-Each milestone needs its stated evidence before completion.
+The current acceptance configuration is SC1, 2K capacity and two slots.
 
-| Milestone | Acceptance |
-|---|---|
-| Isolated branch | Original disaggregated and model-PR branches unchanged |
-| Compact tests | Retain model numerics; use ordinary runtime/table tests and common runner coverage |
-| Reference traces | Two distinct 2K passages; FP32 HF K/V for all 32 layers |
-| Address table | All K/V configs, slots, layers and pages match independent live tensors; protobuf roundtrip preserves owners and addresses |
-| Shared runner/producer | H2D requests fill two slots; independent full-prefix golden PCC passes; runner exits cleanly |
-| Standard launcher | `run_multirank_pcc.sh llama31 sc1` passes the per-rank verdict gate |
-| Larger capacities | List 4K–64K follow-up checks after 2K passes |
+| Milestone | Status | Evidence |
+|---|---|---|
+| Isolated branch | Done | Original disaggregated and model-PR branches preserved |
+| Compact tests | Done | Custom bridge harness removed; numerical model coverage preserved |
+| Reference traces | Done | Two distinct 2K passages; independent FP32 HF K/V for all 32 layers |
+| Address table | Done — passed | 3 tests; exact synthetic page mapping, protobuf and real writer readback |
+| Shared runner/producer | Done — passed | Both slots complete; all-layer golden PCC exceeds 0.99; clean shutdown |
+| Standard launcher | Done — passed | `run_multirank_pcc.sh llama31 sc1`: exit 0, 1/1 rank verdict |
+| Host regressions | Done — passed | 29 compact host checks |
+| Larger-capacity checklist | Done | [4K–64K plan](docs/runner-capacity-plan.md) |
+| Larger-capacity execution | To do | Separate shared-runner acceptance at 4K, 8K, 16K, 32K and 64K |
 
-See [commands and pass criteria](docs/runner-integration.md). Saved historical model
+See [commands and pass criteria](docs/runner-integration.md) and the
+[recorded SC1 results](docs/runner-sc1-validation.md). Saved historical model
 results remain in `docs/validation-2k.md` and `docs/performance-prefill.md`.
-New shared-runner results must be recorded separately; host checks alone are not
-hardware acceptance.

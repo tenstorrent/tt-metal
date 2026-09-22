@@ -14,6 +14,8 @@ Related issue: [tt-blaze#4138](https://github.com/tenstorrent/tt-blaze/issues/41
 
 - [SC1 runner guide and cache-table contract](docs/runner-integration.md): independent
   golden traces, live table readback, shared runner/producer PCC and tt-run commands.
+- [Passed SC1 runner checks](docs/runner-sc1-validation.md): two-slot 2K results and PCC.
+- [4K–64K runner checklist](docs/runner-capacity-plan.md): planned capacity checks.
 - [Model numerical validation](docs/validation-2k.md): saved full-model and component evidence.
 - [Model performance](docs/performance-prefill.md): saved eager full-model measurements.
 - [Current integration milestones](ROADMAP.md).

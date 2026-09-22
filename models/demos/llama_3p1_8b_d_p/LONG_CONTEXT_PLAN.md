@@ -13,4 +13,5 @@ embedding/layer-stack/final-normalization/vocabulary-head path through 64K. Thos
 saved measurements are distinct from acceptance of the shared runner and producer.
 
 [SC1 reproduction commands](docs/runner-integration.md) define the current 2K gate.
-128K is deferred.
+[The follow-up checklist](docs/runner-capacity-plan.md) lists each larger case and
+its acceptance criteria. These shared-runner cases remain to do. 128K is deferred.

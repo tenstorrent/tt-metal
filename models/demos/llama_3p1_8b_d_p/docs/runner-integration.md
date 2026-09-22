@@ -62,11 +62,11 @@ Run these commands sequentially: only one process group may own the Galaxy.
 | `run_multirank_pcc.sh llama31 sc1` | The same producer/runner contract works under the standard tt-run/MPI launcher and passes the per-rank verdict gate |
 
 ```bash
-python -m pytest -q models/demos/llama_3p1_8b_d_p/tests/test_prefill_runtime.py
+python -m pytest -q --tt-arch blackhole models/demos/llama_3p1_8b_d_p/tests/test_prefill_runtime.py
 
-python -m pytest -s -q models/demos/llama_3p1_8b_d_p/tests/test_kv_cache_table.py
+python -m pytest -s -q --tt-arch blackhole models/demos/llama_3p1_8b_d_p/tests/test_kv_cache_table.py
 
-python -m pytest -s -q \
+python -m pytest -s -q --tt-arch blackhole \
   'models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc[llama31_2k_two_slots]'
 
 # CI normally supplies /etc/ttop/hostfile. For an allocated standalone host:
@@ -110,6 +110,9 @@ layer/head identities, slot ownership, valid token length, completion signals an
 cache lifetime. A matching table alone cannot establish those semantic contracts.
 
 ## Larger-capacity follow-up
+
+The [2K acceptance results](runner-sc1-validation.md) are complete. The
+[4K–64K checklist](runner-capacity-plan.md) records each follow-up as **to do**.
 
 After the 2K acceptance passes, list separate 4K, 8K, 16K, 32K and 64K runs.
 Each must fill both slots to its capacity, read boundary pages through the table,
