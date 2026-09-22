@@ -259,10 +259,28 @@ def apply_recommended_env(batched_l1: bool) -> None:
     os.environ.setdefault("QWEN_ROPE_FIDELITY", "lofi")
     # Inert for 4B (dim=2560 exceeds per-core LN budget) but harmless to set.
     os.environ.setdefault("QWEN_LN_BLOCK_SHARDED", "1")
+    # The block-sharded LN path aims for an 8x8 grid, which is inherited from
+    # BGE-M3 / 0.6B. On 4B that silently disables it: k_tiles = dim/32 = 80, so
+    # gx=8 gives block_w=10 and block_h*block_w = 20, over the 16-tile per-core
+    # cap -> the helper returns None and LN stays interleaved. gx=10 divides 80
+    # and lands exactly on the cap. Measured on P150 bs=1 ISL=512 (best prefill):
+    #   gx<=8  (inert, interleaved LN) 28.8 ms
+    #   gx<=10 (sharded LN, 80 cores)  26.9 ms   <- default
+    #   gx<=10 gy<=10                  27.0 ms
+    #   gx<=8  with cap raised to 20   27.1 ms
+    os.environ.setdefault("QWEN_LN_GRID_MAX_X", "10")
     # Embedding-specific: skip KV cache fill (prefill-only, no decode).
     os.environ.setdefault("TT_SKIP_KV_CACHE_FILL", "1")
     # Bigger SDPA chunks for bs=1 — more work per SDPA launch.
     os.environ.setdefault("QWEN_SDPA_BIG_CHUNK_BS1", "1")
+    # SDPA chunk. The 128 that QWEN_SDPA_BIG_CHUNK_BS1 selects was tuned on 0.6B
+    # (16 q heads); 4B has 32 q heads over the same head_dim, so it wants more
+    # work per SDPA launch. Measured on P150 bs=1 ISL=512 (best prefill):
+    #   chunk  64   29.2 ms
+    #   chunk 128   26.9 ms  (previous default)
+    #   chunk 256   25.7 ms  <- default
+    #   chunk 512   fails: statically allocated circular buffers exceed L1
+    os.environ.setdefault("QWEN_SDPA_CHUNK", "256")
     if batched_l1:
         os.environ.setdefault("TT_BATCHED_L1_PREFILL", "1")
         # Lift the batched-L1 activation cap from the 8 MiB default to 12 MiB so
