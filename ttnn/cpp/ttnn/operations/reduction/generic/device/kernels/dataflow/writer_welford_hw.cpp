@@ -156,17 +156,9 @@ void kernel_main() {
     // any result; subsequent outputs only need to replace element [0,0].
     if (num_outputs > 0) {
         dfb_combined.reserve_back(1);
-        if constexpr (combined_is_bf16) {
-            auto* combined_ptr = reinterpret_cast<volatile std::uint16_t*>(dfb_combined.get_write_ptr());
-            for (std::uint32_t i = 0; i < combined_tile_size_bytes / sizeof(std::uint16_t); ++i) {
-                combined_ptr[i] = 0;
-            }
-        } else {
-            auto* combined_ptr = reinterpret_cast<volatile float*>(dfb_combined.get_write_ptr());
-            for (std::uint32_t i = 0; i < combined_tile_size_bytes / sizeof(float); ++i) {
-                combined_ptr[i] = 0.0f;
-            }
-        }
+        noc.async_write_zeros(dfb_combined, combined_tile_size_bytes);
+        // Complete the clear before overwriting the scalar or publishing the tile.
+        noc.write_zeros_l1_barrier();
     }
 
     for (std::uint32_t out = 0; out < num_outputs; ++out) {
