@@ -27,8 +27,8 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host, prime_decode_trace, unpack_rope
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.qwen36.tt.generator_interface import pack_rope_host, prime_decode_trace, unpack_rope
+from models.demos.qwen36.tt.model import Qwen36Model
 from models.tt_transformers.tt.generator import Generator
 
 # Single-device test: default to the 9B checkpoint (the 27B needs a multi-device mesh for TP).

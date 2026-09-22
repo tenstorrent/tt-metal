@@ -16,7 +16,7 @@ import torch
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
 from models.tt_transformers.tt.generator import Generator
 
 

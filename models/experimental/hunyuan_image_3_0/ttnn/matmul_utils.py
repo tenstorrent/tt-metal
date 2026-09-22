@@ -15,7 +15,7 @@ import os
 
 import ttnn
 from models.common.utility_functions import is_blackhole, nearest_32
-from models.demos.blackhole.qwen36.tt.tp_common import _find_grid, _find_largest_divisor
+from models.demos.qwen36.tt.tp_common import _find_grid, _find_largest_divisor
 
 TILE_SIZE = 32
 

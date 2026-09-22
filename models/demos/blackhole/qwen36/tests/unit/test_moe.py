@@ -24,7 +24,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     load_moe_layer,
     torch_moe_reference,
 )
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
 
 from .conftest import DEVICE_PARAMS
 
@@ -38,7 +38,7 @@ def test_moe_pcc(device, seq_len, mode, request):
     if args.moe_num_experts <= 0:
         pytest.skip("not a MoE checkpoint (moe_num_experts == 0)")
 
-    from models.demos.blackhole.qwen36.tt.moe import MoEConfig, Qwen36MoE
+    from models.demos.qwen36.tt.moe import MoEConfig, Qwen36MoE
 
     moe_state = load_moe_layer(args.CKPT_DIR, 0)
 

@@ -37,8 +37,8 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     shard_to_device,
     tp_composer,
 )
-from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
@@ -523,7 +523,7 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     x_tt = shard_to_device(mesh_device, x, dim=-1)
     composer = tp_composer(mesh_device)
 
-    import models.demos.blackhole.qwen36.tt.gdn.fused_chunk as fc
+    import models.demos.qwen36.tt.gdn.fused_chunk as fc
 
     # Fused chunk is the production prefill path on both Blackhole and Wormhole (see
     # fused_chunk_enabled for the T3K validation data). QWEN36_GDN_FUSED=0 forces the seq

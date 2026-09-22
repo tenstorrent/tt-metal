@@ -123,8 +123,8 @@ def main():
             pass
 
         # Imported here so the device is open / fabric is configured first.
-        from models.demos.blackhole.qwen36.tt.vision.model import DropInVisionTransformer
-        from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
+        from models.demos.qwen36.tt.vision.model import DropInVisionTransformer
+        from models.demos.qwen36.tt.vision.vision_model_config import VisionModelArgs
 
         logger.info("Building VisionModelArgs...")
         model_args = VisionModelArgs(

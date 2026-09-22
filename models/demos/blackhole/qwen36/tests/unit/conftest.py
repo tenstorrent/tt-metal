@@ -20,8 +20,8 @@ import os
 
 import pytest
 
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
-from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen36_state_dict
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.weight_mapping import remap_qwen36_state_dict
 
 # Single-device component tests run against the 9B checkpoint (27B needs a TP mesh).
 os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")

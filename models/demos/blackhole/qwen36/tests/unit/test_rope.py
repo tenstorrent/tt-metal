@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc
-from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup, compute_rope_freqs
+from models.demos.qwen36.tt.rope import Qwen36RoPESetup, compute_rope_freqs
 
 pytestmark = run_for_blackhole()
 

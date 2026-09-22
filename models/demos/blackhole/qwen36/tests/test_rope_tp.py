@@ -33,13 +33,13 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     parametrize_mesh_tp,
     replicate_to_device,
 )
-from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
+from models.demos.qwen36.tt.attention.rope_tp import (
     apply_partial_rope_decode,
     apply_partial_rope_prefill,
     rot_mats_decode,
     rot_mats_prefill,
 )
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
 
 
 def _cos_sin(positions, rope_dim, theta):

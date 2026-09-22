@@ -31,8 +31,8 @@ def test_mlp_pcc(device, setup, request):
         down_w.to(torch.bfloat16),
     )
 
-    from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
-    from models.demos.blackhole.qwen36.utils.substate import substate
+    from models.demos.qwen36.tt.mlp import Qwen36MLP
+    from models.demos.qwen36.utils.substate import substate
 
     mlp_state = substate(sd, "layers.0.mlp")
     mlp = Qwen36MLP(device, mlp_state)

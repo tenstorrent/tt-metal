@@ -19,7 +19,7 @@ Run:
 import os
 
 from models.demos.blackhole.qwen36.tests.test_factory import model_path, parametrize_mesh_tp
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.qwen36.tt.model import Qwen36Model
 
 
 @parametrize_mesh_tp()

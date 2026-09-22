@@ -20,8 +20,8 @@ pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVI
 def test_deltanet_pcc(device, setup, request):
     """Compare TTNN deltanet against the torch reference for layer 0."""
     args, sd, raw = setup
-    from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
-    from models.demos.blackhole.qwen36.utils.substate import substate
+    from models.demos.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
+    from models.demos.qwen36.utils.substate import substate
     from models.experimental.gated_attention_gated_deltanet.torch_functional.gated_deltanet import (
         gated_deltanet_forward,
     )

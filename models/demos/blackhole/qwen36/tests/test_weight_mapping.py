@@ -5,9 +5,9 @@
 import pytest
 import torch
 
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
-from models.demos.blackhole.qwen36.tt.tp_common import replicate_kv_weight
-from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen36_state_dict
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.tp_common import replicate_kv_weight
+from models.demos.qwen36.tt.weight_mapping import remap_qwen36_state_dict
 
 HIDDEN_SIZE = 4096
 NUM_LAYERS = 32

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 
-from models.demos.blackhole.qwen36.utils.substate import has_substate, substate
+from models.demos.qwen36.utils.substate import has_substate, substate
 
 
 def test_substate_strips_prefix_and_filters():

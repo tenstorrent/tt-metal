@@ -12,7 +12,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc, get_pcc_threshold
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
 
 from .conftest import DEVICE_PARAMS
 

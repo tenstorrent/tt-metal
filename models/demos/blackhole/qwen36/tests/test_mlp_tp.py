@@ -27,8 +27,8 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     shard_to_device,
     tp_composer,
 )
-from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.mlp import Qwen36MLP
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
 
 
 @torch.no_grad()

@@ -37,9 +37,9 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     shard_to_device,
     tp_composer,
 )
-from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode, rot_mats_prefill
-from models.demos.blackhole.qwen36.tt.attention.tp import TPAttention, load_attention_weights_tp
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.attention.rope_tp import rot_mats_decode, rot_mats_prefill
+from models.demos.qwen36.tt.attention.tp import TPAttention, load_attention_weights_tp
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
 
 
 def _rope_torch(x, rope_dim, theta):  # x: [S, H, HD]
@@ -386,7 +386,7 @@ def test_attention_tp_qknorm_offset(mesh_device):
     logits are ~14x too small, long-context attention goes UNIFORM, and 64k retrieval collapses.
     Builds a tiny synthetic state_dict and checks the loaded q_norm/k_norm equal raw weights + 1.
     """
-    from models.demos.blackhole.qwen36.tt.attention.tp import load_attention_weights_tp
+    from models.demos.qwen36.tt.attention.tp import load_attention_weights_tp
 
     nd = mesh_device.get_num_devices()
     HD = 128

@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc
-from models.demos.blackhole.qwen36.tt.rms_norm import rms_norm_ttnn
+from models.demos.qwen36.tt.rms_norm import rms_norm_ttnn
 
 pytestmark = run_for_blackhole()
 EPS = 1e-6

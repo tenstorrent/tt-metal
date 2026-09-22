@@ -32,7 +32,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
@@ -987,7 +987,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     gen = Generator([model], [model.args], device)
 
     # Decode trace with GDN snapshot/restore (stock capture would double-advance state)
-    from models.demos.blackhole.qwen36.tt.generator_interface import prime_decode_trace
+    from models.demos.qwen36.tt.generator_interface import prime_decode_trace
 
     signpost("compile_decode")
     prime_decode_trace(gen, model, torch.tensor([[next_token]], dtype=torch.long), torch.tensor([T]), page_table)

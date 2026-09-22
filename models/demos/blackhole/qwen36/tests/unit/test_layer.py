@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
+from models.demos.qwen36.tt.layer import Qwen36DecoderLayer
 
 from .conftest import DEVICE_PARAMS
 
@@ -81,7 +81,7 @@ def test_layer3_gated_attention_prefill(device, setup):
     args, sd, raw = setup
     device.enable_program_cache()
 
-    from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+    from models.demos.qwen36.tt.rope import Qwen36RoPESetup
 
     layer = Qwen36DecoderLayer(device, args, sd, layer_num=3)
 

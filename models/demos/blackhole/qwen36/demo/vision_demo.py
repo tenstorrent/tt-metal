@@ -41,7 +41,7 @@ from qwen_vl_utils import process_vision_info
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.qwen36.tt.model import Qwen36Model
 from models.tt_transformers.tt.generator import Generator
 
 # Multi-device (TP) is selected via MESH_DEVICE (e.g. P150x4). On a single device the mesh is
@@ -368,7 +368,7 @@ def _run_traced_vision_generation(model, tokenizer, device, token_ids, vision_in
     we capture the per-chunk prefill trace and replay it; ``prefill_traced_chunked`` stages the
     image rows into the persistent splice buffers per chunk via host->device copies only.
     """
-    from models.demos.blackhole.qwen36.tt.generator_interface import prime_decode_trace
+    from models.demos.qwen36.tt.generator_interface import prime_decode_trace
 
     T = token_ids.shape[1]
     kv_cache_shape = [num_blocks, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]

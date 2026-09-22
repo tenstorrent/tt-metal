@@ -20,7 +20,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.qwen36.tt.model import Qwen36Model
 
 N_LAYERS = 8
 
@@ -68,7 +68,7 @@ def test_bucket_selection():
 
 
 def test_unsupported_device_sampling_fails_at_startup(expect_error):
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+    from models.demos.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
     model = SimpleNamespace(
         sampling=None,
@@ -97,7 +97,7 @@ def test_trace_buffer_reuse_is_opt_in(monkeypatch):
 
 
 def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
-    from models.demos.blackhole.qwen36.tt.generator_interface import warmup_decode_buckets
+    from models.demos.qwen36.tt.generator_interface import warmup_decode_buckets
 
     calls = []
 
@@ -309,7 +309,7 @@ def test_bucketed_decode_matches_full_width(mesh_device, reset_seeds, ensure_gc)
 def _parametrize_traced(max_tp=8, trace_bytes=1073741824):
     """Same mesh/fabric params as parametrize_mesh_tp, plus a trace region (needed to capture)."""
     from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape
-    from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
+    from models.demos.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
     shape = _resolve_mesh_shape(max_tp)
 

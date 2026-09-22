@@ -55,7 +55,7 @@ def load_layer_weights(ckpt_dir, layer_idx, names, search_prefix, out_prefix="")
     """
     from safetensors import safe_open
 
-    from ..tt.tp_common import dequant_fp8_block
+    from models.demos.qwen36.tt.tp_common import dequant_fp8_block
 
     ckpt_dir = Path(ckpt_dir)
     wm = json.load(open(ckpt_dir / "model.safetensors.index.json"))["weight_map"]
@@ -281,7 +281,7 @@ def parametrize_mesh_tp(max_tp=8):
     """
     shape = _resolve_mesh_shape(max_tp)
     # Local import to keep this test helper's module load light (see module docstring).
-    from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
+    from models.demos.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
     def decorator(fn):
         fn = pytest.mark.parametrize(

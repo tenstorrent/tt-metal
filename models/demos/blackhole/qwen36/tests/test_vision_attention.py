@@ -9,9 +9,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.blackhole.qwen36.tt.vision.functional import qwen3_5_vision_transformer_preprocess
-from models.demos.blackhole.qwen36.tt.vision.vision_attention import VisionAttention
-from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
+from models.demos.qwen36.tt.vision.functional import qwen3_5_vision_transformer_preprocess
+from models.demos.qwen36.tt.vision.vision_attention import VisionAttention
+from models.demos.qwen36.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (

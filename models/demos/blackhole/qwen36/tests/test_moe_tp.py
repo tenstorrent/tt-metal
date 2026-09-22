@@ -31,7 +31,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     torch_routed_experts_reference,
     tp_composer,
 )
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.qwen36.tt.model_config import Qwen36ModelArgs
 
 
 @torch.no_grad()
@@ -47,7 +47,7 @@ def test_moe_tp(mesh_device, seq_len, mode, reset_seeds, ensure_gc, request):
     if args.moe_num_experts <= 0:
         pytest.skip("not a MoE checkpoint (moe_num_experts == 0)")
 
-    from models.demos.blackhole.qwen36.tt.moe import MoEConfig, Qwen36MoE
+    from models.demos.qwen36.tt.moe import MoEConfig, Qwen36MoE
 
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} experts={args.moe_num_experts} top_k={args.moe_top_k}")
@@ -94,7 +94,7 @@ def test_moe_routed_experts_batch(mesh_device, reset_seeds, ensure_gc, request):
     if args.moe_num_experts <= 0:
         pytest.skip("not a MoE checkpoint (moe_num_experts == 0)")
 
-    from models.demos.blackhole.qwen36.tt.moe import MoEConfig, Qwen36MoE
+    from models.demos.qwen36.tt.moe import MoEConfig, Qwen36MoE
 
     nd = mesh_device.get_num_devices()
     batch, top_k, num_experts = 8, args.moe_top_k, args.moe_num_experts
