@@ -28,6 +28,13 @@ bool are_middle_kernels_uniform(const std::vector<uint32_t>& kernels) {
     return true;
 }
 
+// PyTorch adaptive pooling window for one output index.
+std::pair<uint32_t, uint32_t> pytorch_adaptive_window(uint32_t idx, uint32_t input_size, uint32_t output_size) {
+    uint32_t start = (idx * input_size) / output_size;
+    uint32_t end = ((idx + 1) * input_size + output_size - 1) / output_size;
+    return {start, end};
+}
+
 // Helper function designed to generate the kernel sizes for each output elements the same way it is
 // calculated in pytorch implementation
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> calculate_actual_kernel_patterns(
@@ -36,24 +43,21 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> calculate_actual_kernel_
 
     // Height kernel pattern
     for (uint32_t out_h = 0; out_h < output_h; out_h++) {
-        uint32_t start_h = (out_h * input_h) / output_h;
-        uint32_t end_h = ((out_h + 1) * input_h + output_h - 1) / output_h;
+        auto [start_h, end_h] = pytorch_adaptive_window(out_h, input_h, output_h);
         h_kernels.push_back(end_h - start_h);
     }
 
     // Width kernel pattern
     for (uint32_t out_w = 0; out_w < output_w; out_w++) {
-        uint32_t start_w = (out_w * input_w) / output_w;
-        uint32_t end_w = ((out_w + 1) * input_w + output_w - 1) / output_w;
+        auto [start_w, end_w] = pytorch_adaptive_window(out_w, input_w, output_w);
         w_kernels.push_back(end_w - start_w);
     }
 
     return {h_kernels, w_kernels};
 }
 
-// Helper function designed to check that a uniform pool2d window for each output
-// element covers the same input range as the pytorch adaptive pooling formula
-bool are_pooling_windows_uniform(
+// A uniform pool2d window, including border padding, covers the same input range as PyTorch.
+bool pool2d_windows_match_adaptive(
     uint32_t input_size,
     uint32_t output_size,
     uint32_t kernel_size,
@@ -74,9 +78,7 @@ bool are_pooling_windows_uniform(
     }
 
     for (uint32_t out_idx = 0; out_idx < output_size; out_idx++) {
-        // Adaptive window (pytorch)
-        uint32_t start = (out_idx * input_size) / output_size;
-        uint32_t end = ((out_idx + 1) * input_size + output_size - 1) / output_size;
+        auto [start, end] = pytorch_adaptive_window(out_idx, input_size, output_size);
 
         // Corresponding pool2d window mapped back onto the unpadded input
         int32_t pool_start = static_cast<int32_t>(out_idx * stride) - static_cast<int32_t>(pad_before);
@@ -167,17 +169,6 @@ AdaptivePoolingParams calculate_adaptive_pool_params(
         params.padding = {pad_top, pad_bottom, pad_left, pad_right};
     }
 
-    uint32_t padded_h = input_h + params.padding[0] + params.padding[1];
-    uint32_t padded_w = input_w + params.padding[2] + params.padding[3];
-    uint32_t final_out_h = ((padded_h - params.kernel_size[0]) / params.stride[0]) + 1;
-    uint32_t final_out_w = ((padded_w - params.kernel_size[1]) / params.stride[1]) + 1;
-
-    if (final_out_h != output_h || final_out_w != output_w) {
-        params.kernel_size = {base_kernel_h, base_kernel_w};
-        params.stride = {base_stride_h, base_stride_w};
-        params.padding = {0, 0, 0, 0};
-    }
-
     return params;
 }
 
@@ -199,11 +190,11 @@ bool are_borders_correctable_with_padding(const std::vector<uint32_t>& kernels) 
 bool validate_pooling_params_uniformity(
     const AdaptivePoolingParams& params, uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
     // Check height dimension
-    bool h_uniform = are_pooling_windows_uniform(
+    bool h_uniform = pool2d_windows_match_adaptive(
         input_h, output_h, params.kernel_size[0], params.stride[0], params.padding[0], params.padding[1]);
 
     // Check width dimension
-    bool w_uniform = are_pooling_windows_uniform(
+    bool w_uniform = pool2d_windows_match_adaptive(
         input_w, output_w, params.kernel_size[1], params.stride[1], params.padding[2], params.padding[3]);
 
     return h_uniform && w_uniform;
