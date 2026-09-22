@@ -858,6 +858,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
                 return "ExaMAX";
             }
             break;
+        default: break;
     }
 
     return "unknown";
