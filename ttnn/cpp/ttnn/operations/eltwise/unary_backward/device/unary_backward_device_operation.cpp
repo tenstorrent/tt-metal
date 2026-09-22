@@ -48,9 +48,20 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         op_name,
         name);
 
-    // Interleaved-only: see the sharded fallback in the composite layer, which keeps sharded
-    // callers on the op composition that supports them rather than failing here.
-    TT_FATAL(!tensor.is_sharded(), "{} operation does not support sharding, but {} is sharded.", op_name, name);
+    // Sharded operands are supported: a sharded tensor's circular buffer is bound to its own
+    // buffer and the dataflow kernels skip the copy for it. What is NOT supported is a shard
+    // spec whose shard is not a whole number of tiles, because the program is one-to-one on
+    // physical tiles.
+    if (tensor.is_sharded()) {
+        const auto& shard_shape = tensor.memory_config().shard_spec()->shape;
+        TT_FATAL(
+            shard_shape[0] % tt::constants::TILE_HEIGHT == 0 && shard_shape[1] % tt::constants::TILE_WIDTH == 0,
+            "{} operation requires a shard shape that is a whole number of tiles, but {} has a {}x{} shard.",
+            op_name,
+            name,
+            shard_shape[0],
+            shard_shape[1]);
+    }
 
     // The factory sizes its circular buffers with tt::tile_size and splits work by
     // physical_volume() / TILE_HW, and neither the layout nor the tile is in
@@ -72,13 +83,6 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         name,
         tile.get_height(),
         tile.get_width());
-
-    TT_FATAL(
-        tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "{} operation requires {} to use INTERLEAVED memory layout, but it uses {}.",
-        op_name,
-        name,
-        tensor.memory_config().memory_layout());
 }
 
 }  // namespace
@@ -117,12 +121,8 @@ void UnaryBackwardDeviceOperation::validate_on_program_cache_miss(
         input.dtype(),
         output_dtype);
 
-    TT_FATAL(
-        input.memory_config().memory_layout() == output_memory_config.memory_layout(),
-        "{} operation requires the input and output memory layouts to match. Input layout: {}, output layout: {}",
-        op_name,
-        input.memory_config().memory_layout(),
-        output_memory_config.memory_layout());
+    // Input and output layouts need not match: a caller may hand interleaved operands and ask
+    // for a sharded result, or the reverse, and the composite this replaced honoured both.
 
     // The reader walks the same tile_id range in both operands with a count derived from the
     // input alone (physical_volume() / TILE_HW), so a smaller grad_output would be read past
@@ -212,6 +212,9 @@ ttsl::hash::hash_t UnaryBackwardDeviceOperation::compute_program_hash(
     const auto& grad_output = tensor_args.grad_output;
 
     // args carries op_type, so entries for two different gradients can never collide.
+    // memory_config() carries the shard spec, so grid, shard shape and orientation are all in
+    // the key. They must be: the factory sizes globally allocated CBs from the shard shape and
+    // takes its core ranges from the shard grid, none of which a cache hit can refresh.
     operation::Hash hash = operation::hash_operation<UnaryBackwardDeviceOperation>(
         args,
         input.dtype(),

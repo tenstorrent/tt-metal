@@ -41,14 +41,57 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
 
     const uint32_t num_tiles = input.physical_volume() / TILE_HW;
 
+    // Sharding is per operand: any of the three may be sharded independently, and a caller may
+    // ask for a sharded output from interleaved operands. A sharded tensor's circular buffer is
+    // bound to its own buffer (globally allocated) and sized to a whole shard, and the dataflow
+    // kernels skip the copy for it -- the shard already is the CB. The others keep the
+    // interleaved double-buffered path.
+    const bool grad_output_sharded = grad_output.is_sharded();
+    const bool input_sharded = input.is_sharded();
+    const bool output_sharded = output.is_sharded();
+    const bool any_sharded = grad_output_sharded || input_sharded || output_sharded;
+
+    // Tiles in one shard, for whichever operand is sharded. All sharded operands share a shape
+    // and a grid here (validation pins the padded shapes equal), so one figure serves them all.
+    const auto shard_tiles_of = [](const Tensor& t) -> uint32_t {
+        const auto& shard_shape = t.memory_config().shard_spec()->shape;
+        return (shard_shape[0] / TILE_HEIGHT) * (shard_shape[1] / TILE_WIDTH);
+    };
+    const uint32_t shard_tiles = grad_output_sharded ? shard_tiles_of(grad_output)
+                                 : input_sharded     ? shard_tiles_of(input)
+                                 : output_sharded    ? shard_tiles_of(output)
+                                                     : 0;
+
     IDevice* device = input.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
-    constexpr uint32_t num_input_tiles = 2;
-    constexpr uint32_t num_output_tiles = 2;
+    // Work split: for a sharded program the cores are dictated by the shard grid -- each core
+    // owns exactly its own shard -- so split_work_to_cores (which picks its own grid from a tile
+    // count) must not be used.
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1, core_group_2;
+    uint32_t num_cores = 0, num_tiles_per_core_group_1 = 0, num_tiles_per_core_group_2 = 0;
+    if (any_sharded) {
+        const auto& shard_grid = grad_output_sharded ? grad_output.memory_config().shard_spec()->grid
+                                 : input_sharded     ? input.memory_config().shard_spec()->grid
+                                                     : output.memory_config().shard_spec()->grid;
+        all_cores = shard_grid;
+        core_group_1 = shard_grid;
+        num_cores = shard_grid.num_cores();
+        num_tiles_per_core_group_1 = shard_tiles;
+    } else {
+        auto split = split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        num_cores = std::get<0>(split);
+        all_cores = std::get<1>(split);
+        core_group_1 = std::get<2>(split);
+        core_group_2 = std::get<3>(split);
+        num_tiles_per_core_group_1 = std::get<4>(split);
+        num_tiles_per_core_group_2 = std::get<5>(split);
+    }
+
+    // A globally allocated CB must hold a whole shard; an interleaved one only needs its double
+    // buffer. Applied per operand at the push_cb calls below.
     constexpr uint32_t grad_output_cb_index = CBIndex::c_0;
     constexpr uint32_t input_cb_index = CBIndex::c_1;
     constexpr uint32_t grad_input_cb_index = CBIndex::c_2;
@@ -57,26 +100,46 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
 
     // ---- Circular buffers ----
 
-    const auto push_cb = [&desc, &all_cores](
-                             uint32_t index, DataFormat data_format, uint32_t tile_size, uint32_t tiles) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = tiles * tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(index),
-                .data_format = data_format,
-                .page_size = tile_size,
-            }}},
-        });
-    };
-
-    push_cb(grad_output_cb_index, grad_output_cb_data_format, grad_output_single_tile_size, num_input_tiles);
-    push_cb(input_cb_index, input_cb_data_format, input_single_tile_size, num_input_tiles);
-    push_cb(grad_input_cb_index, output_cb_data_format, output_single_tile_size, num_output_tiles);
-
     auto* grad_output_buffer = grad_output.buffer();
     auto* input_buffer = input.buffer();
     auto* grad_input_buffer = output.buffer();
+
+    // `buffer` set means a globally allocated CB: the CB is the tensor's own shard in L1 rather
+    // than a staging area, so the dataflow kernel copies nothing for that operand. Left null for
+    // an interleaved operand, which keeps its double buffer.
+    const auto push_cb =
+        [&desc, &all_cores](
+            uint32_t index, DataFormat data_format, uint32_t tile_size, uint32_t tiles, Buffer* shard_buffer) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = tiles * tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(index),
+                    .data_format = data_format,
+                    .page_size = tile_size,
+                }}},
+                .buffer = shard_buffer,
+            });
+        };
+
+    push_cb(
+        grad_output_cb_index,
+        grad_output_cb_data_format,
+        grad_output_single_tile_size,
+        grad_output_sharded ? shard_tiles : 2,
+        grad_output_sharded ? grad_output_buffer : nullptr);
+    push_cb(
+        input_cb_index,
+        input_cb_data_format,
+        input_single_tile_size,
+        input_sharded ? shard_tiles : 2,
+        input_sharded ? input_buffer : nullptr);
+    push_cb(
+        grad_input_cb_index,
+        output_cb_data_format,
+        output_single_tile_size,
+        output_sharded ? shard_tiles : 2,
+        output_sharded ? grad_input_buffer : nullptr);
 
     // ---- Reader / writer kernels ----
     //
@@ -84,9 +147,24 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // unary gradient reads two same-shaped operands and writes one, which is exactly the
     // binary reader's and the unary writer's contract.
 
+    // The reader declares a TensorAccessor only for an operand it actually reads, so the
+    // compile-time arg list must carry exactly the accessors the defines leave enabled --
+    // appending one for a sharded operand would shift the other's offset.
     std::vector<uint32_t> reader_compile_time_args = {0};
-    TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+    if (!grad_output_sharded) {
+        TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
+    }
+    if (!input_sharded) {
+        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+    }
+
+    std::map<std::string, std::string> reader_defines;
+    if (grad_output_sharded) {
+        reader_defines["IN0_SHARDED"] = "1";
+    }
+    if (input_sharded) {
+        reader_defines["IN1_SHARDED"] = "1";
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -94,10 +172,18 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     reader_desc.config = ReaderConfigDescriptor{};
 
+    // The writer declares its accessor unconditionally, so it is always appended; under
+    // OUT_SHARDED the kernel just waits on the CB and never uses it.
     std::vector<uint32_t> writer_compile_time_args = {grad_input_cb_index};
     TensorAccessorArgs(*grad_input_buffer).append_to(writer_compile_time_args);
+
+    std::map<std::string, std::string> writer_defines;
+    if (output_sharded) {
+        writer_defines["OUT_SHARDED"] = "1";
+    }
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -105,6 +191,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.defines = {writer_defines.begin(), writer_defines.end()};
     writer_desc.config = WriterConfigDescriptor{};
 
     // ---- Compute kernel ----
@@ -156,8 +243,27 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
 
     // ---- Per-core runtime args ----
 
+    // Core enumeration. For an interleaved program the linear-index-to-coordinate mapping below
+    // has to agree with split_work_to_cores, which walks columns of the compute grid. For a
+    // sharded program it instead has to agree with the SHARD's own core order, which follows the
+    // shard spec's orientation -- a linear mapping through the compute grid's height silently
+    // hands each core another core's tile range. That produced correct results only where the
+    // shard grid happened to be one compute-grid column; a full 8x8 grid came out at PCC 0.13.
+    std::vector<CoreCoord> cores;
+    if (any_sharded) {
+        const auto& shard_spec = grad_output_sharded ? grad_output.memory_config().shard_spec()
+                                 : input_sharded     ? input.memory_config().shard_spec()
+                                                     : output.memory_config().shard_spec();
+        cores = corerange_to_cores(all_cores, num_cores, shard_spec->orientation == ShardOrientation::ROW_MAJOR);
+    } else {
+        cores.reserve(num_cores);
+        for (uint32_t i = 0; i < num_cores; i++) {
+            cores.push_back(CoreCoord{i / num_cores_y, i % num_cores_y});
+        }
+    }
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        CoreCoord core = cores[i];
         uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
