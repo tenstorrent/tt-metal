@@ -549,11 +549,17 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
             num_program_slots);
         const uint32_t base =
             REMOTE_DFB_REGION_HEADER_WORDS + participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+        // A slot is reserved from geometry and bound to a live pipe later
+        TT_FATAL(
+            participant.pipe != nullptr,
+            "PrefetcherPipe slot {} is not bound to a PrefetcherPipe object; supply a PrefetcherPipeArgument for "
+            "every PrefetcherPipeParameter via SetProgramRunArgs before enqueueing the program",
+            participant.prefetcher_pipe_id);
         // P is a pipe-lifetime property read at build time, not a participant field: a relay or
-        // later Attach may arm lanes after this record was added. Packing it here (rather than
-        // poking the persistent page) keeps it ordered with this program in the command queue.
-        const uint32_t num_credit_lanes =
-            program.get_prefetcher_pipe_attachment(participant.prefetcher_pipe_id).num_credit_lanes();
+        // later Attach (possibly in another program) may arm lanes after this record was added.
+        // Packing it here (rather than poking the persistent page) keeps it ordered with this
+        // program in the command queue.
+        const uint32_t num_credit_lanes = participant.pipe->num_credit_lanes();
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;
         payload[base + 2] = pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, num_credit_lanes);
@@ -601,8 +607,9 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    // Mock/emulated devices don't have real binaries, skip finalization
-    if (metal_ctx.get_cluster().is_mock_or_emulated()) {
+    // Emule and Quasar mock don't have real binaries, skip finalization.
+    const auto target = metal_ctx.get_cluster().get_target_device_type();
+    if (target == tt::TargetDevice::Emule || (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR)) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;

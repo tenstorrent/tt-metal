@@ -868,13 +868,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                          : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
                                                                     : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
-    // Int8 quant input (dequant/requant operand A) is read through the UInt8 unpacker.
-    const auto a_data_format =
-        (is_quant_op && a_dtype == DataType::INT8) ? tt::DataFormat::UInt8 : datatype_to_dataformat_converter(a_dtype);
+    // Int8 input (dequant/requant operand A) is read through the UInt8 unpacker.
+    const auto a_data_format = cb_dataformat_for(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
     // Int8 output is packed through the UInt8 packer path.
-    const auto c_pack_data_format = (c_dtype == DataType::INT8) ? tt::DataFormat::UInt8 : c_data_format;
+    const auto c_pack_data_format = cb_dataformat_for(c_dtype);
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);

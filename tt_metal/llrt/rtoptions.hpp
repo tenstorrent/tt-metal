@@ -243,6 +243,7 @@ class RunTimeOptions {
     bool profiler_accumulate = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
+    bool profiler_sync_events_enabled = false;
     // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
     bool streaming_profiler_enabled = false;
@@ -431,6 +432,7 @@ class RunTimeOptions {
 
     // BRISC firmware variant selected by TT_METAL_FW_SRC_BRISC.
     BriscFirmwareVariant brisc_firmware_variant = BriscFirmwareVariant::Default;
+    std::string brisc_firmware_header;
 
     // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
     // and full-dispatch passes on dispatch_s.
@@ -684,6 +686,10 @@ public:
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
         }
+        if (get_brisc_firmware_variant() == BriscFirmwareVariant::Blaze) {
+            compile_hash_str += "_blaze_runtime_reload_";
+            compile_hash_str += get_brisc_firmware_header();
+        }
         return compile_hash_str;
     }
 
@@ -710,6 +716,7 @@ public:
     }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
+    bool get_profiler_sync_events_enabled() const { return profiler_sync_events_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
@@ -983,6 +990,7 @@ public:
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
     BriscFirmwareVariant get_brisc_firmware_variant() const { return brisc_firmware_variant; }
+    const std::string& get_brisc_firmware_header() const { return brisc_firmware_header; }
 
     uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
     void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }

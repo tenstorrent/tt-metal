@@ -19,7 +19,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.runners.migration import is_per_host_storage, migration_table_path
+from models.demos.common.prefill.runners.migration import (
+    is_per_host_storage,
+    migration_table_path,
+    rank_scoped_device_map_path,
+)
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 
@@ -80,14 +84,22 @@ METADATA_SIZE_BYTES = 12
 
 
 def _load_env_config() -> None:
-    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER
+    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
     MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
-    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+    # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
+    # pattern) rather than a literal -- a hardcoded default silently under-covers any model
+    # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
+    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
+    # One ack fires per layer that WRITES KV, not per layer. Dense stacks are the same number, but a
+    # hybrid one is not: Kimi-K3 at 93 layers acks only its 24 full-attention layers, so draining
+    # NUM_LAYERS * pushes waits for acks that are never sent and burns the full 600 s timeout twice,
+    # once after warmup and once after the measured request.
+    NUM_ACK_LAYERS = getattr(ADAPTER, "num_kv_cache_layers", lambda n: n)(NUM_LAYERS)
 
 
 _load_env_config()
@@ -146,7 +158,7 @@ def _read_kv_chunk_table(timeout_s: int):
     return table
 
 
-def _read_device_map(timeout_s: int) -> dict:
+def _read_device_map(timeout_s: int, rank: int | None = None, num_ranks: int = 1) -> dict:
     import glob as _glob
     import json
 
@@ -165,19 +177,44 @@ def _read_device_map(timeout_s: int) -> dict:
     path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
     stem, ext = os.path.splitext(path)
 
-    def _matches():
+    # A KV read is UMD-local: read_dram_umd only reaches chips visible to THIS process. Under
+    # pipeline parallelism every rank exports its own map, and merging them all makes the caller
+    # believe it can resolve another galaxy's chips -- such a layer then clears the visibility guard
+    # and dies inside the read with "no visible chip with ASIC unique_id".
+    def _own():
+        # This rank's own map: the only chips this process can actually reach. Resolve the name
+        # with the same helper the runner writes it with -- at num_ranks <= 1 that is the
+        # unsuffixed base path, and hardcoding the _r<rank> form here made the single-rank SC1
+        # leg wait out its timeout for a file nothing ever writes.
+        own = rank_scoped_device_map_path(path, rank, num_ranks)
+        return [own] if os.path.exists(own) else []
+
+    def _any():
         return ([path] if os.path.exists(path) else []) + sorted(_glob.glob(f"{stem}_r*{ext}"))
 
+    # Waiting on _any() under pipeline parallelism is a race, not a fallback: the ranks write to a
+    # shared path at different times, so a rank whose own map is not out yet would see a PEER's and
+    # stop waiting immediately, picking up exactly the cross-galaxy map the rank-scoping exists to
+    # avoid. Wait for our own, or for nothing.
+    _wanted = _own if rank is not None else _any
+
     deadline = time.perf_counter() + timeout_s
-    files = _matches()
+    files = _wanted()
     while not files:
         if time.perf_counter() > deadline:
-            logger.warning(
-                f"[producer] device map {path} (or {stem}_r*{ext}) not found after {timeout_s}s; skipping KV read."
-            )
+            if rank is not None and _any():
+                logger.warning(
+                    f"[producer] rank {rank}'s own device map {stem}_r{rank}{ext} never appeared, though "
+                    f"other ranks' maps are present. Not merging them -- they describe chips this "
+                    f"process cannot reach. Skipping KV read."
+                )
+            else:
+                logger.warning(
+                    f"[producer] device map {path} (or {stem}_r*{ext}) not found after {timeout_s}s; skipping KV read."
+                )
             return {}
         time.sleep(0.1)
-        files = _matches()
+        files = _wanted()
 
     device_map = {}
     for f_path in files:
@@ -200,6 +237,23 @@ def _connect_layer_ack_channel(timeout_s: int):
         return None
     logger.info(f"[producer] connected LayerAck channel {shm_name}")
     return channel
+
+
+def _ack_layers_per_chunk(kv_table) -> int:
+    """Layer acks one chunk produces across all ranks.
+
+    NUM_ACK_LAYERS counts only what the model's own layers emit; DFlash acks the drafter's context K/V
+    past the verifier's last layer, so the runner emits more. Read the wider count off the published
+    table rather than re-deriving the drafter's depth here: a drafter config spans the same global layer
+    axis the acks are numbered on, and the table is the only thing this device-less process and the
+    runner both see.
+    """
+    if kv_table is None:
+        return NUM_ACK_LAYERS
+    dflash = [name for name in _config_names(kv_table) if name.startswith("dflash_")]
+    if not dflash:
+        return NUM_ACK_LAYERS
+    return kv_table.config(kv_table.config_id_of(dflash[0])).num_layers
 
 
 def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
@@ -686,18 +740,87 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         _load_golden_index_k,
         _load_golden_kv_post,
         index_golden_present,
+        kvpe_golden_present,
     )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
     from tests.ttnn.utils_for_testing import comp_pcc
+
+    # The pe half needs re-basing only if the model rotates it. The adapter's own declaration wins:
+    # `cache_half_pccs` names a second case (a natively interleaved indexer RoPE) where the answer
+    # is False with no USE_NOPE flag to derive it from, and the chunked test already reads the
+    # attribute, so deriving it a second way here is how the two drift. Absent both, the usual
+    # rotated convention.
+    _KVPE_INTERLEAVE = getattr(ADAPTER, "kv_pe_interleave", not bool(getattr(ADAPTER.model_config, "USE_NOPE", False)))
 
     KV_LORA = ADAPTER.model_config.KV_LORA_RANK
     HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
 
+    # PREFILL_PCC_TAIL_WINDOW=W scores the LAST W tokens instead of the first real_len. A head+tail
+    # capture holds only two windows of a long prompt, so at 1M context the golden has no rows for
+    # the middle and [0,real_len) cannot be scored at all -- but the tail is exactly the interesting
+    # part, since it is the only evidence the model is still correct at full context depth. The
+    # device holds every position, so only the read has to move; PREFILL_PCC_GOLDEN_OFFSET says
+    # where the golden's tail window starts (the head length, not the prompt position).
+    tail_window = int(os.environ.get("PREFILL_PCC_TAIL_WINDOW", "0"))
+    golden_offset = int(os.environ.get("PREFILL_PCC_GOLDEN_OFFSET", "0"))
+    # An explicit [START, END) beats the "last W tokens" form, because the interesting window does
+    # not always end at real_len. At 1M with 5120-token chunks it must not: 1,048,576 = 204*5120 +
+    # 4096, so the final chunk carries 1024 padding tokens, and a window ending at real_len scores
+    # KV that was produced in a padded chunk. Scoring only whole, fully-real chunks means
+    # [993280, 1044480) -- chunks 194..203 -- which also drops chunk 193, of which just 1024 tokens
+    # fall inside the tail.
+    win_start = int(os.environ.get("PREFILL_PCC_WINDOW_START", "0"))
+    win_end = int(os.environ.get("PREFILL_PCC_WINDOW_END", "0"))
+    # Moving the device read without moving the golden read scores unrelated positions, and the
+    # result looks exactly like a broken model rather than a misconfiguration: every layer lands
+    # near zero. There is no safe default to infer -- a head+tail capture wants the head length,
+    # a full-length capture wants the window start itself -- so require it to be stated.
+    if (win_end or tail_window) and "PREFILL_PCC_GOLDEN_OFFSET" not in os.environ:
+        raise ValueError(
+            "a PCC window is set (PREFILL_PCC_WINDOW_END or PREFILL_PCC_TAIL_WINDOW) but "
+            "PREFILL_PCC_GOLDEN_OFFSET is not; set it to the golden row the window starts at "
+            "(0 is valid and must be passed explicitly)."
+        )
+    if win_end:
+        for name, v in (("PREFILL_PCC_WINDOW_START", win_start), ("PREFILL_PCC_WINDOW_END", win_end)):
+            if v % tokens_per_block:
+                raise ValueError(f"{name}={v} must be a multiple of {tokens_per_block} (the DRAM block)")
+        first_pos, last_pos = win_start, min(win_end, real_len)
+        cmp_len, skip_rows = last_pos - first_pos, 0
+    elif tail_window:
+        cmp_len = min(tail_window, real_len)
+        first_pos = ((real_len - cmp_len) // tokens_per_block) * tokens_per_block
+        last_pos = real_len
+        skip_rows = (real_len - cmp_len) - first_pos
+    else:
+        cmp_len, first_pos, skip_rows, last_pos = real_len, 0, 0, real_len
+    read_end = ((last_pos + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
+
+    # Which layers own a KV slab according to the MODEL, not according to what happens to be on
+    # disk. A hybrid stack legitimately has goldens for only some layers, but a mispointed or partial
+    # PREFILL_TRACE_DIR looks exactly the same from a file-presence check, and skipping both leaves a
+    # gate that passes on whatever subset survived. None (every dense model) means every layer.
+    slab_layers = getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS)
+    expected_slabs = set(range(NUM_LAYERS)) if slab_layers is None else set(slab_layers)
+
     min_pcc = 1.0
     checked = 0
+    unreferenced = []
+    missing_golden = []
     for layer in range(NUM_LAYERS):
+        # A hybrid attention stack writes a KV slab on only some layers, so the table publishes rows
+        # for only those. Decide from the MODEL, not from what is on disk: a shared or dense-variant
+        # trace dir can carry a golden for a slab-less layer, and `table.lookup` on its unpublished
+        # row would score whatever sits at the default address and fold that into the gate.
+        if layer not in expected_slabs:
+            unreferenced.append(layer)
+            continue
+        if not kvpe_golden_present(trace_dir, layer):
+            missing_golden.append(layer)
+            continue
         loc0 = table.lookup(layer, 0, slot_id)
         try:
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
@@ -705,29 +828,56 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             continue
 
         decoded_rows = []
-        for pos in range(0, read_len, tokens_per_block):
+        for pos in range(first_pos, read_end, tokens_per_block):
             loc = table.lookup(layer, pos, slot_id)
             unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
             raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
             decoded_rows.append(_decode_kv_chunk(raw, HEAD_DIM))
-        device_kv = torch.cat(decoded_rows, dim=0)[:real_len]
+        device_kv = torch.cat(decoded_rows, dim=0)[skip_rows : skip_rows + cmp_len]
 
-        golden = _load_golden_kv_post(trace_dir, layer, real_len)
-        _, pcc_nope = comp_pcc(golden[:, :KV_LORA], device_kv[:, :KV_LORA])
+        # A single PCC scalar per half per layer cannot separate a static per-column error from one
+        # that accumulates per token, which is the question the depth curve actually poses. The
+        # tensor is already in host memory here, so dumping it costs no device time. bfloat16 is
+        # lossless for a bfp8_b-sourced value (7 mantissa bits into 8) and halves the file.
+        dump_dir = os.environ.get("PREFILL_DUMP_KV_DIR")
+        if dump_dir:
+            try:
+                os.makedirs(dump_dir, exist_ok=True)
+                torch.save(
+                    device_kv.to(torch.bfloat16),
+                    os.path.join(dump_dir, f"device_kv_layer{layer}_slot{slot_id}.pt"),
+                )
+            except Exception as exc:  # diagnostics must never fail the gate
+                logger.warning(f"[producer] KV dump for layer {layer} failed: {exc}")
 
-        golden_pe = golden[:, KV_LORA:]
-        pe_dim = golden_pe.shape[-1]
-        golden_pe = torch.stack([golden_pe[:, : pe_dim // 2], golden_pe[:, pe_dim // 2 :]], dim=-1).reshape(-1, pe_dim)
-        _, pcc_pe = comp_pcc(golden_pe, device_kv[:, KV_LORA:])
+        golden = _load_golden_kv_post(trace_dir, layer, cmp_len, start=golden_offset)
+        # Re-base the pe half only if the model rotates it. Kimi-K3 is NoPE (`mla_use_nope`): its 64
+        # rope dims pass through unrotated, so applying the half-split re-interleave scores the
+        # transform instead of the cache -- 0.02 against a nope half of 0.998.
+        pcc_nope, pcc_pe = cache_half_pccs(golden, device_kv, KV_LORA, pe_interleave=_KVPE_INTERLEAVE)
 
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
         checked += 1
         logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
     logger.info(
-        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
-        f"{min_pcc:.6f}"
+        f"[producer] slot {slot_id} KV PCC over "
+        f"[{first_pos + skip_rows},{first_pos + skip_rows + cmp_len}) vs golden "
+        f"[{golden_offset},{golden_offset + cmp_len}) "
+        f"across {checked}/{len(expected_slabs)} "
+        f"slab-owning layers -> {min_pcc:.6f}"
+        + (f"; {len(unreferenced)} layers own no KV slab (hybrid stack): {unreferenced}" if unreferenced else "")
     )
+    if missing_golden:
+        # These layers DO own a slab, so the golden must have covered them. Warning and scoring the
+        # rest is exactly the gate quietly narrowing itself: a partial or mispointed trace then
+        # reports a passing min PCC over whichever layers happened to be present, and the layers
+        # that go missing are the deep ones that carry the minimum. Fail instead.
+        raise RuntimeError(
+            f"slot {slot_id}: {len(missing_golden)} slab-owning layer(s) have no KV golden under "
+            f"{trace_dir} and cannot be scored: {missing_golden}. The trace is partial or "
+            f"PREFILL_TRACE_DIR is wrong."
+        )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
 
@@ -740,6 +890,16 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             )
             return mins
 
+        if first_pos + skip_rows != 0 or cmp_len != real_len:
+            # The window flags move the KVPE read only; the loop below still walks from 0 and asks
+            # the golden for [0,real_len). Half-windowing one gate is worse than refusing: both
+            # halves fold into the same `mins`, so the verdict would mix two token ranges.
+            raise RuntimeError(
+                f"a PCC window ([{first_pos + skip_rows},{first_pos + skip_rows + cmp_len}) of "
+                f"[0,{real_len})) is set on a table that also carries an index config, but the "
+                f"indexer-key half is not windowed. Score the index cache unwindowed, or extend "
+                f"the window to it."
+            )
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers
@@ -804,8 +964,38 @@ def _write_pcc_verdict(
         json.dump(verdict, f)
 
 
-def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0) -> bool:
-    device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
+def _dflash_caches_are_local(kv_table, device_map: dict, *, slot_id: int) -> bool:
+    """Whether this host owns the DFlash drafter caches the table describes.
+
+    The drafter is built on ONE rank (the KV tail), so its caches live on ONE host, but every rank sees
+    its configs because the table is shared. ``read_dram_umd`` is local-PCIe only, so a rank elsewhere
+    would resolve a chip it cannot read and abort inside umd_dram_reader
+    (``TT_FATAL: it != uid_to_chip.end()``) rather than skip. Probing one config is enough: all of them
+    describe the same two caches on the same host.
+
+    The KVPE reader has the equivalent behaviour inline (``except KeyError: continue`` per layer); the
+    drafter needs it hoisted because its reader checks every (layer, head) as one unit.
+    """
+    from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import dflash_config_name
+
+    try:
+        config_id = kv_table.config_id_of(dflash_config_name("k", 0))
+        # Last row, not layer 0: the drafter's configs span the merged table's global layer axis and only
+        # its tail is populated. An unpopulated row reads back zeroed, and device_group_index 0 is a real
+        # group, so probing layer 0 would resolve some other cache's host and answer True anywhere.
+        loc = kv_table.lookup(kv_table.config(config_id).num_layers - 1, 0, slot_id, config_id)
+        _resolve_unique_id(kv_table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+    except KeyError:
+        return False
+    return True
+
+
+def _verify_resident_slots(
+    kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0, num_ranks: int = 1
+) -> bool:
+    device_map = _read_device_map(
+        int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")), rank=rank, num_ranks=num_ranks
+    )
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
         _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold, per_cache={})
@@ -813,6 +1003,12 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
     check_dflash = any(name.startswith("dflash_") for name in _config_names(kv_table))
+    if check_dflash and not _dflash_caches_are_local(kv_table, device_map, slot_id=min(stats.resident, default=0)):
+        logger.info(
+            "[producer] drafter caches are not on this host; leaving the drafter PCC to the rank that "
+            "owns them (the KV-tail rank)."
+        )
+        check_dflash = False
     if check_dflash:
         from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import dflash_kv_table_pcc_check
 
@@ -845,6 +1041,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
                 slot_id,
                 real_len,
                 read_config_slice=read_dflash_slice,
+                golden_dir=os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR") or ADAPTER.dflash_golden_default,
                 threshold=dflash_threshold,
                 rope_convention="interleaved",
             )
@@ -999,7 +1196,9 @@ def _run_validator(rank: int, world_size: int) -> None:
     else:
         try:
             slot_traces, _slot_lengths, _pools = _resolve_slot_prompts(cfg)
-            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces, rank=rank)
+            ok = _verify_resident_slots(
+                kv_table, stats, cfg.pcc_threshold, slot_traces, rank=rank, num_ranks=world_size
+            )
         except Exception as e:
             logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
             ok = False
@@ -1067,6 +1266,7 @@ def main() -> None:
             "channel (pure token feeder; the runner's migration self-test owns it)"
         )
 
+    ack_layers = _ack_layers_per_chunk(kv_table)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
@@ -1088,7 +1288,7 @@ def main() -> None:
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
         service.barrier()
         if ack_channel is not None:
-            _drain_layer_acks(ack_channel, NUM_LAYERS * warmup_chunks)
+            _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1103,7 +1303,7 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
+    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
@@ -1111,7 +1311,9 @@ def main() -> None:
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
-            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces, rank=mr_rank)
+            verify_ok = _verify_resident_slots(
+                kv_table, stats, cfg.pcc_threshold, slot_traces, rank=mr_rank, num_ranks=world_size
+            )
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
             verify_ok = False

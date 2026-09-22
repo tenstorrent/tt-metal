@@ -381,6 +381,17 @@ jobs:
               ;;
           esac
 
+          # Per-entry environment, space-separated KEY=VALUE pairs, exported after
+          # the per-model case block so an entry can override it.
+          if [ -n "${{ matrix.test-group.extra-env }}" ]; then
+            for _kv in ${{ matrix.test-group.extra-env }}; do
+              case "$_kv" in
+                *=*) export "$_kv"; echo "extra-env: ${_kv%%=*}" ;;
+                *) echo "extra-env: ignoring malformed entry '$_kv'" ;;
+              esac
+            done
+          fi
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")

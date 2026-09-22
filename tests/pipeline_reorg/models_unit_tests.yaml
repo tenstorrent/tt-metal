@@ -704,12 +704,15 @@
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    # Watcher setup is per SKU: this cmd is shared by wh_galaxy_perf and bh_galaxy, and only
+    # the Blackhole leg has been revalidated. See the skus block below.
+    {watcher_setup}
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH)
     pytest --timeout 60 models/tt_transformers/tests/test_attention_utils.py
     pytest --timeout 60 models/tt_transformers/tests/test_distributed_norm_utils.py
     pytest --timeout 60 models/tt_transformers/tests/test_model_config_utils.py
+    pytest --timeout 60 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_model_config.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
@@ -722,9 +725,18 @@
     wh_galaxy_perf:
       timeout: 10
       tier: 1
+      # Still blocked by #50886: this leg has its own watcher-exposed fabric / paged-attention
+      # hang (see #49081), unfixed and unvalidated. Keep the watcher off until it is revalidated.
+      watcher_setup: "unset TT_METAL_WATCHER"
     bh_galaxy:
       timeout: 15
       tier: 1
+      # The #53330 slice fault is fixed by #56176, so the watcher goes back on here.
+      # DISABLE_ETH is required: with the watcher on ethernet cores the fabric program needs
+      # 27328 bytes against a 26624 byte ACTIVE_ETH kernel config buffer, so open_mesh_device
+      # throws in FabricFirmwareInitializer::compile_and_configure_fabric() and no test runs.
+      # Worker cores stay watched, which is where the #50886 faults have been.
+      watcher_setup: "export TT_METAL_WATCHER=30; export TT_METAL_WATCHER_DISABLE_ETH=1"
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
   budget_type: unit
@@ -1054,7 +1066,7 @@
 
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     pytest --timeout 10000 models/tt_dit/tests/unit/
   model: dit-common
   skus:
@@ -1536,6 +1548,12 @@
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    # The shared offline cache lacks this adapter. Fetch its pinned revision into
+    # writable job storage before pytest opens any devices; keep the tests offline.
+    LORA_PATH=$(mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
+      env HF_HUB_OFFLINE=0 python3 -m models.tt_dit.utils.ltx_lora_asset \
+      --download-dir "${PIPELINE_DIR:?CI staging directory required}/.lora") || exit 1
+    export LORA_PATH
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
@@ -1543,7 +1561,7 @@
     # HF_HOME -- symlink it to the pre-staged /mnt/models cache so it resolves offline (no-op for the rest).
     mpirun --pernode --tag-output bash -lc 'mkdir -p ~/.cache && ln -sfn /mnt/models/huggingface ~/.cache/huggingface' || true
     # One multihost-ci-sc1 leg runs every LTX component test on the 4x8 galaxy (bh_sc1).
-    # Block tests use random weights; audio/upsampler/lora resolve offline from /mnt/models.
+    # Block tests use random weights; audio/upsampler resolve offline from /mnt/models.
     # Run all, accumulate failures, fail the leg if any component failed.
     rc=0
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || rc=1; }
