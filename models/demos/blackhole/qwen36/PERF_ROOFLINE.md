@@ -7,6 +7,77 @@ per-op cost ranking that any further optimisation should be driven by.
 Everything below is **measured on this box**, traced (not eager), best-of-N. Reproduce with the
 scripts in `tests/perf/roofline/`. Numbers dated 2026-09-22.
 
+## Status: what is a result and what is not
+
+Read this first. Over the course of this work several estimates were presented alongside
+measurements, and they were not always kept apart. This section is the line between them.
+
+**Exactly one performance number in this document is a result:**
+
+> **42.79 ms** prefill wavefront, SP=4 x TP=8, all 32 chips, PCC 0.9991, commit `b9356ef71e3`.
+
+Everything else is one of:
+
+| kind | examples | trust |
+|---|---|---|
+| **measured** (Tracy / traced microbenchmarks) | per-op costs, collective costs, peak TFLOPS, MLP floor per split | yes -- these are the "now" columns |
+| **estimated** (formula or judgment) | the 8-11 ms budget's "target" column, every pipeline-parallel number | no -- not verified, do not quote as results |
+| **implemented, unverified** | the `QWEN36_REPL_RESIDUAL` path | its A/B produced no output, including the baseline control; treat as broken |
+
+**Verified savings so far: zero.** The 8-11 ms plan below is a budget of estimated cuts against
+measured costs; none of the cuts has been demonstrated.
+
+## The 42.79 ms result: exact configuration and run details
+
+| | |
+|---|---|
+| model / input | Qwen3.5-2B, ISL 4096, **prefill only** (TTFT) |
+| chips | **all 32** Blackhole Galaxy = 4 SP spans x 8 TP |
+| sequence parallel | SP=4: 4096 tokens -> 4 spans of 1024; layer-wise wavefront, die d -> d+1 over **MeshSockets** carrying GDN state + KV prefix |
+| tensor parallel | TP=8 inside each span: weights sharded; all 6 collectives/layer live here |
+| fabric | `FABRIC_1D`, `Topology.Linear` (Ring overridden -- Galaxy rows are lines, not rings) |
+| env | `SP_DIES=4 SP_TP=8 QWEN36_NO_AGMM=1` |
+| precision | bf4 gate/up, bf8 down, **fp32** GDN out-proj reduce-scatter (bf16 partials gave PCC 0.69) |
+| measurement | traced replay, warm, min-of-runs; **wavefront = last die's finish time** |
+| correctness | PCC **0.9991** vs a TP=4 oracle, argmax equal |
+| commit | `b9356ef71e3` on `arg/qwen36_2b_sp` |
+
+Per-die finish: `d0=38.51  d1=39.51  d2=40.71  d3=42.79 ms`. So **38.5 ms is one die's own
+work and 4.3 ms is wavefront tail.** Any optimisation has to attack the 38.5, not the 4.3.
+
+Starting point was **180 ms** (demo TTFT), a 4.2x reduction. The last two steps were turning
+AGMM off (44.19 -> 42.79 ms; the fusion was a pessimisation) and Linear topology. The other
+32-chip split, SP=8 x TP=4 on the 2D mesh, measured 43.58 ms.
+
+**What 42.79 ms excludes:** logits readback, the prefill -> decode handoff, all 8 decode
+steps, and host dispatch. It is the device wavefront only. See the next section.
+
+## Prefill vs decode: where SP and TP are used, and the handoff
+
+SP and TP are split **by phase**, not both used in both:
+
+| phase | parallelism | chips | code |
+|---|---|---|---|
+| **prefill (TTFT)** | **SP x TP** -- SP=4 spans, TP=8 inside each | 32 | `tt/sp_prefill.py` |
+| **decode** | **TP only** -- TP=4 | 4 | `model.decode_tp()` |
+
+SP is prefill-only: with one token per step there is no sequence to split. Prefill uses both;
+the 15.1 ms of collectives comes from the inner TP=8, not from SP.
+
+**The handoff is a host round-trip, and it is unmeasured.** `tt/sp_handoff.py` pulls the KV
+cache and GDN state (left unsharded on the last die by SP prefill) to host as torch tensors,
+reshapes them into the per-device shards the TP=4 decode model expects, and uploads them
+back. Its own docstring: *"v1 goes through host torch tensors (no on-device transfer)."*
+
+For the OSL=8 target this means:
+
+    real e2e  =  42.79 ms prefill  +  host handoff (unmeasured)  +  8 decode steps (unmeasured)
+
+Neither of the last two terms appears in any number in this document. The 63 / 68 ms figures
+in `SP_PREFILL_README.md` are from the earlier 4-die QuietBox configuration, not this one. Any
+e2e claim needs the decode path and handoff measured first; an on-device handoff would remove
+the host copy entirely.
+
 ## Headline: 2 ms is not reachable; ~6.5 ms is the floor
 
 | | per layer | 24 layers |
@@ -76,7 +147,40 @@ and will mislead you):
 | Slice / BinaryNg / Tilize / Untilize / Concat | 10% | 4-15 us | 113-120 |
 
 We spend **3x more on collectives than on matmul.** Per layer that is 4 all-gathers + 2
-reduce-scatters.
+reduce-scatters, in two repeating groups of three. Every one is in a shared framework file,
+not in this model's code:
+
+| # | collective | where | dtype | cost |
+|---|---|---|---|---|
+| 1 | AllGather -- **norm stats** | `models/common/rmsnorm.py:234`, inside `attention_norm` | bf16 | 79 us |
+| 2 | AllGather -- **norm output** | `models/tt_transformers/tt/distributed_norm.py:171`, `attention_norm` | bf16 | 79 us |
+| 3 | ReduceScatter -- **attn / GDN out-proj** | `tt/gdn/tp.py:795` | **fp32** (GDN) / bf16 (FA) | 196 / 130 us |
+| 4 | AllGather -- **norm stats** | `rmsnorm.py:234`, inside `ffn_norm` | bf16 | 79 us |
+| 5 | AllGather -- **norm output** | `distributed_norm.py:171`, `ffn_norm` | bf16 | 79 us |
+| 6 | ReduceScatter -- **MLP down-proj** | `tt/mlp.py:368` | bf16 | 130 us |
+
+The accounting closes against the profile, which is how this mapping is known rather than
+guessed:
+
+    ReduceScatter, per iteration:
+      18 GDN layers x 196.4us (fp32)  = 3535us
+       6  FA layers x 130.2us (bf16)  =  781us
+      24 MLP layers x 130.2us (bf16)  = 3125us
+                                total = 7441us     profile: 7440us
+    AllGather:  4/layer x 24 x 78.8us = 7565us     profile: 7630us
+                                                   -------
+                                                   15.1 ms
+
+The op counts confirm it independently: the capture holds exactly **1152 fp32 reduce-scatters**
+(= 18 GDN layers x 64 iterations) and **1920 bf16** (= [6 FA + 24 MLP] x 64). That is how the
+fp32 one is known to be the GDN out-proj specifically.
+
+**Four of the six exist only because the residual is hidden-fractured.** The reduce-scatter at
+#3 and #6 leaves the residual sharded on the hidden dim; that fracture forces
+`is_distributed_norm() -> True`, which costs a stats gather (#1, #4) and then an output gather
+(#2, #5) to rebuild the full hidden dim -- which the next column-parallel matmul wanted all
+along. We scatter, then immediately gather back. None of this is in the SP wavefront: the
+sockets carry GDN state and KV prefix between spans and cost almost nothing.
 
 ### Collectives are a fixed ~120 us each, NOT bandwidth
 
@@ -102,7 +206,14 @@ deliberate, not an oversight: bf16 partial sums on the GDN out-proj took PCC to 
 
 ## Change in flight: replicated residual (`QWEN36_REPL_RESIDUAL=1`)
 
-**Status: implemented, verification run not yet complete. Do not trust until the A/B lands.**
+**Status: implemented; A/B ran and produced NO usable output -- including the baseline
+control. Treat as broken until debugged.** The four-run A/B (baseline TTFT, baseline PCC, repl
+TTFT, repl PCC) completed with exit 0 but none of the runs printed a wavefront time, a PCC, or
+even a pytest PASSED/FAILED line. Because the *baseline* also printed nothing, the likely cause
+is that the refactor broke the default path too (e.g. the `tpc` import or `residual_all_reduce`
+signature), not the new mode. Diagnosis was started and interrupted; the next step is a single
+baseline run with full stdout captured. Off by default, so `b9356ef71e3` behaviour is unaffected
+only if the default path is in fact intact -- verify this first.
 
 Today each half-layer pays three collectives:
 
@@ -150,48 +261,95 @@ reduce over a single device, returning the unreduced partial. `residual_all_redu
 - **SP=16.** The mesh caps at 8 columns. SP16 x TP2 also measured 51.76 ms e2e -- the 16-hop
   wavefront costs more than the cheaper collectives save.
 
-## Pipeline parallel: why it was dropped
+## Pipeline parallel: a paper sweep, never built, priced with the wrong cost model
 
-Cost model fitted to measured per-layer times on this box:
+**Nothing in this section was built or measured.** It is a formula swept over stage count.
 
-    T_layer(span) = 0.82 ms + 1.67 us/token
+Each row is pipeline parallel with `S` stages, the leftover chips doing tensor parallel
+*inside* each stage so `S x TP = 32`, minimised over the microbatch count `M`:
 
-With `S` stages, `L=24` layers and `M` microbatches over 4096 tokens:
+    total = (M + S - 1) * (24 / S) * T_layer(4096 / M)
+    T_layer(span) = 0.82 ms + 1.67 us * span
 
-    total = (M + S - 1) * (L/S) * T_layer(4096/M)
+| stages | chips | best M | tok/microbatch | "optimum" | collectives inside a stage? | is the 0.82 ms fair? |
+|---|---|---|---|---|---|---|
+| 4 | 4 x TP8 = 32 | 5 | 819 | 105.0 ms | yes, 6/layer | roughly -- same TP as measured |
+| 8 | 8 x TP4 = 32 | 8 | 512 | 75.4 ms | yes, 6/layer, fewer hops | somewhat too high |
+| 16 | 16 x TP2 = 32 | 11 | 372 | 56.2 ms | yes, 6/layer, 1 hop | too high |
+| **24** | **24 x TP1 = 24 (8 idle)** | 14 | 293 | 48.4 ms | **none** | **wrong** |
 
-| stages | chips | best M | tok/microbatch | optimum |
+**The flaw:** the only measured input, `T_layer`, was fitted on **SP=4 x TP=8 -- the running
+system** -- so the 15.1 ms of collectives is baked into the 0.82 ms fixed term. The TP=1 row is
+the one with *zero* collectives, and it is the one priced with a cost model that includes them.
+Its 48.4 ms is therefore an overestimate by an unknown amount; the TP=1 per-layer cost has never
+been measured (`n_local_kv_heads` is unset unless `sequence_parallel=True`, which is what blocked
+it).
+
+**Why TP=1 has zero collectives, verified in code:** at `num_devices=1`,
+`is_distributed_norm()` returns False from its first line (`if not self.is_multichip`), so the
+norm gathers at `rmsnorm.py:234`, `distributed_norm.py:137` and `:171` are all skipped, and
+`tt_all_reduce` hits `if mesh_shape == [1, 1]: return input_tensor` and no-ops. Nothing is split,
+so there is nothing to reassemble; and with no partial sums the fp32 constraint on the GDN
+out-proj disappears too. GDN state and KV also never move: stage l owns layer l and its
+recurrent state feeds the next microbatch on the same chip. The only inter-chip traffic is one
+point-to-point socket send of the activation per stage boundary per microbatch
+(`[293 x 2048]` bf16 = 1.2 MB, ~14 us measured for `RecvDirectAsync`).
+
+Each stage must be its own **1-device submesh** for this to hold. Hand the model a 24-chip mesh
+and `is_multichip` is True and all six collectives fire.
+
+**Why PP still does not look like the route:** zero collectives does not mean fast. The
+`(M + S - 1) / M` factor is 37/14 = **2.6x wasted pipeline slots**, because 4096 tokens cannot
+fill a 24-deep pipeline. Even a corrected `T_layer` in the 0.6-0.9 ms range lands ~22-33 ms,
+which straddles the current 42.79 ms rather than beating it clearly. The one conclusion the
+table supports is directional: more stages is better *because* it drives TP toward 1 and deletes
+collectives. The absolute numbers should not be quoted.
+
+The honest use of this analysis is as evidence for attacking collectives **inside** the current
+SP x TP design -- PP's zero-collective property without its pipeline-occupancy tax.
+
+## Path to ~11 ms: measured costs, estimated cuts, zero verified so far
+
+Per-iteration device time from the Tracy capture (capture totals / 64 iterations). The **now**
+column is measured. The **target** column is a judgment about how far each item can be cut;
+none of it has been demonstrated.
+
+| item | now (measured) | target (estimate) | how | confidence |
 |---|---|---|---|---|
-| 4 | 4 x TP8 = 32 | 5 | 819 | 105.0 ms |
-| 8 | 8 x TP4 = 32 | 8 | 512 | 75.4 ms |
-| 16 | 16 x TP2 = 32 | 11 | 372 | 56.2 ms |
-| **24** | **24 x TP1 = 24 (8 chips idle)** | 14 | 293 | **48.4 ms** |
+| **collectives** | **15.1 ms** | 1.5 | 6 -> 2 per layer via replicated residual (coded, broken); then narrower TP for fewer hops | medium |
+| **GDN plumbing** | **7.2 ms** | 2.0 | `ChunkGdnScan` 8 -> 64+ cores; fuse the Slice/Binary/Tilize/Untilize/Concat chain (~35k op invocations per capture) | medium |
+| matmul | 4.9 ms | 4.0 | wider N per chip, program configs | high |
+| SDPA | 3.0 ms | 2.0 | already on 120 cores | high |
+| wavefront tail | 4.3 ms | 1.0 | fewer SP hops once collectives are cheap | medium |
+| norms | 0.8 ms | 0.3 | local norms, free with replicated residual | high |
+| misc (unary, socket recv) | 0.9 ms | 0.5 | -- | high |
+| **total** | **~38 ms** | **~11.3 ms** | | |
 
-The best case, 48.4 ms, still loses to the current 42.79 ms, and it needs the *maximum*
-possible stage count -- one layer per device, which caps at 24 because there are only 24
-layers, leaving 8 of the 32 chips idle.
+So **~11 ms is reachable on measured line items if every estimated cut lands; 8 ms is not**
+without also winning on matmul MFU. Commit to ~11-13 ms; treat 8 ms as stretch.
 
-The reason PP loses is that **the 0.82 ms fixed cost is per (layer x microbatch)**. Splitting
-into M microbatches to fill the pipeline multiplies that overhead by M, so you pay it 14 times
-over. PP only wins when the fixed per-layer cost is small next to the per-token term; here it
-is 0.82 ms against 0.49 ms of actual token work at the optimum.
+Sanity check that this is not wishful: 11.2 TFLOP / 10 ms / 32 chips = **35 TFLOPS per chip**,
+and the actual per-chip shapes already measure 34-80 TFLOPS. We currently get **8.2 TFLOPS per
+chip effective**. The whole 4.3x gap is overhead, not shape efficiency -- which is why the plan
+is almost entirely "delete overhead", not "make matmuls faster".
 
-## Open leads, ranked by measured size
+Collectives and GDN plumbing are 22 of the 38 ms; everything else is rounding. The order is
+forced:
 
-1. **Collective count.** 45% of work. The replicated-residual change above is the first cut;
-   after it, the floor is 2 collectives/layer at ~120-220 us each.
-2. **GDN plumbing, ~18% of work.** `ChunkGdnScan` runs on **8 of 120 cores** (146 us/call), and
-   Slice/BinaryNg/Tilize/Untilize/Concat add another ~10% in pure data movement. Owner for the
-   GDN layer work is Izajasz Wrosz.
-3. **Fabric packet size.** The CCL layer logs
-   `Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B` --
-   i.e. 2 tiles per packet where 4 would fit. There is no env knob (`TT_METAL_FABRIC_*` has no
-   packet-size override); it needs a fabric-builder change. Untried, and it bears directly on
-   the single largest cost.
-4. **Conv2d in the GDN path is completely flat in sequence length** (0.173 ms at span 512 vs
-   0.174 ms at span 1024) -- ~4.2 ms across 24 layers of pure overhead. A tap-based rewrite (4
-   shifted multiply-adds instead of Conv2d + Halo + sharded conversions) is blocked on shifts of
-   1-3 rows not being tile-aligned in TILE layout.
+1. **Debug the replicated-residual regression.** Coded, largest single item, currently broken.
+2. **`ChunkGdnScan` occupancy.** 8 of 120 cores, 2.6 ms -- the worst utilisation in the model.
+3. **Fuse the GDN data-movement chain.** 4.5 ms.
+4. **Re-run the SP x TP sweep afterwards.** The optimum will move once collectives are cheap;
+   SP8 x TP4 already has the better MLP floor (4.31 vs 5.05 ms) and fewer hops.
+5. **Fabric packet size.** The CCL layer logs `Fabric packet size 4352 B is suboptimal for
+   transporting 2048 B pages. Configure 8192 B` -- 2 tiles per packet where 4 fit. No env knob
+   exists (`TT_METAL_FABRIC_*` has none for packet size); needs a fabric-builder change. Untried.
+6. **Conv2d flat cost.** 0.173 ms at span 512 vs 0.174 ms at span 1024 -- ~4.2 ms across 24
+   layers of pure overhead. A tap-based rewrite is blocked on 1-3 row shifts not being
+   tile-aligned in TILE layout.
+
+None of this touches the decode path or the prefill -> decode handoff, which sit **on top of**
+whatever prefill number results and are unmeasured.
 
 ## Reproducing
 
