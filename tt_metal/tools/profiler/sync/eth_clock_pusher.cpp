@@ -122,9 +122,11 @@ inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, 
 }  // namespace sync
 
 namespace model {
-constexpr uint32_t kRingSamples = 512;  // raw samples kept, ~0.5 us apart: ~250 us deep (kEthRingBytes on the host)
+constexpr uint32_t kRingSamples = 512;  // raw samples kept, ~0.3 us apart: ~150 us deep (kEthRingBytes on the host)
 constexpr uint32_t kConfirm = 4;        // consecutive off-line samples that make a step
-constexpr int64_t kOffTicks = 4;        // off the line by this much is off: a 1/8 step gets there in 0.7 us
+// A sample's wall read sits midway between refclk reads ~9 cycles apart, so its pairing error is under 5 cycles;
+// the thresholds below sit above that. Off the line by kOffTicks is off: a 1/8 step gets there in ~1 us.
+constexpr int64_t kOffTicks = 6;
 // The intercept follows the samples: once this many are behind the line it moves by 1/2^kEmaShift of each residue
 // (the mean is kept scaled by 2^kEmaShift so sub-tick residues are not lost to the shift), so the phase's wander and
 // a frequency a few ppm off the k8 grid walk the intercept instead of the residues, and the points stay on the true
@@ -132,7 +134,7 @@ constexpr int64_t kOffTicks = 4;        // off the line by this much is off: a 1
 constexpr uint32_t kEmaShift = 5;
 constexpr uint32_t kAcqTicks = 1024;       // refclk after a departure before the first lock test (20 us): past any ramp
 constexpr uint32_t kWinTicks = 1024;       // the window that must lie on one line to lock its slope (~45 samples)
-constexpr uint32_t kWinSpreadTicks = 8;    // one line's samples spread less than this; a glide inside bends more
+constexpr uint32_t kWinSpreadTicks = 14;   // one line's samples spread less than this; a glide inside bends more
 constexpr uint32_t kAcqTestEvery = 64;     // samples between lock tests: a scan of the window every ~30 us
 constexpr uint32_t kFirstPointN = 16;      // samples behind a segment's first point: a quarter of a tick
 constexpr uint32_t kLastDoublingN = 4096;  // points at every doubling of the count up to here, then every kPointTicks
@@ -141,7 +143,7 @@ constexpr uint32_t kLastDoublingN = 4096;  // points at every doubling of the co
 // then bends through the glide instead of bridging it with one chord (whose error is the frequency change times the
 // seam length over eight -- hundreds of us for a 7% ramp over 30 ms). A slow ramp costs a point every ~80 us, a
 // fast one a point a sample while it lasts.
-constexpr int64_t kRawEpsTicks = 3;       // 2.2 ns
+constexpr int64_t kRawEpsTicks = 1;       // 0.7 ns: the means it applies to carry ~1 cycle of noise themselves
 constexpr uint32_t kCountMax = 1u << 22;  // the residue sum stops here, and it stays in 32 bits
 // A point lies this far behind the newest sample (164 us): a departure is confirmed within ~25 us of samples, and
 // a sweep can hold sampling for ~100 us, so no point ever lands on a step the model has not yet seen.
@@ -172,11 +174,23 @@ struct Model {
     uint64_t r_last_point = 0;
     uint32_t max_d8 = 0;  // the largest |residual| of an on-line sample since the last point, in eighths
     uint32_t ring_n = 0;  // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
+    uint32_t win_i = 0;   // the oldest ring entry within kWinTicks of the newest sample (try_lock's window)
     // Acquisition's raw points: the anchor (the last point sent), the previous sample, and the cone of chord slopes
     // from the anchor that keep every sample since within kRawEpsTicks, as fractions n/d with d > 0.
     uint64_t raw_r0 = 0, raw_w0 = 0, raw_rp = 0, raw_wp = 0;
-    int64_t lo_n = 0, lo_d = 1, hi_n = 0, hi_d = 1;
+    int32_t lo_n = 0, lo_d = 1, hi_n = 0, hi_d = 1;  // 32-bit: a seam's spans stay under 2^31; the products are 64
     bool cone = false;
+    // The last kWin samples, in this RISC's local memory (the L1 ring above is for the lock test; reading it back
+    // costs an L1 miss per word). A raw instant is the mean of the last kRawMean of them, taken every kRawStride:
+    // one sample's pairing error is wider than kRawEpsTicks and would break the cone at every one, the mean over
+    // ~1 us bends by under a cycle in any glide seen, and the stride keeps the instants ~0.6 us apart (one a sample
+    // doubled the records in a seam and the tail with them). A mean must not span a hole in the samples (it would
+    // average across the glide's bend): win_from is the first sample after the last one.
+    static constexpr uint32_t kWin = 16;
+    uint64_t win_r[kWin] = {}, win_w[kWin] = {};
+    uint32_t win_n = 0;     // samples pushed; the newest is win_r[(win_n - 1) & (kWin - 1)]
+    uint32_t win_from = 0;  // the first sample a mean may include
+    uint32_t onset = 0;     // means still to send as they form: a seam's first, where the glide is steepest
 };
 
 inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint64_t w) {
@@ -218,26 +232,27 @@ __attribute__((noinline)) void raw_feed(Model& m, uint64_t r, uint64_t w) {
         m.cone = false;
         return;
     }
-    const int64_t dr = static_cast<int64_t>(r - m.raw_r0), dw = static_cast<int64_t>(w - m.raw_w0);
+    const int32_t dr = static_cast<int32_t>(r - m.raw_r0), dw = static_cast<int32_t>(w - m.raw_w0);
+    const int32_t lo = dw - kRawEpsTicks, hi = dw + kRawEpsTicks;
     if (!m.cone) {
-        m.lo_n = dw - kRawEpsTicks;
-        m.hi_n = dw + kRawEpsTicks;
+        m.lo_n = lo;
+        m.hi_n = hi;
         m.lo_d = m.hi_d = dr;
         m.cone = true;
     } else {
-        if ((dw - kRawEpsTicks) * m.lo_d > m.lo_n * dr) {
-            m.lo_n = dw - kRawEpsTicks;
+        if (static_cast<int64_t>(lo) * m.lo_d > static_cast<int64_t>(m.lo_n) * dr) {
+            m.lo_n = lo;
             m.lo_d = dr;
         }
-        if ((dw + kRawEpsTicks) * m.hi_d < m.hi_n * dr) {
-            m.hi_n = dw + kRawEpsTicks;
+        if (static_cast<int64_t>(hi) * m.hi_d < static_cast<int64_t>(m.hi_n) * dr) {
+            m.hi_n = hi;
             m.hi_d = dr;
         }
-        if (m.lo_n * m.hi_d > m.hi_n * m.lo_d) {
+        if (static_cast<int64_t>(m.lo_n) * m.hi_d > static_cast<int64_t>(m.hi_n) * m.lo_d) {
             write_raw_point(m, m.raw_rp, m.raw_wp);
             m.raw_r0 = m.raw_rp;
             m.raw_w0 = m.raw_wp;
-            const int64_t dr2 = static_cast<int64_t>(r - m.raw_r0), dw2 = static_cast<int64_t>(w - m.raw_w0);
+            const int32_t dr2 = static_cast<int32_t>(r - m.raw_r0), dw2 = static_cast<int32_t>(w - m.raw_w0);
             m.lo_n = dw2 - kRawEpsTicks;
             m.hi_n = dw2 + kRawEpsTicks;
             m.lo_d = m.hi_d = dr2;
@@ -254,24 +269,70 @@ inline void begin_acquire(Model& m, uint64_t r_from) {
     m.acq_count = 0;
     m.raw_r0 = 0;
     m.cone = false;
+    m.win_i = m.ring_n;
+}
+constexpr uint32_t kRawMean = 4;
+constexpr uint32_t kRawStride = 2;
+constexpr uint32_t kTightCycles = 8;      // the wall reads either side of a bracket four back-to-back loads apart
+constexpr uint32_t kGroupGapTicks = 125;  // 2.5 us
+static_assert(kRawMean == 4 && (kRawMean % kRawStride) == 0);
+inline __attribute__((always_inline)) void win_push(Model& m, uint64_t r, uint64_t w) {
+    if (m.win_n != 0 && r - m.win_r[(m.win_n - 1) & (Model::kWin - 1)] > kGroupGapTicks) {
+        m.win_from = m.win_n;
+    }
+    m.win_r[m.win_n & (Model::kWin - 1)] = r;
+    m.win_w[m.win_n & (Model::kWin - 1)] = w;
+    m.win_n++;
+}
+// The mean of the kRawMean samples ending at (exclusive) window index `end`.
+inline void win_mean(const Model& m, uint32_t end, uint64_t& mr, uint64_t& mw) {
+    uint64_t sr = 0, sw = 0;
+    for (uint32_t i = end - kRawMean; i < end; i++) {
+        sr += m.win_r[i & (Model::kWin - 1)];
+        sw += m.win_w[i & (Model::kWin - 1)];
+    }
+    mr = sr >> 2;
+    mw = sw >> 2;
+}
+inline void send_onset_mean(Model& m, uint64_t mr, uint64_t mw) {
+    write_raw_point(m, mr, mw);
+    m.raw_r0 = m.raw_rp = mr;
+    m.raw_w0 = m.raw_wp = mw;
+    m.cone = false;
+}
+__attribute__((noinline)) void raw_sample(Model& m) {
+    if (m.win_n - m.win_from < kRawMean || (m.onset == 0 && (m.win_n % kRawStride) != 0)) {
+        return;
+    }
+    uint64_t mr, mw;
+    win_mean(m, m.win_n, mr, mw);
+    if (m.onset == 0) {
+        raw_feed(m, mr, mw);
+        return;
+    }
+    // The cone would hold each of these back until the next one arrived, and the stride would halve them; here
+    // every 0.3 us matters.
+    m.onset--;
+    send_onset_mean(m, mr, mw);
 }
 
 // Locks the slope from the newest kWinTicks of the ring when those samples lie on one line: the slope from the
-// window's ends, then every entry's residue against it within one refclk tick of phase. A window across a glide
-// bends more than that and the test is retried after kAcqTestEvery samples.
-__attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
-    const uint32_t avail = m.ring_n < kRingSamples ? m.ring_n : kRingSamples;
-    uint32_t cnt = 0;
-    for (uint32_t i = 1; i <= avail; i++) {
-        if (r_now - raw_r(ring()[(m.ring_n - i) & (kRingSamples - 1)]) > kWinTicks) {
-            break;
-        }
-        cnt = i;
+// window's ends, then every kLockStride-th entry's residue against it within one refclk tick of phase. A window
+// across a glide bends more than that and the test is retried after kAcqTestEvery samples. The window's oldest
+// entry is carried in m.win_i, advanced a step at a time as samples arrive, so the test walks ~17 entries: whole,
+// over every entry, it held the sampler 4-6 us at +40 and +60 us of every seam, holes a glide bent across.
+constexpr uint32_t kLockStride = 4;
+inline __attribute__((always_inline)) void advance_window(Model& m, uint64_t r_now) {
+    while (m.win_i + 1 < m.ring_n && r_now - raw_r(ring()[m.win_i & (kRingSamples - 1)]) > kWinTicks) {
+        m.win_i++;
     }
-    if (cnt < 8) {
+}
+__attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
+    const uint32_t cnt = m.ring_n - m.win_i;
+    if (cnt < 8 || cnt > kRingSamples) {
         return false;
     }
-    const volatile tt_l1_ptr Raw& oldest = ring()[(m.ring_n - cnt) & (kRingSamples - 1)];
+    const volatile tt_l1_ptr Raw& oldest = ring()[m.win_i & (kRingSamples - 1)];
     const volatile tt_l1_ptr Raw& newest = ring()[(m.ring_n - 1) & (kRingSamples - 1)];
     const uint64_t r_old = raw_r(oldest), w_old = raw_w(oldest);
     const uint32_t dr = static_cast<uint32_t>(raw_r(newest) - r_old);
@@ -281,12 +342,13 @@ __attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
     }
     const uint32_t k8 = (8u * dw + dr / 2u) / dr;
     int32_t lo = 0, hi = 0, sum = 0;
-    for (uint32_t i = 1; i <= cnt; i++) {
-        const volatile tt_l1_ptr Raw& e = ring()[(m.ring_n - i) & (kRingSamples - 1)];
+    uint32_t n = 0;
+    for (uint32_t i = m.win_i; i < m.ring_n; i += kLockStride, n++) {
+        const volatile tt_l1_ptr Raw& e = ring()[i & (kRingSamples - 1)];
         const int32_t res = 8 * static_cast<int32_t>(static_cast<uint32_t>(raw_w(e) - w_old)) -
                             static_cast<int32_t>(k8 * static_cast<uint32_t>(raw_r(e) - r_old));
-        lo = i == 1 || res < lo ? res : lo;
-        hi = i == 1 || res > hi ? res : hi;
+        lo = n == 0 || res < lo ? res : lo;
+        hi = n == 0 || res > hi ? res : hi;
         sum += res;
     }
     if (static_cast<uint32_t>(hi - lo) > 8u * kWinSpreadTicks) {
@@ -296,40 +358,52 @@ __attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
     m.ra = r_old;
     m.wa = w_old;
     m.r_lock = r_old;
-    m.n = cnt;
+    m.n = n;
     m.sum = sum;
-    m.c8 = sum / static_cast<int32_t>(cnt);
+    m.c8 = sum / static_cast<int32_t>(n);
     m.ema = m.c8 << kEmaShift;
     m.r_last_on = r_now;
     m.off = 0;
     return true;
 }
 
-// A confirmed step: the old line closes at its last on-line sample, the slope acquisition restarts from the
-// departure, and the kConfirm samples that proved the step open the seam. The glide is already under way while they
-// are counted; a chord from the close to the first sample after them missed its onset by up to hundreds of cycles.
+// A confirmed step. The glide is under way before any sample is off the line by kOffTicks: the samples drift
+// within it for a microsecond, then kConfirm of them are counted off. The line closes kPreSamples before the first
+// off sample, where the samples still sat on it, the slope acquisition restarts from the departure, and those
+// samples and the confirming ones open the seam, so the onset is placed from measurements, not from the line.
+constexpr uint32_t kPreSamples = 8;
+constexpr uint32_t kOnsetMeans = 14;  // live means sent as they form after the replay's, one a sample, ~4 us
 __attribute__((noinline, cold)) void step(Model& m) {
-    write_point(m, m.r_last_on, kp::kSyncLocalClose);
+    constexpr uint32_t back = kConfirm + kPreSamples;
+    static_assert(back % kRawMean == 0);
+    static_assert(back + 1 <= Model::kWin);
+    write_point(m, m.win_r[(m.win_n - back - 1) & (Model::kWin - 1)], kp::kSyncLocalClose);
     begin_acquire(m, m.r_dep);
-    for (uint32_t i = kConfirm; i >= 1; i--) {
-        const volatile tt_l1_ptr Raw& e = ring()[(m.ring_n - i) & (kRingSamples - 1)];
-        raw_feed(m, raw_r(e), raw_w(e));
+    // The seam's first instants, the means over those samples, from local memory: every cycle here is a sample
+    // not taken at the onset, the glide's steepest microseconds.
+    for (uint32_t end = m.win_n - back + kRawMean; end <= m.win_n; end += kRawStride) {
+        if (end - kRawMean < m.win_from) {
+            continue;
+        }
+        uint64_t mr, mw;
+        win_mean(m, end, mr, mw);
+        send_onset_mean(m, mr, mw);
     }
+    m.onset = kOnsetMeans;
 }
 
 inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w) {
     ring_push(m, r, w);
+    win_push(m, r, w);
     if (m.k8 == 0) {
+        advance_window(m, r);
         if (r - m.r_acq0 >= kAcqTicks && ++m.acq_count >= kAcqTestEvery) {
             m.acq_count = 0;
             if (try_lock(m, r)) {
-                if (m.raw_r0 != 0 && m.raw_rp != m.raw_r0) {
-                    write_raw_point(m, m.raw_rp, m.raw_wp);  // the seam's last instant, on the new line
-                }
                 return;
             }
         }
-        raw_feed(m, r, w);
+        raw_sample(m);
         return;
     }
     const int64_t e = 8 * static_cast<int64_t>(w - m.wa) - static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
@@ -399,7 +473,7 @@ inline void copy_words(volatile tt_l1_ptr uint32_t* dst, const volatile tt_l1_pt
     }
 }
 
-inline void ship(SocketSenderInterface& s, uint32_t bytes) {
+__attribute__((noinline)) void ship(SocketSenderInterface& s, uint32_t bytes) {
     const uint32_t pages = bytes / kPageBytes;
     socket_reserve_pages(s, pages);
     push_fifo(s, kStageAddr, s.write_ptr, bytes);
@@ -585,7 +659,7 @@ void kernel_main() {
     set_sender_socket_page_size(sync_sender, kPageBytes);
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
 
-    const auto sweep_sync = [&]() {
+    const auto sweep_sync = [&]() __attribute__((noinline)) {
         while (sync::g_head != sync::g_tail) {
             const uint32_t left = sync::g_tail - sync::g_head;
             const uint32_t n = left < kp::kSyncFrameRecords ? left : kp::kSyncFrameRecords;
@@ -637,17 +711,21 @@ void kernel_main() {
         }
         link_cursor[i] = tail;
     };
-    const auto sweep = [&]() {
-        uint32_t bytes = pack_own_frame();
+    // Step 0 is this core's frame, step i a linked core's frame and its link records. The loop runs one step per
+    // housekeeping tick (~17 us apart) so a sweep never holds the sampler for more than one frame: whole, it held
+    // it 6-9 us, a hole a glide bends across.
+    const auto sweep_step = [&](uint32_t i) __attribute__((noinline)) {
+        const uint32_t bytes = i == 0 ? pack_own_frame() : pack_linked_frame(linked_xy[i - 1], linked_l1[i - 1]);
         if (bytes != 0) {
             ship(sender, bytes);
         }
-        for (uint32_t i = 0; i < n_linked; i++) {
-            bytes = pack_linked_frame(linked_xy[i], linked_l1[i]);
-            if (bytes != 0) {
-                ship(sender, bytes);
-            }
-            ship_link_sync(i);
+        if (i != 0) {
+            ship_link_sync(i - 1);
+        }
+    };
+    const auto sweep = [&]() {
+        for (uint32_t i = 0; i <= n_linked; i++) {
+            sweep_step(i);
         }
         sweep_sync();
     };
@@ -659,34 +737,73 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
-    // The loop is one bracket -- refclk, wall, refclk -- and as little else as possible, so the bracket is a large
-    // part of each iteration and most iterations that see the refclk advance are ones that bracket it: about one
-    // advance in five is a sample, one per ~0.5 us. More loads in flight than these three widen the bracket (measured:
-    // sixteen back-to-back brackets read the wall 8 ticks wide). Each iteration is padded by 0-3 pseudo-random
-    // cycles so the advance's phase against the loop walks instead of locking. Both clocks' high words are carried
-    // from the low words' wraps, which at this rate no sweep can hide (86 s and 3.2 s periods).
+    // Each iteration is a group of eight brackets, r0 w1 r1 w2 r2 ... w8 r8: seventeen loads issued back to back with
+    // nothing between them (stores or compares in the group widen it), one ~35-cycle window in which a refclk advance
+    // is caught by the bracket it fell in -- at most one fits, advances being 64-108 cycles apart -- with the wall
+    // read midway between the two refclk reads that saw it; the wall reads either side of that bracket time it,
+    // and only a tight one (loads that issued back to back) is kept. About one iteration in three samples. Each
+    // iteration is padded by 0-3 pseudo-random cycles so the advance's phase against the loop walks instead of
+    // locking. Both clocks' high words are carried from the low words' wraps, which at this rate no sweep can hide
+    // (86 s and 3.2 s periods).
     const eth_ptp::Instant start = eth_ptp::read_instant();
     uint32_t r_hi = static_cast<uint32_t>(start.refclk >> 32), prev_r_lo = static_cast<uint32_t>(start.refclk);
     uint32_t w_hi = start.wall_hi, prev_w_lo = start.wall_lo;
     model::Model m;
     model::begin_acquire(m, start.refclk);
     uint64_t r_sweep = start.refclk;
+    uint32_t sweep_at = 0;  // 1 + the next sweep step while one runs
     uint32_t iter = 0, walk = start.wall_lo | 1u;
     while (true) {
         walk = walk * 1103515245u + 12345u;
         for (uint32_t d = walk >> 30; d != 0; d--) {
             asm volatile("nop");
         }
-        const uint32_t ra_lo = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        const uint32_t w_lo = eth_ptp::rd(eth_ptp::kWallClockLo);
-        const uint32_t rb_lo = eth_ptp::rd(eth_ptp::kPtpCfrLo);
-        if (rb_lo != ra_lo) {
-            r_hi += rb_lo < prev_r_lo;
-            w_hi += w_lo < prev_w_lo;
-            prev_r_lo = rb_lo;
-            prev_w_lo = w_lo;
-            model::feed(m, (static_cast<uint64_t>(r_hi) << 32) | rb_lo, (static_cast<uint64_t>(w_hi) << 32) | w_lo);
+        // All loads ahead of every compare: a compare waiting on an early load would hold the later loads.
+        uint32_t w0 = eth_ptp::rd(eth_ptp::kWallClockLo), r0 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        uint32_t w1 = eth_ptp::rd(eth_ptp::kWallClockLo), r1 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        uint32_t w2 = eth_ptp::rd(eth_ptp::kWallClockLo), r2 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        uint32_t w3 = eth_ptp::rd(eth_ptp::kWallClockLo), r3 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        uint32_t w4 = eth_ptp::rd(eth_ptp::kWallClockLo), r4 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        uint32_t w5 = eth_ptp::rd(eth_ptp::kWallClockLo), r5 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        uint32_t w6 = eth_ptp::rd(eth_ptp::kWallClockLo), r6 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        uint32_t w7 = eth_ptp::rd(eth_ptp::kWallClockLo), r7 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        uint32_t w8 = eth_ptp::rd(eth_ptp::kWallClockLo), r8 = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        asm volatile("" : "+r"(w0), "+r"(r0), "+r"(w1), "+r"(r1), "+r"(w2), "+r"(r2), "+r"(w3), "+r"(r3), "+r"(w4));
+        asm volatile("" : "+r"(r4), "+r"(w5), "+r"(r5), "+r"(w6), "+r"(r6), "+r"(w7), "+r"(r7), "+r"(w8), "+r"(r8));
+        uint32_t rb_lo = r8, w_lo = w8;
+        // The wall reads either side of the bracket that caught the advance time the bracket itself: the loads
+        // issue back to back while the load queue takes them (the group's first few) and at its drain rate after,
+        // so brackets range from a cycle to ~20 wide, and the width is the pairing error a sample carries.
+        uint32_t width = 2u * (w8 - w7);
+        if (r8 == r0) {
+            goto housekeeping;
         }
+        if (r1 != r0) {
+            rb_lo = r1, w_lo = w1, width = w2 - w0;
+        } else if (r2 != r1) {
+            rb_lo = r2, w_lo = w2, width = w3 - w1;
+        } else if (r3 != r2) {
+            rb_lo = r3, w_lo = w3, width = w4 - w2;
+        } else if (r4 != r3) {
+            rb_lo = r4, w_lo = w4, width = w5 - w3;
+        } else if (r5 != r4) {
+            rb_lo = r5, w_lo = w5, width = w6 - w4;
+        } else if (r6 != r5) {
+            rb_lo = r6, w_lo = w6, width = w7 - w5;
+        } else if (r7 != r6) {
+            rb_lo = r7, w_lo = w7, width = w8 - w6;
+        }
+        // Only the tight brackets are samples: a wide one pairs the wall read with the advance at an offset of its
+        // own, and mixing them biases whatever averages over them.
+        if (width > model::kTightCycles) {
+            goto housekeeping;
+        }
+        r_hi += rb_lo < prev_r_lo;
+        w_hi += w_lo < prev_w_lo;
+        prev_r_lo = rb_lo;
+        prev_w_lo = w_lo;
+        model::feed(m, (static_cast<uint64_t>(r_hi) << 32) | rb_lo, (static_cast<uint64_t>(w_hi) << 32) | w_lo);
+    housekeeping:
         if ((++iter & 255u) != 0u) {
             continue;
         }
@@ -694,9 +811,24 @@ void kernel_main() {
         invalidate_l1_cache();
         const uint64_t r = (static_cast<uint64_t>(r_hi) << 32) | prev_r_lo;
         const uint32_t fill = kp::profiler_control_buffer[kp::TAIL_INDEX] - kp::profiler_control_buffer[kp::HEAD_INDEX];
-        if (fill >= kShipWords || r - r_sweep >= kSweepTicks) {
-            r_sweep = r;
-            sweep();
+        // Nothing ships while a slope is being acquired: a frame's PCIe write flush holds the sampler ~10 us, a hole
+        // the map would chord across right where the clock bends. The sync ring holds a whole seam's instants.
+        if (m.k8 != 0) {
+            if (sweep_at == 0 && (fill >= kShipWords || r - r_sweep >= kSweepTicks)) {
+                r_sweep = r;
+                sweep_at = 1;
+            }
+            if (sweep_at != 0) {
+                sweep_step(sweep_at - 1);
+                if (sweep_at - 1 == n_linked) {
+                    sweep_at = 0;
+                    sweep_sync();
+                } else {
+                    sweep_at++;
+                }
+            } else if (sync::g_tail - sync::g_head >= kp::kSyncFrameRecords) {
+                sweep_sync();
+            }
         }
         // Teardown: the relay stop word, written by the host at quiesce. The streaming control layout has no
         // terminate slot; this word is the only stop signal a resident eth kernel gets.
