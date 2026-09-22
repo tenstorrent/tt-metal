@@ -772,6 +772,8 @@ void kernel_main() {
         // its signal so a cached program cannot observe the previous invocation's token.
         const uint32_t synchronization_iters =
             1 + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1];
+        // One signal per halo regardless of hop count: the collecting exchange waits for every hop's
+        // arrival before signalling (ring_attention_neighbor_halo_reader.cpp).
         for (uint32_t ring_iter = 0; ring_iter < synchronization_iters; ++ring_iter) {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }

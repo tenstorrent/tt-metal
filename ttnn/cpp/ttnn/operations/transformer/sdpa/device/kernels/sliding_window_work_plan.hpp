@@ -48,35 +48,87 @@ constexpr uint32_t chunked_sliding_halo_tile_rows(
     return ((left_window_tokens + k_chunk_tokens - 1) / k_chunk_tokens) * k_chunk_tile_rows;
 }
 
+// Multi-hop halo geometry. The halo is the `halo_tile_rows` of history immediately preceding the
+// receiver's own slab. When it is wider than one per-device Q slab it cannot come from a single
+// neighbour, so it is split across `hop_count` cyclic predecessors: hop d (1-based) carries the
+// TAIL of the slab d positions back, and the hops land in disjoint, oldest-first row ranges of the
+// same compact buffer. At hop_count == 1 every formula below reduces to the single-neighbour halo.
+
+constexpr uint32_t chunked_sliding_halo_hop_count(uint32_t halo_tile_rows, uint32_t q_local_tile_rows) {
+    return q_local_tile_rows == 0 ? 0 : (halo_tile_rows + q_local_tile_rows - 1) / q_local_tile_rows;
+}
+
+// Rows carried by hop d: a full slab, except the farthest hop which carries only the remainder.
+constexpr uint32_t chunked_sliding_halo_hop_rows(uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t hop) {
+    if (hop == 0 || q_local_tile_rows == 0) {
+        return 0;
+    }
+    const uint32_t consumed = (hop - 1) * q_local_tile_rows;
+    if (consumed >= halo_tile_rows) {
+        return 0;
+    }
+    const uint32_t remaining = halo_tile_rows - consumed;
+    return remaining < q_local_tile_rows ? remaining : q_local_tile_rows;
+}
+
+// Hops that actually cross the fabric. A halo deep enough to reach `ring_size` slabs back wraps
+// onto this device's OWN earlier slab, which the work plan reads locally, so no exchange is built
+// for it. Everything downstream (kernel indices, signal counts) counts remote hops.
+constexpr uint32_t chunked_sliding_halo_remote_hop_count(
+    uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t ring_size) {
+    const uint32_t hops = chunked_sliding_halo_hop_count(halo_tile_rows, q_local_tile_rows);
+    return ring_size == 0 ? 0 : (hops < ring_size - 1 ? hops : ring_size - 1);
+}
+
+// First compact-buffer row written by hop d. The buffer holds the halo oldest-first, so the
+// farthest hop starts at row 0 and hop 1 is the last block, ending at row halo_tile_rows.
+constexpr uint32_t chunked_sliding_halo_hop_dest_row(
+    uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t hop) {
+    const uint32_t consumed = hop * q_local_tile_rows;
+    return consumed >= halo_tile_rows ? 0 : halo_tile_rows - consumed;
+}
+
+// Local tile row at which `source_device` starts the tail it ships `hop` positions forward.
 constexpr uint32_t chunked_sliding_halo_source_start_tile(
     uint32_t source_device,
     uint32_t q_local_tile_rows,
     uint32_t ring_size,
     uint32_t logical_k_tile_rows,
     uint32_t halo_tile_rows,
-    uint32_t circular_kv_slab_count = 0) {
+    uint32_t circular_kv_slab_count = 0,
+    uint32_t hop = 1) {
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
-    if (q_group_tile_rows == 0 || logical_k_tile_rows < q_group_tile_rows || halo_tile_rows > q_local_tile_rows) {
+    if (q_group_tile_rows == 0 || logical_k_tile_rows < q_group_tile_rows || hop > ring_size) {
+        return 0;
+    }
+    const uint32_t hop_rows = chunked_sliding_halo_hop_rows(halo_tile_rows, q_local_tile_rows, hop);
+    if (hop_rows == 0) {
         return 0;
     }
     const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;
-    // The wrap source for device 0 is the prior group. It does not exist in group
-    // 0, but device 0's clipped work plan never reads the fixed-size payload sent
-    // on this edge. Clamp the origin to an in-bounds tile range and preserve the
-    // exchange length so the halo protocol remains synchronized.
-    if (current_group == 0 && source_device + 1 == ring_size) {
+    // A hop that runs off the end of the ring lands on a device in the NEXT group, so the payload
+    // comes from this device's slab in the prior group. That group does not exist in group 0, but
+    // the receiver's clipped work plan never reads the fixed-size payload sent on those edges.
+    // Clamp the origin to an in-bounds tile range and preserve the exchange length so the halo
+    // protocol remains synchronized.
+    const bool wraps_group = source_device + hop >= ring_size;
+    if (current_group == 0 && wraps_group) {
         return 0;
     }
-    const uint32_t source_group = source_device + 1 == ring_size ? current_group - 1 : current_group;
+    const uint32_t source_group = wraps_group ? current_group - 1 : current_group;
     return circular_kv_local_slab(source_group, circular_kv_slab_count) * q_local_tile_rows + q_local_tile_rows -
-           halo_tile_rows;
+           hop_rows;
 }
 
-// Device-compatible work plan for one Q chunk. The supported 128-token window
-// touches at most the Q-owned region and its predecessor, so two fixed ranges
-// cover the chunked layout without a dynamic container.
+// Device-compatible work plan for one Q chunk. A window narrower than one Q slab touches only the
+// Q-owned region and its predecessor; a wider one reaches `hop_count` slabs back (see
+// chunked_sliding_halo_hop_count). Sized for a full ring of predecessors plus the local slab so the
+// fixed array covers every legal chunked layout without a dynamic container.
 struct SlidingQWorkPlan {
-    static constexpr uint32_t max_source_ranges = 2;
+    // One range per halo hop plus this device's own slab. build_sliding_q_work_plan returns an EMPTY
+    // plan on overflow, so validate_on_program_cache_miss rejects deeper halos up front.
+    static constexpr uint32_t max_halo_hops = 8;
+    static constexpr uint32_t max_source_ranges = max_halo_hops + 1;
 
     std::array<SlidingKVSourceRange, max_source_ranges> source_ranges{};
     uint32_t source_range_count = 0;
@@ -146,7 +198,10 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
 
     const uint32_t halo_tile_rows =
         chunked_sliding_halo_tile_rows(sliding_window_tokens, tile_height, k_chunk_tile_rows);
-    if (halo_tile_rows > q_local_tile_rows) {
+    // A halo wider than one Q slab is split across several cyclic predecessors, but it can never
+    // need more than the whole ring: beyond that a source is this device's own earlier slab, which
+    // is already a local read.
+    if (chunked_sliding_halo_hop_count(halo_tile_rows, q_local_tile_rows) > ring_size) {
         return plan;
     }
 
@@ -193,23 +248,29 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
         const uint32_t last_k_chunk = (clipped_range_local_end + k_chunk_tile_rows - 1) / k_chunk_tile_rows;
         uint32_t first_compact_k_chunk = 0;
         if (source_ring_id != q_device_index) {
+            // How far back around the ring this source sits. With a one-slab halo this is always 1;
+            // a wider halo reaches 2..hop_count devices back, and each hop owns its own disjoint
+            // block of the compact buffer.
+            const uint32_t hop = (q_device_index + ring_size - source_ring_id) % ring_size;
             const uint32_t halo_source_start = chunked_sliding_halo_source_start_tile(
                 source_ring_id,
                 q_local_tile_rows,
                 ring_size,
                 logical_k_tile_rows,
                 halo_tile_rows,
-                circular_kv_slab_count);
-            // A remote range must begin inside the fixed-size halo. This is
-            // guaranteed by the one-hop halo bound and first-group clipping;
-            // make it explicit so unsigned subtraction cannot produce an
-            // out-of-range compact-buffer index if that contract changes.
+                circular_kv_slab_count,
+                hop);
+            const uint32_t hop_dest_row = chunked_sliding_halo_hop_dest_row(halo_tile_rows, q_local_tile_rows, hop);
+            // A remote range must begin inside the fixed-size payload this hop ships. Guaranteed by
+            // the halo bound and first-group clipping; make it explicit so unsigned subtraction
+            // cannot produce an out-of-range compact-buffer index if that contract changes.
             // (Bounded mode wraps halo_source_start and first_k_chunk through the SAME
             // source-group slab base, so the comparison stays exact across the wrap.)
             if (halo_source_start > first_k_chunk * k_chunk_tile_rows) {
                 return SlidingQWorkPlan{};
             }
-            first_compact_k_chunk = (first_k_chunk * k_chunk_tile_rows - halo_source_start) / k_chunk_tile_rows;
+            first_compact_k_chunk =
+                (hop_dest_row + first_k_chunk * k_chunk_tile_rows - halo_source_start) / k_chunk_tile_rows;
         }
         if (plan.source_range_count == SlidingQWorkPlan::max_source_ranges) {
             return SlidingQWorkPlan{};

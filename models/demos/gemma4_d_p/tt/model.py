@@ -126,6 +126,33 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
     return caches_4d, caches_2d
 
 
+GEMMA4_SLIDING_WINDOW_TOKENS = 1024
+
+
+def sliding_halo_hop_count(prefill_chunk_size, cp_degree, sliding_window=GEMMA4_SLIDING_WINDOW_TOKENS):
+    """Cyclic predecessors a rank reads to cover the sliding window: one per Q slab the window spans.
+
+    Pre-screens a config before weights load. The op's validator is authoritative; it also rounds the
+    halo up to whole K chunks, which changes nothing when the window is a multiple of k_chunk_size.
+    """
+    return ttnn.core.divup(sliding_window, prefill_chunk_size // cp_degree)
+
+
+def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len):
+    """Reason this chunk geometry is unusable, or None."""
+    if max_seq_len <= 0 or prefill_chunk_size <= 0:
+        return "sequence and chunk lengths must be positive"
+    if prefill_chunk_size % (cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
+        return "prefill chunks must divide max_seq_len and contain whole CP-local tiles"
+    hops = sliding_halo_hop_count(prefill_chunk_size, cp_degree)
+    if hops > cp_degree:
+        return (
+            f"prefill chunk {prefill_chunk_size} gives a {prefill_chunk_size // cp_degree}-token Q "
+            f"slab at CP={cp_degree}, which needs {hops} sliding-window halo hops, more than the ring size"
+        )
+    return None
+
+
 class Gemma4Model:
     """Galaxy prefill model with ring-cache outputs for disaggregation."""
 
@@ -149,12 +176,9 @@ class Gemma4Model:
         ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
         mesh_device = mesh_config.device
 
-        if max_seq_len <= 0 or prefill_chunk_size <= 0:
-            raise ValueError("sequence and chunk lengths must be positive")
-        if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):
-            raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-        if prefill_chunk_size < 1024 * mesh_config.cp_degree:
-            raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+        geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
+        if geometry_error:
+            raise ValueError(geometry_error)
 
         self.mesh_device = mesh_device
         self.hf_config = hf_config

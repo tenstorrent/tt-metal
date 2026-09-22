@@ -61,6 +61,8 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
     std::array<uint32_t, num_inputs> input_origin_page;
+    // First page this hop writes in the receiver's compact buffer.
+    std::array<uint32_t, num_inputs> output_origin_page;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         output_batch_head_stride_pages[input_idx] = get_arg_val<uint32_t>(arg_idx++);
@@ -68,6 +70,7 @@ void kernel_main() {
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        output_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     if constexpr (has_halo_metadata) {
@@ -77,13 +80,14 @@ void kernel_main() {
         const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t baked_start_Ht = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t hop = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t ring_size_rt = get_arg_val<uint32_t>(arg_idx++);
         Noc meta_noc;
         CircularBuffer cb_meta(meta_cb_id);
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
         const uint32_t tail_start_Ht = ring_attention_all_gather::compute_halo_tail_start_Ht(
-            kv_actual_isl, q_local_tile_rows, ring_size_rt, halo_tile_rows, source_device, cache_local_tile_rows);
+            kv_actual_isl, q_local_tile_rows, ring_size_rt, halo_tile_rows, source_device, cache_local_tile_rows, hop);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
             const uint32_t runtime_origin = tail_start_Ht * input_Wt;
@@ -99,6 +103,21 @@ void kernel_main() {
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
     size_t fabric_args_idx = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(fabric_args_idx);
+
+    // Link hand-off for hops that time-share a fabric link (see RingAttentionNeighborHaloConfig):
+    // wait for the predecessor on this link to close its connection, and wake the successor after
+    // closing ours. Both flags are 0 when this hop owns its link.
+    uint32_t chain_arg_idx = fabric_args_idx;
+    const uint32_t chain_waits = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_signals = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_semaphore_id = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_successor_noc_x = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_successor_noc_y = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uintptr_t chain_semaphore_addr = get_semaphore(chain_semaphore_id);
+
+    if (chain_waits) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chain_semaphore_addr), 1);
+    }
 
     Noc noc_obj;
     CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
@@ -135,7 +154,8 @@ void kernel_main() {
                 const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                 cb_output.wait_front(packet_size_in_pages);
                 const size_t l1_read_addr = cb_output.get_read_ptr();
-                const uint32_t tile_id = output_batch_head_base + tiles_read - input_origin_page[input_idx];
+                const uint32_t tile_id =
+                    output_batch_head_base + tiles_read - input_origin_page[input_idx] + output_origin_page[input_idx];
 
                 if (num_pages_to_read == 2) {
                     const uint32_t second_tile_id = tile_id + 1;
@@ -204,4 +224,11 @@ void kernel_main() {
     noc_obj.async_write_barrier();
 
     fabric_connection.close();
+
+    // The EDM sender channel is free only once close() has persisted its producer cursor, so the
+    // hand-off has to follow the close, not the last payload send.
+    if (chain_signals) {
+        noc_semaphore_inc(get_noc_addr(chain_successor_noc_x, chain_successor_noc_y, chain_semaphore_addr), 1);
+        noc_obj.async_atomic_barrier();
+    }
 }
