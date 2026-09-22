@@ -35,7 +35,8 @@ from ....utils.test import (
 )
 
 DEVICE_PARAMS = {"trace_region_size": 150000000}
-# 5B tests: WAN5B_TRACE_MODE=2cq opens the mesh with two command queues (read at import time).
+# 5B tests: the default trace mode (2cq) opens the mesh with two command queues; WAN5B_TRACE_MODE=blocking
+# restores the single-queue blocking path (read at import time).
 DEVICE_PARAMS_5B = device_params_for_trace_mode(DEVICE_PARAMS)
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
@@ -594,7 +595,7 @@ def test_pipeline_performance_ti2v_5b(
     # Applied before the traced warmup, with a second eager warmup, so the trace captures the
     # quantized programs. Unset means the bf16 / HiFi2 baseline the gates are calibrated for.
     quant_config_name = set_quant_config_from_env(pipeline)
-    # Opt-in trace execution mode (WAN5B_TRACE_MODE=blocking | nonblocking | 2cq); default blocking.
+    # Trace execution mode (WAN5B_TRACE_MODE=2cq | nonblocking | blocking); default 2cq since 2026-09-22.
     trace_mode = configure_trace_mode_from_env(pipeline)
 
     # Warmup run (traced trace-capture, not timed).

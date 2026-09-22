@@ -378,11 +378,16 @@ def set_quant_config_from_env(pipeline, *, rewarm: bool = True, var: str = QUANT
 
 TRACE_MODE_ENV = "WAN5B_TRACE_MODE"
 TRACE_MODES = ("blocking", "nonblocking", "2cq")
+DEFAULT_TRACE_MODE = "2cq"
+"""Production default for the 5B tests and demo since 2026-09-22: non-blocking trace with the
+per-step uploads on a second command queue. Measured on the 4x8 BH Galaxy, 720p T2V, mean of 3
+vs mean of 3 the same hour: denoise 10.747 -> 10.434 s (-2.9 %), total 11.83 -> 11.50 s, with
+bit-identical latents and an unchanged 12x10 compute grid. `blocking` is the previous path."""
 
 
 def trace_mode_from_env(var: str = TRACE_MODE_ENV) -> str:
-    """`blocking` (default), `nonblocking`, or `2cq` (non-blocking + input uploads on queue 1)."""
-    mode = os.environ.get(var, "blocking").strip().lower() or "blocking"
+    """`2cq` (default: non-blocking + input uploads on queue 1), `nonblocking`, or `blocking`."""
+    mode = os.environ.get(var, DEFAULT_TRACE_MODE).strip().lower() or DEFAULT_TRACE_MODE
     if mode not in TRACE_MODES:
         msg = f"{var}={mode!r}; expected one of {TRACE_MODES}"
         raise ValueError(msg)
