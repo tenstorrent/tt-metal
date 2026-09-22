@@ -428,72 +428,32 @@ def prefill_sdpa_compute_config(mesh_device):
     return _PREFILL_SDPA_COMPUTE[arch]
 
 
-# Serving keeps ~90 KiB of persistent L1 (decode CCL scratch, sampler buffers) at the top of
-# the 1.5 MiB L1 on every core, so a freshly compiled prefill program whose static circular
-# buffers reach past ~1.48 MB throws "circular buffers clash with L1 buffers" (CI run
-# 35671641642 died exactly there with q=256/k=128). Size the SDPA chunks by the kernel's
-# CB footprint (the QB2 decoder's sdpa_l1 formula, which over-estimates by ~0.1 MB) against
-# a limit that leaves that headroom.
-PREFILL_SDPA_CB_LIMIT_BYTES = 1_400_000
-_BLACKHOLE_CB_BASE = 111_616
+# Serving pins persistent L1 (decode CCL scratch, sampler state) at the top of every core's
+# 1.5 MiB; CI run 35671641642 died when a freshly compiled prefill SDPA's static circular
+# buffers ended at 1,487,616 B against a resident buffer at 1,485,120 B. Measured CB ends for
+# the BFP8 full-attention SDPA on the 11x10 grid (8 local heads, head_dim 512, 4096 rows,
+# bench/l1_headroom_probe.py): q256/k128 1,546,240 B; q256/k64 1,460,224 B; q128/k128
+# 1,273,856 B (the shipped 8x4 BF16 q128/k64 ends at 1,349,632 B; the explicit matmul
+# configs at <= 1,286,144 B). Only q <= 128 leaves real headroom, so chunks are capped there.
+PREFILL_SDPA_MAX_Q_CHUNK = 128
+PREFILL_SDPA_MAX_K_CHUNK = 128
 
 
-def _sdpa_cb_end(*, rows, q_chunk, k_chunk, heads, cores, head_dim, q_tile_bytes, kv_tile_bytes, page_table_bytes):
-    """Static circular-buffer end of the Blackhole causal SDPA (FP32 softmax accumulation)."""
-    chunks = max(1, rows // q_chunk)
-    scheduling_unit = 2 if chunks % 2 == 0 else 1
-    units = heads * chunks // scheduling_unit
-    q_buffers = 2 if ((units + cores - 1) // cores) * scheduling_unit > 1 else 1
-    a, b, d = q_chunk // 32, k_chunk // 32, head_dim // 32
-    scalar_tile_bytes = 4096 if q_tile_bytes == 4096 else 2048
-    payload = (
-        a * d * q_buffers * q_tile_bytes
-        + 4 * b * d * kv_tile_bytes
-        + 2 * 2048
-        + 2 * scalar_tile_bytes
-        + page_table_bytes
-        + a * b * 4096
-        + 2 * a * d * 2048
-        + 3 * a * 2048
-        + 2 * a * 4096
-        + a * d * q_tile_bytes
-    )
-    return _BLACKHOLE_CB_BASE + payload
+def prefill_full_attention_sdpa_config(mesh_device, seq_len: int, *, head_dim: int = 512):
+    """Full-grid SDPA config for BFP8 full-attention prefill: 11x10 cores, q/k chunks capped at 128.
 
-
-def prefill_full_attention_sdpa_config(
-    mesh_device, seq_len: int, *, head_dim: int = 512, heads: int = 8, page_table_bytes: int = 16_384
-):
-    """Full-grid SDPA config for BFP8 full-attention prefill.
-
-    Picks the largest power-of-two (q, k) chunk pair whose circular buffers stay under
-    ``PREFILL_SDPA_CB_LIMIT_BYTES``; window-aligned ``chunk_start_idx`` values divide any of
-    them. Falls back to the smallest pair if none fits (the caller may still see the op fail).
+    Power-of-two chunks no larger than the padded sequence, so any window-aligned
+    ``chunk_start_idx`` divides them; 1.98 ms per global layer at 4096 rows vs 3.3 ms shipped.
     """
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = min(grid.x, PREFILL_MATMUL_MAX_GRID[0]), min(grid.y, PREFILL_MATMUL_MAX_GRID[1])
     padded = math.ceil(seq_len / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-    candidates = [(q, k) for q in (256, 128, 64, 32) for k in (128, 64, 32) if q <= padded and k <= padded and k <= q]
-    chosen = candidates[-1] if candidates else (32, 32)
-    for q_chunk, k_chunk in candidates:
-        end = _sdpa_cb_end(
-            rows=padded,
-            q_chunk=q_chunk,
-            k_chunk=k_chunk,
-            heads=heads,
-            cores=gx * gy,
-            head_dim=head_dim,
-            q_tile_bytes=_TILE_BYTES[ttnn.bfloat8_b],
-            kv_tile_bytes=_TILE_BYTES[ttnn.bfloat8_b],
-            page_table_bytes=page_table_bytes,
-        )
-        if end <= PREFILL_SDPA_CB_LIMIT_BYTES:
-            chosen = (q_chunk, k_chunk)
-            break
+    q_chunk = next((c for c in (PREFILL_SDPA_MAX_Q_CHUNK, 64, 32) if c <= padded), 32)
+    k_chunk = next((c for c in (PREFILL_SDPA_MAX_K_CHUNK, 64, 32) if c <= padded), 32)
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
-        q_chunk_size=chosen[0],
-        k_chunk_size=chosen[1],
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
         exp_approx_mode=False,
     )
 
