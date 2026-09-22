@@ -33,9 +33,7 @@ void kernel_main() {
 
     DataflowBuffer C_slice(dfb::C_slice);
     if constexpr (C_borrowed) {
-        // The C_slice IS this core's C shard: the compute packs the finished tiles in place, so there is
-        // nothing to move. Wait for the whole C slice so the DFB's credits balance. (Borrowing needs one C slice
-        // per core and batch 1, so this is the entire output.)
+        // The C_slice IS this core's C shard: compute packs in place; just balance the DFB's credits.
         C_slice.wait_front(C_slice_M_tiles * C_slice_N_tiles);
         return;
     }

@@ -2,16 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul reader. For each batch, C slice and K chunk it pushes
-//   - one A slice: the C slice's rows of A, K_chunk_tiles wide    -> [C_slice_M_tiles][K_chunk_tiles]
-//   - one B slice: the C slice's columns of B, K_chunk_tiles tall -> [K_chunk_tiles][C_slice_N_tiles]
-// both row-major in tiles, the layout the compute kernel indexes. Loop order (batch, MN chunk, K chunk)
-// matches it.
-//
-// Edge C slices: tiles past M_tiles / N_tiles are never read; their entries keep stale L1, which only
-// reaches C tiles the writer drops. When K is not a tile multiple, the padding columns of A's last K
-// tile are zeroed so they contribute nothing. A and B are addressed by tile index through the tensor
-// accessor, so interleaved, L1-sharded and DRAM-sharded inputs are one code path.
+// Unified matmul reader: per batch, C slice and K chunk it pushes one A slice
+// ([C_slice_M_tiles][K_chunk_tiles] tiles) and one B slice ([K_chunk_tiles][C_slice_N_tiles]), both
+// row-major, matching the compute kernel's loop order and indexing. Edge tiles past M/N are never
+// read (their stale entries only reach C tiles the writer drops); A's K-padding columns are zeroed.
 
 #include <stdint.h>
 
@@ -24,8 +18,7 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
-    // Per-core runtime args: how many C slices this cluster produces per batch; the origin of its first
-    // C slice is read at the top of every batch below.
+    // Per-core RTA; the first C slice's origin is read at the top of every batch below.
     const uint32_t num_C_slices = get_arg(args::num_C_slices);
 
     constexpr uint32_t batch_size = get_arg(args::batch_size);

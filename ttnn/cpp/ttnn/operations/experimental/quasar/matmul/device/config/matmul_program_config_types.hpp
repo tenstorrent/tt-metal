@@ -86,16 +86,11 @@ struct MatmulMultiCoreProgramConfig {
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
-// Placement-first program config for the Quasar-native matmul (GH#41910): the caller names the
-// clusters (`cores`) and the C slice (in 32x32 tiles) each produces in one go. The factory walks the
-// C slices of one batch (across N, then down M) and hands contiguous runs to `cores` in enumeration
-// order (x fastest when `row_major_cores`); trailing cores idle when there are fewer C slices, each
-// core produces several when there are more. Edge C slices are computed full size and clipped on read
-// and write, so any M / N works.
-//
-// Current limits: one NEO, one reader and one writer per cluster; no inter-cluster sharing; no bias
-// (applied as a separate add), no fused activation, no untilize, 32x32 tiles only; sharded output
-// needs batch 1 and exactly one C slice per core.
+// Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
+// the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
+// `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works.
+// Limits: one NEO/reader/writer per cluster, no bias/activation/untilize, 32x32 tiles only;
+// sharded output needs batch 1 and one C slice per core.
 struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
     std::size_t C_slice_M_tiles{};
