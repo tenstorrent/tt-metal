@@ -395,7 +395,7 @@ private:
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
-    void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
+    void handle_final_credits(uint32_t transactions_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
     friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
@@ -432,11 +432,11 @@ private:
     // Metadata for implicit sync
     uint16_t ptxn_id_loop_cnt_ = 0;
     uint8_t ptxn_id_index_ = 0;
-    uint16_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
+    uint32_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
 
     uint16_t ctxn_id_loop_cnt_ = 0;
     uint8_t ctxn_id_index_ = 0;
-    uint16_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
+    uint32_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
 #endif
 };
 
