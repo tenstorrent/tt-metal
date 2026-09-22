@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import signal
+import time
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -630,7 +631,25 @@ def _select_tests_by_op(config, items):
 
 
 @pytest.hookimpl(tryfirst=True)
+def _stable_xdist_groups(config, items):
+    """Group every test by a stable hash of its node id.
+
+    crc32 and not hash(): each xdist worker is its own process and Python
+    randomises str hashing per process, so hash() would give the workers
+    different assignments and no determinism at all.
+    """
+    import zlib
+
+    count = int(os.environ.get("PERF_STABLE_GROUPS", "0"))
+    if count <= 0:
+        return
+    for item in items:
+        bucket = zlib.crc32(item.nodeid.encode()) % count
+        item.add_marker(pytest.mark.xdist_group(f"perfgrp{bucket}"))
+
+
 def pytest_collection_modifyitems(config, items):
+    _stable_xdist_groups(config, items)
     _select_tests_by_op(config, items)
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
@@ -860,8 +879,25 @@ def pytest_runtest_makereport(item, call):
 _reset_simulator_pending = False
 
 
+def _log_core_for_test(item):
+    """Append nodeid, core, worker and finish time; one file per worker."""
+    path = os.environ.get("PERF_CORE_LOG")
+    if not path:
+        return
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    try:
+        with open(f"{path}.{worker}.tsv", "a") as fh:
+            fh.write(
+                f"{item.nodeid}\t{TestConfig.TENSIX_LOCATION}\t"
+                f"{worker}\t{time.time():.3f}\n"
+            )
+    except OSError:
+        pass  # a missing log line is not worth failing a measurement
+
+
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
+    _log_core_for_test(item)
     if not TestConfig.TEST_TARGET.reset_simulator_per_test:
         return
     if nextitem is None:
