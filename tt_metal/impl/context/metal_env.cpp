@@ -769,7 +769,9 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     if (context_guard.holds_context() && !result.empty()) {
         // Devices are live: release even without a parent, so the context outlives them.
         context_guard.release();
-        if (const auto& parent = result.begin()->second->get_parent_mesh()) {
+        const auto& parent = result.begin()->second->get_parent_mesh();
+        TT_ASSERT(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
+        if (parent) {
             parent->impl().set_destroy_metal_context_instance_on_close(true);
         }
     }

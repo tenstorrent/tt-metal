@@ -283,6 +283,19 @@ TEST(MetalEnv, FailedCreateMeshDeviceDoesNotLeakContext) {
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
 }
 
+TEST(MetalEnv, FailedCreateUnitMeshDeviceDoesNotLeakContext) {
+    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
+    const ContextId baseline = next_free_context_id(mock_path);
+
+    for (int i = 0; i < 3; ++i) {
+        MetalEnv env{MetalEnvDescriptor(mock_path)};
+        // Device 99 is not in the 1-chip mock cluster, so opening it fails.
+        EXPECT_THROW(env.create_unit_mesh_device(99), std::runtime_error);
+    }
+
+    EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
 TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
     auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
     const ContextId baseline = next_free_context_id(mock_path);
