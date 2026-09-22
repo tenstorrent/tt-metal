@@ -53,7 +53,7 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
 
     tile_regs_acquire();
-    reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
+    // Startup and preprocessing preserve the LHS-format SrcA invariant.
     copy_init(cb_post_lhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
@@ -72,6 +72,7 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+    reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
     tile_regs_commit();
 
     tile_regs_wait();
@@ -99,6 +100,9 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
+    static_assert(
+        cb_post_lhs_id == BINARY_PHYSICAL_LHS_FORMAT_CB,
+        "binary_ng: SFPU SrcA startup operand disagrees with the preprocessing restore reference");
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
