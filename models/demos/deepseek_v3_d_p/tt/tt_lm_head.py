@@ -61,7 +61,11 @@ class TtLMHead(LightweightModule):
 
     @staticmethod
     def check_cache_complete(cache_path: Path) -> bool:
-        """Check if LM head weights cache files exist for the requested mode."""
+        """Check if LM head weight cache files exist.
+
+        Existence only: the cache key does not encode the TP strategy, so this cannot tell a
+        column-parallel cache from a row-parallel one.
+        """
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         if not pattern_exists("lm_head_weight*.tensorbin", "LMHead"):
@@ -114,6 +118,10 @@ class TtLMHead(LightweightModule):
             dims=TtLMHead._weight_shard_dims(is_column_parallel),
         )
 
+        # The key omits `is_column_parallel`, and the cached file holds already-sharded device
+        # tensors, so the mapper above is ignored on a cache hit. A column-parallel cache loaded
+        # into a row-parallel head therefore keeps its full-emb contracted dim and fails only at
+        # the matmul. Switching strategy needs the cache rebuilt, not just the flag flipped.
         cache_file_name = str(cache_path / "lm_head_weight") if cache_path else None
 
         tt_weight = ttnn.as_tensor(
