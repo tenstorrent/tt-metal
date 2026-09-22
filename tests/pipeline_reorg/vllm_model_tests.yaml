@@ -329,6 +329,8 @@
   tt_mm_throttle_perf: 2
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
   structured-output: true
+  # Allow the complete 32 x 1024-token correctness run to finish.
+  structured-output-timeout: 30
   sampling-tests: true
   sampling-test-timeout: 40
   additional-structured-output-args: "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
