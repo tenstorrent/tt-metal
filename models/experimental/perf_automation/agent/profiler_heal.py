@@ -123,15 +123,49 @@ def _loaded_lib(root: Path) -> Path | None:
     return hits[0] if hits else None
 
 
-def _heal_marked_ineffective(build: Path) -> bool:
-    return (build / _INEFFECTIVE_SENTINEL).is_file()
-
-
-def _mark_heal_ineffective(build: Path, why: str) -> None:
-    """Record that patch+rebuild does not land on this build, so later runs skip it instead
-    of repeating a known-failing 3-minute rebuild every time."""
+def _lib_identity(lib: Path | None) -> str:
+    """A cheap fingerprint of the library the runtime loads. An 'ineffective' verdict is
+    only trusted while the library it was recorded against is still the one in place; once
+    that library is rebuilt or replaced, the verdict is stale and the heal retries."""
+    if lib is None:
+        return "none"
     try:
-        (build / _INEFFECTIVE_SENTINEL).write_text(why[:500])
+        st = lib.stat()
+        return f"{lib.resolve()}:{st.st_size}:{st.st_mtime_ns}"
+    except Exception:  # noqa: BLE001
+        return "none"
+
+
+def _heal_marked_ineffective(build: Path, lib: Path | None) -> bool:
+    """Whether a prior run already proved patch+rebuild cannot land on THIS library.
+
+    The verdict is keyed to the loaded library's identity, not just the build directory:
+    worktrees share one build tree, so a verdict written from a throwaway worktree (or
+    before the library was rebuilt) must not permanently disable healing for later runs.
+    A verdict whose recorded identity no longer matches the current library is stale and
+    is cleared so the heal is attempted again."""
+    sentinel = build / _INEFFECTIVE_SENTINEL
+    try:
+        if not sentinel.is_file():
+            return False
+        recorded = sentinel.read_text().splitlines()[0].strip()
+    except Exception:  # noqa: BLE001
+        return False
+    if recorded == _lib_identity(lib):
+        return True
+    try:
+        sentinel.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _mark_heal_ineffective(build: Path, lib: Path | None, why: str) -> None:
+    """Record that patch+rebuild does not land on this library, so later runs skip it
+    instead of repeating a known-failing 3-minute rebuild every time. The verdict carries
+    the library's identity so it expires automatically once the library changes."""
+    try:
+        (build / _INEFFECTIVE_SENTINEL).write_text(f"{_lib_identity(lib)}\n{why[:500]}")
     except Exception:  # noqa: BLE001
         pass
 
@@ -184,6 +218,18 @@ def _rebuild(root: Path, build: Path) -> bool:
                 except Exception as exc:
                     _log(f"could not install {loaded.name}: {exc}")
                     return False
+    # The glob above is relative to root; when the build tree is shared/symlinked the
+    # library the runtime actually loads (ldd-resolved) may sit outside root/build*/lib.
+    # Install the freshly built libtt_metal.so directly over that exact path too, so a
+    # rebuilt marker is guaranteed to reach the library that is loaded and verified.
+    loaded_lib = _loaded_lib(root)
+    built_lib = build / "tt_metal" / "libtt_metal.so"
+    if loaded_lib is not None and built_lib.is_file() and built_lib.resolve() != loaded_lib.resolve():
+        try:
+            loaded_lib.write_bytes(built_lib.read_bytes())
+        except Exception as exc:
+            _log(f"could not install {loaded_lib}: {exc}")
+            return False
     return True
 
 
@@ -231,7 +277,7 @@ def ensure_profiler_patched(tt_metal_root) -> None:
         if build is None:
             _log("no build dir found (wheel/prebuilt install) -> cannot rebuild; run will use stock profiler")
             return
-        if _heal_marked_ineffective(build):
+        if _heal_marked_ineffective(build, lib):
             _log("patch+rebuild already proven ineffective on this build -> skipping (stock profiler)")
             if _MARKER not in text:
                 src.write_text(text)
@@ -251,7 +297,7 @@ def ensure_profiler_patched(tt_metal_root) -> None:
                 f"rebuild did not reach the loaded library ({lib}); reverting source and "
                 "disabling further heal attempts on this build (stock profiler is used)"
             )
-            _mark_heal_ineffective(build, f"marker absent from {lib} after ninja rebuild")
+            _mark_heal_ineffective(build, lib, f"marker absent from {lib} after ninja rebuild")
             bak = src.with_name("profiler.cpp.perfauto_bak")
             if bak.is_file() and _MARKER not in text:
                 src.write_text(text)

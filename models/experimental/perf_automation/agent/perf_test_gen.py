@@ -53,6 +53,13 @@ PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
 # reader never has to guess the conditions.
 PERF_ISL_TOKENS = int(os.environ.get("TT_PERF_ISL_TOKENS", "128"))
 PERF_OSL_TOKENS = int(os.environ.get("TT_PERF_OSL_TOKENS", "128"))
+# EAGER-PATH BOUND. The eager forward wraps every ttnn op to drain the device profiler; on a
+# high-op-count model a long decode there makes the profiler's never-freed per-(chip,core) host
+# buffers pile up until the HOST OOMs -- a 6-layer build has reached 224 GB this way. The traced
+# path, which produces the reported OSL number, does not (it runs profiler-off), so only the eager
+# path needs bounding: it runs a SHORT decode capped here while the trace keeps the full
+# PERF_OSL_TOKENS. Env-overridable; never exceeds the declared OSL.
+_EAGER_OSL_TOKENS = min(PERF_OSL_TOKENS, int(os.environ.get("TT_PERF_EAGER_OSL_TOKENS", "8")))
 # BATCH BELONGS TO THE MODEL, not to this generator. It was written into the generated test as a
 # literal `batch=1`, so a pipeline emit-e2e built to serve 8 users was measured serving one, and its
 # aggregate throughput under-reported by 8x. 0 means "ask the pipeline" -- it already knows, via
@@ -118,7 +125,9 @@ def test_<task>_perf(device_params, device):
                     _orig.append((_mod, _n, _op)); setattr(_mod, _n, _draining(_op))
         _fw0 = time.monotonic()
         try:
-            out = ...  # run the pipeline BOUNDED (PERF_OSL_TOKENS decode steps, or one forward)
+            out = ...  # run the pipeline BOUNDED to _EAGER_OSL_TOKENS decode steps (the eager path
+                       # is short to bound profiler host-memory; the traced path measures the full
+                       # PERF_OSL_TOKENS), or a single forward
             try: ttnn.ReadDeviceProfiler(device)
             except Exception: pass
         finally:
