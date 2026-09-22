@@ -319,4 +319,12 @@ Tensor logaddexp_stable(
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+// Numerically stable logaddexp2: log2(2^a + 2^b) = max(a, b) + log2(1 + 2^(-abs(a - b)))
+Tensor logaddexp2_stable(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 }  // namespace ttnn
+

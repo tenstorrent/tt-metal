@@ -1434,3 +1434,51 @@ def test_prelu_scalar_honours_memory_config(input_shapes, device, weight, reques
 
     if requested_memcfg is not None:
         assert_equal(ttnn.to_torch(output), ttnn.to_torch(ttnn.prelu(input_tensor, weight)))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 2, 64, 64])),
+    ),
+)
+def test_binary_logaddexp_stable_overflow(input_shapes, device):
+    """
+    Verifies that logaddexp remains numerically stable beyond standard FP32 exp overflow (~88.7)
+    and negative underflow thresholds without producing inf or NaN.
+    """
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, 90.0, 150.0, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, 85.0, 140.0, device)
+
+    golden_tensor = torch.logaddexp(in_data1, in_data2)
+    assert not torch.isinf(golden_tensor).any()
+    assert not torch.isnan(golden_tensor).any()
+
+    output_tensor = ttnn.logaddexp_stable(input_tensor1, input_tensor2)
+    comp_pass = compare_pcc([output_tensor], [golden_tensor], pcc=0.99)
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 2, 64, 64])),
+    ),
+)
+def test_binary_logaddexp2_stable_overflow(input_shapes, device):
+    """
+    Verifies that logaddexp2 remains numerically stable beyond base-2 exp2 overflow thresholds.
+    """
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, 130.0, 200.0, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, 120.0, 190.0, device)
+
+    golden_tensor = torch.logaddexp2(in_data1, in_data2)
+    assert not torch.isinf(golden_tensor).any()
+    assert not torch.isnan(golden_tensor).any()
+
+    output_tensor = ttnn.logaddexp2_stable(input_tensor1, input_tensor2)
+    comp_pass = compare_pcc([output_tensor], [golden_tensor], pcc=0.99)
+    assert comp_pass
+

@@ -1401,4 +1401,18 @@ Tensor logaddexp_stable(
     return ttnn::add(max_ab, log1p_term, std::nullopt, output_mem_config, optional_output_tensor);
 }
 
+Tensor logaddexp2_stable(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    // Numerically stable logaddexp2: log2(2^a + 2^b) = max(a, b) + log2(1 + 2^(-abs(a - b)))
+    Tensor diff = ttnn::abs(ttnn::subtract(input_a, input_b, std::nullopt, output_mem_config), output_mem_config);
+    Tensor exp2_neg_diff = ttnn::exp2(ttnn::neg(diff, output_mem_config), output_mem_config);
+    Tensor log2_term = ttnn::log2(ttnn::add(exp2_neg_diff, 1.0f, std::nullopt, output_mem_config), output_mem_config);
+    Tensor max_ab = ttnn::maximum(input_a, input_b, std::nullopt, output_mem_config);
+    return ttnn::add(max_ab, log2_term, std::nullopt, output_mem_config, optional_output_tensor);
+}
+
 }  // namespace ttnn
+
