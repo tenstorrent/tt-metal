@@ -30,10 +30,11 @@ Independently corroborated on g03blx04, which measured 15.2 s for the same 8-for
 | t2va | 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | -- | 9.4 | 3.6 | 1.2 | 14.5 | 2.8 | 37.53 | bh-glx-120-b09u02 |
 | t2va | 10 s | 243 | 1344x768 | 8 | 73472 | 0.4 | -- | 23.1 | 7.3 | 1.3 | 32.1 | 3.2 | 36.94 | bh-glx-120-b09u02 |
 | t2va | 15 s | 362 | 1344x768 | 8 | 109312 | 0.4 | -- | 43.7 | 11.3 | 1.5 | 56.9 | 3.8 | 35.19 | bh-glx-120-b09u02 |
+| fl2va | 5 s | 124 | 1344x768 | 8 | 41984 | 1.9 | 1.5 | 10.8 | 3.4 | 1.2 | 18.7 | 3.6 | 34.12 | bh-glx-120-b09u02 |
 | fl2va | 10 s | 243 | 1344x768 | 8 | 77568 | 2.2 | 1.3 | 30.2 | 7.3 | 1.2 | 42.1 | 4.2 | 37.19 | bh-glx-120-c06u08 |
 | fl2va | 15 s | 362 | 1344x768 | 8 | 113152 | 2.2 | 1.3 | 58.5 | 10.8 | 1.5 | 74.2 | 4.9 | 37.44 | bh-glx-120-c06u08 |
 
-**Not measured:** fl2va 5 s, ref2va 5 s, ref2va 10 s, ref2va 15 s.
+**Not measured:** ref2va 5 s, ref2va 10 s, ref2va 15 s.
 
 Timings are seconds of compute in the warm window: each point runs one full warmup generation at
 its shape first, and prepares plus artifact export are excluded. CLIP is prompt alignment,
@@ -105,3 +106,13 @@ Ruled out by experiment, not inference:
 
 The remaining suspects are the conv3d blocking chosen for this shape and the op's own L1
 accounting, which needs a bisect against the build that produced the gate's recorded numbers.
+
+### The fl2va rows do not share a keyframe
+
+`fl2va` conditions on frame 0 of a `t2va` artifact, and the sweep picked that artifact with a glob
+loose enough to match `15s` as well as `5s`. The rows from `bh-glx-120-c06u08` were conditioned on
+the 5 s clip; anything run after the 15 s point completed was conditioned on the 15 s clip instead.
+
+Timings are unaffected -- the shapes are identical either way and keyframe encode is 1.3 s in both
+-- but the **CLIP column is not comparable across `fl2va` rows**, because the rows were conditioned
+on different content.
