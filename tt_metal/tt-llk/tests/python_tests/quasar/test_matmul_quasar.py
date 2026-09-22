@@ -29,6 +29,7 @@ from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -238,21 +239,26 @@ def matmul_tiny_transpose_modes(
     return [Transpose.No, Transpose.Yes]
 
 
-# Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
-# unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
-# entries where MxFp4 would land as an output.
-MATMUL_FORMAT = input_output_formats(
-    [
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    ],
-) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+# MxFp4 is an input-only (L1) format here: matmul_register_format_hints always pairs it
+# with MxFp4_2x_A/B, so these two entries are the 2x src-register sweep and the output
+# stays a plain 16-bit float. One entry per exponent family, because the hint picks the
+# math format (2x_A -> Float16, 2x_B -> Float16_b).
+MATMUL_2X_FORMATS = [
+    InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16),
+    InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16_b),
+]
+
+MATMUL_FORMAT = (
+    input_output_formats(
+        [
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + MATMUL_2X_FORMATS
+    + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
+)
 
 FULL_MATMUL_SHAPES = [((TILE_DIM, TILE_DIM), (TILE_DIM, TILE_DIM))]
 TINY_MATMUL_SHAPE_CASES = [((16, 16), (16, 16))] + [

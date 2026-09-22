@@ -433,6 +433,39 @@ def input_output_formats(
     return [InputOutputFormat(input, output) for input in formats for output in formats]
 
 
+def quasar_mx_smoke(
+    input_format: DataFormat, output_format: DataFormat
+) -> List[InputOutputFormat]:
+    """
+    Single MX format pair for a test that is not the pack or the unpack test.
+
+    On Quasar the MX formats live only in L1. The unpacker decodes every one of them
+    to Float16_b in SrcA/SrcB (@ref infer_unpack_out), so an op fed an MX input runs
+    the exact same math and pack configuration as the Float16_b row beside it in the
+    same sweep, and an op writing an MX output only exercises the packer. Sweeping MX
+    across a whole test therefore re-measures one unpacker descriptor field against an
+    unchanged pipeline: the MX codec belongs to test_pack_quasar and
+    test_unpack_unary_operand_quasar, which own those two conversions.
+
+    Every other test keeps exactly one pair, so the MX-conditional plumbing it does
+    own stays covered: format-inference bypass, the ImpliedMathFormat.Yes requirement,
+    MX stimulus clamping and the sub-byte L1 tile-size constraints.
+
+    MxFp4_2x_A / MxFp4_2x_B are not covered by this rule. They are real SrcA/SrcB
+    register formats that change the math format and the per-tile MVMUL sequence, so
+    they are swept wherever they apply (matmul, reduce GAPOOL).
+
+    Parameters:
+    input_format (DataFormat): MX format to feed from L1, or the L1 input paired with
+        an MX output when the test's MX coverage is on the pack side.
+    output_format (DataFormat): the paired output format.
+    Returns:
+    List[InputOutputFormat]: a one-element list, ready to concatenate onto an
+        input_output_formats() product.
+    """
+    return [InputOutputFormat(input_format, output_format)]
+
+
 def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:
     """
     A function that creates a list of FormatConfig objects from a list of DataFormat objects that client wants to test.
