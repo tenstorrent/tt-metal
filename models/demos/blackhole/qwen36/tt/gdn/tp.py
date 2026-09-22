@@ -605,15 +605,68 @@ class TPGatedDeltaNet:
         _fits_channel_width = self.qkv_dim_tp * self.K <= 4096 * 4
         return _fits_grid and _fits_channel_width
 
-    def _shift_register_tail(self, src, T, conv_state, C):
+    def _carry_tail_tile_stable(self, src, carry_len, C, full_T):
+        """Last K-1 valid rows, as programs whose count is bounded by the BUCKET, not the request.
+
+        The plain form -- slice(src, carry_len-(K-1) .. carry_len) -- is keyed on the REQUEST's
+        valid_len, because a ttnn.slice program hashes its offset, not only its shapes. Warmup
+        (model.py::warmup_prefill_masked_buckets) only compiles two actual_len per bucket, so real
+        requests compiled here AFTER the prefill trace was parked, clobbering it (#48536,
+        test_model_tp.py::test_prefill_warmup_no_recompile).
+
+        Fix: read a TILE-ALIGNED window and pick the rows inside it.
+          * the window slice's offset is a multiple of TILE_SIZE -> at most full_T/TILE_SIZE
+            programs per bucket instead of one per request length, and warmup can enumerate them;
+          * the pick is a one-hot matmul whose shapes depend only on (K, window, C) -> ONE program.
+        The window is two tiles so the K-1 rows are always contained even when the first one lands
+        in the last K-2 rows of a tile, and its base is clamped so the window never runs past the
+        buffer (every mask bucket is >= 128, so 2*TILE_SIZE always fits).
+
+        NOT the FIR's one-hot over the whole chunk: on this path _project_qkvzab hands qkv over
+        ROW_MAJOR (qkv_row_major=True), so that would add a full-tensor tilize per GDN layer.
+        Here only the 2-tile window is tilized.
+        """
+        K = self.K
+        TS = tpc.TILE_SIZE
+        W = 2 * TS
+        start = carry_len - (K - 1)
+        base = min(max((start // TS) * TS, 0), full_T - W)
+        off = start - base  # 0 <= off <= W-(K-1)
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        win = ttnn.slice(src, (0, base, 0), (1, base + W, C))
+        win_t = ttnn.to_layout(win, ttnn.TILE_LAYOUT, memory_config=_dram)
+        ttnn.deallocate(win)
+        idx = ttnn.arange(0, W, 1, dtype=ttnn.float32, device=self.mesh)
+        idx = ttnn.reshape(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), (1, 1, W))
+        picks = []
+        for i in range(K - 1):
+            sel = ttnn.eq(idx, float(off + i))
+            picks.append(ttnn.typecast(sel, win_t.dtype))
+            ttnn.deallocate(sel)
+        ttnn.deallocate(idx)
+        sel_all = picks[0] if K - 1 == 1 else ttnn.concat(picks, dim=1)  # [1, K-1, W]
+        if K - 1 > 1:
+            for p in picks:
+                ttnn.deallocate(p)
+        out = ttnn.matmul(sel_all, win_t)  # [1, K-1, C]
+        ttnn.deallocate(sel_all)
+        ttnn.deallocate(win_t)
+        return out
+
+    def _shift_register_tail(self, src, T, conv_state, C, full_T=None):
         """Last K-1 rows of the shift register after T shifts, i.e. of [conv_state ; src].
 
         A chunk SHORTER than the register (T < K-1) has no K-1 rows of its own — spec decode's
         seed and commit chunks call the conv with T=1 — and slicing `src` alone would ask for a
         negative start and TT_FATAL. Returns a tensor in `src`'s layout; the caller tilizes.
+
+        full_T set and > T marks the MASKED path, whose offset would otherwise be request-keyed;
+        see _carry_tail_tile_stable. Wormhole only -- Blackhole keeps the validated plain slice.
         """
         K = self.K
         if T >= K - 1:
+            if full_T is not None and full_T > T and full_T >= 2 * tpc.TILE_SIZE and not tpc.is_blackhole():
+                return self._carry_tail_tile_stable(src, T, C, full_T)
             return ttnn.slice(src, (0, T - (K - 1), 0), (1, T, C))
         _dram = ttnn.DRAM_MEMORY_CONFIG
         if conv_state is None:
@@ -776,7 +829,9 @@ class TPGatedDeltaNet:
             # callers that still hand over TILE (per-user prefill, tests calling this directly).
             qkv_rm = qkv if qkv.layout == _rm else ttnn.to_layout(qkv, _rm, memory_config=_dram)
             # Only K-1 rows, so tilizing the carry back is ~12us, not a full-tensor relayout.
-            new_state = self._shift_register_tail(qkv_rm, T if carry_len is None else carry_len, conv_state, C)
+            new_state = self._shift_register_tail(
+                qkv_rm, T if carry_len is None else carry_len, conv_state, C, full_T=T
+            )
             new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
             # Splice: build the fix conv's input HERE, while qkv_rm and conv_state are both certainly
             # alive. Doing it after the big conv would race the `deallocate(xin)` below, which frees

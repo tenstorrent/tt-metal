@@ -114,7 +114,8 @@ class Qwen36Model:
         # spec_norm is that norm with the trailing all-gather off, so its output keeps the fractured
         # [1,1,*,dim/tp] shape/dtype the drafter already consumes. QWEN36_SPEC_POSTNORM=0 restores
         # the pre-norm (V0) contract, under which spec_norm is never called.
-        self.spec_postnorm = os.environ.get("QWEN36_SPEC_POSTNORM", "1") == "1"
+        _spec_postnorm_env = os.environ.get("QWEN36_SPEC_POSTNORM")
+        self.spec_postnorm = _spec_postnorm_env != "0"
         self.spec_norm = None
         if self.num_devices > 1:
             # TP: DistributedNorm all-gathers fractured hidden for LM head.
@@ -131,10 +132,25 @@ class Qwen36Model:
         else:
             # Single device: the plain RMSNorm's full-dim output IS the fractured form.
             self.spec_norm = self.norm
-        assert not self.spec_postnorm or self.spec_norm is not None, (
-            "QWEN36_SPEC_POSTNORM=1 needs the fractured-output distributed final norm "
-            "(args.is_distributed_norm(Mode.PREFILL) is False on this mesh/dim)"
-        )
+        # No fractured-output norm on this mesh/dim -> fall back to the V0 pre-norm contract rather
+        # than refusing to build. is_distributed_norm(PREFILL) is True only on a 2D mesh or when
+        # dim > 4096, so a 1D mesh at dim == 4096 -- the 9B on an N300 -- lands here. Asserting
+        # instead made EVERY model build on that config fail, MTP or not: the 9B/N300 full-depth
+        # tests (tests/unit/test_prefill.py, tests/unit/test_decode.py) died in Qwen36Model.__init__
+        # having never touched spec decode. V0 feeds the drafter the pre-norm residual stream and is
+        # a supported contract everywhere, so the fallback costs acceptance, not correctness.
+        # An EXPLICIT QWEN36_SPEC_POSTNORM=1 still hard-fails: asking for a contract this mesh
+        # cannot provide should say so rather than silently run a different one.
+        if self.spec_postnorm and self.spec_norm is None:
+            assert _spec_postnorm_env != "1", (
+                "QWEN36_SPEC_POSTNORM=1 needs the fractured-output distributed final norm "
+                "(args.is_distributed_norm(Mode.PREFILL) is False on this mesh/dim)"
+            )
+            logger.info(
+                "[spec] post-norm (V3) feed unavailable on this mesh/dim "
+                "(is_distributed_norm(PREFILL) False); falling back to the pre-norm (V0) contract"
+            )
+            self.spec_postnorm = False
 
         # LM head [in,out]. Mesh: vocab-sharded (dim=-1); _lm_head all-gathers logits.
         # M=1 decode is weight-read-bound (~1.3GB/token), so sharding cuts bandwidth;
@@ -3310,7 +3326,41 @@ class Qwen36Model:
                 self.prefill_masked_bucket(toks, page_table, actual_len=actual_len, bucket=bucket)
         # Fill-width-keyed programs: warm every width directly (no full forward).
         self._warmup_paged_fill_widths(page_table, buckets, block_size)
+        # GDN conv-carry window: its slice is keyed on a TILE-ALIGNED offset (see
+        # gdn/tp.py::_carry_tail_tile_stable), so the set is finite -- full_T/TILE_SIZE per bucket
+        # -- but NOT covered by the two actual_len above. One masked forward per window base
+        # compiles them all; without this the first request at an unseen base compiles after the
+        # prefill trace is parked and clobbers it (#48536).
+        self._warmup_conv_carry_windows(page_table, buckets)
         ttnn.synchronize_device(self.device)
+
+    def _warmup_conv_carry_windows(self, page_table, buckets):
+        """Compile the GDN conv-carry window slice at every TILE-aligned base it can take.
+
+        _carry_tail_tile_stable clamps base to [0, bucket - 2*TILE_SIZE] in TILE_SIZE steps, and
+        base is derived from actual_len as ((actual_len - (K-1)) // TILE_SIZE) * TILE_SIZE. Walking
+        actual_len over one representative per base therefore covers every reachable program.
+        Blackhole keeps the plain slice, so it needs none of this.
+        """
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        if tpc.is_blackhole() or not any(not layer.is_full_attention for layer in self.layers):
+            return
+        TS = tpc.TILE_SIZE
+        K = self.args.linear_conv_kernel_dim
+        for bucket in sorted(buckets):
+            if bucket < 2 * TS:
+                continue
+            seen_base = set()
+            for base in range(0, bucket - 2 * TS + 1, TS):
+                # smallest actual_len whose window lands on this base, kept inside the bucket
+                actual_len = min(base + (K - 1), bucket)
+                b = min(max(((actual_len - (K - 1)) // TS) * TS, 0), bucket - 2 * TS)
+                if b in seen_base or actual_len < K - 1:
+                    continue
+                seen_base.add(b)
+                toks = torch.zeros(1, actual_len, dtype=torch.int32)
+                self.prefill_masked_bucket(toks, page_table, actual_len=actual_len, bucket=bucket)
 
     def _warmup_paged_fill_widths(self, page_table, buckets, block_size):
         """Warm the per-fill-width programs in TPAttention.forward_prefill_paged's KV-fill sub-path
