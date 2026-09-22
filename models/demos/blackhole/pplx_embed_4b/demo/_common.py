@@ -242,6 +242,17 @@ def apply_recommended_env(batched_l1: bool) -> None:
     os.environ.setdefault("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "1")
     os.environ.setdefault("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "1")
     os.environ.setdefault("QWEN_ROPE_PREFILL_L1", "1")
+    # Lift the historical in0_block_w cap of 8 in find_largest_divisor. FF2 has
+    # k=9728, which over a grid_y=8 row is 38 K-tiles whose only divisors are
+    # 1, 2, 19 and 38 — the cap pinned it at 2, the value tt-perf-report OPT-004
+    # calls out as a floor rather than a target. Measured on P150 bs=1 ISL=512
+    # (best prefill, head-splits on):
+    #   cap  8 (default) 33.2 ms   FF2 in0_block_w=2
+    #   cap 10           32.8 ms
+    #   cap 16           32.6 ms
+    #   cap 19           29.0 ms   FF2 in0_block_w=19
+    #   cap 38           28.8 ms   FF2 in0_block_w=38 (whole K row per block)
+    os.environ.setdefault("QWEN_MM_MAX_DIVISOR", "38")
     # RoPE is a cos/sin rotation (operands in [-1,1]); the rotary_embedding_llama
     # op defaults to HiFi4, but LoFi is accuracy-neutral and cheaper. See
     # tt/attention.py:_mllama_rope_prefill.
@@ -337,6 +348,12 @@ def pplx_optimizations(model_args):
     """
     base = DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
+    # NOTE: FF1/FF3 weights are already BFP4 here — DecodersPrecision.performance
+    # sets TensorGroup.FF1_FF3 to BFP4 before this function runs, so there is no
+    # QWEN_FF13_BFP4 knob to add. Verified by reading the resolved policy:
+    # FF1_FF3=bfp4 with LI_FF1_FF3 fidelity=lofi. All five prefill matmul roles
+    # (QKV, WO, FF1, FF3, FF2) therefore run BFP4/LoFi, which puts the whole
+    # matmul roofline at 3.72 TFLOP / 580.9 TFLOPS = 6.40 ms for bs=1 ISL=512.
     promote_ff2 = os.getenv("QWEN_FF2_BFP4", "0") == "1"
     promote_qkv = os.getenv("QWEN_QKV_BFP4", "0") == "1"
     promote_wo = os.getenv("QWEN_WO_BFP4", "0") == "1"
