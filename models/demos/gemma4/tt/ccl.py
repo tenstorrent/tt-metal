@@ -43,14 +43,32 @@ def default_num_links():
     return 2 if is_blackhole() else 1
 
 
-def default_ccl_packet_bytes():
-    """Wormhole packet-width override; Blackhole keeps the Fabric default.
+def is_t3k_cluster() -> bool:
+    """Wormhole T3K, decided before any mesh is open.
 
-    6144 B is three 2048 B tiles (the SharedMLP / all-gather page size).
-    Blackhole stays on Fabric's 4352 B default: matching page width was
-    slower end-to-end on P150x8. Override with ``GEMMA4_CCL_PACKET_BYTES``.
+    ``is_t3k_mesh`` needs an open mesh, so device_params -- which are chosen to
+    open one -- cannot use it. The cluster type is available earlier and is the
+    same machine.
     """
     if is_blackhole():
+        return False
+    try:
+        return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.T3K
+    except (AttributeError, RuntimeError):
+        return False
+
+
+def default_ccl_packet_bytes():
+    """Wormhole T3K packet-width override; every other cluster keeps Fabric's.
+
+    6144 B is three 2048 B tiles (the SharedMLP / all-gather page size).
+    Blackhole stays on Fabric's 4352 B default: matching page width was slower
+    end-to-end on P150x8. The other Wormhole clusters (N150, N300, WH Galaxy)
+    are outside the measurement and keep the default too -- a non-default
+    payload is Fabric-wide, so widening this is not free. Override with
+    ``GEMMA4_CCL_PACKET_BYTES``.
+    """
+    if not is_t3k_cluster():
         return None
     return _WH_CCL_PACKET_BYTES
 

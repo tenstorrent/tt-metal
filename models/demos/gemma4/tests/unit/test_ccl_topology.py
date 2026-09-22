@@ -174,13 +174,36 @@ def test_ccl_async_env(monkeypatch):
     assert ccl_async_enabled() is True
 
 
-def test_default_ccl_packet_bytes_wormhole_packs_2048_tiles(monkeypatch):
-    """WH fabric default 4352 B cannot hold an integer number of 2048 B pages."""
+def test_default_ccl_packet_bytes_only_on_a_wormhole_t3k(monkeypatch):
+    """WH fabric default 4352 B cannot hold an integer number of 2048 B pages.
+
+    T3K is the cluster that was measured; every other one keeps the default,
+    because a non-default payload is Fabric-wide.
+    """
     monkeypatch.delenv("GEMMA4_CCL_PACKET_BYTES", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_t3k_cluster", lambda: True)
     assert default_ccl_packet_bytes() == 6144
+    # N150 / N300 / WH Galaxy are Wormhole but not T3K.
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_t3k_cluster", lambda: False)
+    assert default_ccl_packet_bytes() is None
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
     assert default_ccl_packet_bytes() is None
+
+
+def test_t3k_cluster_predicate(monkeypatch):
+    """Cluster-type read, so device_params can gate before a mesh is open."""
+    from models.demos.gemma4.tt.ccl import is_t3k_cluster
+
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    monkeypatch.setattr("ttnn.cluster.get_cluster_type", lambda: ttnn.cluster.ClusterType.T3K)
+    assert is_t3k_cluster() is True
+    for other in ("N150", "N300", "GALAXY", "TG"):
+        monkeypatch.setattr("ttnn.cluster.get_cluster_type", lambda o=other: getattr(ttnn.cluster.ClusterType, o))
+        assert is_t3k_cluster() is False, other
+    monkeypatch.setattr("ttnn.cluster.get_cluster_type", lambda: ttnn.cluster.ClusterType.T3K)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
+    assert is_t3k_cluster() is False
 
 
 def test_prefill_l1_act_env(monkeypatch):
