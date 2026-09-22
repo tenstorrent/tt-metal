@@ -428,22 +428,72 @@ def prefill_sdpa_compute_config(mesh_device):
     return _PREFILL_SDPA_COMPUTE[arch]
 
 
-def prefill_full_attention_sdpa_config(mesh_device, seq_len: int, *, pinned_pow2: bool = True):
+# Serving keeps ~90 KiB of persistent L1 (decode CCL scratch, sampler buffers) at the top of
+# the 1.5 MiB L1 on every core, so a freshly compiled prefill program whose static circular
+# buffers reach past ~1.48 MB throws "circular buffers clash with L1 buffers" (CI run
+# 35671641642 died exactly there with q=256/k=128). Size the SDPA chunks by the kernel's
+# CB footprint (the QB2 decoder's sdpa_l1 formula, which over-estimates by ~0.1 MB) against
+# a limit that leaves that headroom.
+PREFILL_SDPA_CB_LIMIT_BYTES = 1_400_000
+_BLACKHOLE_CB_BASE = 111_616
+
+
+def _sdpa_cb_end(*, rows, q_chunk, k_chunk, heads, cores, head_dim, q_tile_bytes, kv_tile_bytes, page_table_bytes):
+    """Static circular-buffer end of the Blackhole causal SDPA (FP32 softmax accumulation)."""
+    chunks = max(1, rows // q_chunk)
+    scheduling_unit = 2 if chunks % 2 == 0 else 1
+    units = heads * chunks // scheduling_unit
+    q_buffers = 2 if ((units + cores - 1) // cores) * scheduling_unit > 1 else 1
+    a, b, d = q_chunk // 32, k_chunk // 32, head_dim // 32
+    scalar_tile_bytes = 4096 if q_tile_bytes == 4096 else 2048
+    payload = (
+        a * d * q_buffers * q_tile_bytes
+        + 4 * b * d * kv_tile_bytes
+        + 2 * 2048
+        + 2 * scalar_tile_bytes
+        + page_table_bytes
+        + a * b * 4096
+        + 2 * a * d * 2048
+        + 3 * a * 2048
+        + 2 * a * 4096
+        + a * d * q_tile_bytes
+    )
+    return _BLACKHOLE_CB_BASE + payload
+
+
+def prefill_full_attention_sdpa_config(
+    mesh_device, seq_len: int, *, head_dim: int = 512, heads: int = 8, page_table_bytes: int = 16_384
+):
     """Full-grid SDPA config for BFP8 full-attention prefill.
 
-    Power-of-two chunks no larger than the padded sequence: the kernel handles a
-    partial final chunk, and window-aligned ``chunk_start_idx`` values divide them.
+    Picks the largest power-of-two (q, k) chunk pair whose circular buffers stay under
+    ``PREFILL_SDPA_CB_LIMIT_BYTES``; window-aligned ``chunk_start_idx`` values divide any of
+    them. Falls back to the smallest pair if none fits (the caller may still see the op fail).
     """
     grid = mesh_device.compute_with_storage_grid_size()
+    gx, gy = min(grid.x, PREFILL_MATMUL_MAX_GRID[0]), min(grid.y, PREFILL_MATMUL_MAX_GRID[1])
     padded = math.ceil(seq_len / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-    q_chunk = next((c for c in (256, 128, 64, 32) if c <= padded), 32)
-    k_chunk = next((c for c in (128, 64, 32) if c <= padded), 32)
+    candidates = [(q, k) for q in (256, 128, 64, 32) for k in (128, 64, 32) if q <= padded and k <= padded and k <= q]
+    chosen = candidates[-1] if candidates else (32, 32)
+    for q_chunk, k_chunk in candidates:
+        end = _sdpa_cb_end(
+            rows=padded,
+            q_chunk=q_chunk,
+            k_chunk=k_chunk,
+            heads=heads,
+            cores=gx * gy,
+            head_dim=head_dim,
+            q_tile_bytes=_TILE_BYTES[ttnn.bfloat8_b],
+            kv_tile_bytes=_TILE_BYTES[ttnn.bfloat8_b],
+            page_table_bytes=page_table_bytes,
+        )
+        if end <= PREFILL_SDPA_CB_LIMIT_BYTES:
+            chosen = (q_chunk, k_chunk)
+            break
     return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(
-            min(grid.x, PREFILL_MATMUL_MAX_GRID[0]), min(grid.y, PREFILL_MATMUL_MAX_GRID[1])
-        ),
-        q_chunk_size=q_chunk,
-        k_chunk_size=k_chunk,
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        q_chunk_size=chosen[0],
+        k_chunk_size=chosen[1],
         exp_approx_mode=False,
     )
 
@@ -1681,7 +1731,7 @@ class MultichipDecoder(OptimizedDecoder):
                 bfp8_kv[1],
                 is_causal=True,
                 scale=1.0,
-                program_config=prefill_full_attention_sdpa_config(self.mesh_device, seq_len),
+                program_config=prefill_full_attention_sdpa_config(self.mesh_device, seq_len, head_dim=config.head_dim),
                 compute_kernel_config=prefill_sdpa_compute_config(self.mesh_device),
             )
             q_bfp8.deallocate(True)
@@ -1883,7 +1933,7 @@ class MultichipDecoder(OptimizedDecoder):
             # Chunk sizes are powers of two, so any window-aligned chunk_start_idx
             # divides them (the op requires chunk_start_idx % chunk == 0).
             program_config = prefill_full_attention_sdpa_config(
-                self.mesh_device, min(FULL_ATTN_Q_CHUNK, seq_len), pinned_pow2=True
+                self.mesh_device, min(FULL_ATTN_Q_CHUNK, seq_len), head_dim=head_dim
             )
             sdpa_compute = prefill_sdpa_compute_config(self.mesh_device)
         else:
