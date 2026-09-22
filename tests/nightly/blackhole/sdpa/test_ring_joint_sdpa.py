@@ -5722,6 +5722,27 @@ def test_ring_joint_attention_gemma_complete_group_sliding_geometry(expect_error
     )
 
 
+@pytest.mark.parametrize("chunk_size_local", [512, 256], ids=["two_hop", "four_hop"])
+def test_ring_joint_attention_gemma_multi_hop_sliding_halo_geometry(expect_error, chunk_size_local):
+    """Gemma's W1024 window over a Q slab too narrow to hold it, so the halo spans several predecessors.
+
+    The Gemma4 chunk-4096 (two-hop) and chunk-2048 (four-hop) shapes at CP8. On this SP4 ring the
+    four-hop halo also wraps onto the device's own earlier slab, which is read locally.
+    """
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        gpt_oss_chunked_mesh_config(),
+        batch_size=1,
+        expect_error=expect_error,
+        chunk_size_local=chunk_size_local,
+        sliding_window_size=1024,
+        local_q_heads=4,
+        local_kv_heads=2,
+        head_dim=256,
+        prefix_group_counts=(0, 1),
+        num_iterations=1,
+    )
+
+
 def test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy():
     """Validate sliding halo reads from each requested indexed K/V-cache slot on a cache hit."""
     chunk_size = 1024
@@ -5784,6 +5805,45 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_linear_topology_accuracy()
                 qk_configs=[(64, 128)],
                 persistent_buffer_mode="exact_per_chunk",
                 sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                runtime=runtime,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.parametrize(
+    "window_multiplier, hops",
+    [(2, 2), (4, 4)],
+    ids=["two_hop", "four_hop"],
+)
+def test_ring_joint_attention_multi_hop_sliding_halo_linear_topology_accuracy(window_multiplier, hops):
+    """Multi-hop sliding halo on an SP8 ring with linear fabric, where wrapping hops travel backward.
+
+    A 1024-token chunk gives each rank a 128-token Q slab, so a 2x / 4x window needs two / four hops.
+    On a BH Galaxy's two fabric links the four-hop case time-shares them, two hops per link.
+    """
+    chunk_size = 1024
+    total_seq = 2 * chunk_size
+    final_chunk = total_seq // chunk_size - 1
+    model = replace(
+        GPT_OSS_CHUNKED_MODEL,
+        name=f"gpt_oss_chunked_sliding_linear_{hops}_hop",
+        q_chunk_sizes=[64],
+        seq_len=chunk_size,
+    )
+
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=Topology.Linear)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                batch_size=1,
+                chunk_size=chunk_size,
+                total_seq=total_seq,
+                qk_configs=[(64, 128)],
+                persistent_buffer_mode="exact_per_chunk",
+                sliding_window_size=window_multiplier * GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
                 runtime=runtime,
             )
     finally:

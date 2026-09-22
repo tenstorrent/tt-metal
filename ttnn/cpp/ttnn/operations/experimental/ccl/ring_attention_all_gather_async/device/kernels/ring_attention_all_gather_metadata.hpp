@@ -20,6 +20,7 @@
 #include <cstdint>
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 
 namespace ring_attention_all_gather {
 
@@ -125,39 +126,29 @@ inline uint32_t compute_gather_valid_Ht(
     return valid_slabs * chunk_local_tiles;
 }
 
-// Which cache-group tail the one-hop neighbor halo reads, derived on-device.
-//
-// KEEP IN SYNC with the host reference, chunked_sliding_halo_source_start_tile
-// (ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp) and its caller
-// ChunkedSlidingHaloLayout::send_tail_start_tile. The result is linear in the chunk index
-// (current_group == chunk index for chunk-aligned prefill), so on the scalar path the host rewrites the
-// halo reader/writer page ranges every dispatch. A captured trace never runs that rewrite, which is why
-// this has to be recomputed here instead. Unlike the host reference this does not wrap the source slab
-// for circular KV caches; the ring-joint op rejects circular caches on the metadata path until it does.
+// Which cache-group tail halo hop `hop` reads, derived on-device from kv_actual_isl. The result is
+// linear in the chunk index, so on the scalar path the host rewrites the halo reader/writer page
+// ranges every dispatch; a captured trace never runs that rewrite, so it is recomputed here with the
+// same function the host uses (sender and receiver rows must agree exactly). Circular KV caches are
+// not wrapped (slab count 0): the ring-joint op rejects them on the metadata path.
 inline uint32_t compute_halo_tail_start_Ht(
     uint32_t kv_actual_isl,
     uint32_t q_local_tile_rows,
     uint32_t ring_size,
     uint32_t halo_tile_rows,
     uint32_t source_device,
-    uint32_t cache_local_tile_rows) {
+    uint32_t cache_local_tile_rows,
+    uint32_t hop) {
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
-    if (q_group_tile_rows == 0 || halo_tile_rows > q_local_tile_rows) {
+    if (q_group_tile_rows == 0) {
         return 0;
     }
     kv_actual_isl =
         trace_metadata::bounded_kv_actual_isl(kv_actual_isl, q_group_tile_rows, cache_local_tile_rows * ring_size);
     const uint32_t logical_k_tile_rows = trace_metadata::logical_tile_rows_clamped_to_cache(
         kv_actual_isl, q_group_tile_rows, cache_local_tile_rows * ring_size);
-    if (logical_k_tile_rows < q_group_tile_rows) {
-        return 0;
-    }
-    const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;
-    if (current_group == 0 && source_device + 1 == ring_size) {
-        return 0;
-    }
-    const uint32_t source_group = source_device + 1 == ring_size ? current_group - 1 : current_group;
-    return source_group * q_local_tile_rows + q_local_tile_rows - halo_tile_rows;
+    return ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_source_start_tile(
+        source_device, q_local_tile_rows, ring_size, logical_k_tile_rows, halo_tile_rows, 0, hop);
 }
 
 // Shift a halo worker's page range from the group baked at program-create time to the group this chunk

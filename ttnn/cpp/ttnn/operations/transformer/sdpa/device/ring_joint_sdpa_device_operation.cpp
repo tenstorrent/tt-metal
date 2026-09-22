@@ -669,13 +669,25 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             N_local_q % k_chunk_size == 0,
             "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
+        // A halo wider than the per-device Q slab is delivered by several hops around the CP ring,
+        // one slab tail each (sliding_window_work_plan.hpp), and cannot span more than the ring.
+        const uint32_t halo_hops = ring_joint::chunked_sliding_halo_hop_count(
+            halo_tokens / tt::constants::TILE_HEIGHT, N_local_q / tt::constants::TILE_HEIGHT);
         TT_FATAL(
-            halo_tokens <= N_local_q,
-            "Chunked sliding halo {} (window {}) exceeds the per-device Q slab {}; wider windows need a multi-hop "
-            "halo",
+            halo_hops <= args.ring_size,
+            "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}, more than the SP{} ring",
             halo_tokens,
             window_size,
-            N_local_q);
+            halo_hops,
+            N_local_q,
+            args.ring_size);
+        // The work plan returns an EMPTY plan past its fixed range count; reject that here instead
+        // of computing no attention.
+        TT_FATAL(
+            halo_hops <= ring_joint::SlidingQWorkPlan::max_halo_hops,
+            "Chunked sliding halo needs {} hops; at most {} are supported",
+            halo_hops,
+            ring_joint::SlidingQWorkPlan::max_halo_hops);
     }
 
     if (args.circular_kv_cache) {
