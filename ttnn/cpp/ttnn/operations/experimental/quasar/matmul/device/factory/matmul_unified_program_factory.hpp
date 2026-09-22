@@ -19,15 +19,6 @@ namespace ttnn::prim::qsr {
 // MatmulUnifiedProgramConfig plus the operand shapes. One function computes it so the three can never
 // disagree about which core owns which piece of C or how big the buffers are. Every constraint of the
 // config is checked in that function with TT_FATAL, so calling it is the config check.
-//
-// Vocabulary (classic GEMM, all sizes in 32x32 tiles): C[M x N] = A[M x K] x B[K x N], per batch.
-//   C slice     the C_slice_M_tiles x C_slice_N_tiles tiles of C a core produces in one go: the
-//                L1-fittable piece of the core's output region. Normally the region is one C slice; a large
-//                region is produced as several consecutive C slices (across N, then down M). Every core
-//                produces its C slices for every batch
-//   subblock     the subblock_M_tiles x subblock_N_tiles tiles of a C slice accumulated in DST at once (one
-//                matmul_block call per K tile); "block" means this and nothing else
-//   K chunk  K_chunk_tiles of the inner dimension; one A slice + one B slice per K chunk
 struct UnifiedMatmulPlan {
     uint32_t M_tiles = 0;
     uint32_t K_tiles = 0;

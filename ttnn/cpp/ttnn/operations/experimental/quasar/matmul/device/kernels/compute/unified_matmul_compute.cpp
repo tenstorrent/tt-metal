@@ -2,26 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul compute kernel: C = A x B for one cluster, as a classic blocked GEMM.
+// Unified matmul compute kernel: produces num_C_slices C slices per batch, position-agnostic. Per K
+// chunk the reader delivers one A slice ([C_slice_M_tiles][K_chunk_tiles] tiles) and one B slice
+// ([K_chunk_tiles][C_slice_N_tiles] tiles), multiplied one subblock (what DST holds) at a time.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N], batch_size times. A C slice is
-// C_slice_M_tiles x C_slice_N_tiles tiles of C, the L1-fittable piece of the output region this cluster
-// owns; normally the region is one C slice. This kernel produces num_C_slices C slices for every batch and does
-// not care where in C they sit. For every C slice it accumulates over K, K_chunk_tiles per K chunk: the reader
-// delivers one A slice ([C_slice_M_tiles][K_chunk_tiles] tiles) and one B slice
-// ([K_chunk_tiles][C_slice_N_tiles] tiles) per K chunk, and the MATH engine multiplies them one subblock
-// (subblock_M_tiles x subblock_N_tiles C tiles, the amount DST holds) at a time.
-//
-// Between K chunks the running sums have to leave DST. Default: they are packed into the C_partials
-// and copied back into DST at the start of the next K chunk (spill / reload). With packer_l1_acc the packer
-// adds DST onto the partials already in L1 instead, so only the last K chunk reloads. The last K chunk packs
-// the finished subblocks into the C_slice for the writer.
-//
-// Loop order matches the reader and the writer: batch, MN chunk (which C slice), K chunk, subblocks (m_tile, n_tile)
-// row-major over the C slice, k_tile within the K chunk. Runtime args: num_C_slices. Compile-time args:
-// batch_size, K_chunk_tiles, num_K_chunks, C_slice_M_tiles, C_slice_N_tiles, subblock_M_tiles,
-// subblock_N_tiles, packer_l1_acc, partials_format_differs (C_partials and C_slice hold different formats,
-// so the packer must be reconfigured when switching between them).
+// Between K chunks the running sums leave DST: packed into C_partials and reloaded at the start of the
+// next K chunk (spill / reload), or with packer_l1_acc the packer adds DST onto the partials in L1 and
+// only the last K chunk reloads. The last K chunk packs the finished subblocks into C_slice for the
+// writer. Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks row-major
+// over the C slice, k_tile within the K chunk.
 
 #include <cstdint>
 

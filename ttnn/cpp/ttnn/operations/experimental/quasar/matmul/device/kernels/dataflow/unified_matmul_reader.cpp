@@ -2,24 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul reader: streams the A and B slices for this cluster's C slices.
-//
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N], batch_size times. A C slice is the
-// C_slice_M_tiles x C_slice_N_tiles tiles of C at origin (C_slice_first_M_tile, C_slice_first_N_tile). This cluster
-// owns num_C_slices consecutive C slices of the row-major walk over C (across N, then down M) starting at
-// (C_slice_first_M_tile, C_slice_first_N_tile) as passed by the host, and produces them for every batch. For each
-// batch, C slice and K chunk the reader pushes
+// Unified matmul reader. For each batch, C slice and K chunk it pushes
 //   - one A slice: the C slice's rows of A, K_chunk_tiles wide    -> [C_slice_M_tiles][K_chunk_tiles]
 //   - one B slice: the C slice's columns of B, K_chunk_tiles tall -> [K_chunk_tiles][C_slice_N_tiles]
-// both row-major in tiles, which is the layout the compute kernel indexes. Loop order (batch, MN chunk,
-// K chunk) matches it.
+// both row-major in tiles, the layout the compute kernel indexes. Loop order (batch, MN chunk, K chunk)
+// matches it.
 //
-// Edge C slices: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only reaches
-// C tiles the writer drops (a valid C tile uses valid A rows and valid B columns only). When K is not a
-// multiple of the tile dim, the padding columns of A's last K tile are zeroed so they contribute nothing.
-//
-// A and B are addressed by tile index through the tensor accessor (page id == row-major tile index within
-// the tensor), so interleaved, L1-sharded and DRAM-sharded inputs are one code path.
+// Edge C slices: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only
+// reaches C tiles the writer drops. When K is not a tile multiple, the padding columns of A's last K
+// tile are zeroed so they contribute nothing. A and B are addressed by tile index through the tensor
+// accessor, so interleaved, L1-sharded and DRAM-sharded inputs are one code path.
 
 #include <stdint.h>
 

@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified (placement-first) matmul factory: stage A of the Quasar-native matmul (GH#41910).
-//
-// One Metal 2.0 program for every placement. The config names the cores and the C slice per core; this
-// file turns that into a C slice assignment, four DFB rings (A slice, B slice, C slice, C partials),
-// one reader, one compute kernel and one writer. Nothing here depends on how the operands are laid out in
-// memory: the kernels address tiles by tile index through the tensor accessor.
+// Unified (placement-first) matmul factory (GH#41910): one Metal 2.0 program for every placement.
+// The config names the cores and the C slice per core; this file turns that into a C slice assignment,
+// four DFB rings (A slice, B slice, C slice, C partials), one reader, one compute kernel and one
+// writer. Nothing here depends on operand memory layout: the kernels address tiles by tile index
+// through the tensor accessor.
 
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_unified_program_factory.hpp"
 

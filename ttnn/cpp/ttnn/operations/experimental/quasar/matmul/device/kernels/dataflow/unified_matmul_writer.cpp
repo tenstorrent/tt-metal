@@ -2,18 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul writer: stores this cluster's finished C slices.
-//
-// GEMM view, all sizes in 32x32 tiles: C[M x N], batch_size times. A C slice is the C_slice_M_tiles x
-// C_slice_N_tiles tiles of C at origin (C_slice_first_M_tile, C_slice_first_N_tile). This cluster owns num_C_slices
-// consecutive C slices of the row-major walk over C (across N, then down M) starting at
-// (C_slice_first_M_tile, C_slice_first_N_tile) as passed by the host, and writes them for every batch, exactly as the
-// reader walks them.
-//
-// The compute kernel packs a C slice one subblock (subblock_M_tiles x subblock_N_tiles tiles, what DST holds)
-// at a time, subblocks in row-major order over the C slice and tiles in row-major order within a subblock.
-// This writer mirrors that order, maps every tile back to its position in C and writes it by tile index
-// through the tensor accessor. Tiles past M_tiles / N_tiles (edge C slices) are popped but not written.
+// Unified matmul writer. The compute kernel packs a C slice one subblock at a time, subblocks
+// row-major over the C slice and tiles row-major within a subblock; this writer mirrors that order,
+// maps every tile back to its position in C and writes it by tile index through the tensor accessor.
+// Tiles past M_tiles / N_tiles (edge C slices) are popped but not written.
 
 #include <stdint.h>
 
