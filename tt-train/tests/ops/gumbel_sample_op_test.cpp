@@ -10,11 +10,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
+#include <xtensor/misc/xsort.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -245,18 +245,20 @@ WinnerLogits make_winner_logits(
     return out;
 }
 
-// Exact CPU reference for GREEDY (temperature 0) sampling: argmax over (logits - mask) at each
-// selected row, strict greater so ties keep the lowest column -- the same tie-break the writer's
-// scan and merge use. Exact on FLOAT32 device inputs: greedy applies no scaling and no noise, an
-// absent (or zero) mask column leaves the logit bit-identical, and a banned column's fp32 subtract
-// rounds the same way on host and device -- so the two argmaxes see the same values.
+// Exact CPU reference for GREEDY (temperature 0) sampling: xt::argmax over (logits - mask) at each
+// selected row. TIE-BREAK CONTRACT: axis-less xt::argmax is std::max_element over the row
+// (xsort.hpp), so ties keep the FIRST occurrence -- the lowest column index -- which is exactly the
+// tie-break the writer's scan and merge implement (strict greater, columns in increasing order),
+// itself chosen to match ttnn::argmax. Exact on FLOAT32 device inputs: greedy applies no scaling
+// and no noise, an absent (or zero) mask column leaves the logit bit-identical, and a banned
+// column's fp32 subtract rounds the same way on host and device -- so the two argmaxes see the
+// same values.
 std::vector<uint32_t> greedy_reference(
     const xt::xarray<float>& logits,
     const std::optional<xt::xarray<float>>& mask,
     const std::optional<std::vector<uint32_t>>& positions) {
     const auto batch = static_cast<uint32_t>(logits.shape(0));
     const auto tokens = static_cast<uint32_t>(logits.shape(2));
-    const auto vocab = static_cast<uint32_t>(logits.shape(3));
     std::vector<uint32_t> expected;
     expected.reserve(positions.has_value() ? batch : static_cast<size_t>(batch) * tokens);
     for (uint32_t b = 0; b < batch; ++b) {
@@ -265,16 +267,11 @@ std::vector<uint32_t> greedy_reference(
         const uint32_t first_token = positions.has_value() ? (*positions)[b] : 0U;
         const uint32_t last_token = positions.has_value() ? first_token + 1U : tokens;
         for (uint32_t t = first_token; t < last_token; ++t) {
-            uint32_t best = 0U;
-            float best_score = -std::numeric_limits<float>::infinity();
-            for (uint32_t v = 0; v < vocab; ++v) {
-                const float score = logits(b, 0, t, v) - (mask.has_value() ? (*mask)(mask_row, 0, 0, v) : 0.0F);
-                if (score > best_score) {
-                    best_score = score;
-                    best = v;
-                }
+            xt::xarray<float> scores = xt::view(logits, b, 0, t, xt::all());
+            if (mask.has_value()) {
+                scores -= xt::view(*mask, mask_row, 0, 0, xt::all());
             }
-            expected.push_back(best);
+            expected.push_back(static_cast<uint32_t>(xt::argmax(scores)()));
         }
     }
     return expected;
