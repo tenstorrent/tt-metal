@@ -250,24 +250,9 @@ UnifiedMatmulPlan plan_unified_matmul(
         grid.y);
     plan.row_major_cores = config.row_major_cores;
     const std::vector<CoreCoord> all_cores = corerange_to_cores(config.cores, std::nullopt, config.row_major_cores);
-    // Each active core takes a contiguous run of the walk, the first (C_slices_per_batch % num_active) cores
-    // one C slice longer. A core's start is expressed in tile coordinates so the kernels only ever step it by
-    // C_slice_M_tiles / C_slice_N_tiles.
     const uint32_t num_active = std::min<uint32_t>(all_cores.size(), plan.C_slices_per_batch);
     plan.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
-    const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / num_active;
-    const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active;
-    plan.C_slice_first_M_tile.resize(num_active);
-    plan.C_slice_first_N_tile.resize(num_active);
-    plan.num_C_slices.resize(num_active);
-    uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
-    for (uint32_t core = 0; core < num_active; ++core) {
-        plan.num_C_slices[core] = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
-        plan.C_slice_first_M_tile[core] = (next_C_slice / C_slices_across_N) * plan.C_slice_M_tiles;
-        plan.C_slice_first_N_tile[core] = (next_C_slice % C_slices_across_N) * plan.C_slice_N_tiles;
-        next_C_slice += plan.num_C_slices[core];
-    }
-    plan.max_C_slices_per_core = plan.num_C_slices.front();
+    plan.max_C_slices_per_core = tt::div_up(plan.C_slices_per_batch, num_active);
 
     // ---- Subblock: the C slice's tiles accumulated in DST at once ----
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
@@ -683,18 +668,27 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     }};
 
     // ---- Per-core runtime args: where each core's run of C slices starts and how long it is ----
+    // Each active core takes a contiguous run of the walk, the first (C_slices_per_batch % cores) cores
+    // one C slice longer. A core's start is in tile coordinates so the kernels only ever step it by
+    // C_slice_M_tiles / C_slice_N_tiles.
     ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER_KERNEL};
     ProgramRunArgs::KernelRunArgs compute_run_args{.kernel = COMPUTE_KERNEL};
     ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER_KERNEL};
-    for (uint32_t core = 0; core < plan.cores.size(); ++core) {
+    const uint32_t num_active_cores = plan.cores.size();
+    const uint32_t C_slices_across_N = tt::div_up(plan.N_tiles, plan.C_slice_N_tiles);
+    const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / num_active_cores;
+    const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active_cores;
+    uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
+    for (uint32_t core = 0; core < num_active_cores; ++core) {
+        const uint32_t num_C_slices = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
         const std::initializer_list<std::pair<std::string, uint32_t>> run_start = {
-            {"C_slice_first_M_tile", plan.C_slice_first_M_tile[core]},
-            {"C_slice_first_N_tile", plan.C_slice_first_N_tile[core]},
-            {"num_C_slices", plan.num_C_slices[core]}};
+            {"C_slice_first_M_tile", (next_C_slice / C_slices_across_N) * plan.C_slice_M_tiles},
+            {"C_slice_first_N_tile", (next_C_slice % C_slices_across_N) * plan.C_slice_N_tiles},
+            {"num_C_slices", num_C_slices}};
+        next_C_slice += num_C_slices;
         AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, plan.cores[core], run_start);
         AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, plan.cores[core], run_start);
-        AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, plan.cores[core], {{"num_C_slices", plan.num_C_slices[core]}});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, plan.cores[core], {{"num_C_slices", num_C_slices}});
     }
 
     ProgramSpec spec{
