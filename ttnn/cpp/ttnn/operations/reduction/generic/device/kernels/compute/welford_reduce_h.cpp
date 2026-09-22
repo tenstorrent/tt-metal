@@ -76,8 +76,10 @@ void kernel_main() {
         copy_init(dfb::in);
         tile_regs_acquire();
         if constexpr (materialize_padding) {
-            // Tile-wide SFPU operations read physical DST, not its lazy zero flags.
-            // Clear before statistics initialise their live LREG accumulators.
+            // The variance finaliser writes only the result rows. sqrt_tile
+            // and the optional scalar multiply read every physical DST row,
+            // ignoring lazy zero flags, so their padding must be cleared too.
+            // fill_tile uses LREGs: clear before statistics initialise theirs.
             fill_tile_init();
             fill_tile(var_dst, 0.0f);
         }
