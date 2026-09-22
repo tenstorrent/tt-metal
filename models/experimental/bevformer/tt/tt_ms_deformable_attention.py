@@ -203,14 +203,18 @@ class TTMSDeformableAttention:
         """
         sampling_offsets = getattr(self.params, "sampling_offsets", None)
         if sampling_offsets is None:
-            return None, None
+            raise ValueError(
+                "TTMSDeformableAttention requires params.sampling_offsets to fold the offset "
+                "normalizer; got params=None or missing sampling_offsets."
+            )
 
         weight = sampling_offsets.weight
         out_features = weight.shape[-1]
         expected = self.num_heads * self.num_levels * self.num_points * 2
         # Asserted against the weight's real width: a config/checkpoint mismatch would
         # otherwise scale the wrong channels silently.
-        assert out_features == expected, f"sampling_offsets width {out_features} != {expected}"
+        if out_features != expected:
+            raise ValueError(f"sampling_offsets width {out_features} != {expected}")
 
         scale = torch.ones(self.num_heads, self.num_levels, self.num_points, 2, dtype=torch.float32)
         for level, (h, w) in enumerate(spatial_shapes.tolist()):
