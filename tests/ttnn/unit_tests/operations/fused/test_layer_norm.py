@@ -1020,7 +1020,7 @@ def test_layer_norm_tile_backend_does_not_require_reciprocal(device):
     assert_output_accuracy(reference, ttnn.to_torch(output))
 
 
-@run_for_blackhole("Blackhole uses two-pass statistics for wide fused BFP8 LayerNorm")
+@run_for_wormhole_b0_or_blackhole()
 def test_layer_norm_bfp8_residual_affine_two_pass(device):
     torch.manual_seed(20260824)
     shape = (128, 2880)
@@ -1060,11 +1060,25 @@ def test_layer_norm_bfp8_residual_affine_two_pass(device):
     )
 
 
-@run_for_blackhole("Blackhole replays retained residual rows and multicasts affine parameters")
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("multicast", [False, True], ids=["replay", "affine_multicast"])
-def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_program_cache, multicast):
+@pytest.mark.parametrize("width", [487, 2880, 3217])
+@pytest.mark.parametrize("offset", [0.0, 1_000_000.0])
+def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_program_cache, multicast, width, offset):
     torch.manual_seed(20260824)
-    h, w = 1024, 2880
+
+    def check_output(reference, output):
+        if offset:
+            # Match the large-offset FP32 residual regressions; the ordinary
+            # accuracy helper's tighter absolute bound assumes U[0, 1) inputs.
+            assert_numeric_metrics(
+                reference, output, rtol=0, atol=0.025, frobenius_threshold=0.005, pcc_threshold=0.99999
+            )
+        else:
+            assert_output_accuracy(reference, output, use_welford=True)
+
+    # Sixteen tile rows stay below the 20-core multicast crossover.
+    h, w = 512, width
     if multicast:
         grid = device.compute_with_storage_grid_size()
         # Reach the 20-core crossover with a complete rectangle in row-wise allocation order.
@@ -1072,8 +1086,10 @@ def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_pr
         if core_rows > grid.y:
             pytest.skip("Affine multicast requires at least 20 compute cores")
         h = 32 * grid.x * core_rows
-    torch_input = torch.rand((h, w), dtype=torch.float32)
-    torch_residual = torch.rand((h, w), dtype=torch.float32)
+    scale = 128.0 if offset else 1.0
+    torch_input = offset + scale * torch.rand((h, w), dtype=torch.float32)
+    torch_residual = offset + scale * torch.rand((h, w), dtype=torch.float32)
+    reference_input = torch_input.double() + torch_residual.double()
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
     reciprocal = create_recip_tensor(device, w, use_welford=True)
@@ -1091,9 +1107,9 @@ def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_pr
         recip_tensor=reciprocal,
     )
     first_reference = torch.nn.functional.layer_norm(
-        torch_input + torch_residual, [w], weight=first_torch_weight, bias=first_torch_bias
+        reference_input, [w], weight=first_torch_weight.double(), bias=first_torch_bias.double()
     )
-    assert_output_accuracy(first_reference, ttnn.to_torch(first_output), use_welford=True)
+    check_output(first_reference, ttnn.to_torch(first_output))
     cache_entries = device.num_program_cache_entries()
 
     torch_weight = torch.rand((w,), dtype=torch.float32) + 0.5
@@ -1110,12 +1126,12 @@ def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_pr
     )
 
     reference = torch.nn.functional.layer_norm(
-        torch_input + torch_residual,
+        reference_input,
         normalized_shape=[w],
-        weight=torch_weight,
-        bias=torch_bias,
+        weight=torch_weight.double(),
+        bias=torch_bias.double(),
     )
-    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+    check_output(reference, ttnn.to_torch(output))
     assert device.num_program_cache_entries() == cache_entries
 
 

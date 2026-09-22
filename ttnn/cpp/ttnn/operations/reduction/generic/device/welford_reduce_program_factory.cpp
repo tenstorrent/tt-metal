@@ -215,9 +215,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
 
     const auto reduce_batch_size = plan.reduce_batch_size;
     const auto use_sfpu_leaf_combine = plan.use_sfpu_leaf_combine;
-    // Complete-row compact stores permit overlapping MATH/PACK on Blackhole.
-    // Keep Wormhole single-buffered until equivalent hardware validation.
-    const bool compact_hw_single_buffer = use_sfpu_leaf_combine && device->arch() != tt::ARCH::BLACKHOLE;
+    // A single column must wait for the writer's combined result: there is no next column to overlap.
+    // Retain Wormhole's lower-overhead single-buffered path here; batch/multi-column reductions
+    // use both DST sections now that the compact finaliser writes complete rows.
+    const bool compact_hw_single_buffer =
+        use_sfpu_leaf_combine && device->arch() == tt::ARCH::WORMHOLE_B0 && Wt == 1 && reduce_batch_size == 1;
     const auto num_cores = plan.num_cores;
     const auto& all_cores = plan.all_cores;
     const auto& core_group_1 = plan.core_group_1;

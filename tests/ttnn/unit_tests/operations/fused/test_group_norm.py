@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole, is_wormhole_b0
+from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole, is_wormhole_b0
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -185,7 +185,7 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
-@run_for_blackhole("low-variance stable-statistics regression is calibrated on Blackhole")
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("base, amplitude", [(1.0, 0.01), (10.0, 0.05)])
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 def test_group_norm_stable_stats_translation_stability(device, base, amplitude):

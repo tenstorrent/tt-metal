@@ -385,8 +385,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     }
 
     // Retained residual rows require the finaliser's offset-aware FP32 input alias.
-    if (device->arch() == tt::ARCH::BLACKHOLE && fp32_sfpu_finalizer && plan.large_tensor && residual.has_value() &&
-        gamma.has_value() && beta.has_value()) {
+    if (fp32_sfpu_finalizer && plan.large_tensor && residual.has_value() && gamma.has_value() && beta.has_value()) {
         const std::uint32_t full_row_tiles = tt::round_up(width_tiles, block_size);
         auto replay_footprint = footprint(true);
         replay_footprint.residual_values = static_cast<std::uint64_t>(full_row_tiles) * intermediate_tile_size;

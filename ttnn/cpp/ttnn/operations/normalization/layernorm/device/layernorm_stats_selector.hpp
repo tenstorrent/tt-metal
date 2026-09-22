@@ -87,6 +87,9 @@ constexpr StatisticsBackend select_interleaved_statistics_backend(
     if (input_is_row_major) {
         return StatisticsBackend::TILE_REDUCTION;
     }
+    // Wormhole BF16/BFP8 interleaved measurements favour two-pass or are neutral
+    // across plain, partial/full affine and residual cases. Its crossover does
+    // not match Blackhole's; do not share the calibrated tile selector below.
     if (arch != tt::ARCH::BLACKHOLE) {
         return StatisticsBackend::SFPU_TWO_PASS;
     }

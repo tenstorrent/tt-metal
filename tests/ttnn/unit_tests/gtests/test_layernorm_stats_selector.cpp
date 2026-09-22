@@ -253,4 +253,24 @@ TEST(LayerNormStatsSelector, ShardedArchitectureAndPrecisionPolicy) {
         StatisticsBackend::TILE_REDUCTION);
 }
 
+TEST(LayerNormStatsSelector, WormholeRetainsInterleavedTwoPassForLowerPrecision) {
+    auto params = default_params();
+    params.padded_width = 256;
+    for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b}) {
+        params.input_format = format;
+        for (bool residual : {false, true}) {
+            params.fuse_pre_add = residual;
+            for (bool gamma : {false, true}) {
+                params.has_gamma = gamma;
+                for (bool beta : {false, true}) {
+                    params.has_beta = beta;
+                    EXPECT_EQ(
+                        select_interleaved_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, true, params),
+                        StatisticsBackend::SFPU_TWO_PASS);
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
