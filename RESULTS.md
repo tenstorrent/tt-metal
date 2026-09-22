@@ -29,17 +29,17 @@ Independently corroborated on g03blx04, which measured 15.2 s for the same 8-for
 
 | Clip | Frames | Canvas | Fwd | Padded | Encoder | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | 9.4 | 3.6 | 1.2 | 14.5 | 2.8 | 37.53 | bh-glx-120-b09u02 |
-| 10 s | 243 | 1344x768 | 8 | 73472 | 0.4 | 23.1 | 7.3 | 1.3 | 32.1 | 3.2 | 36.94 | bh-glx-120-b09u02 |
-| 15 s | 362 | 1344x768 | 8 | 109312 | 0.4 | 43.7 | 11.3 | 1.5 | 56.9 | 3.8 | 35.19 | bh-glx-120-b09u02 |
+| 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | 9.4 | 3.6 | 1.2 | 14.5 | 2.80 | 37.53 | bh-glx-120-b09u02 |
+| 10 s | 243 | 1344x768 | 8 | 73472 | 0.4 | 23.1 | 7.3 | 1.3 | 32.1 | 3.17 | 36.94 | bh-glx-120-b09u02 |
+| 15 s | 362 | 1344x768 | 8 | 109312 | 0.4 | 43.7 | 11.3 | 1.5 | 56.9 | 3.77 | 35.19 | bh-glx-120-b09u02 |
 
 ### fl2va
 
 | Clip | Frames | Canvas | Fwd | Padded | Encoder | Keyframe encode | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 5 s | 124 | 1344x768 | 8 | 41984 | 1.9 | 1.5 | 10.8 | 3.4 | 1.2 | 18.7 | 3.6 | 34.12 | bh-glx-120-b09u02 |
-| 10 s | 243 | 1344x768 | 8 | 77568 | 2.0 | 1.3 | 25.0 | 6.6 | 1.2 | 36.1 | 3.6 | 34.24 | bh-glx-120-b09u02 |
-| 15 s | 362 | 1344x768 | 8 | 113152 | 1.9 | 1.5 | 47.4 | 9.6 | 1.5 | 61.9 | 4.1 | 34.74 | bh-glx-120-b09u02 |
+| 5 s | 124 | 1344x768 | 8 | 41984 | 1.9 | 1.5 | 10.8 | 3.4 | 1.2 | 18.7 | 3.62 | 34.12 | bh-glx-120-b09u02 |
+| 10 s | 243 | 1344x768 | 8 | 77568 | 2.0 | 1.3 | 25.0 | 6.6 | 1.2 | 36.1 | 3.56 | 34.24 | bh-glx-120-b09u02 |
+| 15 s | 362 | 1344x768 | 8 | 113152 | 1.9 | 1.5 | 47.4 | 9.6 | 1.5 | 61.9 | 4.10 | 34.74 | bh-glx-120-b09u02 |
 
 ### ref2va
 
@@ -87,10 +87,9 @@ ref2va -- at `padded_len` 89856 the SDPA circular buffers on 11x10 reach 1647616
 VSA stages, worth roughly 8 % more cores. Treat cross-row comparisons spanning that boundary as
 approximate until the early points are re-measured.
 
-### ref2va does not run on this build
+### ref2va: why it was blocked, and the fix
 
-All three `ref2va` cells are unmeasured because the mode fails at program compile, before any
-device work:
+`ref2va` failed at program compile, before any device work, on every node tried:
 
 ```
 Statically allocated circular buffers on core range [0-0 - 10-9]
@@ -100,23 +99,24 @@ grow to 1647616 B which is beyond max L1 size of 1572864 B
   conv_minimax_h3.py:359  forward
 ```
 
-It is the video VAE's taps=3 encoder conv3d, which only `ref2va` reaches, 4.75 % over L1.
+The conv is the video VAE encoder's ResNet `conv1`, fp32, blocking
+`C_in=64 C_out=128 T=1 H=16 W=2` -- 73 KB over a 1.5 MB budget. The cause is that the conv3d
+blocking tables are tuned at **one** temporal tap; three taps widen the input's T extent without
+changing the config, and the op sizes its circular buffers from both. Only `ref2va` reaches the
+three-tap encoder, which is why the other two modes never hit it.
 
-This is **not specific to the HyperFlow sweep**. The pre-existing, calibrated
+Halving `H_out_block` at more than one tap clears the compile (verified: zero overflow, the run
+proceeds into weight loading). The fix is scoped to the multi-tap encoder -- the decoder builds
+its convs from a different class, and single-tap callers keep their tuned blocking -- so `t2va`
+and `fl2va` timings are unaffected.
+
+This was **never specific to the HyperFlow sweep**: the pre-existing, calibrated
 `test_pipeline_ref2va_minimax_h3.py::test_ref2va_end_to_end` -- no adapter, no two-time schedule --
-fails with the byte-identical size on the same build. That gate carries measured `padded_len` and
-per-stage timings in its own comments, so `ref2va` ran on an earlier build: this is a regression,
-not a mode that never worked.
-
-Ruled out by experiment, not inference:
-
-* **Core grid.** The blocking is grid-independent -- forcing 12x10 instead of 11x10 produced the
-  same 1647616 B to the byte.
-* **The rail-cap commit.** The same failure occurs with it reverted.
-* **A missing blocking entry.** The exact `_BLOCKINGS` lookup hits; neither fallback warning fires.
-
-The remaining suspects are the conv3d blocking chosen for this shape and the op's own L1
-accounting, which needs a bisect against the build that produced the gate's recorded numbers.
+failed with the byte-identical size. That gate records its own `padded_len` and per-stage timings,
+so `ref2va` ran on an earlier build; this is a regression that the tap-scoped cap works around
+rather than a mode that never worked. Ruled out by experiment, not inference: the core grid
+(forcing 12x10 produced the same byte count), the rail-cap commit (same failure reverted), and a
+missing blocking entry (the exact lookup hits).
 
 ### The fl2va rows do not share a keyframe
 

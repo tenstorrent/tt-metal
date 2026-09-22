@@ -59,7 +59,9 @@ def table(records: list[dict]) -> str:
                         str(r["padded_len"]),
                         *[f"{r['timings_s'][s]:.1f}" if s in r["timings_s"] else "--" for s in stages],
                         f"{r['total_compute_s']:.1f}",
-                        f"{r['s_per_video_second']:.1f}",
+                        # Three significant figures: at two, 5 s and 10 s both print 3.6 and the
+                        # ratio's reversal between them disappears into the rounding.
+                        f"{r['s_per_video_second']:.2f}",
                         f"{r['clip']['mean']:.2f}",
                         r.get("node", "?"),
                     ]
