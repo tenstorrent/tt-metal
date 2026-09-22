@@ -9,6 +9,7 @@ models/tt_dit/
 ├── models/
 │   ├── MiniMaxH3.md                  # this file
 │   ├── minimax_h3_wormhole/          # Wormhole Galaxy perf: baseline + breakdown (README.md), per-op docs (sdpa, ff1, to_qkv, to_out, ff2)
+│   ├── minimax_h3_blackhole/         # Blackhole Galaxy perf: AGMM fused-vs-unfused study plan (README.md) and results
 │   ├── transformers/minimax_h3/      # denoising transformer (block, attention, RoPE)
 │   ├── vae/minimax_h3/               # video VAE (AutoencoderKLMiniMaxH3)
 │   └── audio_vae/minimax_h3/         # audio VAE (AutoencoderKLMiniMaxH3Audio)
@@ -324,7 +325,9 @@ The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), mat
 Those numbers are Blackhole. For the Wormhole Galaxy port -- the full aspect x duration sweep, the
 DiT-FSDP memory fix it needs, and its open issues -- see
 [`minimax_h3_wormhole/README.md`](minimax_h3_wormhole/README.md) (baseline, block breakdown and the
-per-op optimization docs in that directory).
+per-op optimization docs in that directory). The Wormhole AGMM fused-vs-unfused blocking study
+([`minimax_h3_wormhole/agmm_fused_vs_unfused.md`](minimax_h3_wormhole/agmm_fused_vs_unfused.md)) has a Blackhole
+counterpart in progress: plan and results in [`minimax_h3_blackhole/`](minimax_h3_blackhole/README.md).
 
 Measured warm (the MEASUREMENT block in `test_performance_minimax_h3.py`), 768P/15s, 362 frames,
 49 forwards:
