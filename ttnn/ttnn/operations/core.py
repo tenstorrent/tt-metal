@@ -705,7 +705,13 @@ def as_tensor(
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
         ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
         if device is not None:
-            tensor = tensor.to(device, memory_config)
+            # Place the freshly dumped tensor exactly as a later warm boot will (the load path below) instead of
+            # `tensor.to(device, memory_config)`: a cold boot then yields the same device tensor as every warm boot
+            # and takes the same device path. Observed 2026-09-22 on a two-rank MPI job whose ranks run independent
+            # (1,1) meshes (a prefill/decode pair): the `.to()` upload of the cold path took part in a cross-rank
+            # barrier per converted tensor while the warm load path never did, so a rank with a cold cache and a
+            # rank with a warm cache paired their barriers with unrelated ones and the job wedged.
+            tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
         return tensor
 
     cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.tensorbin"
