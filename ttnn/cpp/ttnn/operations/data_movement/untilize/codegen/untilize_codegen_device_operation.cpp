@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "untilize_codegen_supported.hpp"
@@ -35,7 +36,7 @@ UntilizeCodegenDeviceOperation::spec_return_value_t UntilizeCodegenDeviceOperati
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
     const auto& input_tensor = tensor_args.input;
-    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+    DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor.dtype());
 
     const auto& logical_shape = input_tensor.logical_shape();
     const bool tile_aligned =
