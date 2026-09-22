@@ -306,12 +306,15 @@ UnifiedMatmulPlan plan_unified_matmul(
         candidate.C_slice_N_padded_tiles = tt::round_up(plan.C_slice_N_tiles, subblock_N_tiles);
         const bool M_padded = candidate.C_slice_M_padded_tiles != plan.C_slice_M_tiles;
         const bool N_padded = candidate.C_slice_N_padded_tiles != plan.C_slice_N_tiles;
-        // A borrowed shard holds only the true slice dims, so padding a borrowable operand's dim would
-        // void its borrow: never trade a borrow for subblock volume. (C never constrains this: its
-        // borrow needs subblock_N == C_slice_N, and only the sharded-output "if" below produces that.)
+        // A borrowed shard holds only the true slice dims, so a candidate that voids an achievable
+        // borrow is rejected outright: never trade a borrow for subblock volume. C's borrow needs
+        // subblocks spanning the C slice width, achievable only when that width fits DST.
+        const bool C_borrow_achievable = C_shard_borrowable && plan.C_slice_N_tiles <= dst_capacity_tiles;
+        const bool C_borrow_kept = subblock_N_tiles == plan.C_slice_N_tiles && !M_padded;
         const bool voids_A_borrow = A_shard_borrowable && M_padded;
         const bool voids_B_borrow = B_shard_borrowable && N_padded;
-        if (voids_A_borrow || voids_B_borrow) {
+        const bool voids_C_borrow = C_borrow_achievable && !C_borrow_kept;
+        if (voids_A_borrow || voids_B_borrow || voids_C_borrow) {
             return false;
         }
         return size_dfbs(
@@ -321,29 +324,21 @@ UnifiedMatmulPlan plan_unified_matmul(
                    packer_l1_acc,
                    /*A_borrowable=*/A_shard_borrowable,
                    /*B_borrowable=*/B_shard_borrowable,
-                   /*C_borrowable=*/C_shard_borrowable && !M_padded && subblock_N_tiles == plan.C_slice_N_tiles)
+                   /*C_borrowable=*/C_shard_borrowable && C_borrow_kept)
             .fits(l1_budget);
     };
 
-    if (config.subblock_M_tiles == 0 && config.subblock_N_tiles == 0) {
-        // A sharded C is packed straight into the shard only when subblocks span the C slice width and
-        // tile its height exactly; prefer that when it fits DST.
-        if (attributes.output_mem_config.is_sharded() && plan.C_slice_N_tiles <= dst_capacity_tiles) {
-            plan.subblock_N_tiles = plan.C_slice_N_tiles;
-            plan.subblock_M_tiles = std::min(dst_capacity_tiles / plan.C_slice_N_tiles, plan.C_slice_M_tiles);
-            while (plan.C_slice_M_tiles % plan.subblock_M_tiles != 0) {
-                --plan.subblock_M_tiles;
-            }
-        } else {
-            std::tie(plan.subblock_M_tiles, plan.subblock_N_tiles) =
-                maximize_subblock_size(plan.C_slice_M_tiles, plan.C_slice_N_tiles, dst_capacity_tiles, subblock_viable);
-        }
-    } else {
-        TT_FATAL(
-            config.subblock_M_tiles > 0 && config.subblock_N_tiles > 0,
-            "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto)");
+    TT_FATAL(
+        (config.subblock_M_tiles == 0) == (config.subblock_N_tiles == 0),
+        "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto), got {}x{}",
+        config.subblock_M_tiles,
+        config.subblock_N_tiles);
+    if (config.subblock_M_tiles != 0) {
         plan.subblock_M_tiles = config.subblock_M_tiles;
         plan.subblock_N_tiles = config.subblock_N_tiles;
+    } else {
+        std::tie(plan.subblock_M_tiles, plan.subblock_N_tiles) =
+            maximize_subblock_size(plan.C_slice_M_tiles, plan.C_slice_N_tiles, dst_capacity_tiles, subblock_viable);
     }
     plan.C_slice_M_padded_tiles = tt::round_up(plan.C_slice_M_tiles, plan.subblock_M_tiles);
     plan.C_slice_N_padded_tiles = tt::round_up(plan.C_slice_N_tiles, plan.subblock_N_tiles);
