@@ -1,6 +1,6 @@
 # Resumable experiment checkpoint
 
-Updated 2026-09-22 12:47 UTC. **Incomplete and not hardware-validated.**
+Updated 2026-09-22 12:58 UTC. **Incomplete and not hardware-validated.**
 
 - Base: `b8915544692d8f9feb2c890afbc2f22791560cd2` (origin/main at setup).
 - Implementation HEAD: `1222558c5f1d52491dce2b23f4819727068445be`; subsequent
@@ -48,7 +48,15 @@ changed device C++ must compile and execute on hardware before qualification.
   cache misses forbidden (cache entries 2 → 2). This is not numerical evidence.
 - Compiler telemetry: SwiGLU code/config 6,144 bytes; MLP 16,016 bytes, including
   14,768 bytes of kernel text. See `compile-mock-reuse.log` and `footprint.json`.
-- Python syntax/help pass; five real-model pytest cases collect. **Not run.**
+- Python syntax/help pass; six real-model pytest cases collect, including
+  focused MLP intermediate outputs and distinct layer-0/layer-31 weight rows.
+  **Hardware assertions have not run.**
+- A CPU-only HF BF16 real-checkpoint reference completed at context 128 with
+  32 predictions. Logits [32,128256] and every layer's K/V [1,8,159,128] are
+  finite; cache lengths grow 128→159. Artifacts: `hf-reference-128/reference.pt`
+  and `.json`; preparation took 139.33 s. This is not TT correctness/performance.
+  Benchmark `--hf-reference` enforces the same teacher stream and adds HF
+  logit/cache comparisons while retaining the selected TT baseline precision.
 - Current-build full connectivity fails: chip 2↔3 has one internal link instead
   of two, missing chip 2 `(0,8)` / chip 3 `(0,3)`. Four-chip ring mesh fails.
 - Isolating chips 0/1 lets topology map but ERISC firmware init times out.
@@ -71,8 +79,8 @@ fusion only**: prefill, normalization, attention/KV, collectives and terminal
 embedding/head/sampling remain native TTNN; no complete decoder/device layer
 loop or vLLM qualification. B1 only. Current Blackhole supports 64 CB indices.
 
-1. Continue independent reference preparation/review while reset approval is
-   pending. Preserve this scope; compiler success does not qualify the body.
+1. Continue independent review while reset approval is pending; the context-128
+   CPU reference is now prepared. Preserve this scope; compiler success does not qualify the body.
 2. After approved recovery and passing health/mesh, run the serial bounded
    `commands/validate-after-recovery.sh`: existing HF layer comparison, both
    fused-layer modes, then full-model baseline/prototype at context 128.

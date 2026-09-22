@@ -24,6 +24,12 @@ import subprocess
 import torch
 
 
+def make_prompt(tokenizer, context):
+    text = "Explain how an operating system shares memory and processor time among several programs. "
+    unit = tokenizer.encode(text, add_special_tokens=False)
+    return ([tokenizer.bos_token_id] + unit * ((context + len(unit) - 1) // len(unit)))[:context]
+
+
 def metrics(actual, expected):
     a, b = actual.float().flatten(), expected.float().flatten()
     if a.shape != b.shape or not (torch.isfinite(a).all() and torch.isfinite(b).all()):
@@ -45,6 +51,9 @@ def parse_args():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reference", type=Path)
+    parser.add_argument(
+        "--hf-reference", type=Path, help="CPU reference.pt; fixes the teacher stream and adds HF accuracy evidence"
+    )
     parser.add_argument("--profile", action="store_true")
     args = parser.parse_args()
     if args.context < 1 or args.tokens < 3 or args.repeats < 1:
@@ -66,6 +75,7 @@ def run(args):
 
     torch.set_num_threads(8)
     args.output.mkdir(parents=True, exist_ok=True)
+    hf_reference = torch.load(args.hf_reference, map_location="cpu", weights_only=True) if args.hf_reference else None
     reference = None
     if args.reference:
         reference = torch.load(args.reference / "evidence.pt", map_location="cpu", weights_only=True)
@@ -103,11 +113,11 @@ def run(args):
         if reference is not None:
             for key in ("precision", "checkpoint_revision", "sampling"):
                 assert evidence[key] == reference[key], f"Unmatched baseline {key}"
-        text = "Explain how an operating system shares memory and processor time among several programs. "
-        unit = generator.tokenizer.encode(text, add_special_tokens=False)
-        prompt = ([generator.tokenizer.bos_token_id] + unit * ((args.context + len(unit) - 1) // len(unit)))[
-            : args.context
-        ]
+        prompt = make_prompt(generator.tokenizer, args.context)
+        if hf_reference is not None:
+            assert hf_reference["prompt"] == prompt
+            assert hf_reference["checkpoint_revision"] == REVISION
+            assert hf_reference["tokens"] == args.tokens and hf_reference["context"] == args.context
         if reference is not None:
             assert prompt == reference["prompt"]
         evidence["prompt"] = prompt
@@ -154,7 +164,12 @@ def run(args):
 
         # Teacher forcing isolates numerical drift from different token paths.
         # Readback is intentionally outside the generation performance evidence.
-        forced = reference["generated_tokens"] if reference is not None else output
+        forced = reference["teacher_tokens"] if reference is not None else output
+        if hf_reference is not None:
+            if reference is not None:
+                assert forced == hf_reference["teacher_tokens"], "TT and HF references must use the same teacher stream"
+            forced = hf_reference["teacher_tokens"]
+        evidence["teacher_tokens"] = forced
         rows = []
         positions = []
 
@@ -173,6 +188,14 @@ def run(args):
             result["teacher_step_metrics"] = [metrics(a, b) for a, b in zip(logits, reference["teacher_logits"])]
             assert result["teacher_logits"]["pcc"] >= 0.999
             assert result["teacher_logits"]["relative_l2"] < 0.03
+
+        if hf_reference is not None:
+            result["hf_logits"] = metrics(logits, hf_reference["teacher_logits"])
+            result["hf_step_metrics"] = [metrics(a, b) for a, b in zip(logits, hf_reference["teacher_logits"])]
+            result["hf_teacher_top1_agreement"] = (
+                (logits.argmax(-1) == hf_reference["teacher_logits"].argmax(-1)).float().mean().item()
+            )
+            assert result["hf_logits"]["pcc"] >= 0.99
 
         # Read only pages touched by this request, but include every layer and
         # TP shard. Slice/readback programs are warmed after releasing traces.
@@ -197,9 +220,23 @@ def run(args):
             for pair in result["teacher_cache_metrics"]:
                 for item in pair:
                     assert item["pcc"] >= 0.999 and item["relative_l2"] < 0.03, item
+        if hf_reference is not None:
+            visible = args.context + args.tokens - 1
+            result["hf_cache_metrics"] = [
+                [
+                    metrics(a.permute(0, 2, 1, 3, 4).reshape(1, 8, -1, 128)[:, :, :visible], b)
+                    for a, b in zip(pair, expected)
+                ]
+                for pair, expected in zip(cache_evidence, hf_reference["teacher_cache"])
+            ]
         torch.save(evidence, args.output / "evidence.pt")
         result["comparison_checks_passed"] = True
         return result
+    except BaseException as error:
+        result["failure"] = f"{type(error).__name__}: {error}"
+        if "teacher_logits" in evidence:
+            torch.save(evidence, args.output / "failure-evidence.pt")
+        raise
     finally:
         # Preserve partial results when a numerical assertion fails.
         (args.output / "result.json").write_text(json.dumps(result, indent=2))

@@ -41,15 +41,33 @@ class FusedMLP:
         self.mesh = layers[0].mesh_device
         if self.mesh.arch() != ttnn.device.Arch.BLACKHOLE or self.mesh.dram_grid_size().x != 8:
             raise ValueError("Fused MLP requires Blackhole with eight DRAM banks")
+        grid = self.mesh.compute_with_storage_grid_size()
+        if grid.x < 8 or grid.y < 4:
+            raise ValueError("Fused MLP requires at least eight columns and four worker rows")
         self.projection_cores = [ttnn.CoreCoord(x, 3) for x in range(8)]
         self.sfpu_cores = ttnn.corerange_to_cores(layers[0].decode_inputs["down"].shard_spec.grid, row_wise=True)
         if len(self.sfpu_cores) != 16 or any(c in self.sfpu_cores for c in self.projection_cores):
             raise ValueError("Projection and sixteen-core down-input grids must be disjoint")
+        down_shard = layers[0].decode_inputs["down"].shard_spec
+        if down_shard.shape != [32, 224] or down_shard.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+            raise ValueError("Expected sixteen row-major down-input shards of shape [32,224]")
         self.projection_grid = _grid(self.projection_cores)
         self.sfpu_grid = _grid(self.sfpu_cores)
         self.all_grid = _grid(self.projection_cores + self.sfpu_cores)
 
         for layer in layers:
+            policy = layer.precision_policy
+            if (
+                policy["accumulation"]["matmul_fp32"]
+                or policy["accumulation"]["math_approx_mode"]
+                or policy["activation_dtype"] != "bfloat16"
+                or policy["activation_output_dtype"] != "bfloat16"
+            ):
+                raise ValueError(
+                    "Fused MLP requires BF16 activations, BF16 destination accumulation and exact math mode"
+                )
+            if layer.decode_inputs["down"] != layers[0].decode_inputs["down"]:
+                raise ValueError("All layers must share the same down-input layout")
             if layer.mesh_device is not self.mesh or layer.decode_workspace.batch != 1:
                 raise ValueError("All layers must share this mesh and a batch-one decode workspace")
             for role, shape, dtype in (
@@ -60,7 +78,12 @@ class FusedMLP:
                 if tuple(weight.shape) != shape or weight.dtype != dtype:
                     raise ValueError(f"Unsupported {role} weight shape/precision")
                 memory = weight.memory_config()
-                if memory.buffer_type != ttnn.BufferType.DRAM or memory.shard_spec.shape != [shape[0], shape[1] // 8]:
+                if (
+                    memory.buffer_type != ttnn.BufferType.DRAM
+                    or memory.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                    or memory.shard_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR
+                    or memory.shard_spec.shape != [shape[0], shape[1] // 8]
+                ):
                     raise ValueError(f"Unsupported {role} DRAM layout")
                 if layer.precision_policy["compute_fidelities"]["decode"][role] != "LoFi":
                     raise ValueError("This body requires the selected LoFi projection policy")

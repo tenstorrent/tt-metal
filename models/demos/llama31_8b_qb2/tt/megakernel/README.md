@@ -31,6 +31,7 @@ that captures triage before terminating a hung process:
 
 ```bash
 pytest -q -s models/demos/llama31_8b_qb2/tests/test_decoder.py -k '1-129'
+pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel_mlp.py
 pytest -q -s models/demos/llama31_8b_qb2/tests/test_megakernel.py
 python -m models.demos.llama31_8b_qb2.tests.benchmark_megakernel \
     --mode baseline --context 128 --output /outside/repo/baseline
@@ -46,6 +47,22 @@ Full-model tests exercise greedy token feedback and teacher-forced logits/KV
 across all layers. The comparison checks matched checkpoint/precision/sampling.
 The reported host generation duration includes enqueue and final readback;
 it is not a device-profiler or vLLM serving measurement.
+
+An optional CPU-only HF reference provides full-model accuracy evidence on a
+fixed teacher stream, in addition to the matched TT fusion comparison:
+
+```bash
+python -m models.demos.llama31_8b_qb2.tests.reference_megakernel \
+    --context 128 --tokens 32 --output /outside/repo/hf-reference
+```
+
+Pass `--hf-reference /outside/repo/hf-reference/reference.pt` to both TT
+benchmark modes. The same prompt and teacher tokens are checked explicitly;
+HF uses BF16 checkpoint/cache precision, so it is an accuracy reference, not
+the matched performance baseline. Logits, predicted tokens and all-layer KV
+are saved outside Git. Failed TT comparisons preserve actual tensors.
+The focused MLP test separately checks packed gate/up, SiLU/product, and down
+outputs with distinct real layer-0/layer-31 weight-table rows and trace replay.
 
 Run profiling in a separate process, without Watcher or serving:
 
