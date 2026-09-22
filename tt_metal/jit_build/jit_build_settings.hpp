@@ -182,6 +182,12 @@ public:
     virtual void process_scratchpad_binding_handles(
         std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
 
+    // PrefetcherPipe binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
+    //  - prefetcher_pipe_id: the program PrefetcherPipe slot the accessor constructs its PrefetcherPipe with
+    virtual void process_prefetcher_pipe_binding_handles(
+        std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const {}
+
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).
     virtual void process_tensor_binding_sequences(

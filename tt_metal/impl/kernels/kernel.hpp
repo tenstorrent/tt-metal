@@ -158,6 +158,15 @@ struct ScratchpadBindingHandle {
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
 };
 
+// Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
+// One accessor names one program PrefetcherPipe slot (dense id the kernel constructs its
+// PrefetcherPipe with); the slot resolves to whichever pipe of the accessor's group is present
+// on the executing node. Emitted as a constexpr token in the `pipe::` namespace.
+struct PrefetcherPipeBindingHandle {
+    std::string accessor_name;
+    uint8_t prefetcher_pipe_id = 0;
+};
+
 // Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).
 struct TensorBindingSequenceHandle {
     std::string sequence_name;
@@ -271,6 +280,16 @@ public:
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
     }
+    // PrefetcherPipe binding handles are set post-construction (before compile: they are part of
+    // the kernel cache key and of kernel_bindings_generated.h).
+    void process_prefetcher_pipe_binding_handles(
+        std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const override;
+    const std::vector<PrefetcherPipeBindingHandle>& prefetcher_pipe_binding_handles() const {
+        return prefetcher_pipe_binding_handles_;
+    }
+    void set_prefetcher_pipe_binding_handles(std::vector<PrefetcherPipeBindingHandle> handles) {
+        prefetcher_pipe_binding_handles_ = std::move(handles);
+    }
     void process_tensor_binding_sequences(
         std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const override;
     void set_tensor_binding_sequences(std::vector<TensorBindingSequenceHandle> sequences) {
@@ -382,6 +401,8 @@ protected:
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
     // Metal 2.0: tensor binding sequences (set post-construction, like scratchpads).
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
+    // Metal 2.0: PrefetcherPipe accessors -> program slot (set post-construction, like scratchpads).
+    std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
