@@ -120,7 +120,7 @@ caller responsibilities, not an implicit host scan.
   and ordinary cached program descriptors.
 - `compute/sdpa_recipe.cpp`: recipe specialization; A reuses the existing
   streaming implementation. B/C/D/E share `streaming/recipe_streaming.hpp`.
-- `streaming/recipe_sfpu.hpp`, `balanced_exp.hpp`, `compensated_*`: selected
+- `streaming/recipe_sfpu.hpp`, `compensated_sfpu.hpp`, `compensated_group.hpp`: selected
   exponential and state arithmetic. Shared FP32 SFPU primitives have independent
   component tests in addition to full-attention tests.
 - `sdpa_input_preparation.cpp`, `compute/prepare_*`: explicit device preparation.

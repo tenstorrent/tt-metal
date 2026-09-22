@@ -1,17 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole
-from .sdpa_recipe_test_utils import VARIANTS, digest, make_inputs, metrics, prepare, reference, run
+from .sdpa_recipe_test_utils import load_baseline, VARIANTS, digest, make_inputs, metrics, prepare, reference, run
 
-BASELINE = json.loads(Path(__file__).with_name("recipe_accuracy_baseline.json").read_text())
+BASELINE = load_baseline()
 
 
 @pytest.fixture(scope="module", params=BASELINE["cases"], ids=lambda c: f"{c['k_length']}-{c['distribution']}")
@@ -47,6 +44,7 @@ def test_sdpa_frozen_accuracy(device, accuracy_case, variant, record_property):
     record_property("suite", case["suite"])
     record_property("frozen_l2_pct", frozen["metrics"]["l2_pct"])
     record_property("frozen_output_equal", digest(actual) == frozen["output_sha256"])
+    assert digest(actual) == frozen["output_sha256"], "Recipe arithmetic differs from the frozen output"
     record_property("output_sha256", digest(actual))
     # Relative per-case regression budget, not a universal absolute guarantee.
     # Common modes remain visible stress cases; they do not get excluded.

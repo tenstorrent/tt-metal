@@ -2,15 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Production SDPA recipe contracts, independent of the research adapter."""
 
-import json
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole
-from .sdpa_recipe_test_utils import VARIANTS, digest, make_inputs, metrics, prepare, reference, run
+from .sdpa_recipe_test_utils import load_baseline, VARIANTS, digest, make_inputs, metrics, prepare, reference, run
 
 
 @pytest.mark.parametrize("precision", ["FAST", "COMPENSATED", "BALANCED", "ACCURATE"])
@@ -170,7 +167,7 @@ def test_sdpa_recipe_switching_cache_identity(device):
     if not is_blackhole():
         pytest.skip("Named recipes initially target Blackhole")
     device.enable_program_cache()
-    baseline = json.loads(Path(__file__).with_name("recipe_accuracy_baseline.json").read_text())
+    baseline = load_baseline()
     case = next(c for c in baseline["cases"] if c["k_length"] == 4096 and c["distribution"] == "normal")
     inputs = [ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in make_inputs(4096, "normal")]
     prepared = {variant: prepare(inputs, variant) for variant in VARIANTS}

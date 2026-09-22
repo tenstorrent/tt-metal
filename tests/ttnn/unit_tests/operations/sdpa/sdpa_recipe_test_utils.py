@@ -2,12 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import json
+from pathlib import Path
 
 import torch
 import ttnn
 
 VARIANTS = ("A", "B", "C", "D", "E_bf16", "E_bfp8", "E_bfp4")
 PRECISIONS = {"A": "FAST", "B": "COMPENSATED", "C": "BALANCED", "D": "ACCURATE"}
+
+
+def load_baseline():
+    """Expand the fixture's implicit no-preparation hashes for A-D.
+
+    Each variant result occupies one JSON record so numerical evidence is easy
+    to diff; metrics and provenance are unchanged from the frozen snapshot.
+    """
+    baseline = json.loads(Path(__file__).with_name("recipe_accuracy_baseline.json").read_text())
+    for case in baseline["cases"]:
+        for variant, result in case["variants"].items():
+            if not variant.startswith("E_"):
+                result["prepared_sha256"] = list(case["input_sha256"])
+    return baseline
 
 
 def digest(tensor):
