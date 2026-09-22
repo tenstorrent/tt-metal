@@ -124,8 +124,31 @@ class ProgramConfig:
         return user_cores, sdpa_grid
 
     def get_decode_sdpa_config(self, mesh_device, batch_size: int = 1) -> ttnn.SDPAProgramConfig:
-        """Get SDPA config for decode mode"""
-        _, sdpa_grid = self.get_decode_user_grid(mesh_device, batch_size)
+        """Get SDPA config for decode mode.
+
+        Uses a TIGHT grid (exactly `batch_size` cores, one per user, matching the layout
+        get_decode_user_grid gives Q/K/V and RoPE) rather than the wider per-device/8x8 grid
+        get_decode_user_grid returns for those other consumers.
+
+        This is load-bearing, not a style choice. SDPA decode's own kernel scales its core count
+        to num_cores_available (from compute_with_storage_grid_size), and when that exceeds the
+        batch size it groups multiple physical cores per user for a flash-decode-style reduction
+        (num_cores_per_batch = num_cores_available // B, sdpa_decode_program_factory.cpp). That
+        reduction's internal core-to-user grouping is NOT the same as the one-core-per-user
+        layout Q/K/V and RoPE use. At batch 128 (32 local users/device, wide grid = 8x8 = 64
+        cores => num_cores_per_batch = 2) that mismatch corrupted specific per-user-core-column
+        positions (idx % 8 == 4, milder on the others) starting from the first attention layer
+        whose SDPA call has any real history to reduce over (layer 0's single-token step is
+        degenerate and hid it) -- root-caused by bisecting layer-by-layer with a same-prompt,
+        all-128-users-identical input: K/V cache writes and position bookkeeping were verified
+        bit-correct, but SDPA's own output was already wrong. Forcing num_cores_per_batch to 1
+        (this tight grid) fixed it with no measured perf change and no unit-test PCC regression
+        (12/12 across every 4x8 batch/paged/prefill parametrization). See
+        models/demos/gpt_oss/demo/text_demo.py's `batch128_same_prompt` case for the repro.
+        """
+        user_cores, _ = self.get_decode_user_grid(mesh_device, batch_size)
+        grid_size = user_cores.bounding_box().grid_size()
+        sdpa_grid = ttnn.CoreCoord(grid_size.x, grid_size.y)
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_grid,
             q_chunk_size=self.decode_q_chunk_size,
