@@ -747,7 +747,7 @@ static bool test_check_cores(std::span<struct core_setup> cores) {
 
 [[maybe_unused]]
 static void print_summary(std::span<struct LinkError> errors) {
-    if (!errors.size()) {
+    if (errors.empty()) {
         return;
     }
 
