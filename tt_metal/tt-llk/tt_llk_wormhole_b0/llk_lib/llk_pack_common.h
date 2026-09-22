@@ -309,9 +309,16 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFA
     }
 
     // Initialize TMP registers with values we need to write in CFG registers
-    // The lower-half mask is always zero; upper-half row-table selectors depend on the runtime tile geometry.
+    // The lower-half mask is always zero; only tiled row/column selectors depend on the runtime tile geometry.
     TTI_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
+    if constexpr (pack_mode == PackMode::Untilize || dim == ReduceDim::REDUCE_SCALAR)
+    {
+        TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
+    }
+    else
+    {
+        TT_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
+    }
     TTI_SETDMAREG(0, LOWER_HALFWORD(edge_offset_sec1_mask), 0, LO_16(p_gpr_pack::TMP_LO));
     TTI_SETDMAREG(0, LOWER_HALFWORD(row_set_mapping_1), 0, LO_16(p_gpr_pack::TMP1));
     TTI_SETDMAREG(0, UPPER_HALFWORD(row_set_mapping_1), 0, HI_16(p_gpr_pack::TMP1));
