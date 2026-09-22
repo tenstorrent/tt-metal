@@ -40,8 +40,8 @@ PCC_STATE = 0.99999
 #
 # _REGIME_SHAPES exercise the op's internal branches (GQA group 1, batch > 1, V < K).
 #
-# _QWEN_FAMILY_SHAPES add every per-chip head geometry this op can be run at in any Qwen model,
-# and tensor prallelism (TP) setting.
+# _QWEN_FAMILY_SHAPES adds every per-chip head geometry at which this op can run for any Qwen model
+# and tensor parallelism (TP) setting.
 #
 # GDN head geometry of the family, from each model's HF config.json:
 # `linear_num_key_heads` = 16 and `linear_key_head_dim` = `linear_value_head_dim` = 128 are
