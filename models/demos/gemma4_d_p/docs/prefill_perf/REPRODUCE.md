@@ -30,24 +30,34 @@ cd python_env && ln -sfn /usr/bin/python3.10 bin/python
 sed -i 's|^home = .*|home = /usr/bin|' pyvenv.cfg && cd ..
 ```
 
-## 1. The whole scoreboard — 6 runs, ~35 min
+## 1. The whole scoreboard — 9 runs, ~37 min
+
+> ⚠️ **`GEMMA4_PREFILL_L1_ACT` is dead.** The rebase onto mmanzoor/svuckovic inverted
+> this knob: `gemma4_d_p` now puts short-lived prefill activations in L1 **by default**
+> and the opt-out is `GEMMA4_ACTIVATIONS_DRAM_ONLY=1`. The old name survives only in
+> `models/demos/gemma4/` (a different model) and as a stale comment in
+> `gemma4_d_p/tt/attention/__init__.py`. Passing it was a silent no-op that produced two
+> "different" configs with bit-identical numbers, so **`run_e2e.sh` now exits 2** if you
+> do. Old `L1 off` → `dram_only`; old `mmanzoor_only` → `base`.
 
 ```bash
 OUT=/data/kmabee/remeasure_$(date +%m%d)
-BASE="GEMMA4_PREFILL_L1_ACT=1"
-FIX="$BASE GEMMA4_NORM_SHARD=1 GEMMA4_MLP_MM_CFG=1 GEMMA4_MLP_MM_GRID=12x10 GEMMA4_ATTN_MM_PC=1"
+DRAM="GEMMA4_ACTIVATIONS_DRAM_ONLY=1"
+FIX="GEMMA4_NORM_SHARD=1 GEMMA4_MLP_MM_CFG=1 GEMMA4_MLP_MM_GRID=12x10 GEMMA4_ATTN_MM_PC=1"
 
-for C in 2048 4096 8192; do
-  $S/run_e2e.sh --chunk $C --out $OUT --label mmanzoor_only_c$C $BASE
-  $S/run_e2e.sh --chunk $C --out $OUT --label all_fixes_c$C     $FIX
+for C in 2048 4096 8192; do                      # grouped by width: each trio adjacent
+  $S/run_e2e.sh --chunk $C --out $OUT --label dram_only_c$C $DRAM
+  $S/run_e2e.sh --chunk $C --out $OUT --label base_c$C
+  $S/run_e2e.sh --chunk $C --out $OUT --label all_fixes_c$C  $FIX
 done
 ```
 
-Then one command for the verdict:
+Then one command per config for the verdict:
 
 ```bash
-$S/check_baseline.py --config mmanzoor_only $OUT/mmanzoor_only_c*.log
-$S/check_baseline.py --config all_fixes     $OUT/all_fixes_c*.log
+for cfg in dram_only base all_fixes; do
+  $S/check_baseline.py --config $cfg $OUT/${cfg}_c*.log
+done
 ```
 
 It prints expected vs measured vs drift for `a`, `slope` and the 256k total at each width,
