@@ -15,6 +15,7 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn/operations/data_movement/fold/fold.hpp"
+#include "ttnn/operations/data_movement/fold/device/fold_device_op.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 
@@ -50,6 +51,26 @@ void bind_fold_operation(nb::module_& mod) {
         nb::arg("grid_size") = nb::none(),
         nb::arg("override_memory_config") = nb::none(),
         nb::arg("collapse_output") = false);
+
+    // Test-only hooks used by test_fold_tile_gate_pins_routing / test_fold_tile_gate_pins_alignment
+    // to pin the tile-native routing. _prim_fold bypasses the composite gate so validate_fold's
+    // FATAL fires on unsupported inputs; _is_tile_native_fold_supported lets tests compute their
+    // fits/over shapes from the same predicate both C++ callers consult.
+    mod.def(
+        "_prim_fold",
+        [](const ttnn::Tensor& input, uint32_t stride_h, uint32_t stride_w, bool collapse_output) {
+            return ttnn::prim::fold(input, stride_h, stride_w, collapse_output);
+        },
+        nb::arg("input"),
+        nb::arg("stride_h"),
+        nb::arg("stride_w"),
+        nb::arg("collapse_output") = false);
+    mod.def(
+        "_is_tile_native_fold_supported",
+        &ttnn::operations::data_movement::is_tile_native_fold_supported,
+        nb::arg("input"),
+        nb::arg("stride_h"),
+        nb::arg("stride_w"));
 }
 
 }  // namespace ttnn::operations::data_movement

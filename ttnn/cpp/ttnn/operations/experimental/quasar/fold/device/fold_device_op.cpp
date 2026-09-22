@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fold_device_op.hpp"
+
+#include <fmt/core.h>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/constants.hpp>
@@ -25,17 +28,48 @@ uint64_t tile_native_fold_scratch_bytes(const Tensor& input_tensor, uint32_t str
     return static_cast<uint64_t>(input_width / stride_w) * stride_h * stride_w * C * out_elem;
 }
 
-bool tile_native_fold_scratch_fits_l1(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w) {
+// hal::get_max_worker_l1_unreserved_size() is defined as l1_end - KERNEL_CONFIG_addr, i.e. the
+// budget *if the ringbuffer size is 0*. DFB allocations actually start at DEFAULT_UNRESERVED_addr,
+// past the KERNEL_CONFIG region (~105 KB on WH, similar on BH). Reserve covers that gap + JIT
+// dataflow/compute code+stack so the predicate stays a strict upper bound on real CB alloc.
+static constexpr uint64_t kFoldL1CodeStackReserveBytes = 160 * 1024;
+
+std::optional<std::string> tile_native_fold_rejection_reason(
+    const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w) {
+    // Zero-stride short-circuit: the composite consults this predicate before prim::qsr::fold, so
+    // divide-by-zero in tile_native_fold_scratch_bytes (input_width / stride_w) would beat
+    // validate_fold's stride > 0 guard and turn a clean FATAL into a host SIGFPE.
+    if (stride_h == 0 || stride_w == 0) {
+        return fmt::format("stride_h={} or stride_w={} (must be > 0)", stride_h, stride_w);
+    }
     if (input_tensor.layout() != tt::tt_metal::Layout::TILE) {
-        return false;
+        return std::string{"non-TILE layout"};
+    }
+    if (input_tensor.is_sharded()) {
+        return std::string{"sharded input"};
+    }
+    // Writer's tt_memmove only hits the NoC self-copy path with 16B-aligned c_bytes; otherwise it
+    // falls into per-pixel CPU memmove and loses ~2x on small C (composite routes those to RM).
+    const uint32_t out_elem = tt::datum_size(datatype_to_dataformat_converter(fold_output_dtype(input_tensor.dtype())));
+    const uint32_t c_bytes = input_tensor.logical_shape()[-1] * out_elem;
+    if (c_bytes % 16 != 0) {
+        return fmt::format("c_bytes={} (not 16B-aligned)", c_bytes);
     }
     const uint64_t scratch = tile_native_fold_scratch_bytes(input_tensor, stride_h, stride_w);
     const auto in_df = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto out_df = datatype_to_dataformat_converter(fold_output_dtype(input_tensor.dtype()));
     const uint32_t c_tiles = tt::div_up(input_tensor.padded_shape()[-1], tt::constants::TILE_WIDTH);
-    const uint64_t cb_bytes = static_cast<uint64_t>(tt::tile_size(in_df) + tt::tile_size(out_df)) * c_tiles;
-    constexpr uint64_t kCodeStackReserve = 32 * 1024;
-    return scratch + cb_bytes + kCodeStackReserve < tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
+    // Match the factory: SRC0 and SRC1 each carry kFoldSrcCbDepthPerCTile × c_tiles entries so
+    // untilize/gather can pipeline. Predicate scales with the same constant so routing tracks alloc.
+    const uint64_t cb_bytes =
+        static_cast<uint64_t>(tt::tile_size(in_df) + tt::tile_size(out_df)) * c_tiles * kFoldSrcCbDepthPerCTile;
+    // Static arch budget minus this op's own CB reservations + code/stack; keeps routing a pure
+    // function of inputs (not live allocator state). Any real fragmentation still surfaces at CB alloc.
+    const uint64_t budget = tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
+    if (scratch + cb_bytes + kFoldL1CodeStackReserveBytes >= budget) {
+        return fmt::format("scratch={} B + CBs={} B exceed L1 budget ({} B)", scratch, cb_bytes, budget);
+    }
+    return std::nullopt;
 }
 
 Fold::program_factory_t Fold::select_program_factory(
@@ -52,6 +86,9 @@ void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, ui
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
+    // Guard both branches before any modulo/div on stride; sharded branch does % (W * stride_h) and
+    // % stride_h below, unsharded does % stride_h / % stride_w — both SIGFPE on zero stride.
+    TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h ({}) and stride_w ({}) must be > 0.", stride_h, stride_w);
     if (is_sharded) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
@@ -65,12 +102,16 @@ void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, ui
         // Divisibility on logical (padded hides partial-tile W that the tile-native writer would OOB into).
         TT_FATAL(logical_shape[1] % stride_h == 0, "Fold: logical H must be divisible by stride_h.");
         TT_FATAL(logical_shape[2] % stride_w == 0, "Fold: logical W must be divisible by stride_w.");
-        // TILE input routes through the tile-native factory; refuse configs whose row scratch won't fit L1.
-        TT_FATAL(
-            input_tensor.layout() != tt::tt_metal::Layout::TILE ||
-                tile_native_fold_scratch_fits_l1(input_tensor, stride_h, stride_w),
-            "Fold (TILE): tile-native scratch {} B + tile CBs exceed per-core L1; untilize input to RM first.",
-            tile_native_fold_scratch_bytes(input_tensor, stride_h, stride_w));
+        // Tile-native gate: one FATAL, one source of truth (the predicate). Composite consults the
+        // same predicate and falls back to untilize→RM before prim, so this only reaches direct
+        // prim::qsr::fold callers. Reason string carries the distinguishing substring.
+        if (input_tensor.layout() == tt::tt_metal::Layout::TILE) {
+            auto reason = tile_native_fold_rejection_reason(input_tensor, stride_h, stride_w);
+            TT_FATAL(
+                !reason.has_value(),
+                "Fold (TILE): tile-native gate refused: {}; untilize input to RM first.",
+                reason.value_or(""));
+        }
     }
 }
 
@@ -84,6 +125,13 @@ void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, 
 
 Fold::spec_return_value_t Fold::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    // Same stride > 0 guard as validate_fold: launch calls compute_output_specs before validate,
+    // so an unguarded input_shape / (stride_h * stride_w) below would SIGFPE and skip the FATAL.
+    TT_FATAL(
+        op_attr.stride_h > 0 && op_attr.stride_w > 0,
+        "Fold: stride_h ({}) and stride_w ({}) must be > 0.",
+        op_attr.stride_h,
+        op_attr.stride_w);
     auto input_tensor = tensors.input_tensor;
     const ttnn::Shape& input_shape = input_tensor.logical_shape();
     const tt::tt_metal::DataType output_dtype = fold_output_dtype(input_tensor.dtype());

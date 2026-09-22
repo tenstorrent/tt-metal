@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -19,12 +21,23 @@ bool is_fast_path_input(const Tensor& t);
 // Output-dtype rule: FLOAT32/UINT16 pass through; every other input dtype collapses to BFLOAT16 on RM output.
 tt::tt_metal::DataType fold_output_dtype(tt::tt_metal::DataType input_dtype);
 
+// SRC0/SRC1 entries per C-tile; > 1 lets untilize fill one group while the writer drains the
+// previous. Factory + L1 capacity predicate scale by this so a depth change stays in sync.
+inline constexpr uint32_t kFoldSrcCbDepthPerCTile = 2;
+
 // Bytes the tile-native writer's per-super-block RM scratch needs (one output row of contiguous sticks).
 uint64_t tile_native_fold_scratch_bytes(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
 
-// Tile-native tiled factory needs `scratch + src0 + src1 CBs` to fit per-core L1 (src0/src1 scale with C_tiles);
-// if not, composite untilize→RM handles the same case with 1-stick scratch.
-bool tile_native_fold_scratch_fits_l1(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
+// One source of truth for the tile-native gate: returns nullopt when supported, otherwise a short
+// reason string (the distinguishing substring — "stride_h=0 …", "sharded input", "c_bytes=6 (not
+// 16B-aligned)", "scratch=… exceed L1 budget"). validate_fold surfaces this in a single FATAL;
+// the composite consults the boolean shim below and falls back to untilize→RM on rejection.
+std::optional<std::string> tile_native_fold_rejection_reason(
+    const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
+
+inline bool is_tile_native_fold_supported(const Tensor& t, uint32_t stride_h, uint32_t stride_w) {
+    return !tile_native_fold_rejection_reason(t, stride_h, stride_w).has_value();
+}
 
 // Fresh shard-spec for specless sharded outputs, sized to the populated shard count (not the
 // full compute grid): H/W → num_cores_to_corerangeset over used cores; B → rectangular CoreRange.

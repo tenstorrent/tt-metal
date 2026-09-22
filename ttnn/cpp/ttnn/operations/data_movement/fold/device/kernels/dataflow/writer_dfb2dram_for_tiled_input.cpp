@@ -34,13 +34,13 @@ void kernel_main() {
     DataflowBuffer dfb_untilized(dfb::in1);
     DataflowBuffer dfb_scratch(dfb::in2);
 
-    // cb_asm holds one full output row; touched only by this kernel, so raw pointer + local ordering.
+    // SRC2 scratch holds one full output row; touched only by this kernel, so raw pointer + local ordering.
     const uint32_t scratch_base = dfb_scratch.get_write_ptr();
 
     const uint32_t end_super_block_id = start_super_block_id + num_super_blocks;
     for (uint32_t sb = start_super_block_id; sb < end_super_block_id; ++sb) {
-        // Gather `stride_height` input rows worth of C-byte sticks into cb_asm; each pixel lands at
-        // `out_w * output_stick_bytes + patch_idx * c_bytes` so every output stick becomes contiguous.
+        // Gather `stride_height` input rows worth of C-byte sticks into SRC2 scratch; each pixel lands
+        // at `out_w * output_stick_bytes + patch_idx * c_bytes` so every output stick becomes contiguous.
         for (uint32_t local_h = 0; local_h < stride_height; ++local_h) {
             uint32_t remaining_width = input_width;
             const uint32_t row_patch_base = local_h * stride_width;
@@ -55,7 +55,8 @@ void kernel_main() {
                     const uint32_t w_in = w_base + local_w;
                     const uint32_t out_w = w_in / stride_width;
                     const uint32_t patch_idx = row_patch_base + (w_in % stride_width);
-                    // copy_async=true skips the per-pixel L1D drain; single tail-drain below.
+                    // copy_async=true issues the NoC self-copy without a per-pixel drain; the barrier
+                    // before pop_front flushes them so SRC1 is safe to release (compute reuses it).
                     tt_memmove<false, true, false, c_bytes>(
                         noc,
                         scratch_base + out_w * output_stick_bytes + patch_idx * c_bytes,
@@ -63,14 +64,12 @@ void kernel_main() {
                         c_bytes);
                 }
                 remaining_width -= tt::constants::TILE_HEIGHT;
+                // Drain outstanding tt_memmove self-copies before pop_front: at any SRC1 depth, pop
+                // hands the slot back and the next compute wrap would overwrite src_base mid-read.
+                noc.async_write_barrier();
                 dfb_untilized.pop_front(tiles_per_channel_dim);
             }
         }
-        // One drain per super-block instead of per-pixel: async_write_barrier flushes the NoC self-copy
-        // path; the volatile L1 read serialises any CPU-memmove fallback stores (L1 write-requests are FIFO).
-        noc.async_write_barrier();
-        volatile tt_l1_ptr uint32_t* drain_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_base);
-        [[maybe_unused]] volatile uint32_t drain_read = *drain_ptr;
         // Emit one aligned page-sized write per output stick; super-blocks are laid out sequentially.
         const uint32_t output_page_base = sb * output_width;
         for (uint32_t out_w = 0; out_w < output_width; ++out_w) {

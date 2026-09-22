@@ -42,7 +42,7 @@ DataflowBufferSpec make_dfb(
 }
 
 // TILE-native factory: work-split is at super-block (= stride_h input H-rows) granularity so the writer
-// can gather stride_h*W pixels into an L1 scratch (cb_asm) and emit one aligned output stick per patch,
+// can gather stride_h*W pixels into the SRC2 scratch CB and emit one aligned output stick per patch,
 // avoiding the sub-page scatter that dominated the previous byte-level design.
 ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
@@ -117,7 +117,9 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         nblocks_per_core,
         nblocks_per_core_cliff);
 
-    const uint32_t num_input_tiles = tiles_per_channel_dim;
+    // Double-buffered per C-tile (kFoldSrcCbDepthPerCTile) so reader/compute/writer overlap through
+    // a super-block; predicate in fold_device_op.cpp scales cb_bytes by the same constant.
+    const uint32_t num_input_tiles = tiles_per_channel_dim * kFoldSrcCbDepthPerCTile;
 
     // src0/src1: tile-format input + untilized output; src2: RM scratch sized to one full output row.
     DataflowBufferSpec src0_dfb = make_dfb(SRC0, single_tile_size, num_input_tiles, dfb_data_format);
