@@ -9,8 +9,8 @@ on any other cluster, or on a single-device mesh, keeps opening as it does on
 main.
 """
 
-from ...tt.ccl import default_l1_small_size
-from ..test_factory import with_l1_small
+from models.demos.gemma4.tests.test_factory import with_l1_small
+from models.demos.gemma4.tt.ccl import default_l1_small_size
 
 
 def test_default_l1_small_size(monkeypatch):
