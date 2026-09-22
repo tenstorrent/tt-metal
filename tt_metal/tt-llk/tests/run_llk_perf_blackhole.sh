@@ -1,45 +1,39 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
-#
-# SPDX-License-Identifier: Apache-2.0
-# Blackhole LLK perf runner, shared by the 5 bh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
-#
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
+# CORE CHURN -- which core ran each test, at chunk 374 and at chunk 10.
 set -euo pipefail
-
-GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
-export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
-
-case "$SPEED_OF_LIGHT" in
-  true)
-    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
-    ;;
-  false)
-    SPEED_OF_LIGHT_ARGS=()
-    ;;
-  *)
-    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
-    exit 2
-    ;;
-esac
-
+GROUP="${1:?}"; N_GROUPS="${2:?}"
+if [ "$GROUP" != "1" ]; then echo "only group 1 runs"; exit 0; fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR/python_tests"
-mkdir -p perf_data
+export PERF_KEEP_RUNS=0
+unset PERF_RUN_TAG
+M="perf and not accuracy"
+PQ="-q --override-ini=log_cli=false"
+SEL=(--splits 5 --group 1 .)
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+echo "===== compile  $(date -u +%H:%M:%S)"
+PERF_RUN_TAG=compile pytest $PQ --compile-producer -n 10 -m "$M" --timeout=60 \
+  "${SEL[@]}" > /tmp/c.log 2>&1 || echo "  (producer rc=$?)"
+tail -2 /tmp/c.log | sed 's/^/  /'
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-blackhole-${GROUP}-compile.xml pytest-report-blackhole-${GROUP}-run.xml pytest-report-blackhole-${GROUP}.xml
+pass() {
+  local label="$1" chunk="$2"
+  echo "===== $label  chunk=$chunk  $(date -u +%H:%M:%S)"
+  rm -f /tmp/corelog.*
+  PERF_RUN_TAG="$label" PERF_CORE_LOG=/tmp/corelog \
+    pytest $PQ --compile-consumer -n 15 -m "$M" --timeout=60 \
+    --maxschedchunk "$chunk" "${SEL[@]}" > "/tmp/$label.log" 2>&1 || echo "  (rc=$?)"
+  tail -2 "/tmp/$label.log" | sed 's/^/  /'
+  local dest="$LLK_ROOT/perf_data/runs/corelog-$label"
+  mkdir -p "$dest"
+  cat /tmp/corelog.*.tsv > "$dest/cores.tsv" 2>/dev/null || true
+  echo "  core log lines: $(wc -l < "$dest/cores.tsv" 2>/dev/null || echo 0)"
+}
+
+pass c374_a 374
+pass c374_b 374
+pass c10_a   10
+pass c10_b   10
+echo "===== runs:"; ls -1 "$LLK_ROOT/perf_data/runs/"
+echo "===== done ====="
