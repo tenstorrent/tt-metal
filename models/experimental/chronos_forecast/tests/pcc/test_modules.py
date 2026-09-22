@@ -45,3 +45,44 @@ def test_residual_block_pcc(request, shape):
     assert got.shape == (*shape[:2], 6)
     log_golden(f"tt_residual/device_{shape[1]}p", got)
     assert_with_pcc(expected, got, pcc=0.99)
+
+
+def test_time_attention_pcc(request):
+    """TT TimeSelfAttention (tiny golden dims) vs reference oracle. Single-chip only."""
+    pytest.importorskip("ttnn")
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    from models.experimental.chronos_forecast.reference.chronos2.layers import (
+        TimeSelfAttention as RefTSA,
+    )
+    from models.experimental.chronos_forecast.tests.golden_helpers import tiny_config
+    from models.experimental.chronos_forecast.tt.time_attention import (
+        TtTimeAttention,
+        TtTimeAttentionWeights,
+        build_rope_cache,
+    )
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    if mesh_device.get_num_devices() != 1:
+        pytest.skip("single-chip bring-up only (one chip)")
+
+    cfg = tiny_config()
+    torch.manual_seed(0)
+    layer = RefTSA(cfg).eval()
+    weights = TtTimeAttentionWeights.from_torch_layer(layer)
+    tt = TtTimeAttention(device=mesh_device, weights=weights)
+
+    torch.manual_seed(1)
+    x = torch.randn(2, 8, cfg.d_model)
+    position_ids = torch.arange(8).unsqueeze(0).expand(2, -1)
+    expected = layer(
+        x,
+        attention_mask=torch.zeros(2, cfg.num_heads, 8, 8),
+        position_ids=position_ids,
+    ).hidden_states
+
+    cos, sin = build_rope_cache(position_ids, weights.inv_freq)
+    got = tt.forward(x, cos, sin, torch.zeros(1, 1, 8, 8))
+    assert got.shape == x.shape
+    log_golden("tt_time_attn/device_8", got)
+    assert_with_pcc(expected.float(), got, pcc=0.99)

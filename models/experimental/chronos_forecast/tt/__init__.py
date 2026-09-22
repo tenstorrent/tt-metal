@@ -8,6 +8,11 @@ from models.experimental.chronos_forecast.tt.residual_block import (
     TtResidualBlock,
     TtResidualBlockWeights,
 )
+from models.experimental.chronos_forecast.tt.time_attention import (
+    TtTimeAttention,
+    TtTimeAttentionWeights,
+    build_rope_cache,
+)
 from models.experimental.chronos_forecast.tt.model_preprocessing import (
     Chronos2PackedInputs,
     Chronos2PatchedInputs,
@@ -30,6 +35,9 @@ __all__ = [
     "TtChronos",
     "TtResidualBlock",
     "TtResidualBlockWeights",
+    "TtTimeAttention",
+    "TtTimeAttentionWeights",
+    "build_rope_cache",
     "encode_categorical_covariate",
     "instance_norm",
     "instance_norm_inverse",
