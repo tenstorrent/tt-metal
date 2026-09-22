@@ -1555,15 +1555,74 @@ targets:
     aliases: ["Qwen3.8-27B", "Qwen/Qwen3.8-27B"]
     skus:
       # Wormhole LoudBox / QuietBox (4x n300 = 8 chips), TP=8. Architecturally identical to
-      # qwen3.6-27b above (the two config.json files differ only in transformers_version), so the
-      # bh_quietbox_2 numbers there are the cross-arch reference point.
-      # status: todo -> excluded from perf validation until measured on this SKU.
+      # qwen3.6-27b above -- the two config.json files differ only in transformers_version -- so
+      # the bh_quietbox_2 entries there are the cross-arch reference point.
+      # TTFT is in ms; batch_size 1 so decode_t/s == decode_t/s/u.
+      # Measured 2026-09-22 on a single LoudBox via demo/text_demo.py traced_* with the fused
+      # GDN prefill path (the shipping default; QWEN36_GDN_FUSED=0 routes to the slower composite
+      # seq adapter and will miss these TTFTs). Single run per ISL, hence the 0.2 tolerance.
+      # accuracy is left empty: there is no reference_outputs/*.refpt for this checkpoint yet, so
+      # top1/top5 have not been measured.
       wh_llmbox_perf:
         entries:
           - batch_size: 1
             seq_len: 128
-            status: todo
-            perf: {}
+            status: active
+            perf:
+              prefill_time_to_first_token: 570.0
+              decode_t/s: 16.78
+              decode_t/s/u: 16.78
+              tolerance: 0.2
+            accuracy: {}
+            team: models
+          - batch_size: 1
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 1470.0
+              decode_t/s: 16.82
+              decode_t/s/u: 16.82
+              tolerance: 0.2
+            accuracy: {}
+            team: models
+          - batch_size: 1
+            seq_len: 8192
+            status: active
+            perf:
+              prefill_time_to_first_token: 3180.0
+              decode_t/s: 16.44
+              decode_t/s/u: 16.44
+              tolerance: 0.2
+            accuracy: {}
+            team: models
+          - batch_size: 1
+            seq_len: 16384
+            status: active
+            perf:
+              prefill_time_to_first_token: 6440.0
+              decode_t/s: 16.3
+              decode_t/s/u: 16.3
+              tolerance: 0.2
+            accuracy: {}
+            team: models
+          - batch_size: 1
+            seq_len: 32768
+            status: active
+            perf:
+              prefill_time_to_first_token: 13760.0
+              decode_t/s: 15.99
+              decode_t/s/u: 15.99
+              tolerance: 0.2
+            accuracy: {}
+            team: models
+          - batch_size: 1
+            seq_len: 131072
+            status: active
+            perf:
+              prefill_time_to_first_token: 56450.0
+              decode_t/s: 14.22
+              decode_t/s/u: 14.22
+              tolerance: 0.2
             accuracy: {}
             team: models
   qwq-32b:
