@@ -1,6 +1,6 @@
 # Experiment 2 resumable checkpoint
 
-Updated 2026-09-23 11:09 UTC. Active work; no native-baseline win. Strongest resident candidate context128/32 =8.504254871ms/token, original9.243840999/native7.635744386; five warmed trials, exact teacher logits/all64 touched KV/greedy. Candidate2048 passes exact at8.930579936ms;8192 and256-output qualification suite is finishing. Inspect artifacts/placement-qualification-*-result/result.json for completed values. Source checkpoint before this note: c96b2d90 (GU16 placement and activation read controls).
+Updated 2026-09-23 11:11 UTC. Active work; no native-baseline win. Strongest resident candidate context128/32 =8.504254871ms/token, original9.243840999/native7.635744386; five warmed trials, exact teacher logits/all64 touched KV/greedy. Candidate qualification passed exact:2048=8.930579936ms;8192=9.596915292ms;128/256=8.544241596ms. Artifacts/placement-qualification-summary.json preserves trials and hashes. Source checkpoint before this note: c96b2d90 (GU16 placement and activation read controls).
 
 Branch codex/llama31-qb2-megakernel, starting f776a26ce77921cc84331cafb1434ba20c6ec46b; base b8915544692d8f9feb2c890afbc2f22791560cd2. Original is preserved at starting SHA and EXPERIMENT1_PROGRESS.md. Do not update main or import unrelated changes.
 
