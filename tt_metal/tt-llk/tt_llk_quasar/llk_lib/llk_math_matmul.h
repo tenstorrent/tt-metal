@@ -379,11 +379,20 @@ inline constexpr std::uint32_t _llk_math_matmul_replay_buf_len_()
     return (ENABLE_2X_FORMAT ? FULL_TILE_MVMULS_PER_K_FACE : MAX_NUM_FACES_C_DIM * FULL_TILE_MVMULS_PER_K_FACE) - 1;
 }
 
+template <std::uint32_t NUM_ROWS>
+inline void _llk_math_matmul_emit_rows_()
+{
+#pragma GCC unroll 4
+    for ([[maybe_unused]] const auto row : fpu_row_offsets<NUM_ROWS>())
+    {
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    }
+}
+
 /**
  * @brief Records the standard or 2x MVMUL image into replay buffer slot 0.
  *
- * Standard matmul always records the full 15-entry K-outer image. MOP-based tiny matmul selects a
- * window from that image.
+ * Standard matmul records the full K-outer image, or a dedicated half-face image for narrow-FPU tiny tiles.
  *
  * @tparam ENABLE_2X_FORMAT: When true, records the non-DI MXFP4_2x variant.
  * The variant uses a 7-MVMUL replay for A0/A1 and B0/B1. SrcA uses MxFp4_2x_A/B for the 2x sub-element expansion.
@@ -399,7 +408,6 @@ inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = fals
     // else, unpacker loads f0/f1/f2/f3
     // Math LLKs do not need any transpose handling for Quasar
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
-    constexpr std::uint32_t ops_per_face   = 16 / ELTWISE_MATH_ROWS;
 
     if constexpr (ENABLE_2X_FORMAT)
     {
@@ -448,40 +456,27 @@ inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = fals
             }
         }
 
-        // Same B/A face-pair traversal as the original 16-MVMUL Quasar replay, but each pair now
-        // emits ops_per_face MVMULs (Quasar: 2, 4row_arch: 4): (ops_per_face-1) in-face steps via
-        // ADDR_MOD_0 (srca=srca, srcb+=row_incr, dest+=row_incr) followed by the face-transition
-        // addr_mod. The last MVMUL of the final pair (B3A3) is supplied by matmul_op/matmul_op_last.
+        // Each face pair ends with a transition, except the final pair whose last MVMUL comes from the MOP or no-MOP caller.
         load_replay_buf<0, replay_buf_len>(
-            // Lambda function to load reply buffer
             []
             {
-                // (ops_per_face - 1) in-face steps. ADDR_MOD_0 is a literal so the .ttinsn
-                // immediate-operand ("n") constraint is satisfied even though the *count*
-                // (ops_per_face) is parametric — only the loop bound is runtime, never the op.
-                const auto in_face_steps = []
-                {
-                    for (std::uint32_t i = 0; i < ops_per_face - 1; ++i)
-                    {
-                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // srca=srca, srcb+=row_incr, dest+=row_incr
-                    }
-                };
+                constexpr std::uint32_t IN_FACE_ROWS = FACE_R_DIM - ELTWISE_MATH_ROWS;
 
-                in_face_steps();
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-                in_face_steps();
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
-                in_face_steps();
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-                in_face_steps();
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
-                in_face_steps();
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-                in_face_steps();
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
-                in_face_steps();
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-                in_face_steps();
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
             });
     }
 }
@@ -527,6 +522,17 @@ inline void _llk_math_matmul_mop_config_(const std::uint8_t ct_dim, const std::u
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
+template <std::uint32_t SRC_B, std::uint32_t SRC_A, std::uint32_t DEST, std::uint32_t NUM_ROWS = FACE_R_DIM>
+inline void _llk_math_matmul_di_emit_face_()
+{
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<NUM_ROWS>())
+    {
+        const auto offset = row / 4; // Direct-indexing addresses use four-row units.
+        TTI_MVMULDI(p_setrwc::CLR_NONE, 0, SRC_B + offset, SRC_A, 0, DEST + offset);
+    }
+}
+
 /**
  * @brief Initializes mop config for matrix multiply operation using the direct-indexing instruction variant.
  *
@@ -535,7 +541,7 @@ inline void _llk_math_matmul_mop_config_(const std::uint8_t ct_dim, const std::u
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
+ * @tparam ENABLE_2X_FORMAT: Select the 2x-format face traversal.
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
@@ -551,188 +557,58 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
     constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
     const bool reuse_a                      = ct_dim >= rt_dim;
 
-    constexpr std::uint32_t replay_buf_len =
-        ENABLE_2X_FORMAT ? 8 - 1 : 16 - 1; // -1 since the last instruction for the Tile * Tile operation will come out of the MOP
+    constexpr std::uint32_t FACE_PAIRS     = ENABLE_2X_FORMAT ? 4 : 8;
+    constexpr std::uint32_t OPS_PER_FACE   = FACE_R_DIM / ELTWISE_MATH_ROWS;
+    constexpr std::uint32_t replay_buf_len = FACE_PAIRS * OPS_PER_FACE - 1;
+
+    // The MOP supplies the final row group of the final face pair.
+    constexpr std::uint32_t REPLAY_ROWS = FACE_R_DIM - ELTWISE_MATH_ROWS;
+
     if constexpr (ENABLE_2X_FORMAT)
     {
         load_replay_buf<0, replay_buf_len>(
-            // Lambda function to load reply buffer
             []
             {
                 // [B0] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x0, 0x0, 0x0); // B0[0:7]*A0  srcb=0x0<<2='d0, srca=0x0<<2='d0, dest=0x0<<2='d0
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x0, 0x0, 0x2); // B0[8:15]*A0 srcb=0x2<<2='d8, srca=0x0<<2='d0, dest=0x2<<2='d8
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x4, 0x0, 0x4); // B0[0:7]*A1  srcb=0x0<<2='d0, srca=0x4<<2='d16, dest=0x4<<2='d16
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x4, 0x0, 0x6); // B0[8:15]*A1 srcb=0x2<<2='d8, srca=0x4<<2='d16, dest=0x6<<2='d24
+                _llk_math_matmul_di_emit_face_<0x0, 0x0, 0x0>();
+                _llk_math_matmul_di_emit_face_<0x0, 0x4, 0x4>();
+
                 // [B1] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x0, 0x0, 0x8); // B1[0:7]*A0  srcb=0x4<<2='d16, srca=0x0<<2='d0, dest=0x8<<2='d32
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x0, 0x0, 0xA); // B1[8:15]*A0 srcb=0x6<<2='d24, srca=0x0<<2='d0, dest=0xA<<2='d40
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x4, 0x0, 0xC); // B1[0:7]*A1  srcb=0x4<<2='d16, srca=0x4<<2='d16, dest=0xC<<2='d48
+                _llk_math_matmul_di_emit_face_<0x4, 0x0, 0x8>();
+                _llk_math_matmul_di_emit_face_<0x4, 0x4, 0xC, REPLAY_ROWS>();
             });
     }
     else
     {
         load_replay_buf<0, replay_buf_len>(
-            // Lambda function to load reply buffer
             []
             {
                 // [B0] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x0, 0x0, 0x0); // B0[0:7]*A0  srcb=0x0<<2='d0, srca=0x0<<2='d0, dest=0x0<<2='d0
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x0, 0x0, 0x2); // B0[8:15]*A0 srcb=0x2<<2='d8, srca=0x0<<2='d0, dest=0x2<<2='d8
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x4, 0x0, 0x4); // B0[0:7]*A1  srcb=0x0<<2='d0, srca=0x4<<2='d16, dest=0x4<<2='d16 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x8 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x4, 0x0, 0x6); // B0[8:15]*A1 srcb=0x2<<2='d8, srca=0x4<<2='d16, dest=0x6<<2='d24 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x8 if transposed.
+                _llk_math_matmul_di_emit_face_<0x0, 0x0, 0x0>();
+                _llk_math_matmul_di_emit_face_<0x0, 0x4, 0x4>();
 
                 // [B2] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x8, 0x0, 0x0, 0x8); // B2[0:7]*A0  srcb=0x8<<2='d32, srca=0x0<<2='d0, dest=0x8<<2='d32
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xA, 0x0, 0x0, 0xA); // B2[8:15]*A0 srcb=0xA<<2='d40, srca=0x0<<2='d0, dest=0xA<<2='d40
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x8, 0x4, 0x0, 0xC); // B2[0:7]*A1  srcb=0x8<<2='d32, srca=0x4<<2='d16, dest=0xC<<2='d48 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x8 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xA, 0x4, 0x0, 0xE); // B2[8:15]*A1 srcb=0xA<<2='d40, srca=0x4<<2='d16, dest=0xE<<2='d56 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x8 if transposed.
+                _llk_math_matmul_di_emit_face_<0x8, 0x0, 0x8>();
+                _llk_math_matmul_di_emit_face_<0x8, 0x4, 0xC>();
 
                 // [B1] x [A2 A3] (Accumulates to the result of [B0] x [A0 A1] )
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x8, 0x0, 0x0); // B1[0:7]*A2  srcb=0x4<<2='d16, srca=0x8<<2='d32, dest=0x0<<2='d0 // A2 -> A1 if
-                                                                          // transposed. That is, srca should be set 0x4 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x8, 0x0, 0x2); // B1[8:15]*A2 srcb=0x6<<2='d24, srca=0x8<<2='d32, dest=0x2<<2='d8 // A2 -> A1 if
-                                                                          // transposed. That is, srca should be set 0x4 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0xC, 0x0, 0x4); // B1[0:7]*A3  srcb=0x4<<2='d16, srca=0xC<<2='d48, dest=0x4<<2='d16
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0xC, 0x0, 0x6); // B1[8:15]*A3 srcb=0x6<<2='d24, srca=0xC<<2='d48, dest=0x6<<2='d24
+                _llk_math_matmul_di_emit_face_<0x4, 0x8, 0x0>();
+                _llk_math_matmul_di_emit_face_<0x4, 0xC, 0x4>();
 
                 // [B3] x [A2 A3] (Accumulates to the result of [B2] x [A0 A1]  )
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xC, 0x8, 0x0, 0x8); // B3[0:7]*A2  srcb=0xC<<2='d48, srca=0x8<<2='d32, dest=0x8<<2='d32 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x4 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0x8, 0x0, 0xA); // B3[8:15]*A2 srcb=0xE<<2='d56, srca=0x8<<2='d32, dest=0xA<<2='d40 // A1 -> A2 if
-                                                                          // transposed. That is, srca should be set 0x4 if transposed.
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xC, 0xC, 0x0, 0xC); // B3[0:7]*A3  srcb=0xC<<2='d48, srca=0xC<<2='d48, dest=0xC<<2='d48
+                _llk_math_matmul_di_emit_face_<0xC, 0x8, 0x8>();
+                _llk_math_matmul_di_emit_face_<0xC, 0xC, 0xC, REPLAY_ROWS>();
             });
     }
 
-    /* Just choose what is more readable*/
-    constexpr static std::uint32_t matmul_op =
-        ENABLE_2X_FORMAT ? TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x4, ADDR_MOD_1, 0xE)
-                         :                                                     // B1[8:15]*A1 srcb=0x6<<2='d24, srca=0x4<<2='d16, dest=0xE<<2='d56
-            TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0xC, ADDR_MOD_1, 0xE); // B3[8:15]*A3 srcb=0xE<<2='d56, srca=0xC<<2='d48, dest=0xE<<2='d56
-    std::uint32_t matmul_op_last;
-    if constexpr (ENABLE_2X_FORMAT)
-    {
-        matmul_op_last =
-            reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0x6, 0x4, ADDR_MOD_2, 0xE) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0x6, 0x4, ADDR_MOD_2, 0xE);
-    }
-    else
-    {
-        matmul_op_last =
-            reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0xE, 0xC, ADDR_MOD_2, 0xE) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0xE, 0xC, ADDR_MOD_2, 0xE);
-    }
+    constexpr std::uint32_t LAST_ROW_OFFSET = REPLAY_ROWS / 4;
+    constexpr std::uint32_t FINAL_SRC_B     = (ENABLE_2X_FORMAT ? 0x4 : 0xC) + LAST_ROW_OFFSET;
+    constexpr std::uint32_t FINAL_SRC_A     = ENABLE_2X_FORMAT ? 0x4 : 0xC;
+    constexpr std::uint32_t FINAL_DEST      = 0xC + LAST_ROW_OFFSET;
 
-    ckernel_template temp(1 /* outer loop */, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), matmul_op);
-    temp.set_last_outer_loop_instr(matmul_op_last);
-    temp.program_bank0_sw_cntl(instrn_buffer);
-}
-
-/**
- * @brief Initializes mop config for matrix multiply on the 4-row FPU (4row_arch, ELTWISE_MATH_ROWS == 4).
- *
- * Same face traversal as @ref _llk_math_matmul_di_mop_config_, but each MVMULDI writes 4 dest rows instead of 8,
- * so every face is covered by 4 MVMULDIs (srcb/dest index step 1) instead of 2 — twice the count per tile
- * (Int8_2x: 16; plain: 32). Shares @ref _llk_math_matmul_di_addrmod_ with the 8-row path (row-count agnostic).
- *
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam ENABLE_2X_FORMAT: Select the Int8_2x traversal (16 MVMULDI) instead of the plain one (32 MVMULDI)
- * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
- * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
- */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT>
-inline void _llk_math_matmul_di_mop_config_4row_(std::uint8_t ct_dim, std::uint8_t rt_dim)
-{
-    constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
-    const bool reuse_a                      = ct_dim >= rt_dim;
-
-    constexpr std::uint32_t replay_buf_len =
-        ENABLE_2X_FORMAT ? 16 - 1 : 32 - 1; // -1 since the last instruction for the Tile * Tile operation will come out of the MOP
-    if constexpr (ENABLE_2X_FORMAT)
-    {
-        load_replay_buf<0, replay_buf_len>(
-            // Lambda function to load reply buffer
-            []
-            {
-                // [B0] x [A0 A1]  (srcb/dest step 1: 4 MVMULDIs per face)
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x0, 0x0, 0x0);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x1, 0x0, 0x0, 0x1);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x0, 0x0, 0x2);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x3, 0x0, 0x0, 0x3);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x4, 0x0, 0x4);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x1, 0x4, 0x0, 0x5);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x4, 0x0, 0x6);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x3, 0x4, 0x0, 0x7);
-                // [B1] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x0, 0x0, 0x8);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x5, 0x0, 0x0, 0x9);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x0, 0x0, 0xA);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x7, 0x0, 0x0, 0xB);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x4, 0x0, 0xC);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x5, 0x4, 0x0, 0xD);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x4, 0x0, 0xE);
-            });
-    }
-    else
-    {
-        load_replay_buf<0, replay_buf_len>(
-            // Lambda function to load reply buffer
-            []
-            {
-                // [B0] x [A0 A1]  (srcb/dest step 1: 4 MVMULDIs per face)
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x0, 0x0, 0x0);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x1, 0x0, 0x0, 0x1);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x0, 0x0, 0x2);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x3, 0x0, 0x0, 0x3);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x0, 0x4, 0x0, 0x4);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x1, 0x4, 0x0, 0x5);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x2, 0x4, 0x0, 0x6);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x3, 0x4, 0x0, 0x7);
-                // [B2] x [A0 A1]
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x8, 0x0, 0x0, 0x8);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x9, 0x0, 0x0, 0x9);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xA, 0x0, 0x0, 0xA);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xB, 0x0, 0x0, 0xB);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x8, 0x4, 0x0, 0xC);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x9, 0x4, 0x0, 0xD);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xA, 0x4, 0x0, 0xE);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xB, 0x4, 0x0, 0xF);
-                // [B1] x [A2 A3]  (accumulates onto [B0] x [A0 A1])
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0x8, 0x0, 0x0);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x5, 0x8, 0x0, 0x1);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x8, 0x0, 0x2);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x7, 0x8, 0x0, 0x3);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x4, 0xC, 0x0, 0x4);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x5, 0xC, 0x0, 0x5);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0xC, 0x0, 0x6);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x7, 0xC, 0x0, 0x7);
-                // [B3] x [A2 A3]  (accumulates onto [B2] x [A0 A1])
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xC, 0x8, 0x0, 0x8);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xD, 0x8, 0x0, 0x9);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0x8, 0x0, 0xA);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xF, 0x8, 0x0, 0xB);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xC, 0xC, 0x0, 0xC);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xD, 0xC, 0x0, 0xD);
-                TTI_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0xC, 0x0, 0xE);
-            });
-    }
-
-    const std::uint32_t matmul_op = ENABLE_2X_FORMAT ? TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x7, 0x4, ADDR_MOD_1, 0xF)
-                                                     : TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xF, 0xC, ADDR_MOD_1, 0xF);
-    std::uint32_t matmul_op_last;
-    if constexpr (ENABLE_2X_FORMAT)
-    {
-        matmul_op_last =
-            reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0x7, 0x4, ADDR_MOD_2, 0xF) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0x7, 0x4, ADDR_MOD_2, 0xF);
-    }
-    else
-    {
-        matmul_op_last =
-            reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0xF, 0xC, ADDR_MOD_2, 0xF) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0xF, 0xC, ADDR_MOD_2, 0xF);
-    }
+    constexpr std::uint32_t matmul_op  = TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0, FINAL_SRC_B, FINAL_SRC_A, ADDR_MOD_1, FINAL_DEST);
+    const std::uint32_t matmul_op_last = reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0, FINAL_SRC_B, FINAL_SRC_A, ADDR_MOD_2, FINAL_DEST)
+                                                 : TT_OP_MVMULDI(p_setrwc::CLR_B, 0, FINAL_SRC_B, FINAL_SRC_A, ADDR_MOD_2, FINAL_DEST);
 
     ckernel_template temp(1 /* outer loop */, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), matmul_op);
     temp.set_last_outer_loop_instr(matmul_op_last);
@@ -782,14 +658,7 @@ inline void _llk_math_matmul_init_(
         // Direct-indexing path. Supports plain DI and DI+X2 (DI+X2 is the original
         // MXFP4_2x matmul implementation on Quasar, the Int8_2x path on 4row_arch).
         _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
-        if constexpr (ELTWISE_MATH_ROWS == 4)
-        {
-            _llk_math_matmul_di_mop_config_4row_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
-        }
-        else if constexpr (ELTWISE_MATH_ROWS == 8)
-        {
-            _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
-        }
+        _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
         _set_tile_shape_idx_gpr_(NUM_FACES * MAX_FACE_R_DIM);
     }
     else
