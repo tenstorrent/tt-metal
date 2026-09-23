@@ -144,16 +144,20 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 
-    // The compute kernel is chosen from op_chain[0] alone, and dedicated kernels (other than MAC_TSS)
-    // hard-code their op and never expand SFPU_OP_CHAIN_0, while those same ops emit an empty
-    // init/func into eltwise_sfpu.cpp. Either way, one of them in a longer chain is silently dropped.
+    // The compute kernel and its scalar runtime args come from op_chain[0] alone, and dedicated kernels
+    // hard-code their op and never expand SFPU_OP_CHAIN_0, while those same ops emit an empty init/func
+    // into eltwise_sfpu.cpp. Either way, one of them in a longer chain is silently dropped. MAC_TSS is the
+    // exception only in first position: mac_tss_kernel.cpp expands the chain after filling the DST
+    // registers mac_tile reads, which eltwise_sfpu.cpp never fills.
     if (args.op_chain.size() > 1) {
-        for (const auto& op : args.op_chain) {
-            const auto kernel = utils::get_compute_kernel_path(op.type(), input_tensor.dtype());
+        for (size_t i = 0; i < args.op_chain.size(); ++i) {
+            const auto type = args.op_chain[i].type();
+            const bool leading_mac = i == 0 && type == operations::unary::UnaryOpType::MAC_TSS;
             TT_FATAL(
-                kernel == "eltwise_sfpu.cpp" || op.type() == operations::unary::UnaryOpType::MAC_TSS,
-                "Unary: {} uses a dedicated compute kernel and must be the only op in the chain (chain has {} ops)",
-                op.type(),
+                leading_mac || utils::get_compute_kernel_path(type, input_tensor.dtype()) == "eltwise_sfpu.cpp",
+                "Unary: {} uses a dedicated compute kernel and must be {} in the chain (chain has {} ops)",
+                type,
+                type == operations::unary::UnaryOpType::MAC_TSS ? "the first op" : "the only op",
                 args.op_chain.size());
         }
     }
