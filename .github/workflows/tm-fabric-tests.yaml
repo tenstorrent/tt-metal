@@ -1,10 +1,10 @@
 name: "(TM-Fabric) Fabric Tests"
 
-# Parent workflow for the fabric hardware + perf pipelines. Delegates to two
-# testlist-driven impls:
-#   - tm-fabric-tests-impl.yaml       -> tests/pipeline_reorg/fabric_tests.yaml
-#                                        + fabric-cpu-only-tests-impl.yaml (CPU-only)
-#   - tm-fabric-tests-perf-impl.yaml  -> tests/pipeline_reorg/fabric_perf_tests.yaml
+# Parent workflow for the fabric hardware + perf pipelines. Delegates to:
+#   - tm-fabric-tests-impl.yaml                   -> tests/pipeline_reorg/fabric_tests.yaml
+#                                                   + fabric-cpu-only-tests-impl.yaml (CPU-only)
+#   - tm-fabric-tests-perf-impl.yaml              -> tests/pipeline_reorg/fabric_perf_tests.yaml
+#   - tm-fabric-builder-tests-perf-impl.yaml      -> tests/pipeline_reorg/fabric_builder_perf_tests.yaml 
 #
 # Scheduled run (nightly cron) covers CPU-only tests only.
 #
@@ -103,6 +103,16 @@ on:
         required: false
         default: ""
         type: string
+      run-fabric-builder-perf-tests:
+        description: "Run fabric builder perf tests (fabric_builder_perf_tests.yaml)"
+        required: false
+        default: true
+        type: boolean
+      fabric-builder-perf-enabled-skus:
+        description: "Comma-separated SKUs for the fabric builder perf matrix (or ALL_SKUS_IN_TESTS)"
+        required: false
+        default: "ALL_SKUS_IN_TESTS"
+        type: string
       platform:
         required: false
         type: choice
@@ -159,6 +169,26 @@ jobs:
       tracy: true
       skip-tt-train: true
 
+  # Profiled build for the fabric builder perf jobs.
+  build-artifact-fabric-builder:
+    name: Build (fabric builder perf)
+    needs: check-harbor
+    if: ${{ !cancelled() && inputs.run-fabric-builder-perf-tests }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-inplace-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      tracy: true
+      tracy-debug-categories: fabric-builder
+      skip-tt-train: true
+
   fabric-tests:
     needs: build-artifact
     secrets: inherit
@@ -213,3 +243,17 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ inputs.perf-enabled-skus || 'ALL_SKUS_IN_TESTS' }}
       test-names: ${{ inputs.perf-test-names || '' }}
+
+  fabric-builder-perf-tests:
+    name: Fabric builder perf tests
+    if: ${{
+      (github.event_name == 'workflow_dispatch' && inputs.run-fabric-builder-perf-tests != false)
+      || github.event_name == 'push' }}
+    needs: build-artifact-fabric-builder
+    secrets: inherit
+    uses: ./.github/workflows/tm-fabric-builder-tests-perf-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-fabric-builder.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-fabric-builder.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-fabric-builder.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ inputs.fabric-builder-perf-enabled-skus || 'ALL_SKUS_IN_TESTS' }}

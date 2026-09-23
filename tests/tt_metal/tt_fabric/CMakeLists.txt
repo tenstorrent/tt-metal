@@ -325,3 +325,5 @@ foreach(
 )
     target_precompile_headers(${_fabric_test_target} REUSE_FROM metal_test_pch)
 endforeach()
+
+add_subdirectory(fabric_init_perf)

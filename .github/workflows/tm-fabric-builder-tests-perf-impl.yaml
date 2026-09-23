@@ -1,0 +1,135 @@
+name: "[internal] TM Fabric Builder Perf Tests"
+
+# Runs the fabric builder perf matrix from tests/pipeline_reorg/fabric_builder_perf_tests.yaml.
+# Host-zone cold/hot measurements. The profiled build is selected by the parent.
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      enabled-skus:
+        required: false
+        type: string
+        default: ALL_SKUS_IN_TESTS
+        description: "Comma-separated SKUs (from sku_config.yaml), or ALL_SKUS_IN_TESTS."
+      test-names:
+        required: false
+        type: string
+        default: ""
+        description: "Comma-separated entry names from fabric_builder_perf_tests.yaml to run (default: all)."
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.filter-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_builder_perf_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+      - name: Restrict matrix to requested test names
+        id: filter-matrix
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+
+          matrix = json.loads(r"""${{ steps.build-matrix.outputs.matrix }}""")
+          names = [n.strip() for n in r"""${{ inputs.test-names }}""".split(",") if n.strip()]
+          if names:
+              base = lambda entry: entry["name"].split(" [")[0]
+              unknown = sorted(set(names) - {base(t) for t in matrix})
+              if unknown:
+                  print(f"::error::test-names not present in the matrix: {', '.join(unknown)}")
+                  sys.exit(1)
+              matrix = [t for t in matrix if base(t) in names]
+              print(f"Restricted matrix to: {', '.join(t['name'] for t in matrix)}", file=sys.stderr)
+          print("matrix=" + json.dumps(matrix, separators=(",", ":")))
+          PY
+
+  fabric-builder-perf-tests:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    # wh_* -> wormhole_b0; bh_* -> blackhole.
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
+        LOGURU_LEVEL: INFO
+        TT_METAL_DEVICE_PROFILER: 0
+        TT_METAL_STREAMING_PROFILER: 0
+        TRACY_NO_INVARIANT_CHECK: 1
+        FABRIC_BUILDER_BUILD_ARTIFACT: ${{ inputs.build-artifact-name }}
+        FABRIC_BUILDER_DOCKER_IMAGE: ${{ inputs.docker-image }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: ${{ matrix.test-group.cmd }}
+      - name: Publish comparison summary
+        if: always()
+        run: |
+          report="generated/fabric-builder/${{ matrix.test-group.sku }}/summary.md"
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Upload traces, logs, timings, and baseline candidate
+        if: ${{ !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        with:
+          prefix: fabric-builder-${{ matrix.test-group.sku }}
+          path: /work/generated/fabric-builder/${{ matrix.test-group.sku }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

@@ -10,4 +10,4 @@ data-format
 rt-profiler
 jit
 misc
-fabric-init
+fabric-builder

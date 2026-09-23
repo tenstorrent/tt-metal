@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "hardware": "wh_llmbox_perf",
+  "identity": null,
+  "provenance": {
+    "reference_commit": null,
+    "approved_by": null,
+    "note": "Unmeasured template. Never treat null as zero."
+  },
+  "phases": {
+    "cold": {
+      "bringup": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      },
+      "init": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      },
+      "routing_tables": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      },
+      "build_compile_configure": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      },
+      "configure": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      }
+    },
+    "hot": {
+      "bringup": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      },
+      "init": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      },
+      "routing_tables": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      },
+      "build_compile_configure": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      },
+      "configure": {
+        "median_ms": null,
+        "max_regression_percent": null,
+        "min_regression_ms": null
+      }
+    }
+  }
+}

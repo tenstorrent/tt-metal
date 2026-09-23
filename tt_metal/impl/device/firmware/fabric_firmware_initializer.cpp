@@ -280,7 +280,7 @@ FabricFirmwareInitializer::FabricFirmwareInitializer(
 
 void FabricFirmwareInitializer::init(
     const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& /*init_done*/) {
-    TTZoneScopedDN(FABRIC_INIT, "FabricFirmwareInitializer::init");
+    TTZoneScopedDN(FABRIC_BUILDER, "FabricFirmwareInitializer::init");
     
     devices_ = devices;
 
@@ -430,7 +430,7 @@ void FabricFirmwareInitializer::post_teardown() {
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_.test(); }
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
-    TTZoneScopedDN(FABRIC_INIT, "FabricFirmwareInitializer::compile_and_configure_fabric");
+    TTZoneScopedDN(FABRIC_BUILDER, "FabricFirmwareInitializer::compile_and_configure_fabric");
     
     std::vector<std::shared_future<Device*>> events;
     events.reserve(devices_.size());

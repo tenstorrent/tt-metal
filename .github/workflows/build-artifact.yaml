@@ -19,6 +19,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      tracy-debug-categories:
+        required: false
+        type: string
+        default: "off"
+        description: "The Tracy debug categories to enable. NOTE: Needs *tracy* to also be enabled."
       distributed:
         required: false
         type: boolean
@@ -430,6 +435,7 @@ jobs:
         ${{ inputs.toolchain }}-
         ${{ inputs.architecture }}-
         tracy:${{ inputs.tracy }}-
+        tracy-debug:${{ inputs.tracy-debug-categories }}-
         dist:${{ inputs.distributed }}-
         lto:${{ inputs.enable-lto }}
       queue: max
@@ -553,6 +559,8 @@ jobs:
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
+          # Add the fabric-builder suffix if tracy-debug-categories is set to fabric-builder
+          TRACY_SUFFIX="${TRACY_SUFFIX%_fabric-builder}${{ inputs.tracy-debug-categories == 'fabric-builder' && '_fabric-builder' || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '-no-distributed') || '' }}"
           DISTRO="${{ env.DISTRO }}"
           VERSION="${{ env.VERSION }}"
@@ -639,6 +647,8 @@ jobs:
           [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
 
       - name: 🔧 CMake configure
+        env:
+          FABRIC_BUILDER_TRACY_CATEGORIES: ${{ inputs.tracy-debug-categories || 'off' }}
         run: |
           set -eu # basic shell hygiene
 
@@ -682,6 +692,12 @@ jobs:
             build_args+=("--enable-lto")
           fi
           echo "build-artifact.yaml running: ${build_args[*]}"
+          # fabric-builder-ci: category forwarding
+          case "$FABRIC_BUILDER_TRACY_CATEGORIES" in
+            off|fabric-builder) ;;
+            *) echo "Unsupported debug category selection" >&2; exit 2 ;;
+          esac
+          build_args+=(--build-perf-debug "$FABRIC_BUILDER_TRACY_CATEGORIES")
           "${build_args[@]}"
 
       - name: 📦 Pack CPM cache
@@ -844,6 +860,8 @@ jobs:
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
+          # Add the fabric-builder suffix if tracy-debug-categories is set to fabric-builder
+          TRACY_SUFFIX="${TRACY_SUFFIX%_fabric-builder}${{ inputs.tracy-debug-categories == 'fabric-builder' && '_fabric-builder' || '' }}"
           PYTHON_VERSION_NODOT=$(echo "${{ needs.parse-platform.outputs.python-version }}" | tr -d '.')
           ARTIFACT_NAME="ttnn-dist-inplace-cp${PYTHON_VERSION_NODOT}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
@@ -879,6 +897,8 @@ jobs:
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
+          # Add the fabric-builder suffix if tracy-debug-categories is set to fabric-builder
+          TRACY_SUFFIX="${TRACY_SUFFIX%_fabric-builder}${{ inputs.tracy-debug-categories == 'fabric-builder' && '_fabric-builder' || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
           BUILD_TYPE="${{ inputs.build-type || 'Release' }}"
           VERSION="${{ env.VERSION }}"
