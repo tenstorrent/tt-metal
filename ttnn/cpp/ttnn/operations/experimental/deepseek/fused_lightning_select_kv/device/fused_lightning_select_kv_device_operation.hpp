@@ -7,10 +7,10 @@
 #include <cstdint>
 #include <optional>
 #include <variant>
-
-#include <tt-metalium/program_descriptors.hpp>
+#include <vector>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -34,11 +34,12 @@ struct FusedLightningSelectKvDeviceOperation {
         std::optional<Tensor> valid_length_tensor;
     };
 
-    using spec_return_value_t = tt::tt_metal::TensorSpec;
-    using tensor_return_value_t = Tensor;
+    // [0] selected kv rows, [1] index scores.
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     struct ProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -56,7 +57,7 @@ struct FusedLightningSelectKvDeviceOperation {
 
 namespace ttnn::prim {
 
-ttnn::Tensor fused_lightning_select_kv(
+std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key_cache,
     const ttnn::Tensor& head_weights,
