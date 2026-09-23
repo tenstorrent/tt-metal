@@ -234,6 +234,13 @@ private:
     // apart, every slot but the first would be misaligned and its write would go nowhere,
     // leaving the kernel spinning on a WAIT_CQ that is never satisfied.
     uint32_t cq_signal_slot_stride_ = 0;
+    // Base (local DRISC L1) of each sender kernel's target table, kMaxTargetsPerSender words; uniform
+    // across all sender cores. Carved right after the signal slots.
+    uint32_t target_table_l1_addr_ = 0;
+    // targets_per_sender_[s] holds the distinct target state addresses sender slot s has been queued
+    // since start, mirroring what that sender's kernel records in its target table, so a queue call
+    // that would overflow the table is rejected on the host.
+    std::vector<std::vector<uint32_t>> targets_per_sender_;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
     // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
     // write and the WAIT_CQ request value.

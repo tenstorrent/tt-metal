@@ -40,8 +40,10 @@
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
 using tt::tt_metal::DramSenderStateBlock;
+using tt::tt_metal::kMaxTargetsPerSender;
 using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
+using tt::tt_metal::kTargetTablePipeBit;
 using tt::tt_metal::TensorPrefetcherEntry;
 using tt::tt_metal::TensorPrefetcherRequestHeader;
 using tt::tt_metal::TensorPrefetcherTensorLayout;
@@ -244,6 +246,28 @@ FORCE_INLINE void store_sender_state(
     sb->fifo_wr_ptr = iface.fifo_wr_ptr;
 }
 
+// Spin until every receiver of one recorded target has acked everything this sender published to it.
+// `table_word` is the target's entry in the kernel's target table: its state address, with
+// kTargetTablePipeBit set for a PrefetcherPipe. Both transports keep their counters in the state
+// they name, so this reads them straight from there rather than from an interface a later request
+// may have overwritten.
+FORCE_INLINE void drain_target(uint32_t table_word) {
+    const uint32_t state_addr = table_word & ~kTargetTablePipeBit;
+    if (table_word & kTargetTablePipeBit) {
+        experimental::PipeSenderCtx ctx;
+        experimental::pipe_load_sender_ctx(ctx, state_addr);
+        experimental::dram_sender_barrier(ctx.local_sent_base, ctx.local_acked_base, L1_ALIGNMENT, ctx.num_receivers);
+    } else {
+        volatile tt_l1_ptr DramSenderStateBlock* sb =
+            reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(state_addr);
+        experimental::dram_sender_barrier(
+            sb->aligned_pages_sent_ptr,
+            sb->aligned_pages_sent_ptr + experimental::REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET,
+            experimental::REMOTE_CB_LOCAL_PAGES_STRIDE,
+            sb->num_receivers);
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -268,6 +292,9 @@ void kernel_main() {
     constexpr uint32_t ordinary_mpfe_weight = get_compile_time_arg_val(8);
     constexpr bool dynamic_mpfe_weighting = get_compile_time_arg_val(9) != 0;
     constexpr bool mpfe_enabled = get_compile_time_arg_val(10) != 0;
+    // Base of this core's target table: kMaxTargetsPerSender words, one per distinct target this
+    // sender has been sent a request for (see kTargetTablePipeBit for the encoding).
+    constexpr uint32_t target_table_l1_base = get_compile_time_arg_val(11);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -303,10 +330,10 @@ void kernel_main() {
     }
 
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
-    // What the interface above currently holds, so the stop sentinel drains it with the matching
-    // counter stride -- or not at all, if no request has loaded one.
-    enum class LoadedTarget : uint8_t { None, GlobalCircularBuffer, PrefetcherPipe };
-    LoadedTarget loaded_target = LoadedTarget::None;
+    // Every target a request has named since start, in first-seen order, so the stop sentinel can
+    // drain all of them. The host keeps the count within kMaxTargetsPerSender.
+    volatile tt_l1_ptr uint32_t* target_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(target_table_l1_base);
+    uint32_t num_targets = 0;
 
     // Zero the per-CQ signal slots before parking on the socket. Safe to do here
     // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
@@ -327,21 +354,12 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherRequestHeader*>(socket.read_ptr);
         const uint8_t cmd_id = req->base.cmd_id;
         if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_STOP) {
-            // Stop sentinel. The kernel returns right after this loop, so drain the
-            // last loaded target here: receivers ack into counters in this DRISC's L1,
-            // which the next program is free to reuse.
-            if (loaded_target == LoadedTarget::PrefetcherPipe) {
-                // remote_cb_sender_barrier is the GlobalCircularBuffer's spelling of this and
-                // assumes its interleaved DRISC counters, so a pipe drains on the shared one. The
-                // ACKED block base comes off the config page the last request loaded, which is the
-                // same page iface.aligned_pages_sent_ptr points into.
-                experimental::dram_sender_barrier(
-                    iface.aligned_pages_sent_ptr,
-                    experimental::pipe_local_acked_base(iface.config_ptr),
-                    L1_ALIGNMENT,
-                    remote_cb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr));
-            } else if (loaded_target == LoadedTarget::GlobalCircularBuffer) {
-                experimental::remote_cb_sender_barrier(remote_cb_id);
+            // Stop sentinel. The kernel returns right after this loop, and receivers ack into
+            // counters in this DRISC's L1, which the next program is free to reuse. A request
+            // returns without waiting for its receivers, so every target named since start may
+            // still have acks in flight, not just the last one: drain them all.
+            for (uint32_t t = 0; t < num_targets; ++t) {
+                drain_target(target_table[t]);
             }
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
@@ -393,7 +411,17 @@ void kernel_main() {
         if (!is_pipe) {
             load_sender_state(state, iface);
         }
-        loaded_target = is_pipe ? LoadedTarget::PrefetcherPipe : LoadedTarget::GlobalCircularBuffer;
+        {
+            const uint32_t table_word = target_state_addr | (is_pipe ? kTargetTablePipeBit : 0u);
+            uint32_t t = 0;
+            while (t < num_targets && target_table[t] != table_word) {
+                ++t;
+            }
+            if (t == num_targets) {
+                ASSERT(num_targets < kMaxTargetsPerSender);
+                target_table[num_targets++] = table_word;
+            }
+        }
         // Where this sender reads its receivers' acks: a pipe keeps them in a second block of its
         // config page, a GlobalCircularBuffer interleaves them with pages_sent.
         const uint32_t local_acked_base =

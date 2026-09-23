@@ -9,6 +9,8 @@
 // which holds only a few entries of in-flight data -- refilling as the sender pushes through
 // num_iters entries, so the measured rate is the sender's and not the ring's capacity.
 //
+// A nonzero hold_cycles delays the first pop, so a test can hold every ack back for a known time.
+//
 // No barrier at exit: the acks pop_front posts are what the sender's stop barrier waits on, and the
 // durable read cursor is checkpointed by PrefetcherPipe::commit() when the object goes out of scope.
 
@@ -21,10 +23,14 @@
 
 void kernel_main() {
     constexpr uint32_t num_iters = get_arg(args::num_iters);
+    constexpr uint32_t hold_cycles = get_arg(args::hold_cycles);
 
     Noc noc;
     experimental::PrefetcherPipe pipe(pipe::in);
 
+    if constexpr (hold_cycles != 0) {
+        riscv_wait(hold_cycles);
+    }
     for (uint32_t i = 0; i < num_iters; ++i) {
         pipe.wait_front(1);
         pipe.pop_front(1, noc);

@@ -79,6 +79,18 @@ inline constexpr uint32_t kRequestPageBytes = 128;
 // the dispatcher; a WAIT_CQ request makes the kernel spin until it is reached.
 constexpr uint32_t kNumCqSignalSlots = 2;
 
+// Most distinct delivery targets (GlobalCircularBuffers or PrefetcherPipes) one sender core may be
+// sent requests for between StartTensorPrefetcher and StopTensorPrefetcher. Each sender records every
+// target it loads in a table of this many words in its DRISC L1, and on stop waits for every
+// receiver of every recorded target to ack, since an earlier target's receivers may still be
+// consuming after the sender has moved on to another. The host rejects a queue call that would take a
+// sender past this count.
+inline constexpr uint32_t kMaxTargetsPerSender = 32;
+
+// A target's word in that table: its target_state_addr, which is L1-aligned, with the low bit set for
+// a PrefetcherPipe and clear for a GlobalCircularBuffer.
+inline constexpr uint32_t kTargetTablePipeBit = 1;
+
 // Address-independent per-tensor geometry handed to the Tensor prefetcher kernel.
 // All values are derived from the tensor shape + dtype + GCB ring topology + DRISC L1
 // stage budget; the host (compute_tensor_layout) picks (rows_per_sub, M) by the fit

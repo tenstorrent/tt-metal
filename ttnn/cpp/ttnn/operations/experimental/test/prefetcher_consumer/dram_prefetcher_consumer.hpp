@@ -37,6 +37,9 @@ struct DramPrefetcherConsumerDeviceOperation {
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
         std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> prefetcher_pipes;
         ttnn::MeshDevice* mesh_device;
+        // PrefetcherPipe consumer only: wall-clock cycles each receiver waits before its first pop, so
+        // a test can keep acks outstanding for a known time. 0 drains at once.
+        uint32_t hold_cycles = 0;
     };
 
     struct tensor_args_t {};
@@ -81,11 +84,13 @@ void test_dram_prefetcher_consumer(
 // Same discard-only drain against a PrefetcherPipe target (bound as
 // `ttnn.experimental.test_tensor_prefetcher_pipe_consumer`), so the two transports can be benched
 // head to head. `num_iters` counts entries per receiver, and `page_size_bytes` is the entry size in
-// the consumer ProgramSpec.
+// the consumer ProgramSpec. `hold_cycles` delays each receiver's first pop by that many wall-clock
+// cycles, which holds back every ack for at least that long.
 void test_tensor_prefetcher_pipe_consumer(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_iters,
     uint32_t page_size_bytes,
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes);
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    uint32_t hold_cycles = 0);
 
 }  // namespace ttnn::operations::experimental::test
