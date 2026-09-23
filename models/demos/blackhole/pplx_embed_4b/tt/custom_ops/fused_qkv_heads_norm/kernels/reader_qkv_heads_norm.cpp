@@ -30,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t head_groups = get_compile_time_arg_val(5);
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);
-    constexpr auto in0_args = TensorAccessorArgs<8>();
+    constexpr uint32_t cache_rot = get_compile_time_arg_val(8);  // 1: cos/sin pushed only when the seq tile changes
+    constexpr auto in0_args = TensorAccessorArgs<9>();
     constexpr auto gq_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr auto gk_args = TensorAccessorArgs<gq_args.next_compile_time_args_offset()>();
     constexpr auto sc_args = TensorAccessorArgs<gk_args.next_compile_time_args_offset()>();
@@ -93,6 +94,7 @@ void kernel_main() {
         ceps.push_back(1);
     }
 
+    uint32_t last_s_tile = 0xFFFFFFFFu;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const uint32_t work_unit = work_unit_start + w;
         const uint32_t block = work_unit / head_groups;          // (batch, seq_tile) pair
@@ -118,8 +120,13 @@ void kernel_main() {
             noc.async_read(s0, cb, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
             l1_write_offset += tile_size_bytes;
         }
+        bool load_rot = false;
         if constexpr (fuse_rotary) {
-            // cos/sin tiles for this seq tile (shared by every head in the unit)
+            load_rot = !cache_rot || s_tile != last_s_tile;
+        }
+        if (load_rot) {
+            // cos/sin tiles for this seq tile (shared by every head in the unit). With cache_rot
+            // they stay in the CB until the seq tile changes; the compute pops in lockstep.
             CircularBuffer ccos(cb_cos), csin(cb_sin);
             ccos.reserve_back(head_dim_tiles);
             csin.reserve_back(head_dim_tiles);
@@ -140,6 +147,7 @@ void kernel_main() {
             noc.async_read_barrier();
             ccos.push_back(head_dim_tiles);
             csin.push_back(head_dim_tiles);
+            last_s_tile = s_tile;
         } else {
             noc.async_read_barrier();
         }

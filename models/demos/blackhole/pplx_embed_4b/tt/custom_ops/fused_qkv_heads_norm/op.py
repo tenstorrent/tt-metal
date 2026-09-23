@@ -23,6 +23,7 @@ from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.fused_qkv_heads.op impor
 _HERE = os.path.dirname(os.path.abspath(__file__))
 READER_KERNEL = os.path.join(_HERE, "kernels", "reader_qkv_heads_norm.cpp")
 COMPUTE_KERNEL = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm.cpp")
+COMPUTE_KERNEL_V2 = os.path.join(_HERE, "kernels", "compute_qkv_heads_norm_v2.cpp")  # dest-reuse, 6 passes/head
 WRITER_KERNEL = os.path.join(_HERE, "kernels", "writer_qkv_heads_norm.cpp")
 _BF16_TILE = _TILE_BYTES[ttnn.bfloat16]
 
@@ -55,6 +56,10 @@ def nlp_create_qkv_heads_norm_headsplit(
         memory_config = ttnn.DRAM_MEMORY_CONFIG
     device = qkv_fused.device()
     fuse_rotary = rot_cos is not None
+    use_v2 = os.getenv("QWEN_FUSED_COMPUTE_V2", "0") == "1"
+    # cos/sin tiles depend only on the seq tile; consecutive units of a core share it across the
+    # head groups, so with the v2 compute they are read once per seq tile instead of once per unit.
+    cache_rot = fuse_rotary and use_v2
     if fuse_rotary and (rot_sin is None or trans_mat is None):
         raise ValueError("rot_cos, rot_sin and trans_mat must be given together")
     # Placeholder bindings when rotary is off: the kernels never touch them (compile-time flag).
@@ -115,8 +120,8 @@ def nlp_create_qkv_heads_norm_headsplit(
         cbs.append(cb(17, group_q_tiles * 2, q_dtype, _TILE_BYTES[q_dtype]))  # Q out in its own dtype
     if fuse_rotary:
         cbs += [
-            cb(9, Wt, ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
-            cb(10, Wt, ttnn.bfloat16, _BF16_TILE),  # sin tiles
+            cb(9, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # cos tiles for the unit's seq tile
+            cb(10, Wt * (2 if cache_rot else 1), ttnn.bfloat16, _BF16_TILE),  # sin tiles
             cb(11, 1, ttnn.bfloat16, _BF16_TILE),  # 32x32 rotation tile (resident)
             cb(12, Wt, ttnn.bfloat16, _BF16_TILE),  # x @ T
             cb(13, Wt, ttnn.bfloat16, _BF16_TILE),  # (x @ T) * sin
@@ -133,10 +138,20 @@ def nlp_create_qkv_heads_norm_headsplit(
         head_groups,
         heads_per_group,
         int(fuse_rotary),
+        int(cache_rot),
     ]
     for t in (qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile, cos_t, sin_t, trans_t):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    compute_ct = [plan.q_heads_per_kv, heads_per_group, Wt, int(fuse_rotary), int(separate_q)]
+    compute_ct = [
+        plan.q_heads_per_kv,
+        heads_per_group,
+        Wt,
+        int(fuse_rotary),
+        int(separate_q),
+        int(cache_rot),
+        head_groups,
+        plan.seq_tiles,
+    ]
     writer_ct = [
         plan.seq_tiles,
         Wt,
@@ -173,7 +188,7 @@ def nlp_create_qkv_heads_norm_headsplit(
                 ],
             )
         )
-        compute_rt.append((core, [n_units]))
+        compute_rt.append((core, [n_units, cursor]))
         writer_rt.append(
             (core, [q_tensor.buffer_address(), k_tensor.buffer_address(), v_tensor.buffer_address(), n_units, cursor])
         )
@@ -190,7 +205,7 @@ def nlp_create_qkv_heads_norm_headsplit(
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=COMPUTE_KERNEL,
+                kernel_source=COMPUTE_KERNEL_V2 if use_v2 else COMPUTE_KERNEL,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=used_cores,
                 compile_time_args=compute_ct,

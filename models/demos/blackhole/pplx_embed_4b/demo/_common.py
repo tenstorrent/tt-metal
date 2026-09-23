@@ -409,6 +409,15 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         else:
             cfg = {"batched_l1": fits_l1, "dram_grid": not fits_l1}
 
+    # Batched-prefill SDPA: all 120 workers and one K chunk. Standalone at the model's exact
+    # config (LoFi, exp approx, Q/K/V bfp8, non-causal): bs32 932 -> 806 us, bs8 308 -> 262 us
+    # per call. bs1 keeps 8x8 / k256: its activations are L1-resident and the k512 SDPA CBs
+    # clash with them (TT_THROW), and 32 work units cannot fill 120 cores anyway. Must run
+    # before apply_recommended_env, whose setdefault would pin k256. Opt out:
+    # QWEN_SDPA_BATCHED_WIDE=0.
+    if batch_size > 1 and os.getenv("QWEN_SDPA_BATCHED_WIDE", "1") == "1":
+        os.environ.setdefault("QWEN_SDPA_GRID", "12,10")
+        os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
     apply_recommended_env(batched_l1=cfg["batched_l1"])
     # Fused SwiGLU (tt/mlp.py PplxFusedSwigluMLP) folds FF1 + FF3 + the silu*mul
     # BinaryNg into one minimal_matmul(fuse_swiglu=True). It is a win at moderate
