@@ -51,31 +51,25 @@ ULP_FORMATS: Tuple[DataFormat, ...] = (
     DataFormat.Float32,
 )
 
-# Formats with no float dtype of their own that are still gated in a *proxy* format's ULP
-# space -- ttnn's choice, and free here because `passed_test` has already cast a Bfp8_b
-# tensor to bfloat16 before comparing. Three things to know before enrolling a budget on
-# one:
+# Formats gated in a *proxy* format's ULP space, which is free because `passed_test`
+# has already cast a Bfp8_b tensor to bfloat16 before comparing. Three things to know
+# before enrolling a budget on one:
 #
-# * **A Bfp8_b budget is denominated in bf16 steps, and one Bfp8_b step is two of them.**
-#   Bfp8_b's 7 magnitude bits include an explicit leading 1, so it has 6 fractional bits
-#   against bfloat16's 7. `max_ulp=N` therefore buys N/2 Bfp8_b steps, and an odd budget
-#   buys the same as the even one below it.
+# * **A Bfp8_b budget is in bf16 steps, and one Bfp8_b step is two of them.** `max_ulp=N`
+#   buys N/2 Bfp8_b steps, so an odd budget buys the same as the even one below it.
 # * **It does not forgive block quantization.** A small element in a wide block is
 #   quantized by the shared exponent far more coarsely than bf16 would quantize it --
 #   measured, a lane at 0.06 in a block with amax 2.77 is 69 bf16 steps -- and the budget
-#   charges all of it. `near_zero_atol` cannot absorb that either: its band is a fraction
-#   of the *tensor* maximum, and such a lane is only small relative to its own block. So a
-#   Bfp8_b budget is usable only where the block quantization is exact; elsewhere the op
-#   belongs on the tolerance arm. Charging for it is deliberate -- ORing the lattice
-#   verdict in would mean `max_ulp` was not the enforced maximum for this format.
-# * **The flush models disagree, latent until an op carries a Bfp8_b budget.** bf16 proxy
-#   space collapses below 2**-126 while a Bfp8_b golden is flushed at
-#   `golden_generators._FTZ_THRESHOLD`'s 1e-37 and the unpack model does not flush at all,
-#   so a lane in [1.18e-38, 1e-37) would be charged steps against a golden the harness
-#   calls zero. No current stimulus domain reaches it.
+#   charges all of it. `near_zero_atol` cannot absorb it either: its band is a fraction
+#   of the *tensor* maximum, and such a lane is only small relative to its own block. So
+#   a Bfp8_b budget is usable only where the block quantization is exact.
+# * **The flush models disagree**, and no current stimulus domain reaches it: bf16 proxy
+#   space collapses below 2**-126 while a Bfp8_b golden flushes at 1e-37 and the unpack
+#   model does not flush at all, so a lane in [1.18e-38, 1e-37) would be charged steps
+#   against a golden the harness calls zero.
 #
-# Bfp4_b (2 fractional bits) and Bfp2_b (0) are deliberately absent: a bf16 step count
-# would read every legal quantization as a 32- or 128-step error.
+# Bfp4_b (2 fractional bits) and Bfp2_b (0) are absent: a bf16 step count would read
+# every legal quantization as a 32- or 128-step error.
 _ULP_PROXY_DTYPES: Dict[DataFormat, torch.dtype] = {
     DataFormat.Bfp8_b: torch.bfloat16,
 }
@@ -662,13 +656,10 @@ def within_ulp(
 ) -> Tuple[bool, str]:
     """The whole verdict: non-finite positions agree, and every finite lane is in budget.
 
-    The scalar form of the gate's verdict, for callers outside ``passed_test``. It routes
-    through the same :func:`ulp_elementwise_valid` and forwards every knob that changes
-    that verdict, so the two cannot drift into disagreeing about one tensor -- a
-    passthrough rather than a shorter signature on purpose, since without
-    *near_zero_atol* there are gate verdicts this could not reproduce at any argument.
-    *max_ulp* is keyword-only because it is the one real magic number in the signature;
-    *mask* selects the lanes under judgement.
+    The scalar form of the gate, for callers outside ``passed_test``. It routes through
+    the same :func:`ulp_elementwise_valid` and forwards every knob that changes the
+    verdict, so the two cannot disagree about one tensor. *mask* selects the lanes under
+    judgement.
 
     **Omitting** *fmt* skips the format allowlist as well as the label, and asserts the
     caller has already put the tensors on the lattice they mean: ``format_dict`` collapses
