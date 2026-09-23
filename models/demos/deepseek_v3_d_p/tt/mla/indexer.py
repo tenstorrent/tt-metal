@@ -1334,7 +1334,11 @@ class TtCsaIndexer(TtIndexerBase):
         layer_num: int = 1,
         first_layer_idx: int | None = None,
     ):
-        del slot_num
+        assert slot_num >= 1, f"slot_num must be positive, got {slot_num}"
+        # One overlap-state pair per cache-user slot: the key cache is multi-slot (keyed by
+        # cache_user_id) and a chunk's terminal compressor state is the next chunk's predecessor, so
+        # slots must not share the pair or one user would consume another's boundary state.
+        self._slot_num = slot_num
         self.compress_rate = int(config.compress_rates["compressed_sparse_attention"])
         assert self.compress_rate == 4, f"V4 CSA requires compression ratio 4, got {self.compress_rate}"
         assert seq_len % self.compress_rate == 0
@@ -1457,13 +1461,21 @@ class TtCsaIndexer(TtIndexerBase):
         self._idx_knorm = weights["kv_norm"]
 
     def reset_overlap_state(self) -> None:
-        """Start over from no predecessor window. The inner compressor owns the layout, since it is the
-        one that consumes and emits these. TtCSA.alloc_state resets this alongside the block compressor
-        so both states begin at the same token position."""
+        """Start over from no predecessor window, independently for every cache-user slot. The inner
+        compressor owns the layout, since it is the one that consumes and emits these. TtCSA.alloc_state
+        resets this alongside the block compressor so both states begin at the same token position.
+
+        One pair per slot: two users sharing this instance must not share the overlap state, or the
+        second user's first chunk would consume the first user's terminal state (see __init__)."""
         if hasattr(self, "_overlap_kv_state"):
-            ttnn.deallocate(self._overlap_kv_state)
-            ttnn.deallocate(self._overlap_score_state)
-        self._overlap_kv_state, self._overlap_score_state = self._compressor.alloc_overlap_state()
+            for state in (*self._overlap_kv_state, *self._overlap_score_state):
+                ttnn.deallocate(state)
+        self._overlap_kv_state = []
+        self._overlap_score_state = []
+        for _ in range(self._slot_num):
+            kv_state, score_state = self._compressor.alloc_overlap_state()
+            self._overlap_kv_state.append(kv_state)
+            self._overlap_score_state.append(score_state)
 
     @property
     def index_entries(self) -> int:
@@ -1534,8 +1546,9 @@ class TtCsaIndexer(TtIndexerBase):
         predecessor. The cache write itself always covers the padded width, which the next chunk
         overwrites and the score op's causal mask ignores until then."""
         assert start_pos % self.compress_rate == 0
-        prior_kv_state = self._overlap_kv_state
-        prior_score_state = self._overlap_score_state
+        assert cache_user_id < self._slot_num, f"cache_user_id {cache_user_id} >= slot_num {self._slot_num}"
+        prior_kv_state = self._overlap_kv_state[cache_user_id]
+        prior_score_state = self._overlap_score_state[cache_user_id]
         local_keys, kv_state, score_state = self._compressor(
             hidden_states,
             prior_kv_state,
@@ -1563,8 +1576,8 @@ class TtCsaIndexer(TtIndexerBase):
         ttnn.deallocate(keys)
         ttnn.deallocate(prior_kv_state)
         ttnn.deallocate(prior_score_state)
-        self._overlap_kv_state = self._compressor.terminal_state(kv_state)
-        self._overlap_score_state = self._compressor.terminal_state(score_state)
+        self._overlap_kv_state[cache_user_id] = self._compressor.terminal_state(kv_state)
+        self._overlap_score_state[cache_user_id] = self._compressor.terminal_state(score_state)
 
     def _score(
         self,
