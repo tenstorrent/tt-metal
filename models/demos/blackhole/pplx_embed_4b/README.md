@@ -558,7 +558,10 @@ unfused path, where the defaults win for every projection. The same sweep says t
 bs8 matmuls want other blocks (FF2 16,8,8 −16%, QKV 8,4,8 −15%, WO 16,8,8 −12%
 standalone) — same-chip A/B (chip 7): bs8 **126.4 → 123.4 ms (−2.4%)**, now the bs8
 default (`QWEN_MM_BLOCK_FF2=16,8,8`, `QWEN_MM_BLOCK_QKV=8,4,8`, `QWEN_MM_BLOCK_WO=16,8,8`).
-Full table: `perf_csv/NEGATIVE_RESULTS.md` §29.
+A wider fused-kernel sweep then found K_block 20 for bs16 (`4,20,8` / 1×4): 2988 → 2874 µs
+standalone, **232.8 → 228.3 ms e2e (−1.9%)**, now the bs16 default. Larger K steps are slower
+for every *plain* projection at every batch (K10…K40: +2…+20%), so only the fused kernel takes
+it. Full tables: `perf_csv/NEGATIVE_RESULTS.md` §29.
 
 ### Fused residual add + RMSNorm (bs16+) — landed (2026-09-23)
 
@@ -770,6 +773,18 @@ branch actually taken.
 Per-iteration host cost in this mode at bs1 (`QWEN_ITER_TIMING=1`): h2d 0.08 +
 trace issue 0.02 + readback enqueue 0.04 + to_torch 0.16 = **0.3 ms**; the
 remaining 25.05 ms is the device. bs1 is device-bound end to end.
+
+### Correction: the loaded chip runs at ≈1.1 GHz, so profiler µs are ~20% optimistic (2026-09-23)
+
+`tt-smi -s` sampled every 4 s during a 150-iteration bs32 run: the loaded P150 sits at
+**1087–1143 MHz, 166–170 W, 66 °C** (idle chips 800 MHz / 37 W). The profiler converts
+device cycles at the nominal 1.35 GHz, which is why the eager bs32 pass shows Σkernel
+384.5 ms with no inter-op gaps while the same forward takes 446–451 ms (eager and trace
+replay alike: 451.3 vs 451.5 ms). Every per-op µs and roofline % quoted from the
+profiler in this README is therefore ~20% low for sustained batched runs: compute-bound
+ops scale with AICLK, DRAM-bound ones do not. The chip is power-limited, so lowering
+power per FLOP (fewer active cores on DRAM-bound ops, narrower operands) buys clock as
+well as bytes. E2E numbers are unaffected. Details: `perf_csv/NEGATIVE_RESULTS.md` §30.
 
 ### Correction: use DEVICE KERNEL DURATION, not FW DURATION, for op shares (2026-09-23)
 
