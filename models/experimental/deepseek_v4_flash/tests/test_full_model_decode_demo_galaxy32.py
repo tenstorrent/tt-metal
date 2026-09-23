@@ -66,7 +66,6 @@ from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo imp
     _DEFAULT_TEXT,
     _build_and_prefill,
     _checkpoint_available,
-    _region,
 )
 
 _PROFILE = "galaxy32"
@@ -128,10 +127,10 @@ def test_galaxy32_packed_l1_decode_demo(mesh_device, reset_seeds, text: str) -> 
 
     with contextlib.ExitStack() as prefetcher:
         state = _build_and_prefill(mesh_device, text, prefetcher, system_config=system_config)
-        model, lm_head, tokenizer = state["model"], state["lm_head"], state["tokenizer"]
+        model, tokenizer = state["model"], state["tokenizer"]
         real_len, max_seq = state["real_len"], state["max_seq"]
         max_new_tokens, eos_id = state["max_new_tokens"], state["eos_id"]
-        traced, next_id = state["traced"], state["next_id"]
+        next_id = state["next_id"]
 
         assert model.use_packed_l1_weights, "model did not take the packed L1 weight path"
         _log_packed_l1_budget(model, state["config"])
@@ -152,12 +151,7 @@ def test_galaxy32_packed_l1_decode_demo(mesh_device, reset_seeds, text: str) -> 
                 logger.warning(f"hit max RoPE length {max_seq}; stopping at {len(generated)} tokens")
                 break
             t0 = time.perf_counter()
-            if traced:
-                logits = model.decode_traced(next_id, pos).reshape(1, -1).float()
-            else:
-                hidden = model.decode(next_id, pos, state["rope"])
-                with _region("LM_HEAD"):
-                    logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
+            logits = model.decode_traced(next_id, pos).reshape(1, -1).float()
             next_id = int(logits[0].argmax().item())
             decode_time += time.perf_counter() - t0
             decode_tokens += 1

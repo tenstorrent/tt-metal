@@ -123,7 +123,6 @@ from urllib.parse import unquote, urlparse
 import torch
 from loguru import logger
 
-import ttnn
 from models.experimental.deepseek_v4_flash.demo import tui
 from models.experimental.deepseek_v4_flash.demo.chat_cli import (
     ChatEngine,
@@ -137,7 +136,6 @@ from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
     render_message,
     sort_tool_results_by_call_order,
 )
-from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 
@@ -727,9 +725,6 @@ class _Turn:
         self.next_id: int | None = None  # produced but not yet fed back
         self.generated: list[int] = []
         self.pending: deque[bool] = deque()  # per in-flight step: is it the last prompt token?
-        # Logits of steps run eagerly (``--no-trace``, which has no async dispatch and so
-        # no pipelining); empty on the traced path, where they arrive over the D2H socket.
-        self.eager: deque[torch.Tensor] = deque()
         self.stream: _Streamer | None = None
         self.hit_cap = False
         # Set when a dispatch fails. The turn stays in the round-robin until its steps
@@ -993,9 +988,9 @@ class _Scheduler:
     # -- KV pool reporting ------------------------------------------------------- #
     def pool_usage(self) -> dict:
         """Per-group ``(blocks used, blocks total)`` of the shared page pool, or ``{}``
-        on the dense (``--no-trace``) path. Host-side bookkeeping, so it is cheap enough
-        to poll for the status pane."""
-        if not (self.engine.traced and getattr(self.engine.model, "paged", None)):
+        before the pool exists. Host-side bookkeeping, so it is cheap enough to poll for
+        the status pane."""
+        if not getattr(self.engine.model, "paged", None):
             return {}
         try:
             return dict(self.engine.model.session_usage())
@@ -1005,7 +1000,7 @@ class _Scheduler:
     def _pool_summary(self) -> str:
         usage = self.pool_usage()
         if not usage:
-            return "dense caches (no paging)"
+            return "no page pool yet"
         groups = ", ".join(f"{name} {used}/{total} blocks" for name, (used, total) in usage.items())
         return f"{groups}; ~{self.engine.tokens_left()} tokens free"
 
@@ -1092,9 +1087,8 @@ class _Scheduler:
             try:
                 self._decode_ahead(turn)
             except Exception as e:  # noqa: BLE001 - one bad turn must not stop the others
-                if self.engine.traced:
-                    with contextlib.suppress(Exception):
-                        self.engine.drain_traced(turn.next_id if turn.next_id is not None else 0)
+                with contextlib.suppress(Exception):
+                    self.engine.drain_traced(turn.next_id if turn.next_id is not None else 0)
                 self._fail(turn, e)
         self._post(prefill)
         self._feed(prefill)
@@ -1109,7 +1103,7 @@ class _Scheduler:
             assert self._inflight and self._inflight[0] is turn, "decode outputs read out of dispatch order"
             self._inflight.popleft()
             last_prompt_token = turn.pending.popleft()
-            out = turn.eager.popleft() if turn.eager else self.engine.model.read_decoded_output().reshape(1, -1).float()
+            out = self.engine.model.read_decoded_output().reshape(1, -1).float()
             if turn.phase == _Turn.DECODE or last_prompt_token:
                 turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
             if last_prompt_token:
@@ -1169,7 +1163,7 @@ class _Scheduler:
         remaining = min(turn.max_tokens - len(turn.generated), engine.max_seq - 1 - user.pos)
         n = min(_DECODE_REPLAY_AHEAD, remaining)
         try:
-            if engine.traced and n > 0:
+            if n > 0:
                 engine.post_traced(user, range(user.pos, user.pos + n))
             for _ in range(n):
                 if turn.cancelled.is_set() or turn.next_id == engine.eos_id:
@@ -1187,19 +1181,13 @@ class _Scheduler:
                         f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
                         f"cache at {user.pos}/{engine.max_seq}"
                     )
-                if engine.traced:
-                    engine.write_traced(int(turn.next_id), int(user.pos))
-                    out = engine.model.read_decoded_output().reshape(1, -1).float()
-                else:
-                    hidden = engine.model.decode(int(turn.next_id), int(user.pos), engine.rope)
-                    with _region("LM_HEAD"):
-                        out = ttnn.to_torch(engine.lm_head(hidden)).reshape(1, -1).float()
+                engine.write_traced(int(turn.next_id), int(user.pos))
+                out = engine.model.read_decoded_output().reshape(1, -1).float()
                 turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
                 user.pos += 1
                 self.steps += 1
         finally:
-            if engine.traced:
-                engine.drain_traced(turn.next_id if turn.next_id is not None else 0)
+            engine.drain_traced(turn.next_id if turn.next_id is not None else 0)
 
         if (
             turn.cancelled.is_set()
@@ -1217,7 +1205,7 @@ class _Scheduler:
         Consecutive steps of one user share one seat swap and one ``replay_traced_ahead``,
         matching ``Batch.post`` in the multi-user paged demo.
         """
-        if not self.engine.traced or not steps:
+        if not steps:
             return
         i = 0
         while i < len(steps):
@@ -1231,14 +1219,7 @@ class _Scheduler:
     def _feed(self, steps: list[tuple]) -> None:
         """Write each posted step's packet, in the same order as :meth:`_post`."""
         for turn, user, token_id, pos, last_prompt_token in steps:
-            if self.engine.traced:
-                self.engine.write_traced(int(token_id), int(pos))
-            else:
-                # No async dispatch on the eager path: the step runs to completion here and
-                # its logits wait in the turn (``--no-trace`` is single-user anyway).
-                hidden = self.engine.model.decode(int(token_id), int(pos), self.engine.rope)
-                with _region("LM_HEAD"):
-                    turn.eager.append(ttnn.to_torch(self.engine.lm_head(hidden)).reshape(1, -1).float())
+            self.engine.write_traced(int(token_id), int(pos))
             user.pos += 1
             if turn.phase == _Turn.PREFILL:
                 turn.fed += 1
@@ -1851,13 +1832,6 @@ def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
         help="reasoning-effort hint, only meaningful with --think",
     )
     p.add_argument("--trace-region-size", type=int, default=sys_cfg.device.trace_region_size)
-    p.add_argument(
-        "--no-trace",
-        dest="traced",
-        action="store_false",
-        default=decode.traced,
-        help="eager decode instead of traced decode",
-    )
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
 
 
@@ -1933,10 +1907,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error("--reasoning-effort requires --think")
     if args.num_users < 1:
         p.error("--num-users must be at least 1")
-    # Multiple users need the paged caches, which only the traced path has: the eager
-    # path decodes against one dense cache per layer.
-    if not args.traced and args.num_users > 1:
-        p.error("--no-trace supports a single user; drop --num-users or --no-trace")
     if args.total_context is None:
         # Every user able to fill its own context, rather than all of them sharing one
         # context's worth of blocks (which made a busy server hand out 429s early).

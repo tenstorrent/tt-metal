@@ -197,10 +197,9 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
+from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
     DeepSeekV4Attention,
-    build_static_layer_cache,
-    decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
@@ -381,9 +380,7 @@ def test_attention_real_weights_decode(
     split = seq_len - steps
     cr = cfg.compress_rates[layer_type] if is_compressor else None
 
-    kv_cache = build_static_layer_cache(
-        device, cfg.sliding_window, layer_type, cfg.head_dim, seq_len, cfg.compress_rates, batch=batch_size
-    )
+    pkv = DecodeLayerKV(cfg, layer_type, seq_len, batch_size, device)
     for pos in range(seq_len):
         # Stage this step's projection weights before anything else it needs, so the copies
         # run while the host builds the RoPE tables and mask below.
@@ -404,7 +401,8 @@ def test_attention_real_weights_decode(
             win_slot = int32_pos_tensor(pos % cr, device, batch_size)
             win_row = int32_pos_tensor(cfg.sliding_window + wi, device, batch_size)
 
-        mask, sdpa_cur_pos = decode_sdpa_bounds(cfg.sliding_window, layer_type, cr, pos, seq_len, device, batch_size)
+        pkv.step(pos)
+        mask, sdpa_cur_pos = pkv.bounds(pos)
         out_tt = attn.decode(
             _to_tt(hidden[:, pos : pos + 1].reshape(batch_size, 1, 1, cfg.hidden_size), device),
             cos_d,
@@ -413,9 +411,10 @@ def test_attention_real_weights_decode(
             cos_win_d,
             sin_win_d,
             mask,
-            kv_cache,
+            pkv.cache,
             int32_pos_tensor(pos % cfg.sliding_window, device, batch_size),
             int32_pos_tensor(pos, device, batch_size),
+            pkv.view,
             pool_compressor=pool,
             win_slot=win_slot,
             win_row=win_row,

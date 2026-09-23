@@ -8,12 +8,8 @@ from .attention import (
     DeepSeekV4Attention,
     _StaticLayerCache,
     build_static_layer_cache,
-    decode_sdpa_bounds,
-    host_decode_mask,
     int32_pos_tensor,
     make_rope_table,
-    sdpa_causal_cur_pos,
-    sdpa_causal_ok,
 )
 from .attention_csa import DeepSeekV4CSACompressor
 from .attention_hca import DeepSeekV4HCACompressor
@@ -60,11 +56,7 @@ __all__ = [
     "_region",
     "_trace_capture_guard",
     "build_static_layer_cache",
-    "decode_sdpa_bounds",
-    "host_decode_mask",
     "int32_pos_tensor",
     "make_rope_table",
-    "sdpa_causal_cur_pos",
-    "sdpa_causal_ok",
     "to_ttnn_device",
 ]

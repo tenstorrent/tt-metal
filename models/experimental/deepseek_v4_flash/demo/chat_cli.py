@@ -64,7 +64,6 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
-from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull, round_context
@@ -283,7 +282,7 @@ class ChatEngine:
     """The resident model, plus the users that share it.
 
     One :class:`DeepSeekV4Model` (weights, RoPE tables, decode traces) serves every
-    user; each :class:`UserSession` owns a conversation and, on the traced path, a
+    user; each :class:`UserSession` owns a conversation and a
     paged KV session on the model. Switching users is a page-table rewrite plus a
     swap of the small compressor window buffers, so it costs no cache copying and
     needs no second trace capture.
@@ -303,7 +302,6 @@ class ChatEngine:
         self.config = config
         self.tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
         self.max_new_tokens = args.max_new_tokens
-        self.traced = args.traced
 
         eos = config.eos_token_id
         self.eos_id = eos[0] if isinstance(eos, (list, tuple)) else eos
@@ -373,21 +371,21 @@ class ChatEngine:
         prefetcher.callback(self.model.shutdown)
         logger.info(f"tensor prefetcher: {'on' if self.model.use_prefetcher else 'off'}")
 
-        if self.traced:
-            # Traces are captured lazily on the first decode step and address these
-            # buffers in place, so this happens exactly once per process. Every user's
-            # paged session is allocated here too: allocating on a device that already
-            # holds a trace is unsafe.
-            self.model.prepare_static_decode(
-                rope,
-                self.max_seq,
-                lm_head=self.lm_head,
-                num_sessions=args.num_users,
-                total_tokens=round_context(args.total_context, crs, _PAGE_BLOCK_SIZE),
-                block_size=_PAGE_BLOCK_SIZE,
-            )
-        else:
-            self.model.reset_caches(self.max_seq)
+        # Traces are captured lazily on the first decode step and address these
+        # buffers in place, so this happens exactly once per process. Every user's
+        # paged session is allocated here too: allocating on a device that already
+        # holds a trace is unsafe.
+        self.model.prepare_static_decode(
+            rope,
+            self.max_seq,
+            lm_head=self.lm_head,
+            num_sessions=args.num_users,
+            total_tokens=round_context(args.total_context, crs, _PAGE_BLOCK_SIZE),
+            block_size=_PAGE_BLOCK_SIZE,
+        )
+        if self.model.context_limit is not None and self.model.context_limit < self.max_seq:
+            logger.warning(f"context capped at {self.model.context_limit} tokens/user by the dense CSA KV")
+            self.max_seq = self.model.context_limit
 
         self.users = [UserSession(self, i, args) for i in range(args.num_users)]
         self.active = 0
@@ -411,7 +409,7 @@ class ChatEngine:
 
     def tokens_left(self) -> int:
         """Tokens the shared block pool can still admit across all users."""
-        return self.model.session_tokens_left() if self.traced and self.model.paged else self.max_seq
+        return self.model.session_tokens_left()
 
     # -- decode ---------------------------------------------------------------- #
     def post_traced(self, user: "UserSession", positions) -> None:
@@ -425,7 +423,7 @@ class ChatEngine:
         """
         user.activate()
         positions = [int(p) for p in positions]
-        if not self.traced or not positions:
+        if not positions:
             return
         self.model.ensure_session_capacity(positions[-1])
         self.model.replay_traced_ahead(positions)
@@ -460,18 +458,13 @@ class ChatEngine:
         return the argmax of the resulting single-token logits (the device sync happens
         when the logits are read back).
 
-        One-step convenience for warmup and the eager path. Traced prefill/decode use
+        One-step convenience for warmup. Prefill/decode use
         :meth:`post_traced` / :meth:`write_traced` / :meth:`read_decoded_token` so a
         stretch of known positions can park the device on recv before any packet.
         """
         user.activate()
-        if self.traced:
-            # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
-            logits_host = self.model.decode_traced(token_id, pos)
-        else:
-            hidden = self.model.decode(token_id, pos, self.rope)
-            with _region("LM_HEAD"):
-                logits_host = ttnn.to_torch(self.lm_head(hidden))
+        # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
+        logits_host = self.model.decode_traced(token_id, pos)
         logits = logits_host.reshape(1, -1).float()
         return int(logits[0].argmax().item())
 
@@ -505,10 +498,8 @@ class UserSession:
         self.thinking_mode = "thinking" if args.think else "chat"
         self.reasoning_effort = args.reasoning_effort
         self.system_prompt: str | None = args.system_prompt or None
-        # On the traced path each user is a paged session on the model; the eager path
-        # has a single dense cache, so it only supports one user (enforced in
-        # :func:`parse_args`).
-        self.sid = engine.model.open_session() if engine.traced else None
+        # Each user is a paged session on the model.
+        self.sid = engine.model.open_session()
         self.messages: list[dict] = []
         self.pos = 0
         self.pending_id: int | None = None
@@ -532,12 +523,7 @@ class UserSession:
         """Drop the conversation and rewind this user's caches to an empty sequence,
         keeping the system prompt (which is re-prefilled with the next turn) and
         returning its compressed blocks to the shared pool."""
-        if self.sid is not None:
-            self.engine.model.reset_session(self.sid)
-        elif self.engine.traced:
-            self.engine.model.reset_static_caches()
-        else:
-            self.engine.model.reset_caches(self.engine.max_seq)
+        self.engine.model.reset_session(self.sid)
         self.pos = 0
         self.pending_id = None
         self._seed_messages()
@@ -563,27 +549,22 @@ class UserSession:
                 f"this turn needs {len(ids)}"
             )
         next_id = engine.eos_id
-        if engine.traced and ids:
-            # Prompt length is known, so every execute_trace can sit on the command
-            # queue (device parked on recv) before the first H2D packet -- the decode
-            # demo's replay_traced_ahead path.
-            positions = list(range(self.pos, self.pos + len(ids)))
-            try:
-                engine.post_traced(self, positions)
-                for done, (token_id, pos) in enumerate(zip(ids, positions), start=1):
-                    engine.write_traced(token_id, pos)
-                    next_id = engine.read_decoded_token()
-                    self.pos += 1
-                    if progress is not None:
-                        progress(done, len(ids))
-            finally:
-                engine.drain_traced(ids[-1])
+        if not ids:
             return next_id
-        for done, token_id in enumerate(ids, start=1):
-            next_id = engine.step(self, token_id, self.pos)
-            self.pos += 1
-            if progress is not None:
-                progress(done, len(ids))
+        # Prompt length is known, so every execute_trace can sit on the command
+        # queue (device parked on recv) before the first H2D packet -- the decode
+        # demo's replay_traced_ahead path.
+        positions = list(range(self.pos, self.pos + len(ids)))
+        try:
+            engine.post_traced(self, positions)
+            for done, (token_id, pos) in enumerate(zip(ids, positions), start=1):
+                engine.write_traced(token_id, pos)
+                next_id = engine.read_decoded_token()
+                self.pos += 1
+                if progress is not None:
+                    progress(done, len(ids))
+        finally:
+            engine.drain_traced(ids[-1])
         return next_id
 
     def _turn_prompt_ids(self, text: str) -> list[int]:
@@ -650,8 +631,6 @@ class UserSession:
             token budget and context. Called only when the next token will actually be
             fed, so an EOS/cap stop leaves at most that window to dummy-drain."""
             nonlocal posted_end
-            if not engine.traced:
-                return
             remaining = min(engine.max_new_tokens - len(generated), engine.max_seq - 1 - self.pos)
             queued = posted_end - self.pos
             n_more = min(_DECODE_REPLAY_AHEAD, remaining) - queued
@@ -671,11 +650,8 @@ class UserSession:
                 generated.append(next_id)
                 stream.push(generated)
                 t1 = time.perf_counter()
-                if engine.traced:
-                    engine.write_traced(next_id, self.pos)
-                    next_id = engine.read_decoded_token()
-                else:
-                    next_id = engine.step(self, next_id, self.pos)
+                engine.write_traced(next_id, self.pos)
+                next_id = engine.read_decoded_token()
                 step_seconds = time.perf_counter() - t1
                 self.pos += 1
                 decode_time += step_seconds
@@ -706,8 +682,7 @@ class UserSession:
             # valid, so keep it and let the user free space with /reset.
             print(f"\n[cache pool full: {e} -- /reset a user]", flush=True)
         finally:
-            if engine.traced:
-                engine.drain_traced(next_id if next_id is not None else 0)
+            engine.drain_traced(next_id if next_id is not None else 0)
 
         stream.close()
         # ``next_id`` was produced but never fed; the next turn starts with it.
@@ -750,7 +725,7 @@ def _print_users(engine: ChatEngine) -> None:
         print(
             f" {marker} user {user.index}: {user.pos}/{engine.max_seq} tokens, " f"{len(user.messages)} messages{think}"
         )
-    if engine.traced and engine.model.paged:
+    if engine.model.paged:
         usage = ", ".join(
             f"{name} {used}/{total} blocks" for name, (used, total) in engine.model.session_usage().items()
         )
@@ -919,13 +894,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="reasoning-effort hint, only meaningful with --think",
     )
     p.add_argument("--trace-region-size", type=int, default=sys_cfg.device.trace_region_size)
-    p.add_argument(
-        "--no-trace",
-        dest="traced",
-        action="store_false",
-        default=decode.traced,
-        help="eager decode instead of traced decode",
-    )
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
     args = p.parse_args(argv)
     # The engine builds the model against this, so a --system-profile given after the
@@ -940,10 +908,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error("--num-users must be at least 1")
     if args.tp_size is not None and args.tp_size < 1:
         p.error("--tp-size must be at least 1")
-    # Multiple users need the paged caches, which only the traced path has: the eager
-    # path decodes against one dense cache per layer.
-    if not args.traced and args.num_users > 1:
-        p.error("--no-trace supports a single user; drop --num-users or --no-trace")
     if args.total_context is None:
         args.total_context = args.max_context
     return args
