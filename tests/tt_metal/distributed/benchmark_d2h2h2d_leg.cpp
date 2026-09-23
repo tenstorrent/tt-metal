@@ -102,7 +102,7 @@ public:
         grid_width_ = static_cast<uint32_t>(grid.x);
 
         D2H2H2DSocket::Config cfg;
-        cfg.topo = HostTopology{rank_, ranks_, 1};
+        cfg.topo = experimental::HostTopology{rank_, ranks_, 1};
         cfg.chip = 0;
         cfg.cores = cores_;
         cfg.grid_width = grid_width_;
@@ -223,7 +223,7 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
 
     for ([[maybe_unused]] auto _ : state) {
         const L1MapNew& l1 = sock_->l1();
-        MeshWorkload workload;
+        dist::MeshWorkload workload;
         workload.add_program(dist::MeshCoordinateRange(mesh_->shape()), build_program());
         // Non-blocking, so the poll loop below can feed the receiver to `iters`.
         EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
