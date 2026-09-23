@@ -198,7 +198,18 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     sfpi::vFloat s = z_hi + z_lo;
     sfpi::vFloat e = z_lo - (s - z_hi);
 
-    s = sfpi::max(s, -0x7e.ffff8p0f);
+    // Clamping s alone (without resetting e) leaves e still describing the rounding
+    // error of the pre-clamp s. For a very negative true argument (e.g. pow(0.1, 1000),
+    // true s around -3321) the clamped s-k is tiny (~1e-5) while a stale e can be ~1e-4,
+    // so a negative e can flip the reduced fraction f negative and push the result's
+    // biased exponent to 0 (from k_int = -127). setexp then wraps that 0 to 255 (NaN)
+    // instead of the correct underflow-to-zero. binary_pow (ckernel_sfpu_binary_pow.h)
+    // has the same clamp and resets e to 0 there for the same reason; mirror it here.
+    v_if(s < -0x7e.ffff8p0f) {
+        s = -0x7e.ffff8p0f;
+        e = 0.0f;
+    }
+    v_endif;
 
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(s, k_int);
@@ -217,9 +228,15 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     sfpi::vFloat p = PolynomialEvaluator::eval(
         r, 1.0f, 1.0f, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
 
-    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
+    sfpi::vInt out_exp = sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int;
+    sfpi::vFloat result = sfpi::setexp(p, out_exp);
 
-    v_if(s >= 128.0f) { result = std::numeric_limits<float>::infinity(); }
+    // setexp writes only the low 8 bits of the biased exponent, so an out-of-range
+    // value wraps instead of saturating: out_exp <= 0 (underflow) wraps to a huge
+    // positive field and out_exp >= 255 (overflow) is the inf/NaN field. Both must be
+    // handled explicitly rather than relying on the wrapped bit pattern.
+    v_if(out_exp <= 0) { result = 0.0f; }
+    v_elseif(out_exp >= 255) { result = std::numeric_limits<float>::infinity(); }
     v_endif;
 
     return result;

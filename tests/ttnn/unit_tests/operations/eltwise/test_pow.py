@@ -604,6 +604,45 @@ def test_binary_pow_fp32_overflow_to_inf(exponent, device):
     assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
 
 
+# Underflow must flush to 0, not wrap to NaN (issue #57446). The non-integer fp32 path
+# clamps the reduction argument s but, before this fix, left the FastTwoSum residual e
+# stale from the pre-clamp s; a stale e with the wrong sign flips the reduced fraction
+# negative, driving the result's biased exponent to 0. setexp writes only the low 8 bits
+# of that field, so 0 wraps to 255 (the inf/NaN encoding) instead of correctly encoding a
+# tiny finite value that should flush to 0. Which inputs hit this depends on the sign of
+# the two-sum error, so several deeply-underflowing bases are exercised. Covers both the
+# unary (scalar y) and binary (tensor y) paths, which apply the same s-clamp/setexp logic
+# independently.
+@pytest.mark.parametrize("base", [0.1, 0.003813433460891247, 5.8008667314091156e-11])
+def test_unary_pow_fp32_underflow_to_zero(base, device):
+    exponent = 1000.0
+    torch_base = torch.full((32, 32), base, dtype=torch.float32)
+    golden = torch.pow(torch_base, exponent)
+    assert (golden == 0.0).all()  # sanity: this input really underflows fp32
+
+    tt_base = ttnn.from_torch(torch_base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
+
+    assert not torch.isnan(result).any(), "underflow produced NaN instead of flushing to 0"
+    assert (result == 0.0).all()
+
+
+@pytest.mark.parametrize("base", [0.1, 0.003813433460891247, 5.8008667314091156e-11])
+def test_binary_pow_fp32_underflow_to_zero(base, device):
+    exponent = 1000.0
+    torch_base = torch.full((32, 32), base, dtype=torch.float32)
+    torch_exp = torch.full((32, 32), exponent, dtype=torch.float32)
+    golden = torch.pow(torch_base, torch_exp)
+    assert (golden == 0.0).all()  # sanity: this input really underflows fp32
+
+    tt_base = ttnn.from_torch(torch_base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_exp = ttnn.from_torch(torch_exp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+
+    assert not torch.isnan(result).any(), "underflow produced NaN instead of flushing to 0"
+    assert (result == 0.0).all()
+
+
 @pytest.mark.parametrize("exponent", [0.25, 0.5, 0.75, -0.25, -0.5, -0.75])
 def test_pow_arange_masking_fp32(exponent, device):
     tt_input = generate_clean_bf16_tensor(torch.float32)
