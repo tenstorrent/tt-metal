@@ -170,6 +170,7 @@ extern "C" {
 // These variables are used by triage to help report dispatcher state.
 volatile uint32_t last_wait_count = 0;
 #ifdef FDS_SIGNALLING
+// Last value pushed to the auto dispatch queue, not the value currently on the wire.
 volatile uint32_t last_go_token = 0;
 volatile uint32_t last_fds_go_pending_mask = 0;
 volatile uint32_t last_fds_open_round_mask = 0;
@@ -197,44 +198,32 @@ static std::array<uint32_t, max_num_worker_sems> open_round_worker_count = {0};
 static std::array<uint32_t, max_num_worker_sems> open_round_credited_count = {0};
 static uint32_t open_round_mask = 0;
 static uint32_t fds_go_pending_mask = 0;
-static uint32_t fds_wire_token = overlay::fds_signalling::idle_group_id;
-static uint32_t fds_wire_busy_until = 0;
+static uint32_t fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
+static uint32_t fds_last_go_push_timestamp = 0;
+static bool fds_go_pushed_since_last_drain = false;
 
-FORCE_INLINE
-void write_go_verified(uint32_t value) {
-    WAYPOINT("FGOW");
-    overlay::fds_signalling::write_until_readback_matches(
-        [=] { overlay::fds_signalling::dispatch_write_go(value); },
-        [] { return overlay::fds_signalling::dispatch_read_go(); },
-        value);
-    WAYPOINT("FGOD");
-}
-
-// Strobes queued go tokens onto the shared go wire as token, hold, zero, hold. Emits at once when
-// the wire is idle, otherwise queues behind the in-progress strobe. Timer compares wrap safely.
 FORCE_INLINE
 void service_fds_go_wire() {
-    if (fds_go_pending_mask == 0 && fds_wire_token == overlay::fds_signalling::idle_group_id) {
+    if (fds_go_pending_mask == 0 && fds_last_pushed_go_value == overlay::fds_signalling::idle_group_id) {
         return;
     }
-    const uint32_t current_timestamp = get_timestamp_32b();
-    if (static_cast<int32_t>(current_timestamp - fds_wire_busy_until) < 0) {
+    if (overlay::fds_signalling::dispatch_read_auto_dispatch_fifo_full() != 0) {
         return;
     }
-    if (fds_wire_token != overlay::fds_signalling::idle_group_id) {
-        write_go_verified(overlay::fds_signalling::idle_group_id);
-        fds_wire_token = overlay::fds_signalling::idle_group_id;
-        last_go_token = overlay::fds_signalling::idle_group_id;
+    if (fds_last_pushed_go_value != overlay::fds_signalling::idle_group_id) {
+        overlay::fds_signalling::dispatch_write_go(overlay::fds_signalling::idle_group_id);
+        fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
     } else {
         const uint32_t sub_device_index = __builtin_ctz(fds_go_pending_mask);
         const uint32_t go_token = overlay::fds_signalling::go_group_for_sub_device(sub_device_index);
-        write_go_verified(go_token);
-        fds_wire_token = go_token;
-        last_go_token = go_token;
+        overlay::fds_signalling::dispatch_write_go(go_token);
+        fds_last_pushed_go_value = go_token;
         fds_go_pending_mask &= ~(1U << sub_device_index);
     }
+    last_go_token = fds_last_pushed_go_value;
     last_fds_go_pending_mask = fds_go_pending_mask;
-    fds_wire_busy_until = get_timestamp_32b() + overlay::fds_signalling::go_strobe_hold_cycles;
+    fds_last_go_push_timestamp = get_timestamp_32b();
+    fds_go_pushed_since_last_drain = true;
 }
 
 FORCE_INLINE
@@ -257,6 +246,7 @@ void credit_fds_open_rounds() {
         }
         if (completed_worker_count == expected_worker_count) {
             open_round_mask &= ~sub_device_mask;
+            last_fds_open_round_mask = open_round_mask;
         }
 
         remaining_open_rounds &= ~sub_device_mask;
@@ -294,39 +284,68 @@ void service_fds_signalling() {
     service_fds_go_wire();
 }
 
-// Programs the dispatch side of the FDS interface: one done-count group per sub-device, interrupts
-// off because dispatch_s polls the counts rather than taking them as interrupts.
+// Parks the direct-path output at idle before auto dispatch takes control.
+FORCE_INLINE
+void reset_fds_go_wire() {
+    overlay::fds_signalling::dispatch_write_go_direct(overlay::fds_signalling::idle_group_id);
+    const uint32_t go_clear_start = get_timestamp_32b();
+    while (get_timestamp_32b() - go_clear_start < overlay::fds_signalling::init_go_park_hold_cycles) {
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
+    }
+    fds_last_pushed_go_value = overlay::fds_signalling::idle_group_id;
+    last_go_token = overlay::fds_signalling::idle_group_id;
+    fds_last_go_push_timestamp = 0;
+    fds_go_pushed_since_last_drain = false;
+}
+
 FORCE_INLINE
 void init_fds_signalling() {
+    const uint32_t previous_auto_dispatch_cycle_count =
+        overlay::fds_signalling::dispatch_read_auto_dispatch_cycle_count();
+    const uint32_t previous_auto_dispatch_enabled = overlay::fds_signalling::dispatch_read_auto_dispatch_enable();
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
-    overlay::fds_signalling::dispatch_config_filter_length(overlay::fds_signalling::filter_length);
+    overlay::fds_signalling::dispatch_config_filter_length(overlay::fds_signalling::filter_length_cycles);
     overlay::fds_signalling::dispatch_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
     for (uint32_t group_id = overlay::fds_signalling::idle_group_id + 1; group_id <= max_num_worker_sems; ++group_id) {
         overlay::fds_signalling::dispatch_config_group(
             group_id, overlay::fds_signalling::all_worker_lanes_mask, overlay::fds_signalling::dispatch_done_threshold);
     }
-}
-
-// Parks the wire at idle and holds it there long enough for every worker to observe the zero, so a
-// level left over from a previous program cannot be read as this program's go.
-FORCE_INLINE
-void reset_fds_go_wire() {
-    write_go_verified(overlay::fds_signalling::idle_group_id);
-    const uint32_t go_clear_start = get_timestamp_32b();
-    while (get_timestamp_32b() - go_clear_start < overlay::fds_signalling::init_go_clear_hold_cycles) {
-#if DEVICE_PRINT_DISPATCH_ENABLED
-        device_print_dispatcher.execute();
-#endif
+    reset_fds_go_wire();
+    if (previous_auto_dispatch_cycle_count == 0 && previous_auto_dispatch_enabled != 0) {
+        overlay::fds_signalling::wait_cycles(overlay::fds_signalling::unbounded_drain_fallback_cycles);
+    } else {
+        overlay::fds_signalling::wait_cycles(overlay::auto_dispatch_drain_cycles(
+            overlay::dispatch_auto_dispatch_queue_depth, previous_auto_dispatch_cycle_count));
     }
-    fds_wire_busy_until = go_clear_start + overlay::fds_signalling::init_go_clear_hold_cycles;
+    WAYPOINT("FACW");
+    overlay::fds_signalling::dispatch_config_auto_dispatch_pacing(
+        overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
+    overlay::fds_signalling::dispatch_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
+    overlay::fds_signalling::dispatch_enable_auto_dispatch();
+    WAYPOINT("FACD");
 }
 
 // Runs the wire down to idle. Preconditions differ per site, so each caller states its own.
 FORCE_INLINE
 void drain_fds_go_wire() {
-    while (fds_go_pending_mask != 0 || fds_wire_token != overlay::fds_signalling::idle_group_id) {
+    while (fds_go_pending_mask != 0 || fds_last_pushed_go_value != overlay::fds_signalling::idle_group_id) {
         service_fds_go_wire();
     }
+    if (!fds_go_pushed_since_last_drain) {
+        overlay::fds_signalling::dispatch_disable_auto_dispatch();
+        return;
+    }
+    const uint32_t drain_cycles = overlay::auto_dispatch_drain_cycles(
+        overlay::dispatch_auto_dispatch_queue_depth,
+        overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
+    const uint32_t elapsed_cycles = get_timestamp_32b() - fds_last_go_push_timestamp;
+    if (elapsed_cycles < drain_cycles) {
+        overlay::fds_signalling::wait_cycles(drain_cycles - elapsed_cycles);
+    }
+    overlay::fds_signalling::dispatch_disable_auto_dispatch();
+    fds_go_pushed_since_last_drain = false;
 }
 
 #else
@@ -334,7 +353,6 @@ FORCE_INLINE void service_fds_signalling() {}
 FORCE_INLINE void credit_fds_open_rounds() {}
 FORCE_INLINE void open_worker_completion_round(uint32_t) {}
 FORCE_INLINE void init_fds_signalling() {}
-FORCE_INLINE void reset_fds_go_wire() {}
 FORCE_INLINE void drain_fds_go_wire() {}
 #endif
 
@@ -541,9 +559,11 @@ FORCE_INLINE void issue_go_signal_mcast_noc_write() {
     noc_increment_nonposted_writes_issued(noc_index, 1);
 }
 
-// In an FDS build, RUN_MSG_GO uses the FDS go wire with token sub-device index + 1, strobed as token,
-// hold, zero, hold. DM0 receives it through a machine-external interrupt before writing the worker
-// mailbox signal byte. The wire is 0 outside a strobe. All other go commands use the NOC path.
+// In an FDS build, RUN_MSG_GO uses the FDS go wire with token sub-device index + 1. The token is
+// pushed into the auto dispatch queue and the hardware paces it onto the wire; a trailing idle push
+// follows so a repeat of the same group is seen as a new go. The wire holds the last released value
+// until the next release. DM0 receives the go through a machine-external interrupt before writing
+// the worker mailbox signal byte. All other go commands use the NOC path.
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
@@ -593,17 +613,16 @@ void process_go_signal_mcast_cmd() {
         DPRINT("DISPATCH_S: go FDS\n");
         open_worker_completion_round(/*sub_device_index=*/multicast_go_offset);
         fds_go_pending_mask |= 1U << multicast_go_offset;
+        last_fds_go_pending_mask = fds_go_pending_mask;
         service_fds_go_wire();
     } else if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         DPRINT("DISPATCH_S: go NOC\n");
         // The wait precedes NOC state programming so DEVICE_PRINT cannot clobber the state before the write.
         init_go_signal_mcast_noc_write(
             aligned_go_signal_storage, aligned_go_signal_storage_uncached, go_signal_value, multicast_go_offset);
-        if ((go_signal_value >> 24) == RUN_MSG_GO) {
-            open_worker_completion_round(/*sub_device_index=*/multicast_go_offset);
-        } else {
-            ASSERT((open_round_mask & (1U << multicast_go_offset)) == 0);
-        }
+        // The unicast-target go path, unreachable today because active ethernet is not supported with FDS.
+        ASSERT((go_signal_value >> 24) != RUN_MSG_GO);
+        ASSERT((open_round_mask & (1U << multicast_go_offset)) == 0);
         issue_go_signal_mcast_noc_write();
     } else {
         DPRINT("DISPATCH_S: go NOC\n");
@@ -731,7 +750,6 @@ void set_num_worker_sems() {
     ASSERT(open_round_mask == 0);
     ASSERT(fds_go_pending_mask == 0);
 #endif
-    drain_fds_go_wire();
     num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
     ASSERT(num_worker_sems <= max_num_worker_sems);
     cmd_ptr += sizeof(CQDispatchCmd);
@@ -844,7 +862,6 @@ void kernel_main() {
     // notify_kernel_start() is invoked from process_go_signal_mcast_cmd, after the
     // go signal is sent — the stall-detection window is per-program, not per-dispatch_s.
 #endif
-    reset_fds_go_wire();
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
@@ -946,8 +963,6 @@ void kernel_main() {
             signal_realtime_profiler_and_switch(rt_profiler_msg);
         }
     }
-    // Nothing may sit on the wire once dispatch_s stops servicing it.
-    drain_fds_go_wire();
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
 
