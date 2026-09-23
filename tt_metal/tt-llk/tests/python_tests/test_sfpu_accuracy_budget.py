@@ -44,7 +44,7 @@ from helpers.sfpu_accuracy_budget import (
     resolve_contract,
     validate_registry,
 )
-from helpers.sfpu_domains import for_op
+from helpers.sfpu_domains import exclude_undefined, for_op_pipeline
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import (
     _ULP_PROXY_DTYPES,
@@ -131,43 +131,55 @@ def test_the_metric_is_a_closed_set():
     assert TOLERANCE_CONTRACT.metric is Metric.TOLERANCE
 
 
-@pytest.mark.parametrize(
-    "contract, expected",
-    [
-        (
-            AccuracyContract(max_ulp=3),
-            {"max_ulp": 3, "near_zero_atol": None},
-        ),
-        (
-            AccuracyContract(max_ulp=3, near_zero_atol=1e-7),
-            {"max_ulp": 3, "near_zero_atol": 1e-7},
-        ),
-        (
-            AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
-            {"custom_atol": 0.13, "custom_rtol": 0.05},
-        ),
-        (TOLERANCE_CONTRACT, {"custom_atol": None, "custom_rtol": None}),
-    ],
-)
-def test_a_contract_translates_to_passed_test_arguments(contract, expected):
-    assert contract.passed_test_kwargs() == expected
+#: Both translations, because only `tolerance_kwargs` has a production caller and only
+#: `passed_test_kwargs` is otherwise pinned. `passed_test` takes `max_ulp` and
+#: `near_zero_atol` as optional kwargs, so a `tolerance_kwargs` that regressed from
+#: `return {}` to the `passed_test_kwargs` shape would not raise -- it would swap every
+#: enrolled op from tolerance+PCC to a whole-format ULP budget, silently.
+_KWARGS_METHODS = ("passed_test_kwargs", "tolerance_kwargs")
+
+#: The ULP arm differs between them: `tolerance_kwargs` deliberately declines to gate.
+_TRANSLATIONS = [
+    (
+        AccuracyContract(max_ulp=3),
+        {"max_ulp": 3, "near_zero_atol": None},
+        {},
+    ),
+    (
+        AccuracyContract(max_ulp=3, near_zero_atol=1e-7),
+        {"max_ulp": 3, "near_zero_atol": 1e-7},
+        {},
+    ),
+    (
+        AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+        {"custom_atol": 0.13, "custom_rtol": 0.05},
+        {"custom_atol": 0.13, "custom_rtol": 0.05},
+    ),
+    (
+        TOLERANCE_CONTRACT,
+        {"custom_atol": None, "custom_rtol": None},
+        {"custom_atol": None, "custom_rtol": None},
+    ),
+]
 
 
-def test_every_contract_is_accepted_by_passed_test():
+@pytest.mark.parametrize("contract, by_ulp, by_tolerance", _TRANSLATIONS)
+def test_a_contract_translates_to_passed_test_arguments(contract, by_ulp, by_tolerance):
+    assert contract.passed_test_kwargs() == by_ulp
+    assert contract.tolerance_kwargs() == by_tolerance
+
+
+@pytest.mark.parametrize("method", _KWARGS_METHODS)
+def test_every_contract_is_accepted_by_passed_test(method):
     """The translation has to be callable, not merely shaped right — a renamed keyword
     would otherwise only surface on hardware."""
     golden = torch_ones()
-    for contract in (
-        AccuracyContract(max_ulp=1),
-        AccuracyContract(max_ulp=1, near_zero_atol=1e-7),
-        AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
-        TOLERANCE_CONTRACT,
-    ):
+    for contract, _, _ in _TRANSLATIONS:
         assert passed_test(
             golden,
             golden.clone(),
             DataFormat.Float16_b,
-            **contract.passed_test_kwargs(),
+            **getattr(contract, method)(),
         )
 
 
@@ -346,6 +358,43 @@ def test_a_declared_tolerance_survives_an_unswept_architecture(op, arch):
     assert contract.atol == 0.13 and contract.rtol == 0.05
 
 
+@pytest.mark.parametrize("arch", list(ChipArchitecture), ids=lambda a: a.name)
+@pytest.mark.parametrize(
+    "output_format",
+    [DataFormat.Float16_b, DataFormat.Bfp4_b],
+    ids=lambda f: f.name,
+)
+def test_a_downgrade_lands_on_the_ops_own_tolerance_row(
+    arch, output_format, monkeypatch
+):
+    """Both downgrades re-resolve against the tolerance rows rather than returning the
+    global default: a ULP row winning on specificity must not shadow a *broader*
+    tolerance row the same op declares, or an op carrying both shapes falls back past
+    its own atol to the per-format default.
+
+    Built here rather than taken from the registry -- no live op carries both a ULP row
+    and a wider declared atol yet, and the shadow is only observable through
+    ``passed_test_kwargs()``.
+    """
+    op = MathOperation.Abs
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET,
+        op,
+        {
+            DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+            BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(max_ulp=3),
+        },
+    )
+    contract = accuracy_contract(op, output_format=output_format, arch=arch)
+    if output_format is DataFormat.Float16_b and arch is MEASURED_ARCH:
+        assert contract.metric is Metric.ULP and contract.max_ulp == 3
+    else:
+        # Bfp4_b has no per-element ULP, and off Wormhole the unkeyed budget does not
+        # bind -- either way the op keeps the 0.13 it declared, not the global default.
+        assert contract.metric is Metric.TOLERANCE
+        assert contract.atol == 0.13 and contract.rtol == 0.05
+
+
 @pytest.mark.parametrize(
     "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
 )
@@ -501,28 +550,57 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
     }
 
 
-def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format():
+#: The input formats the unary driver pairs with a Bfp8_b *output* for the three
+#: 0-step-enrolled ops: the BROAD_FORMATS 4x4 matrix plus the Bfp4_b-input row. The
+#: budget spans all five pipelines, and `for_op_pipeline` resolves range against the
+#: input format -- Bfp8_b is absent from `_FORMAT_MAX_MAGNITUDE`, so it inherits the
+#: maximal bf16 fallback, never wins `narrowest_range_format`, and the output narrows
+#: nothing. Asserting only the Bfp8_b->Bfp8_b diagonal would pin one of the five.
+_BFP8_B_OUTPUT_INPUT_FORMATS = (
+    DataFormat.Float32,
+    DataFormat.Float16,
+    DataFormat.Float16_b,
+    DataFormat.Bfp8_b,
+    DataFormat.Bfp4_b,
+)
+
+
+@pytest.mark.parametrize(
+    "op",
+    [MathOperation.Floor, MathOperation.Ceil, MathOperation.Trunc],
+    ids=lambda op: op.name,
+)
+@pytest.mark.parametrize(
+    "input_format", _BFP8_B_OUTPUT_INPUT_FORMATS, ids=lambda f: f.name
+)
+def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format(
+    op, input_format
+):
     """A shared exponent does not represent integers exactly in general: the in-block step
     scales with the block maximum, so it is exact only while every maximum stays under
-    ``2**7``. That is a property of the *stimulus*, so it is asserted, not assumed."""
-    for op in (MathOperation.Floor, MathOperation.Ceil, MathOperation.Trunc):
-        # Resolved at Bfp8_b, the format the invariant is about: identical to the default
-        # Float16_b for these three today, but wrong the moment a format-sensitive spec is
-        # enrolled here.
-        spec = for_op(op, DataFormat.Bfp8_b).spec_A
-        assert spec.low is not None and spec.high is not None, op.name
-        # ceil of the bound, because the invariant is about *result* block maxima and
-        # floor/ceil/trunc round outward by up to one integer. An input domain inside
-        # (127, 128) -- uniform(-127.5, 127.5), say -- produces block maxima of exactly
-        # 128, where the in-block step becomes 2**(7-6) = 2, odd integers stop being
-        # representable and the 0-step budget is no longer a valid criterion.
-        reachable = math.ceil(max(abs(spec.low), abs(spec.high)))
-        assert reachable < BFP8_B_EXACT_INTEGER_DOMAIN, (
-            f"{op.name} is swept over [{spec.low}, {spec.high}], whose results reach "
-            f"{reachable} and so whose block maxima can reach "
-            f"{BFP8_B_EXACT_INTEGER_DOMAIN}. Its 0-step Bfp8_b budget relied on every "
-            "block maximum staying below that; re-measure before widening."
-        )
+    ``2**7``. That is a property of the *stimulus*, so it is asserted, not assumed.
+
+    Over every pipeline the budget covers, resolved the way the driver resolves it: all
+    three specs are static ``uniform(-10, 10)`` today, but `_OP_DOMAIN_REGISTRY` entries
+    may be callables of `data_format` -- `_reciprocal_spec` already is -- so a
+    format-sensitive spec here could push one input pipeline past the bound.
+    """
+    spec = exclude_undefined(
+        op, for_op_pipeline(op, input_format, DataFormat.Bfp8_b).spec_A
+    )
+    assert spec.low is not None and spec.high is not None, op.name
+    # ceil of the bound, because the invariant is about *result* block maxima and
+    # floor/ceil/trunc round outward by up to one integer. An input domain inside
+    # (127, 128) -- uniform(-127.5, 127.5), say -- produces block maxima of exactly
+    # 128, where the in-block step becomes 2**(7-6) = 2, odd integers stop being
+    # representable and the 0-step budget is no longer a valid criterion.
+    reachable = math.ceil(max(abs(spec.low), abs(spec.high)))
+    assert reachable < BFP8_B_EXACT_INTEGER_DOMAIN, (
+        f"{op.name} from {input_format.name} is swept over [{spec.low}, {spec.high}], "
+        f"whose results reach {reachable} and so whose block maxima can reach "
+        f"{BFP8_B_EXACT_INTEGER_DOMAIN}. Its 0-step Bfp8_b budget relied on every "
+        "block maximum staying below that; re-measure before widening."
+    )
 
 
 # ── Integers never reach the ULP metric through the registry ──────────────────
@@ -539,12 +617,14 @@ def test_the_registry_never_carries_a_budget_that_gates_nothing():
 
     Both halves are needed, because neither sees what the other does. A row *keyed* on
     a non-gateable format is caught below by its key -- and that is wider than the
-    integers: Bfp4_b, Bfp2_b, the MX formats and Tf32 are downgraded the same way, and
-    ``validate_registry`` sweeps only the gateable formats plus the proxies, so a
-    ``BudgetKey(output_format=Bfp4_b)`` carrying a measured budget would otherwise pass
-    every guard and gate nothing. An op enrolled under ``DEFAULT`` has
-    ``key.output_format is None``, so the key check cannot see it at all; only the
-    enrolment check can.
+    integers: Bfp4_b, Bfp2_b, the MX formats and Tf32 are downgraded the same way.
+    ``validate_registry`` does reach those formats now that its sweep is every
+    ``DataFormat`` member, but it only asks whether the resolution is *unambiguous*,
+    never whether the winner stayed on the ULP metric -- so a
+    ``BudgetKey(output_format=Bfp4_b)`` carrying a measured budget resolves cleanly,
+    gets downgraded, and passes it. Not subsumed by the widened sweep. An op enrolled
+    under ``DEFAULT`` has ``key.output_format is None``, so the key check cannot see it
+    at all; only the enrolment check can.
     """
     for op, table in _SFPU_ACCURACY_BUDGET.items():
         for key, contract in table.items():
@@ -827,6 +907,25 @@ def _measured_budget_rows(path=_TABLE_PATH):
         measured = int(found.group(1)) if found else op_measured
         rows.append((op, body.strip(), int(declared.group(1)), measured))
     return rows
+
+
+def test_the_provenance_parser_sees_every_budget_the_registry_enforces():
+    """The two audits below recognise a budget row by a regex over the file's text, and a
+    row it misses is silently dropped from both -- it keeps its enforced ``max_ulp`` but
+    loses its measurement requirement and its ``MEASUREMENT_HEADROOM`` bound.
+
+    ``- {max_ulp : 5}`` and ``- {max_ulp: +5}`` both load as 5 and both miss; ``0x10``
+    is worse, loading as 16 while the regex captures ``0``, so the audit would validate
+    a number the registry does not enforce. Tie the parse back to the loaded table.
+    """
+    parsed = sorted((op, budget) for op, _, budget, _ in _measured_budget_rows())
+    loaded = sorted(
+        (op.name, contract.max_ulp)
+        for op, table in _SFPU_ACCURACY_BUDGET.items()
+        for contract in table.values()
+        if contract.metric == Metric.ULP
+    )
+    assert parsed == loaded
 
 
 def test_every_step_budget_names_the_measurement_it_came_from():

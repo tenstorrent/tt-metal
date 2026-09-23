@@ -605,16 +605,6 @@ def test_the_near_zero_band_follows_the_mask_through_passed_test():
     assert not passed_test(golden, result, fmt, mask=keep, **kwargs)
 
 
-TORCH_INT_DTYPES = (
-    torch.int8,
-    torch.uint8,
-    torch.int16,
-    torch.int32,
-    torch.int64,
-    torch.bool,
-)
-
-
 # ── Integers are not ULP territory ──────────────────────────────────────────
 
 

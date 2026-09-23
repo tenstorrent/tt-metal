@@ -39,6 +39,7 @@ from helpers.ulp import (
     ulp_distance,
     ulp_dtype,
     ulp_elementwise_valid,
+    ulp_failure_message,
     ulp_stats,
     ulp_verdict_message,
     warn_if_threshold_unmeaningful,
@@ -1012,6 +1013,35 @@ def test_the_verdict_reproduces_every_gate_verdict_including_the_floor():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def test_the_failure_message_locates_the_lane_and_sizes_its_step():
+    """The inner builder, directly: `ulp_verdict_message` wraps it, so a regression in
+    the line the gate prints would otherwise only be caught by a substring match on a
+    NaN case. A ULP verdict is only useful if it names the point -- which lane, what the
+    hardware produced there, and what one step is worth at that value."""
+    golden = torch.ones(8, dtype=torch.bfloat16)
+    result = golden.clone()
+    result[5] = _step_up(1.0, torch.bfloat16, steps=7)[0]
+    message = ulp_failure_message(
+        golden, result, ulp_distance(golden, result), DataFormat.Float16_b, max_ulp=3
+    )
+    assert "max 7 ULP @ [5]" in message
+    assert repr(float(result[5])) in message
+    # The step is the *upward* gap at 1.0, since the result moved up. Against the constant
+    # rather than against local_step(), which is the function the message already called.
+    assert f"{ABOVE_ONE:.6e}" in message
+
+
+def test_the_message_builder_can_reuse_stats_it_was_given():
+    """The verdict already computed them; building the message must not pay again."""
+    golden = torch.ones(8, dtype=torch.bfloat16)
+    result = golden.clone()
+    result[3] = _step_up(1.0, torch.bfloat16, steps=4)[0]
+    distance = ulp_distance(golden, result)
+    assert ulp_failure_message(
+        golden, result, distance, DataFormat.Float16_b, stats=ulp_stats(distance)
+    ) == ulp_failure_message(golden, result, distance, DataFormat.Float16_b)
+
+
 def test_a_missing_nan_is_named_rather_than_reported_as_zero_steps():
     """A NaN lane is UNMEASURABLE and drops out of the statistics, so a verdict that
     failed only on a missing NaN reported "max 0 ULP (budget 0)" -- true, and useless.
@@ -1085,11 +1115,21 @@ def test_no_integer_format_is_ulp_gateable(fmt):
 
 @pytest.mark.parametrize("dtype", TORCH_INT_DTYPES, ids=str)
 def test_the_metric_refuses_every_integer_tensor_dtype(dtype):
-    """Including the bit containers: reading a bfloat16 through ``torch.int16`` must not
-    make an int16 *tensor* measurable."""
+    """Every entry point, not just the distance: either of the other two could regress to
+    inventing a plausible integer step or flush policy. Including the bit containers --
+    reading a bfloat16 through ``torch.int16`` must not make an int16 *tensor*
+    measurable."""
     values = torch.ones(4, dtype=dtype)
     with _refuses("unsupported dtype"):
         ulp_distance(values, values.clone())
+    with _refuses("unsupported dtype"):
+        flushes_subnormals(dtype)
+    with _refuses("unsupported dtype"):
+        local_step(1.0, dtype)
+    # `local_step` guards separately from `flushes_subnormals`, so an explicit override
+    # must not route around the refusal.
+    with _refuses("unsupported dtype"):
+        local_step(1.0, dtype, flush_subnormals=True)
     assert dtype not in _ULP_DTYPES  # keyed on the float dtypes only
 
 
