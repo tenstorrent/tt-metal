@@ -253,7 +253,29 @@ void D2HLeg::retire(uint32_t core, uint32_t pages) {
     if (core >= im.cfg.cores || pages == 0) {
         return;
     }
-    const uint32_t bytes = pages * im.page_size;
+    // Over-retiring puts acked ahead of sent, which underflows poll()'s wrap-safe
+    // subtraction and opens the device's send gate on pages this host never read.
+    const uint64_t outstanding = im.core[core].forwarded - im.core[core].retired;
+    if (pages > outstanding) {
+        im.fail(fmt::format(
+            "d2h: core {} retire of {} pages exceeds the {} forwarded and not yet retired",
+            core,
+            pages,
+            outstanding));
+        return;
+    }
+
+    // Disarm each page as it is freed -- this is the point the transport is done with it.
+    // host_uva_frame.hpp makes a zero guard "not armed", so a reused slot cannot read fresh.
+    uint32_t disarm_off = im.core[core].read_ptr;
+    for (uint32_t i = 0; i < pages; ++i) {
+        auto* const t = reinterpret_cast<FrameTrailer*>(
+            im.core[core].fifo + disarm_off + im.page_size - kFrameTrailerBytes);
+        __atomic_store_n(&t->guard, UINT64_C(0), __ATOMIC_RELEASE);
+        disarm_off = static_cast<uint32_t>((disarm_off + im.page_size) % im.fifo_bytes);
+    }
+
+    const uint32_t bytes = static_cast<uint32_t>(static_cast<uint64_t>(pages) * im.page_size);
     im.core[core].acked += bytes;
     im.core[core].read_ptr = (im.core[core].read_ptr + bytes) % im.fifo_bytes;
     im.core[core].retired += pages;

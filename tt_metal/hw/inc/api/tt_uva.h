@@ -77,9 +77,13 @@ inline uint64_t wall_clock() {
 // Payload, then trailer, then the caller decides whether to commit. The signal fields are
 // written unconditionally: the staging slot is reused, so stale bytes would read as an op.
 inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_off, uint32_t sig_val, uint32_t sig_op) {
-    // One page is reserved, and the trailer takes its tail: a longer payload runs through
-    // the trailer and into the next page, which nothing has reserved.
+    // Refused, not clamped: an over-long put runs off the slot onto the socket's own
+    // bytes_sent word, and the host validates length from a trailer that is already gone.
     ASSERT(g_page_size >= kFrameTrailerBytes && bytes <= g_page_size - kFrameTrailerBytes);
+    // Subtraction, not bytes + kFrameTrailerBytes: that sum wraps and lets the put through.
+    if (g_page_size < kFrameTrailerBytes || bytes > g_page_size - kFrameTrailerBytes) {
+        return;
+    }
     // Bracketed separately from the write below: this is the wait for the host to retire a
     // page, which is the slot round trip and not a cost of sending.
     const uint64_t t_pre = wall_clock();
@@ -100,6 +104,11 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
     t->sig_off = sig_off;
     t->sig_val = sig_val;
     t->sig_op = sig_op;
+    // Written even though unused: the staging slot is reused, so stale L1 would ride out
+    // on every frame and a peer reads these as a future field's value.
+    t->reserved0 = 0;
+    t->reserved[0] = 0;
+    t->reserved[1] = 0;
 
     // Page TAIL, not page + bytes: D2HLeg::poll() always reads the trailer at
     // page_size - kFrameTrailerBytes, and cannot know `bytes` before it has the trailer.
