@@ -145,6 +145,9 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
     mc.cores = cfg.cores;
     mc.page_bytes = page;
     mc.ring_pages = cfg.ring_pages;
+    // From the leg that owns these rings: H2HSocket writes into the same RX arenas the H2D
+    // leg aliased, so it has to start where that ring starts. Core 0 speaks for all of them.
+    mc.rx_data_offset = im.h2d->data_offset(0);
     mc.region_base = im.region->base();
     mc.region_bytes = im.region->pinned_bytes();
     mc.send_window = cfg.send_window;
