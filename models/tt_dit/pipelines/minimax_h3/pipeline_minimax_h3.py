@@ -290,8 +290,15 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named streaming SDPA recipe for every
+        denoiser attention call; omit them to keep the model's existing attention configuration."""
         self.mesh_device = mesh_device
+        # Read by `_prepare_transformer`; validated by the attention modules when the DiT is built.
+        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = sdpa_kv_dtype
         self.weights_dir = Path(weights_dir)
         # Only consult the preset for what the caller left unset, so an untuned shape with every
         # parallel setting supplied runs rather than raising -- the escape hatch `create_pipeline`
@@ -408,6 +415,8 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -430,6 +439,8 @@ class MiniMaxH3Pipeline:
             task=task,
             audio_split_mode=audio_split_mode,
             audio_t_factor=audio_t_factor,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
     @staticmethod
@@ -906,6 +917,8 @@ class MiniMaxH3Pipeline:
             parallel_config=self.dit_parallel_config,
             precomputed_adaln=True,
             cache_padding=self.trace_denoise,
+            sdpa_precision=self.sdpa_precision,
+            sdpa_kv_dtype=self.sdpa_kv_dtype,
         )
 
         # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of

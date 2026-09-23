@@ -122,6 +122,8 @@ class LTXTransformerBlock(Module):
         cross_attention_adaln: bool = True,
         quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -164,14 +166,18 @@ class LTXTransformerBlock(Module):
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
         self.norm1 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
-        self.attn1 = LTXAttention(dim=video_dim, num_heads=video_num_heads, is_self=True, **attn_kwargs)
+        # The SDPA recipe applies to the D128 video attentions only (video self-attn, ring or dense, and
+        # the unmasked video<->text cross-attn). The D64 audio attentions and the audio<->video
+        # cross-attentions below never receive it and keep their legacy SDPA configuration.
+        video_attn_kwargs = {**attn_kwargs, "sdpa_precision": sdpa_precision, "sdpa_kv_dtype": sdpa_kv_dtype}
+        self.attn1 = LTXAttention(dim=video_dim, num_heads=video_num_heads, is_self=True, **video_attn_kwargs)
         self.norm2 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
         self.attn2 = LTXAttention(
             dim=video_dim,
             num_heads=video_num_heads,
             is_self=False,
             context_dim=video_cross_attention_dim,
-            **attn_kwargs,
+            **video_attn_kwargs,
         )
         self.norm3 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
         self.ffn = ParallelFeedForward(
@@ -570,7 +576,12 @@ class LTXTransformerModel(Module):
         lora_enabled: bool = False,
         image_conditioning: bool = False,
         quant_config: LtxQuantProfile | None = None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt the D128 video attentions (video self-attn and
+        video<->text cross-attn) into a named SDPA recipe; audio (D64) and audio<->video attentions
+        stay legacy. ``None`` keeps the existing attention configuration."""
         super().__init__()
 
         self.inner_dim = num_attention_heads * attention_head_dim
@@ -718,6 +729,8 @@ class LTXTransformerModel(Module):
                     cross_attention_adaln=cross_attention_adaln,
                     quant_config=quant_config,
                     lora_enabled=lora_enabled,
+                    sdpa_precision=sdpa_precision,
+                    sdpa_kv_dtype=sdpa_kv_dtype,
                 )
             )
 
@@ -1200,6 +1213,8 @@ class LTXTransformerCheckpoint:
         image_conditioning: bool,
         quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> LTXTransformerModel:
         """Construct an ``LTXTransformerModel`` for this checkpoint (weights NOT loaded).
 
@@ -1224,6 +1239,8 @@ class LTXTransformerCheckpoint:
             image_conditioning=image_conditioning,
             quant_config=quant_config,
             lora_enabled=lora_enabled,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
     def load(

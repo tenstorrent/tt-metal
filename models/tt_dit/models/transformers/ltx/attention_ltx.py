@@ -17,6 +17,13 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
+from ....utils.sdpa_recipe import (
+    prepare_recipe_inputs,
+    recipe_program_config,
+    reject_mask,
+    sdpa_kwargs,
+    validate_recipe_args,
+)
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .quant_config import LtxQuantProfile
@@ -84,13 +91,24 @@ class LTXAttention(Module):
         apply_gated_attention: bool = False,
         quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt this attention into a named SDPA recipe
+        (Blackhole, D128, unmasked only; see models/tt_dit/utils/sdpa_recipe.py). ``None`` keeps the
+        legacy SDPA configuration exactly. In LTX-2 the transformer block only passes them to the
+        D128 video attentions (video self-attn and video<->text cross-attn); the D64 audio self/text
+        attentions and the audio<->video cross-attentions are always built without a recipe."""
         super().__init__()
 
         assert dim % num_heads == 0
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
+        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = validate_recipe_args(
+            sdpa_precision, sdpa_kv_dtype, head_dim=self.head_dim, model="LTX-2", is_blackhole=is_blackhole()
+        )
         self.qk_norm = qk_norm
         self.eps = eps
         self.is_self = is_self
@@ -579,6 +597,30 @@ class LTXAttention(Module):
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
         return ttnn.permute(gate, (1, 3, 2, 0))
 
+    def _sdpa_kwargs(self) -> dict:
+        """Recipe kwargs, or the legacy compute config read at call time (quant presets replace it)."""
+        return sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
+
+    def _ring_program_config(self, N: int) -> ttnn.SDPAProgramConfig:
+        """Self-attn ring SDPA config: the tuned per-N / per-mesh config, recipe-adjusted when opted in."""
+        program_config = self._ring_pc_by_n.get(N, self.ring_sdpa_program_config)
+        if self.sdpa_precision is None:
+            return program_config
+        return recipe_program_config(program_config, ring=True)
+
+    def _dense_program_config(self) -> ttnn.SDPAProgramConfig:
+        """Unmasked dense self-attn SDPA config (SP=1)."""
+        if self.sdpa_precision is None:
+            return self.sdpa_program_config
+        return recipe_program_config(self.sdpa_program_config)
+
+    def _cross_program_config(self, q_seq: int, kv_seq: int) -> ttnn.SDPAProgramConfig:
+        """Local cross-attn SDPA config: the per-shape tuned config, recipe-adjusted when opted in."""
+        program_config = self._sdpa_pc_by_shape.get((q_seq, kv_seq), self.sdpa_program_config)
+        if self.sdpa_precision is None:
+            return program_config
+        return recipe_program_config(program_config)
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -598,6 +640,8 @@ class LTXAttention(Module):
     ) -> ttnn.Tensor:
         """Same interface as WanAttention.forward(); pass k_rope_cos/sin for separate K RoPE
         in A2V/V2A cross-attention."""
+        # Named recipes are unmasked only; masked paths (e.g. masked audio self-attn) stay legacy-only.
+        reject_mask(self.sdpa_precision, attn_mask, model="LTX-2")
         if rope_cos is not None:
             assert rope_sin is not None
             assert trans_mat is not None, "INTERLEAVED RoPE requires trans_mat (load-time Q/K permute assumes it)"
@@ -723,13 +767,23 @@ class LTXAttention(Module):
         # collective as well as the QK^T/PV matmuls; dummy_joint is a real SDPA input and must carry
         # the same dtype. Kept separate from the linear activation cast: SDPA inputs have the widest
         # dynamic range in the block and are the likeliest place for bf8 to break accuracy.
-        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        # A recipe owns its SDPA input dtypes (BF16, or LOW_PRECISION-prepared), so skip the quant cast.
+        sdpa_input_dtype = None if self.sdpa_precision is not None else getattr(self, "_sdpa_input_dtype", None)
         dummy_joint = self.dummy_joint_input
         if sdpa_input_dtype is not None:
             q_BHNE = maybe_cast_activation(q_BHNE, sdpa_input_dtype)
             k_BHNE = maybe_cast_activation(k_BHNE, sdpa_input_dtype)
             v_BHNE = maybe_cast_activation(v_BHNE, sdpa_input_dtype)
             dummy_joint = maybe_cast_activation(dummy_joint, sdpa_input_dtype)
+
+        if use_ring_cross and self.sdpa_precision is not None and not skip_qk:
+            # Only the D64 V2A attention takes this path, and it is always built without a recipe.
+            raise ValueError("LTX-2: named SDPA recipes are not wired for the ring cross-attention (V2A) path")
+        if not skip_qk:
+            # LOW_PRECISION: after norm/RoPE, before the SDPA call (which fuses the ring K/V gather).
+            q_BHNE, k_BHNE, v_BHNE = prepare_recipe_inputs(
+                self.sdpa_precision, self.sdpa_kv_dtype, q_BHNE, k_BHNE, v_BHNE
+            )
 
         if skip_qk:
             # STG perturbation: skip Q/K attention, use V passthrough.
@@ -753,8 +807,8 @@ class LTXAttention(Module):
                     ),
                     joint_strategy="rear",
                     logical_n=N,
-                    program_config=self._ring_pc_by_n.get(N, self.ring_sdpa_program_config),
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self._ring_program_config(N),
+                    **self._sdpa_kwargs(),
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                         self.parallel_config.sequence_parallel.mesh_axis
@@ -788,8 +842,8 @@ class LTXAttention(Module):
                     v_BHNE,
                     attn_mask=attn_mask,
                     is_causal=False,
-                    program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self._dense_program_config(),
+                    **self._sdpa_kwargs(),
                 )
         elif use_ring_cross:
             # Short audio Q attends non-causally to the SP-sharded video K/V; is_cross fuses the
@@ -831,8 +885,8 @@ class LTXAttention(Module):
                 v_BHNE,
                 attn_mask=attn_mask,
                 is_causal=False,
-                program_config=self._sdpa_pc_by_shape.get((q_BHNE.shape[2], k_BHNE.shape[2]), self.sdpa_program_config),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self._cross_program_config(q_BHNE.shape[2], k_BHNE.shape[2]),
+                **self._sdpa_kwargs(),
             )
 
         # Apply per-head gate in BHNE space.
