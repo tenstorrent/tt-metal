@@ -1,17 +1,10 @@
 # Dependency and input-handling review
 
-> For the maintainers / security owner: four advisories are open and are not closed
-> by a version bump -- three `torch` MEDIUMs and one `transformers` HIGH. The
-> disposition being requested, the evidence behind it, and what the alternatives
-> cost are in the next section. Everything after that is the full audit record.
+Four advisories against the reference venv's pins are open and are not closed by a
+version bump: three `torch` MEDIUM and one `transformers` HIGH. The next section asks
+for a disposition and gives the evidence; the rest is the audit.
 
 ## Disposition requested: four open advisories
-
-Cycode has flagged the same three MEDIUM advisories against `requirements-reference.txt`'s
-`torch==2.6.0+cpu` on every scan since 2026-08-12, unchanged, joined on 2026-09-10 by one
-HIGH against `transformers==5.5.0`. These four are the last four of the 41 findings this
-file opened with; the other 37 are closed by removal or by a bump (see *Audit findings*
-below).
 
 | advisory | affected function | impact | fixed in |
 |---|---|---|---|
@@ -20,34 +13,30 @@ below).
 | [CVE-2025-2998](https://nvd.nist.gov/vuln/detail/CVE-2025-2998) | `torch.nn.utils.rnn.pad_packed_sequence` | memory corruption | none recorded; range ends at `<= 2.6.0` |
 | [CVE-2026-9856](https://nvd.nist.gov/vuln/detail/CVE-2026-9856) | `PreTrainedTokenizerBase.save_pretrained` / `ProcessorMixin.save_pretrained` | arbitrary file write | `5.10.1` (advisory names `5.10.0`, yanked) |
 
-All three are CVSS 4.0 base 4.8 MEDIUM, `AV:L/AC:L/PR:L/UI:N` — local access with
-existing privileges, no user interaction. NVD's own text for CVE-2025-3730 adds "the
-real existence of this vulnerability is still doubted at the moment". Two of the three
-are memory corruption rather than DoS, which is worth stating plainly because an
-earlier revision of this document called all three "local DoS" and that was wrong.
+The three `torch` advisories are CVSS 4.0 base 4.8 MEDIUM, `AV:L/AC:L/PR:L/UI:N`: local
+access with existing privileges, no user interaction. Two are memory corruption and one
+is denial of service; NVD's own text for CVE-2025-3730 adds "the real existence of this
+vulnerability is still doubted at the moment".
 
-The `transformers` finding, CVE-2026-9856 (GHSA-xrqw-3rrv-vx5w, CVSS 7.1 HIGH), is a path
-traversal: `PreTrainedTokenizerBase`/`ProcessorMixin.save_pretrained` write a checkpoint's
-chat-template name as `<name>.jinja` without checking it stays inside the target directory.
-The advisory names `5.10.0` as first patched; that release was yanked by its own authors 21
-minutes after publishing ("missing a bunch of fixes"), so `5.10.1` is the version that
-actually carries the fix. Not reachable either way: this file's only `transformers` import
-(`scripts/eval_wer_sim.py`) never calls `save_pretrained`, and upstream CosyVoice@074ca6d's
-three call sites are all off the reference path -- a CUDA-only Triton export script, a GRPO
-training example, and a `vllm`-only path that saves a raw model, not a tokenizer. Unlike
-`lightning`, this package sits in the AR decode loop that produces every golden, so a
-five-minor-version bump needs a golden re-run before it can be called safe; none has been
-done, so the pin stays at `5.5.0`.
+CVE-2026-9856 (GHSA-xrqw-3rrv-vx5w, CVSS 7.1 HIGH) is a path traversal:
+`PreTrainedTokenizerBase`/`ProcessorMixin.save_pretrained` write a checkpoint's
+chat-template name as `<name>.jinja` without checking that it stays inside the target
+directory. `5.10.0`, the version the advisory names, was yanked by its authors ("missing
+a bunch of fixes"); `5.10.1` carries the fix. It is not reachable: this tree's only
+`transformers` import (`scripts/eval_wer_sim.py`) never calls `save_pretrained`, and
+upstream CosyVoice@074ca6d's three call sites are all off the reference path — a
+CUDA-only Triton export script, a GRPO training example, and a `vllm`-only path that
+saves a raw model, not a tokenizer. `transformers` sits in the AR decode loop that
+produces every golden, so a bump needs a golden re-run first; none has been done, and
+the pin stays at `5.5.0`.
 
-What ships. Nothing. `requirements-reference.txt` builds a host-only venv for
-golden capture, weight export and WER/speaker scoring. Merging this demo installs
-none of it: `tt/`, `tests/` and `demo/` import only `torch`, `numpy`, `ttnn` and
-`loguru`, all of which tt-metal's `python_env` already carries. See *The port adds no
-runtime dependencies*.
+What ships: nothing. `requirements-reference.txt` builds a host-only venv for golden
+capture, weight export and WER/speaker scoring. `tt/`, `tests/` and `demo/` import only
+`torch`, `numpy`, `ttnn` and `loguru`, all already in tt-metal's `python_env` (*The port
+adds no runtime dependencies*).
 
-Reachability, checked rather than asserted. Each advisory names one function, so
-"does anything on the reference path call it" is a decidable question rather than a
-judgement:
+Reachability. Each `torch` advisory names one function, so whether the reference path
+calls it is decidable:
 
 | where | `ctc_loss` | `unpack_sequence` | `pad_packed_sequence` |
 |---|---|---|---|
@@ -58,13 +47,12 @@ judgement:
 | `torchaudio` | — | — | `models/tacotron2.py` |
 | `modelscope` | `trainers/audio/kws_utils` | — | `models/multi_modal/{mmr,prost}` |
 
-Not one of those call sites is on the reference path. The scoring script
-instantiates `WavLMForXVector` — a different class in the same file as `WavLMForCTC` —
-and never passes `labels`, so the `ctc_loss` branch is a training path that does not
-run. From `torchaudio` it calls `load`, `save` and `functional.resample`, not
-Tacotron-2. From `modelscope`, CosyVoice imports exactly `snapshot_download`, which
-reaches neither the video-retrieval models nor the keyword-spotting trainer. Repeat
-the check with:
+None of those call sites is on the reference path. The scoring script instantiates
+`WavLMForXVector`, a different class in the same file as `WavLMForCTC`, and never passes
+`labels`, so the `ctc_loss` branch does not run. From `torchaudio` it calls `load`,
+`save` and `functional.resample`, not Tacotron-2. From `modelscope`, CosyVoice imports
+only `snapshot_download`, which reaches neither the video-retrieval models nor the
+keyword-spotting trainer. To repeat the check:
 
 ```bash
 grep -rn "ctc_loss\|unpack_sequence\|pad_packed_sequence" --include="*.py" \
@@ -73,42 +61,32 @@ grep -rl "ctc_loss\|unpack_sequence\|pad_packed_sequence" --include="*.py" \
   $COSYVOICE_ENV/lib/python3.10/site-packages
 ```
 
-Why the pin does not simply move. Not compatibility — that was re-measured on
-2026-08-22 and every blocker previously recorded here turned out to be false (details
-below). The blocker is narrower and cannot be tested away:
+Why the `torch` pin stays. Compatibility is not the blocker: `openai-whisper` 20250625
+accepts `triton>=2`, `torchaudio` 2.8 keeps its native decoder, and `Qwen2ForCausalLM`
+imports cleanly on torch 2.9.1. The blocker is that
 `torch.multinomial(probs, num_samples=1)` consumes the RNG stream differently in 2.8
-than in 2.6. The batched form, `topk` and `sort` are byte-identical, and so is the
-generator; model arithmetic survives the bump bit-exact. But the token drawn at decode
-step 2 changes, the utterance ends at 147 semantic tokens instead of 164, and all 29
-goldens shift. Every accuracy figure in `PERF.md` is measured against those goldens.
+than in 2.6. The batched form, `topk`, `sort` and the generator are byte-identical, and
+model arithmetic survives the bump bit-exact, but the token drawn at decode step 2
+changes, the utterance ends at 147 semantic tokens instead of 164, and all 29 goldens
+shift. Every accuracy figure in `PERF.md` is measured against those goldens, so a bump
+is a re-baseline: regenerate the golden set, re-run the PCC suite on both architectures,
+and re-measure every derived figure. It changes nothing in the reachability table above.
 
-So a bump is a re-baseline, not a numerical risk: regenerate the golden set, re-run
-the PCC suite on both architectures, and re-measure every figure derived from it. That
-is real work, and it buys nothing on the reachability table above.
-
-The disposition being asked for. One of:
+The disposition requested is one of:
 
 1. Accept the risk and keep both pins — the recommendation. Every finding is in a
    function no reference-path code calls, in a venv the merge does not install.
 2. Require a bump — golden set regenerated and every figure re-measured before merge;
-   `5.10.1` for `transformers`, not the yanked `5.10.0`. `docs/security.md`'s
-   *Reproducing* section is the procedure.
-3. Require the file's removal from the PR — publishable, at the cost that the
+   `5.10.1` for `transformers`, not the yanked `5.10.0`. *Reproducing* below is the
+   procedure.
+3. Require `requirements-reference.txt`'s removal from the PR, at the cost that the
    goldens and the WER/similarity scores stop being reproducible from this tree.
 
-If (1) is granted, please record it on the PR; this document will carry the decision
-and its date so a later scan hits a written disposition rather than an open finding.
+If (1) is granted, please record it on the PR; this document will then carry the
+decision and its date, so a later scan meets a written disposition rather than an open
+finding.
 
 ---
-
-## The full audit record
-
-`pip-audit` run 2026-08-05; re-worked 2026-08-12 against the Cycode scan on the PR, which
-flagged 38 advisories across 10 pinned packages plus one SAST finding. A 39th arrived on
-2026-08-22 against `hydra-core` and a 40th on 2026-09-09 against `lightning`; both are closed
-the same way, by a bump. A 41st arrived the same day against `transformers` and is held
-open -- see *Disposition requested* above. The conclusion depends on a distinction the
-two-environment split already enforces, so it is stated first.
 
 ## The port adds no runtime dependencies
 
@@ -121,28 +99,29 @@ Everything that runs on device imports only what tt-metal already ships:
 | `demo/` | `torch`, `numpy`, `ttnn` | tt-metal `python_env` |
 | `scripts/` | `cosyvoice`, `hyperpyyaml`, `onnxruntime`, `transformers`, `whisper`, `torchaudio`, `zhconv` | **`cosyvoice_env` only** |
 
-All four of the first group are present in tt-metal's environment already. Merging this demo
+All four of the first group are already in tt-metal's environment, so merging this demo
 installs nothing.
 
-`scripts/` is the reference side — golden capture, weight export, front-end preparation, WER/SIM
-scoring. It runs once, on a host, in its own venv, and never on device. That split is not a
-convenience: installing whisper into tt-metal's `python_env` during early bring-up pulled a
-`triton` that broke `import torch` outright, which is what established the rule.
+`scripts/` is the reference side — golden capture, weight export, front-end
+preparation, WER/SIM scoring. It runs on a host, in its own venv, never on device. The
+two environments stay separate because installing whisper into tt-metal's `python_env`
+pulls in a `triton` that breaks `import torch`.
 
-## Audit findings, and where they live
+## Audit findings
 
-None of them ship. Every advisory below is confined to the reference venv, which:
+41 advisories against the reference venv's pins (from `pip-audit` and the PR's Cycode
+scans), plus one SAST finding. None ships: every advisory is confined to the reference
+venv, which
 
 - is not installed by anything in `models/demos/cosyvoice/`,
-- is not needed to run the model, the demo, or any test in `tests/pcc`, `tests/e2e` or `tests/perf`,
+- is not needed to run the model, the demo, or any test in `tests/pcc`, `tests/e2e` or
+  `tests/perf`,
 - exists to reproduce goldens and to score audio.
 
-That containment was the whole of the original argument for leaving upstream's pins alone. It is
-still true, but it is not sufficient on its own: `gen_golden.py` `torch.load`s three checkpoints
-fetched from ModelScope, so the venv does process third-party bytes, and `torch==2.3.1` carried
-CVE-2025-32434 — which is precisely the finding that `weights_only=True` was bypassable before
-2.6.0. All four `torch.load` call sites already pass `weights_only=True`; on 2.3.1 that did not
-help. So the pins moved.
+Containment alone does not settle it. `gen_golden.py` `torch.load`s three checkpoints
+fetched from ModelScope, so the venv processes third-party bytes, and `weights_only=True`
+— passed at all four `torch.load` call sites — was bypassable before torch 2.6.0
+(CVE-2025-32434). So the pins move wherever a bump is safe:
 
 | | advisories | disposition |
 |---|---|---|
@@ -150,68 +129,43 @@ help. So the pins moved.
 | fixed by a version bump | 3 CRITICAL, 10 HIGH, 7 MODERATE | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
 | **outstanding** | **1 HIGH, 3 MODERATE** | `transformers`, `torch` ×3 |
 
-37 of 41 closed. The four that remain are the three `torch` MEDIUMs and the
-`transformers` HIGH dispositioned at the top of this document; see *Disposition
-requested* for their functions, their reachability and what a bump would cost.
+37 of 41 are closed; the four open ones are dispositioned at the top of this document.
 
-Re-measured 2026-08-22, because the reason recorded here was wrong. Neither the `triton` pin
-nor the `torchaudio` decoder blocks a bump any more: `openai-whisper` 20250625 relaxes triton
-to `>=2` and 3.7.1 resolves against torch 2.8/2.9, `torchaudio` 2.8 keeps its native decoder,
-and `Qwen2ForCausalLM` imports cleanly on torch 2.9.1. The real blocker is narrower.
-`torch.multinomial(probs, num_samples=1)` consumes the RNG stream differently in 2.8 than in
-2.6 — the batched form, `topk` and `sort` are byte-identical, and so is the generator. Model
-arithmetic survives the bump bit-exact, but the token drawn at decode step 2 changes, the
-utterance ends at 147 semantic tokens instead of 164, and all 29 goldens shift.
+Every bump taken is checked against the goldens: regenerating the full set from a venv
+built clean from `requirements-reference.txt` reproduces all 29 files at worst PCC
+`0.9999993220`, with an e2e waveform `max|diff|` of `3.457e-04`. The reference the port
+is measured against does not move.
 
-That makes a torch bump a re-baseline rather than a numerical risk: the golden set would have
-to be regenerated and every figure in PERF.md derived from it re-measured. Three MODERATE
-local-DoS findings in a venv that ships nothing do not justify moving the reference the port
-is measured against. `requirements-reference.txt` carries the per-package detail.
+Per package:
 
-One correction worth recording, because it changed the outcome. An earlier pass here reported
-`transformers` 5.x as incompatible — that `Qwen2ForCausalLM` was no longer importable from the
-top-level namespace. That was measured in an environment that also carried torch 2.9.1, and
-torch 2.9.1 breaks that same import by itself; `transformers` 4.53.0 fails identically
-there. Re-tested against torch 2.6.0, `transformers` 5.5.0 imports cleanly and reproduces the
-goldens bit-for-bit, which closed three advisories that had been written up as unfixable.
+- `transformers` 5.5.0 imports cleanly on torch 2.6.0 and reproduces the goldens
+  bit-for-bit. torch 2.9.1 on its own breaks the top-level `Qwen2ForCausalLM` import,
+  with `transformers` 4.53.0 as well as 5.x.
+- `hydra-core` 1.3.2 → 1.3.4 closes CVE-2026-68508 (HIGH, `hydra.utils.instantiate`
+  running code from an untrusted config). `hydra` loads on the reference path only as a
+  side effect of `matcha/utils/__init__.py`, and `instantiate` is called only from
+  `matcha/train.py`, which the reference never runs. With every other pin fixed, the
+  regenerated set is bit-exact against the committed goldens, 139/139 arrays.
+- `lightning` 2.3.3 → 2.6.6 closes CVE-2026-58659 (HIGH, `LightningModule.load_from_checkpoint`
+  running an `_instantiator` import path from the checkpoint even under
+  `weights_only=True`); 2.6.6 adds the `_ALLOWED_INSTANTIATORS` allowlist. `lightning` is
+  on the reference path only because `matcha/utils/pylogger.py` imports `rank_zero_only`
+  from `lightning.pytorch`, a logging decorator with no numeric surface; nothing calls
+  `load_from_checkpoint`. Confirm with *Reproducing* before merge, as for the others.
+- `onnxruntime` stays at 1.18.0 for numerical reasons, with no advisory against it:
+  1.23.2 emits a different token sequence from `speech_tokenizer_v1.onnx`, which
+  reroutes the LLM and desynchronises every downstream RNG draw, giving an e2e waveform
+  at PCC 0.01.
 
-What made the bumps safe to take is that they are checked, not asserted: regenerating the full
-golden set on the new pins reproduces all 29 files at PCC ≥ 0.9999993, e2e waveform
-`max|diff|` 3.5e-04. Re-verified 2026-08-22 from a venv built clean from this file: worst PCC
-`0.9999993220`, e2e `max|diff|` `3.457e-04`. The reference the TTNN port is measured against did not move.
+`pip-audit` cannot audit `torch` and `torchaudio` (`2.6.0+cpu` is not a PyPI version
+string), so their advisories come from the Cycode scan. `requirements-reference.txt`
+carries the per-package detail.
 
-The 39th, CVE-2026-68508 against `hydra-core` (HIGH, `hydra.utils.instantiate` running code
-from an untrusted config), is closed by 1.3.2 -> 1.3.4. `hydra` is imported on the reference
-path, but only as a side effect of `matcha/utils/__init__.py`; `instantiate` is called only
-from `matcha/train.py`, which the reference never runs. The bump is a patch release holding
-the same `omegaconf` range, so it costs nothing to take. Checked the same way as the others:
-holding every other pin fixed and moving only `hydra-core`, the regenerated set is bit-exact
-against the committed goldens, 139/139 arrays — the bump is numerically inert.
+The SAST finding (unsanitised input in an OS command, `gen_golden.py`) is closed by
+removing the call site; see *Input handling*.
 
-CVE-2026-58659 against `lightning` (HIGH, `LightningModule.load_from_checkpoint` running an
-`_instantiator` import path from the checkpoint even under `weights_only=True`) arrived on the
-2026-09-09 scan and is closed by 2.3.3 -> 2.6.6, the release that adds the
-`_ALLOWED_INSTANTIATORS` allowlist. `lightning` is on the reference path only because
-`matcha/utils/pylogger.py` imports `rank_zero_only` from `lightning.pytorch`; nothing calls
-`load_from_checkpoint`, so the exposure was already nil. Matcha pins `lightning>=2.0.0`, the
-shim is a logging decorator with no numeric surface, and the bump moves no code the goldens
-exercise — confirm with the *Reproducing* run below before merge, the same check as the
-others.
-
-One pin is held *back* for the same reason. `onnxruntime` has no advisory, but 1.23.2 emits a
-different token sequence from `speech_tokenizer_v1.onnx` than 1.18.0 does; that reroutes the LLM
-and desynchronises every downstream RNG draw, giving an e2e waveform at PCC 0.01. Version-pinning
-an ONNX runtime is a numerical decision here, not a security one.
-
-A reproduction that needs the reference venv should create it in a container, keeping the eval
-dependencies in a separate virtualenv for the same isolation reason.
-
-`torch` and `torchaudio` are reported as un-auditable by `pip-audit` (`2.6.0+cpu` is not a PyPI
-version string), so their advisories were tracked from the Cycode scan instead.
-
-The SAST finding (unsanitized input in an OS command, `gen_golden.py`) is closed: the call site
-was removed rather than sanitized — see Input handling below. Tracked separately from the
-dependency advisories above.
+A reproduction that needs the reference venv should create it in a container, with the
+eval dependencies in a separate virtualenv.
 
 ## Input handling
 
