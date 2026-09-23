@@ -546,6 +546,25 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### generic_op launch cost: merged core ranges + fewest-cores split (2026-09-23)
+
+The three model-local `generic_op`s (head-split+norm+RoPE, concat heads, plain
+head-split) built their `CoreRangeSet` as one single-core `CoreRange` per worker.
+The dispatcher then unicasts the kernel binaries to each of the 120 cores on every
+launch instead of one multicast per kernel. Measured in trace replay at bs1
+(`[1,1,512,6144]`, kernel ≈ 20 µs): 55.9 µs/op at 120 cores, 30.6 at 64, 19.7 at
+32 — i.e. ≈0.4 µs per core of launch cost that a native op (`ttnn.add` of the same
+size: 8.4 µs/op) does not pay. With merged rectangles: 13.0 µs/op at 120 cores,
+concat heads 7.9 µs/op. The work split now also uses the fewest cores that keep
+the same per-core maximum (bs1: 128 units → 64 cores × 2 instead of 120 cores of
+which 8 carry 2; 60.3 → 51.7 µs/op for the norm+RoPE variant).
+
+In the model the gain is smaller than standalone because the dispatcher writes the
+next program's binaries while the previous (longer) op runs: bs1 23.7 → **23.4**,
+bs8 127.5 → **126.7**, bs16 240.9 → **240.6**, bs32 456.7 → **455.8**; STS-B 0.8161
+(unchanged — no numerics involved). Lesson for any further generic_op: never pass
+per-core ranges; use `_core_ranges(per_core)` from `custom_ops/fused_qkv_heads/op.py`.
+
 ### Fused op emits Q and K/V in bfp8 — Typecast deleted (2026-09-23)
 
 `fused_qkv_heads_norm` now packs Q into its own output CB in SDPA's operand dtype
