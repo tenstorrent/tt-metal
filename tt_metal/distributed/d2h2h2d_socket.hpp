@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "tt_metal/distributed/host_d2h_leg.hpp"
 #include "tt_metal/distributed/host_h2d_leg.hpp"
@@ -38,6 +39,8 @@ public:
         uint32_t send_window = 0;
         // Give delivery its own L1 buffer, so a core can send and receive at once.
         bool bidirectional = false;
+        // Off by default: the h2h and h2d terms cost a steady_clock read per frame.
+        bool collect_timing = false;
     };
 
     struct Counters {
@@ -65,7 +68,20 @@ public:
     uint32_t poll();
 
     const L1MapNew& l1() const;
+    // Raw per-frame samples, so the caller sorts and takes a median exactly as the three
+    // single-leg benchmarks do. Each vector is on ONE clock; empty unless collect_timing.
+    struct Timing {
+        // Sending chip's own cycles, carried in the frame trailer. As test_d2h_bw.cpp.
+        std::vector<uint64_t> d2h_issue_cycles;
+        std::vector<uint64_t> d2h_stall_cycles;
+        // This host's clock, submit -> RDMA complete. As test_h2h_bw.cpp's put->credit.
+        std::vector<uint64_t> h2h_put_to_credit_ns;
+        // This host's clock, publish -> device drained. As test_h2d_bw.cpp.
+        std::vector<uint64_t> h2d_publish_to_drained_ns;
+    };
+
     const Counters& counters() const;
+    const Timing& timing() const;
     HostRegion& region() const;
     D2HLeg& d2h() const;
     H2HSocket& h2h() const;
