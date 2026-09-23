@@ -17,6 +17,7 @@ from ...parallel.manager import CCLManager
 from ...reference.ideogram4.constants import QWEN3_VL_ACTIVATION_LAYERS
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.padding import pad_weight_tensor
+from ...utils.sdpa_recipe import validate_recipe_args
 from ...utils.substate import pop_substate
 from ...utils.tensor import bf16_tensor
 
@@ -705,7 +706,13 @@ class Ideogram4Transformer(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig | None = None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
+        """``sdpa_precision``/``sdpa_kv_dtype`` exist for API parity with the recipe-wired denoisers;
+        Ideogram4 attention is D256, so any named SDPA recipe is rejected (ValueError). ``None`` keeps
+        the existing attention configuration."""
+        self.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=emb_dim // num_heads)
         super().__init__()
         self.emb_dim = emb_dim
         self.num_layers = num_layers
@@ -755,6 +762,15 @@ class Ideogram4Transformer(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+    @staticmethod
+    def validate_sdpa_recipe(
+        sdpa_precision: ttnn.SDPAPrecision | None, sdpa_kv_dtype: ttnn.DataType | None, *, head_dim: int
+    ) -> None:
+        """Reject any named SDPA recipe: Ideogram4 attention (D256) is not wired for recipes."""
+        validate_recipe_args(sdpa_precision, sdpa_kv_dtype, head_dim=head_dim, model="Ideogram4")
+        if sdpa_precision is not None:
+            raise ValueError("Ideogram4: named SDPA recipes are not wired for this model")
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # rotary_emb is a parameter-free buffer module in the reference; drop it (cos/sin

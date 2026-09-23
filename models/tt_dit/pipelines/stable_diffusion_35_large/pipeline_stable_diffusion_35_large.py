@@ -17,7 +17,7 @@ from PIL import Image
 import ttnn
 
 # NOTE: SD35Transformer is the new tt-dit implementation
-from models.tt_dit.models.transformers.transformer_sd35 import SD35Checkpoint
+from models.tt_dit.models.transformers.transformer_sd35 import SD35Checkpoint, SD35Transformer2DModel
 from models.tt_dit.models.vae.vae_sd35 import VAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
@@ -128,6 +128,8 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         cfg_enabled: bool = True,
         max_t5_sequence_length: int = 256,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> StableDiffusion3Pipeline:
         config = StableDiffusion3PipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -137,14 +139,20 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
             max_t5_sequence_length=max_t5_sequence_length,
             checkpoint_name=checkpoint_name,
         )
-        return cls(device=mesh_device, config=config)
+        return cls(device=mesh_device, config=config, sdpa_precision=sdpa_precision, sdpa_kv_dtype=sdpa_kv_dtype)
 
     def __init__(
         self,
         *,
         device: ttnn.MeshDevice,
         config: StableDiffusion3PipelineConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
+        """``sdpa_precision``/``sdpa_kv_dtype`` are accepted for API parity only: SD3.5 attention is D64,
+        so requesting a named SDPA recipe raises ValueError. Omit them to keep the existing attention."""
+        # Fail before any device/weight work (SD3.5 attention_head_dim is 64); the transformer re-checks.
+        SD35Transformer2DModel.validate_sdpa_recipe(sdpa_precision, sdpa_kv_dtype, head_dim=64)
         self._mesh_device = device
         self.dit_parallel_config = config.dit_parallel_config
         self.encoder_parallel_config = config.encoder_parallel_config
@@ -186,7 +194,13 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
 
         checkpoint = SD35Checkpoint(checkpoint_name)
         self.transformers = [
-            checkpoint.build(ccl_manager=mgr, parallel_config=self.dit_parallel_config) for mgr in self.ccl_managers
+            checkpoint.build(
+                ccl_manager=mgr,
+                parallel_config=self.dit_parallel_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
+            )
+            for mgr in self.ccl_managers
         ]
         self.synchronize_devices()
 
