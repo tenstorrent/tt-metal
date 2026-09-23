@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
@@ -35,12 +36,10 @@ void kernel_main() {
     // each width its own buffers: the raw block write below cannot wrap, so a buffer's size must stay
     // an exact multiple of the block pushed into it.
     DataflowBuffer dfb_in0(dfb::in);
-    DataflowBuffer dfb_in1(dfb::staging);
+    Scratchpad<uint8_t> staging(scratch::staging);
 
-    dfb_in1.reserve_back(1);
-    uint32_t temp_addr_raw = dfb_in1.get_write_ptr();
+    uint32_t temp_addr_raw = staging.get_base_address();
     uint32_t temp_addr = (temp_addr_raw + dram_alignment - 1) & ~(dram_alignment - 1);
-    dfb_in1.push_back(1);
 
     auto read_block = [&](uint32_t num_rows,
                           uint32_t start_row_id,
