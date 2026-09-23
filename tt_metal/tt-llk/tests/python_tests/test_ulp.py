@@ -454,7 +454,11 @@ def test_the_quantiles_fall_back_to_the_max_below_their_thresholds():
 
 def test_ulp_stats_on_an_all_unmeasurable_tensor():
     stats = ulp_stats(torch.full((4,), UNMEASURABLE, dtype=torch.int64))
-    assert stats == {**stats, "lanes": 0, "unmeasurable": 4, "worst_index": None}
+    assert stats["lanes"] == 0
+    assert stats["unmeasurable"] == 4
+    assert stats["worst_index"] is None
+    assert stats["max"] == 0
+    assert all(math.isnan(stats[key]) for key in ("mean", "p95", "p99", "exact_frac"))
 
 
 def test_the_failure_message_locates_the_lane_and_sizes_its_step():
@@ -608,9 +612,28 @@ def test_the_step_at_the_top_of_the_range_stays_finite(dtype):
     assert "1 ULP = inf" not in message
 
 
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
+def test_a_saturated_lane_does_not_print_a_nan_step(dtype):
+    """``local_step`` has no answer at ``Inf`` and returns NaN; an agreeing overflow is a
+    pass, so that NaN would reach the log as "1 ULP = nan"."""
+    saturated = _t([float("inf")], dtype)
+    ok, message = within_ulp(saturated, saturated.clone(), max_ulp=0)
+    assert ok
+    assert "nan" not in message
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # What the metric refuses to measure
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_within_ulp_refuses_a_golden_and_result_of_different_dtypes():
+    """A rank is a position on one lattice. Uncast, an overflowed lane reads as a kernel
+    overflow on the non-finite path instead, and is labelled with the golden's dtype."""
+    with _refuses("golden is torch.float32 but result is"):
+        within_ulp(
+            _t([70000.0], torch.float32), _t([float("inf")], torch.float16), max_ulp=0
+        )
 
 
 @pytest.mark.parametrize(
