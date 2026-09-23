@@ -41,6 +41,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tilize_stick_reads.hpp"
+#include "so_coalesced.hpp"
 
 // retile_l1_facewalk load_block (tilize_stick_reads.hpp): walk the core's rectangle in
 // units of row_align output tile-rows; per unit, get its input tiles into L1 (a
@@ -311,6 +312,130 @@ FORCE_INLINE void read_bank_coalesced(
     noc_async_read_set_trid(0);
 }
 
+// scatter_offload (SO_MODE 1..3, so_coalesced.hpp): the bank_coalesced load_block with BRISC
+// taking a share of the scatter (1: half, 2: all) or of the reads + scatter (3). NCRISC stays
+// the single producer of cb_input_sticks; pushes are deferred and polled so NCRISC never sits in
+// a blocking wait while it holds an unpushed slot (the push depends only on BRISC's done flag).
+template <
+    uint32_t cb_input_sticks,
+    uint32_t cb_staging,
+    uint32_t block_width,
+    uint32_t tile_h,
+    uint32_t stick_bytes,
+    uint32_t stick_page_bytes,
+    uint32_t rows_per_quantum,
+    uint32_t stage_depth,
+    uint32_t num_banks,
+    uint32_t depth_in,
+    typename Accessor>
+FORCE_INLINE void read_bank_coalesced_so(
+    const Accessor& accessor,
+    uint32_t row_start,
+    uint32_t core_row_tiles,
+    uint32_t col_start,
+    uint32_t core_col_tiles,
+    uint32_t row_rotation,
+    uint32_t bank_rotation) {
+    static_assert(stage_depth >= 1 && stage_depth <= 14, "one NoC transaction id per staging slot + the scatter's");
+    constexpr uint32_t scatter_trid = stage_depth + 1;
+    constexpr uint32_t stage_slot_bytes = rows_per_quantum * tile_h * stick_page_bytes;
+    constexpr uint32_t slot_pages = rows_per_quantum * block_width;
+    // NCRISC's read share: every bank (modes 1, 2) or its ordinals (mode 3).
+    using ReadShare = so::
+        Share<block_width, tile_h, stick_bytes, stick_page_bytes, num_banks, 0, SO_MODE == 3 ? so::nc_num : so::den>;
+    using ScatterShare = so::Share<block_width, tile_h, stick_bytes, stick_page_bytes, num_banks, 0, so::nc_num>;
+
+    volatile tt_l1_ptr uint32_t* staged = so::sem_ptr(SO_SEM_STAGED);
+    volatile tt_l1_ptr uint32_t* done = so::sem_ptr(SO_SEM_DONE);
+
+    tilize_dataflow::Walker<block_width> issue_walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+    tilize_dataflow::Walker<block_width> scatter_walk(
+        row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+    const uint32_t num_positions = issue_walk.num_positions();
+    const uint32_t num_units = (num_positions + rows_per_quantum - 1) / rows_per_quantum;
+    auto unit_rows = [&](uint32_t k) {
+        const uint32_t left = num_positions - k * rows_per_quantum;
+        return left < rows_per_quantum ? left : rows_per_quantum;
+    };
+    const uint32_t stage_base = get_write_ptr(cb_staging);
+    const uint32_t in_base = get_write_ptr(cb_input_sticks);
+    constexpr uint32_t in_slot_bytes = rows_per_quantum * tile_h * stick_bytes;
+
+    uint32_t pushed = 0;        // units pushed to compute
+    uint32_t nc_scattered = 0;  // units whose NCRISC scatter share has landed
+    auto push_ready = [&]() {
+        const uint32_t d = so::sem_read(done);
+        const uint32_t ready = d < nc_scattered ? d : nc_scattered;
+        while (pushed < ready) {
+            cb_push_back(cb_input_sticks, unit_rows(pushed) * block_width);
+            ++pushed;
+        }
+    };
+
+    auto issue = [&](uint32_t k) {
+        MaybeDeviceZoneScope("reader_issue");
+        noc_async_read_set_trid(1 + (k % stage_depth));
+        ReadShare::issue(
+            accessor, issue_walk, unit_rows(k), stage_base + (k % stage_depth) * stage_slot_bytes, bank_rotation);
+    };
+
+    const uint32_t prefetch = num_units < stage_depth - 1 ? num_units : stage_depth - 1;
+    for (uint32_t k = 0; k < prefetch; ++k) {
+        issue(k);
+    }
+    for (uint32_t k = 0; k < num_units; ++k) {
+        if (k + stage_depth - 1 < num_units) {
+            if constexpr (SO_MODE != 3) {
+                // The slot unit k - 1 was staged in: BRISC's scatter of it must have landed.
+                MaybeDeviceZoneScope("reader_wait_brisc");
+                while (pushed < k) {
+                    push_ready();
+                }
+            }
+            issue(k + stage_depth - 1);
+        }
+        {
+            MaybeDeviceZoneScope("reader_barrier");
+            const uint32_t trid = 1 + (k % stage_depth);
+            while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
+                push_ready();
+            }
+        }
+        {
+            MaybeDeviceZoneScope("reader_reserve");
+            while (!cb_pages_reservable_at_back(cb_input_sticks, slot_pages * (k - pushed + 1))) {
+                push_ready();
+            }
+        }
+        const uint32_t slot = in_base + (k % depth_in) * in_slot_bytes;  // ring invariant: full pushes but the last
+        asm volatile("" ::: "memory");
+        *staged = k + 1;  // BRISC may scatter its share of unit k into its slot now
+        if constexpr (so::nc_num != 0) {
+            MaybeDeviceZoneScope("reader_scatter");
+            noc_async_read_set_trid(scatter_trid);
+            noc_async_read_one_packet_set_state(get_noc_addr(0), stick_bytes);
+            ScatterShare::scatter(
+                scatter_walk, unit_rows(k), stage_base + (k % stage_depth) * stage_slot_bytes, slot, bank_rotation);
+            while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, scatter_trid)) {
+                push_ready();
+            }
+        }
+        nc_scattered = k + 1;
+        push_ready();
+    }
+    {
+        MaybeDeviceZoneScope("reader_wait_brisc");
+        while (pushed < num_units) {
+            push_ready();
+        }
+    }
+    noc_async_read_set_trid(0);
+    // Re-arm the flags for the next launch: BRISC reads `staged` only before its last scatter and
+    // writes `done` last as its final scatter lands, which NCRISC has just observed.
+    *staged = 0;
+    *done = 0;
+}
+
 void kernel_main() {
     constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(0);
     constexpr uint32_t block_width = get_compile_time_arg_val(1);       // tiles per column block (CB quantum)
@@ -331,14 +456,14 @@ void kernel_main() {
     constexpr bool retile_facewalk_noc = get_compile_time_arg_val(16) != 0;  // retile: face rows moved by NoC
     constexpr uint32_t read_noc_split = get_compile_time_arg_val(17);        // parked: 0, else other-NoC stick period
     constexpr bool eager_publish = get_compile_time_arg_val(18) != 0;        // parked: push landed slots early
-    constexpr uint32_t bank_stride = get_compile_time_arg_val(19);  // parked: 0 off, 1 bank-stride, 2 bank-major
-    constexpr bool padded = get_compile_time_arg_val(20) != 0;      // output padded shape > input: fill
+    constexpr uint32_t bank_stride = get_compile_time_arg_val(19);    // parked: 0 off, 1 bank-stride, 2 bank-major
+    constexpr bool padded = get_compile_time_arg_val(20) != 0;        // output padded shape > input: fill
     constexpr uint32_t cb_pad_source = get_compile_time_arg_val(21);  // padded: reader-private fill source
     constexpr uint32_t pad_source_bytes = get_compile_time_arg_val(22);
-    constexpr uint32_t pad_noc_min_bytes = get_compile_time_arg_val(23);  // shorter fills are CPU stores
-    constexpr uint32_t elem_bytes = get_compile_time_arg_val(24);         // input element size
-    constexpr bool w_tail_persist = get_compile_time_arg_val(25) != 0;    // padded: band-fill first pass only
-    constexpr uint32_t coalesce_depth = get_compile_time_arg_val(26);     // 0, else bank_coalesced staging units
+    constexpr uint32_t pad_noc_min_bytes = get_compile_time_arg_val(23);        // shorter fills are CPU stores
+    constexpr uint32_t elem_bytes = get_compile_time_arg_val(24);               // input element size
+    constexpr bool w_tail_persist = get_compile_time_arg_val(25) != 0;          // padded: band-fill first pass only
+    constexpr uint32_t coalesce_depth = get_compile_time_arg_val(26);           // 0, else bank_coalesced staging units
     constexpr bool coalesce_scatter_write = get_compile_time_arg_val(27) != 0;  // loopback writes, else reads
     constexpr uint32_t co_read = get_compile_time_arg_val(28);      // 0, else sticks per tile-row BRISC reads
     constexpr uint32_t co_read_sem = get_compile_time_arg_val(29);  // co-read: the landed flag's semaphore id
@@ -396,6 +521,21 @@ void kernel_main() {
 
     const auto input_accessor = TensorAccessor(input_args, src_addr, stick_page_bytes);
 
+    if constexpr (coalesce_depth != 0 && SO_MODE != 0) {
+        read_bank_coalesced_so<
+            cb_input_sticks,
+            cb_retile_staging,
+            block_width,
+            tile_h,
+            block_width * tile_col_bytes,
+            stick_page_bytes,
+            rows_per_quantum,
+            coalesce_depth,
+            NUM_DRAM_BANKS,
+            depth_in>(
+            input_accessor, row_start, core_row_tiles, col_start, core_col_tiles, row_rotation, stick_rotation);
+        return;
+    }
     if constexpr (coalesce_depth != 0) {
         read_bank_coalesced<
             cb_input_sticks,

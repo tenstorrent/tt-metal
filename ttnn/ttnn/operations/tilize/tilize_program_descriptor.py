@@ -41,11 +41,22 @@ quantum through two CBs of depth_in / depth_out quanta (2 at the default knobs).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
+# Per-stage device zones (MaybeDeviceZoneScope, ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp)
+# are compiled in only when the kernels get KERNEL_PERF_ZONES: set TT_METAL_KERNEL_PERF_ZONES=1 for a
+# perf investigation. Off by default because the markers sit on the critical path (+14 % device-kernel
+# ns on [1,1,128,64], Perf 1), so a plain profiled run measures the production kernel.
+PERF_ZONES_ENV = "TT_METAL_KERNEL_PERF_ZONES"
+
+
+def _kernel_defines():
+    return [("KERNEL_PERF_ZONES", "1")] if os.environ.get(PERF_ZONES_ENV, "0") == "1" else []
+
 
 TILE_WIDTH = 32  # elements per tile row (a tile's width is always 32)
 FULL_TILE_HEIGHT = 32  # rows of a full (non-tiny) tile; tiny tiles are power-of-two fractions of it
@@ -1070,6 +1081,7 @@ def create_program_descriptor(
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+        defines=_kernel_defines(),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
@@ -1083,6 +1095,7 @@ def create_program_descriptor(
     )
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+        defines=_kernel_defines(),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
@@ -1096,6 +1109,7 @@ def create_program_descriptor(
     )
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+        defines=_kernel_defines(),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt_args,

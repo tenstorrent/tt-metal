@@ -37,6 +37,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tilize_stick_reads.hpp"
+#include "so_coalesced.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
@@ -103,6 +104,109 @@ void kernel_main() {
 
     tilize_dataflow::Walker<block_width> store_walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
     const uint32_t num_positions = store_walk.num_positions();
+
+#if SO_MODE != 0
+    {
+        // scatter_offload (so_coalesced.hpp): BRISC's share of the bank_coalesced scatter (and,
+        // mode 3, of its DRAM reads), interleaved with store_block by polling -- never a blocking
+        // CB wait, so neither the scatter wait nor the output drain can starve the other.
+        constexpr uint32_t stage_depth = SO_STAGE;
+        constexpr uint32_t stick_bytes = block_width * tile_col_bytes;
+        constexpr uint32_t scatter_trid = stage_depth + 1;
+        constexpr uint32_t stage_slot_bytes = rows_per_quantum * tile_h * stick_page_bytes;
+        constexpr uint32_t in_slot_bytes = rows_per_quantum * tile_h * stick_bytes;
+        using ReadShare =
+            so::Share<block_width, tile_h, stick_bytes, stick_page_bytes, NUM_DRAM_BANKS, so::nc_num, so::den>;
+        using ScatterShare = ReadShare;  // BRISC scatters ordinals [nc_num, den) in every mode
+        volatile tt_l1_ptr uint32_t* staged = so::sem_ptr(SO_SEM_STAGED);
+        volatile tt_l1_ptr uint32_t* done = so::sem_ptr(SO_SEM_DONE);
+        // Mode 3: BRISC's own staging ring (the host doubled the staging CB), after NCRISC's.
+        const uint32_t stage_base = get_write_ptr(SO_CB_STAGING) + (SO_MODE == 3 ? stage_depth * stage_slot_bytes : 0);
+        const uint32_t in_base = get_write_ptr(cb_input_sticks);
+        const uint32_t num_units = (num_positions + rows_per_quantum - 1) / rows_per_quantum;
+        auto unit_rows = [&](uint32_t k) {
+            const uint32_t left = num_positions - k * rows_per_quantum;
+            return left < rows_per_quantum ? left : rows_per_quantum;
+        };
+        tilize_dataflow::Walker<block_width> scatter_walk(
+            row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+#if SO_MODE == 3
+        const auto input_accessor = TensorAccessor(input_args, src_addr, stick_page_bytes);
+        tilize_dataflow::Walker<block_width> issue_walk(
+            row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+        uint32_t issued = 0;
+        auto issue = [&]() {
+            MaybeDeviceZoneScope("so_brisc_issue");
+            noc_async_read_set_trid(1 + (issued % stage_depth));
+            ReadShare::issue(
+                input_accessor,
+                issue_walk,
+                unit_rows(issued),
+                stage_base + (issued % stage_depth) * stage_slot_bytes,
+                stick_rotation);
+            ++issued;
+        };
+        while (issued < num_units && issued < stage_depth) {
+            issue();
+        }
+#endif
+        uint32_t scattered = 0, stored = 0;
+        while (stored < num_units) {
+#ifdef SO_PRIO_STORE
+            // Store priority: the scatter share only fills BRISC's idle time.
+            if (stored < scattered || scattered == num_units) {
+                const uint32_t rows = unit_rows(stored);
+                if (cb_pages_available_at_front(cb_output_tiles, rows * block_width)) {
+                    tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes>(
+                        output_accessor, store_walk, tiles_per_row, rows, stick_rotation);
+                    ++stored;
+                    continue;
+                }
+            }
+#endif
+            if (scattered < num_units && so::sem_read(staged) > scattered) {
+                const uint32_t u = scattered;
+#if SO_MODE == 3
+                {
+                    MaybeDeviceZoneScope("so_brisc_barrier");
+                    noc_async_read_barrier_with_trid(1 + (u % stage_depth));
+                }
+#endif
+                {
+                    MaybeDeviceZoneScope("so_brisc_scatter");
+                    noc_async_read_set_trid(scatter_trid);
+                    noc_async_read_one_packet_set_state(get_noc_addr(0), stick_bytes);
+                    ScatterShare::scatter(
+                        scatter_walk,
+                        unit_rows(u),
+                        stage_base + (u % stage_depth) * stage_slot_bytes,
+                        in_base + (u % depth_in) * in_slot_bytes,
+                        stick_rotation);
+                    noc_async_read_barrier_with_trid(scatter_trid);
+                }
+                asm volatile("" ::: "memory");
+                *done = u + 1;
+                ++scattered;
+#if SO_MODE == 3
+                if (issued < num_units) {
+                    issue();  // lands in the staging slot unit u was just scattered out of
+                }
+#endif
+                continue;
+            }
+            const uint32_t rows = unit_rows(stored);
+            if (cb_pages_available_at_front(cb_output_tiles, rows * block_width)) {
+                tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes>(
+                    output_accessor, store_walk, tiles_per_row, rows, stick_rotation);
+                ++stored;
+            }
+        }
+        noc_async_read_set_trid(0);
+        MaybeDeviceZoneScope("writer_barrier");
+        noc_async_write_barrier();
+        return;
+    }
+#endif
 
     // Split reader runs one tile-row per quantum (host-enforced), so this stores one position.
     auto store_next = [&]() {

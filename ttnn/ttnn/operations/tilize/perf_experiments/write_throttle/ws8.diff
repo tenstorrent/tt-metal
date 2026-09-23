@@ -1,0 +1,68 @@
+diff -ru ../../kernels/tilize_reader.cpp kernels_ws8/tilize_reader.cpp
+--- ../../kernels/tilize_reader.cpp	2026-09-23 20:38:43.472501929 +0000
++++ kernels_ws8/tilize_reader.cpp	2026-09-23 20:47:36.056429891 +0000
+@@ -1,3 +1,4 @@
++#define WT_WS 8
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ // SPDX-License-Identifier: Apache-2.0
+
+@@ -244,6 +245,12 @@
+             const uint32_t run_stage = stage + p * tile_h * stick_page_bytes;
+             uint32_t j = bank_rotation % run.banks;
+             for (uint32_t b = 0; b < run.banks; ++b) {
++#ifdef RD_RS
++                // sliding read window: issue only while fewer than RD_RS reads are un-landed
++                while ((uint32_t)(noc_reads_num_issued[noc_index] -
++                                  NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED)) >= RD_RS) {
++                }
++#endif
+                 noc_async_read(
+                     accessor.get_noc_addr(first_stick + j),
+                     run_stage + run.offset(j) * stick_page_bytes,
+diff -ru ../../kernels/tilize_stick_reads.hpp kernels_ws8/tilize_stick_reads.hpp
+--- ../../kernels/tilize_stick_reads.hpp	2026-09-23 20:38:51.536500830 +0000
++++ kernels_ws8/tilize_stick_reads.hpp	2026-09-23 20:47:36.056429891 +0000
+@@ -782,6 +782,9 @@
+ FORCE_INLINE void store_rows(
+     const Accessor& accessor, Walk& walk, uint32_t tiles_per_row, uint32_t num_rows, uint32_t col_rotation) {
+     const uint32_t pages = num_rows * block_width;
++#ifdef WT_WB
++    uint32_t wt_issued = 0;
++#endif
+     {
+         MaybeDeviceZoneScope("writer_wait");  // starved on compute
+         cb_wait_front(cb_output_tiles, pages);
+@@ -795,11 +798,26 @@
+             uint32_t t = col_rotation % valid_width;
+             for (uint32_t n = 0; n < valid_width; ++n) {
+                 const uint8_t noc = (noc_split != 0 && (n % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
++#ifdef WT_WS
++                // sliding ACK window: issue only while fewer than WT_WS writes are un-ACKED
++                while ((uint32_t)(noc_nonposted_writes_acked[noc] -
++                                  NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED)) >= WT_WS) {
++                }
++#endif
+                 noc_async_write(
+                     l1_row_addr + t * out_tile_bytes,
+                     accessor.get_noc_addr(row_tile_idx + t, 0, noc),
+                     out_tile_bytes,
+                     noc);
++#ifdef WT_WB
++                if (++wt_issued == WT_WB) {
++                    wt_issued = 0;
++                    noc_async_write_barrier(noc);
++                }
++#endif
++#ifdef WT_SPIN
++                riscv_wait(WT_SPIN);
++#endif
+                 if (++t == valid_width) {
+                     t = 0;
+                 }
+diff -ru ../../kernels/tilize_writer.cpp kernels_ws8/tilize_writer.cpp
+--- ../../kernels/tilize_writer.cpp	2026-09-23 20:38:43.472501929 +0000
++++ kernels_ws8/tilize_writer.cpp	2026-09-23 20:47:36.056429891 +0000
+@@ -1,3 +1,4 @@
++#define WT_WS 8
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ // SPDX-License-Identifier: Apache-2.0

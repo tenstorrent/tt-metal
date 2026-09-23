@@ -1,0 +1,4 @@
+# Generated kernel-dir variants (each idea dir's generator script rebuilds them from ../../kernels).
+*/kernels_*/
+!scatter_offload/kernels_so/
+__pycache__/

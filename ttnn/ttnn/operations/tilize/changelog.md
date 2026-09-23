@@ -406,3 +406,112 @@
   - `test_tilize_r8_roofline.py`: `test_dram_copy_roofline` (native clone ceiling) and `test_co_read_l1_source` (the L1 gate sweep, with a height-sharded resident control).
   - `test_tilize_knobs.py`: 2 one-position shapes and 4 co-read configs (306 cases).
   - `test_tilize_r3_perf.py`: guards `tiny_one_position` and `l1_one_position`.
+
+## Perf 1 — perf tournament, round 1 (measured breakdown + 5-idea portfolio)
+- **Date**: 2026-09-23
+- **Outcome**: all 5 ideas were measured: 0 graduated, 2 NULL, 3 REGRESSION. The op's kernels run unchanged. Only the permanent per-stage instrumentation graduated, and it is opt-in so that it costs nothing in a normal profiled run. There is no regression: golden is identical to HEAD, and the guard set matches Refinement 8.
+- **Focus (the LOOSE_CASES `attention:` entry)**: `[1,1,16384,64]` bf16 → bf16, DRAM `TensorMemoryLayout::INTERLEAVED` in and out.
+  - The config was measured exactly as declared: default precision, no `compute_kernel_config`, every knob in SUPPORTED.
+  - Reference: `measured_ns_wormhole_b0` = 25998. The op measures ~23.0–25.4 µs across this session's runs.
+  - Hardware: WH B0 n150, 64 Tensix cores, AICLK 1000 MHz (cycles = ns).
+- **SUPPORTED**: unchanged.
+
+### Instrumentation (graduated, permanent)
+- **New header** `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`: `MaybeDeviceZoneScope(name)` = `DeviceZoneScopedN(name)`. It records only when the kernel is compiled with both `PROFILE_KERNEL` and `KERNEL_PERF_ZONES`.
+  - `tilize_program_descriptor.py` passes the define to all three kernels when `TT_METAL_KERNEL_PERF_ZONES=1` (`_kernel_defines()`).
+  - **Why opt-in** (measured): compiled in unconditionally, the ~12 zones on the tiny-work critical path added 330–510 ns to DEVICE KERNEL DURATION, the number the perf gate reads.
+    - `[1,1,128,64]`: 2333 / 2282 → 2699 / 2611 ns (+14 %).
+    - `[1,1,32,2048]`: +12 %.
+    - `[1,1,2048,64]`: +7 %.
+    - Gated off, `[1,1,128,64]` measures 2264 / 2265 ns at HEAD and 2266 / 2340 ns with the zoned source.
+- **Zones**:
+  - Reader (NCRISC):
+    - `bank_coalesced` path: `reader_issue` (per-bank read issue), `reader_barrier` (unit landed), `reader_reserve` (CB back-pressure), `reader_scatter`.
+    - StickProducer path: `reader_reserve` / `reader_issue` / `reader_barrier`.
+    - `reader_coread_wait`, `reader_retile`, `reader_publish_resident`.
+  - Writer (BRISC):
+    - `store_rows` and `TileStorer`: `writer_wait` (starved on compute), `writer_issue`, `writer_flush`.
+    - `writer_barrier`, `writer_coread`.
+  - Compute: `compute_tilize`. This measures occupancy, because the helper does its own per-block waits.
+  - Wait and work are split into separate zones wherever the wait is hoistable.
+  - Marker budget: the focus shape peaks at 36 markers per (Tensix core, RISC-V). The per-tile-row StickProducer zones will exhaust the 250-marker budget on walks longer than ~40 tile-rows per Tensix core.
+
+### Measured breakdown (focus shape; `perf_experiments/breakdown/README.md` has all three shapes)
+- **Cumulative ablation** (payload stubbed, synchronization kept; DEVICE KERNEL DURATION ns):
+
+  | Variant | ns |
+  |---|---|
+  | full | 23573 |
+  | no scatter | 23291 |
+  | no reads | 18634 |
+  | no compute | **26721** |
+  | no writes | 15856 |
+  | writes + compute | 17687 |
+  | writes only | 15662 |
+  | reads + scatter | 15267 |
+  | reads only | 11976 |
+  | compute only | 3157 |
+  | synchronization floor | 2395 |
+
+- **Ranked bottleneck** (above the 2.4 µs floor):
+  1. DRAM writes: 13.3 µs, ~158 GB/s for 2 MiB.
+  2. DRAM reads: 9.6 µs, ~218 GB/s.
+  3. Loopback scatter: +3.3 µs on the reader chain, but hidden under the writes in the full op (removing it saves 0.3 µs).
+  4. Tilize compute: 0.8 µs.
+- **Reads and writes nearly add up** (22.9 µs of their sum vs 21.2 µs measured): they serialize on the shared DRAM. The whole op moves ~198 GB/s above the floor.
+  - Ceiling gate: the empirical 64-Tensix-core copy moves 190.8 GB/s (`examples/double_buffer`). `noc_estimate` is not built in this checkout. So the op is at the practical DRAM ceiling for its read + write mix.
+  - Stubbing compute makes the op *slower* (+13 %): unpaced read/write interleaving contends worse.
+- **Zones** (per-core sums, p50 cycles):
+  - Writer: `writer_wait` 8078, `writer_issue` 4628, `writer_flush` 3278. Issue costs ~190 cycles per 2 KiB write, i.e. NoC injection back-pressure.
+  - Reader: `reader_issue` 3814, `reader_barrier` 3900, `reader_scatter` 6661.
+  - BRISC-KERNEL: p50 19330, max 22871.
+  - Spatial tail: bottom-right Tensix cores (NoC0 x 6..8, y 8..10) finish reads first (~12–15k cycles) and writes last (up to 23.5k).
+
+### Portfolio and verdicts
+All numbers are focus-shape DEVICE KERNEL DURATION ns with a same-session baseline. Noise is ±3–5 %: an A/A control of identical kernels in two dirs moved up to 5 %. Every non-ablated variant was bit-exact (`torch.equal`).
+
+| Idea (`perf_experiments/<dir>`) | Verdict | Before → after | Domain / why |
+|---|---|---|---|
+| `write_throttle`: cap un-ACKed tile writes at N = 1..16; barrier every N writes; spin between writes. Read twin: cap in-flight bank reads; stage depth 1. | **NULL** (write caps), **REGRESSION** (read caps) | Base 23157–25417 across sessions. ws1 25428 vs 24304; ws2 / ws3 / ws8 / ws16 flat; wb / wp flat to +8 %. rs1 38014 (+62 %), rs6 26034 (+9 %). | ws8 was flat on 9 regimes (e.g. 32768x64 46758 → 46790, 8192x256 44298 → 44015). Capping writes only moves the writer's stall from the flush into the issue loop. The reads are latency-bound, so capping them loses (`measured-regression` on 16384x64 / 16384x32 / 32768x64). The over-subscription hypothesis is refuted. |
+| `posted_writes`: posted tile writes; one-packet and `set_state` + `_with_state` issue | **NULL** (safe variants); posted variants `incorrect` | Median of 4: baseline 24078, onepkt 24348, state 24322. Unsafe: posted 24072, state_posted 23380. | Posted DRAM writes have no landing guarantee before the next program. `noc_async_posted_writes_flushed` waits only for departure (dataflow_api.h:1822-1844), and firmware signals done with no barrier (brisc.cc:575/590, cq_dispatch_subordinate.cpp:263-278). The only gain from posting is the skipped final ack wait. The safe variants were flat on all 9 sweep regimes. |
+| `noc_region`: static per-region NoC swap (reader NoC1 / writer NoC0 in `DM_DEDICATED_NOC`) over halves, quadrants, the tail, checkerboards, single Tensix cores; row-cost-aware tail rebalance | **REGRESSION** | default 23835; swap_all 51317; region swaps 24923–35229; bottom-right quadrant 27586; row rebalance ("oracle", ∝ 1/T per core) 23576 (flat). | A swapped core's traffic runs against the DRAM-column geometry and becomes the new tail: `measured-regression` +3 to +115 % on the focus shape, and on 32768x64, 8192x256, 2048x1024. Both RISC-Vs on one NoC is `inexpressible` in dedicated mode (shared counters). The rebalance costs +11 % on 16384x32. |
+| `bank_paired_writes`: send a Tensix core's same-bank output tiles (t, t+NB, …) as one 4–8 KiB write | **REGRESSION** (stopped at the Step-1 timing bound) | Writes-only: 15757 → 18242 (k=2) / 18315 (8 KiB). Whole op: 23823 → 24315 / 26394. 32768x64 whole op: 44844 → 48750 (k=2), 52970 (k=3). | A packet-size control (same addresses as k × 2 KiB) shows packet size is not the lever. Grouping forces consecutive writes into one bank and concentrates traffic, and 8 KiB packets add a further penalty. No correct candidate was built. |
+| `scatter_offload`: BRISC does 1/2 (or all) of the loopback scatter in its idle `writer_wait` time; reorder with staging depth 3; BRISC also reads a share of the banks on NoC1 | **NULL** (focus), **REGRESSION** (domain) | base 24308, half 24508, all 24311. Writes stubbed: 15973 → 14700 (−8 %). split 32050 (+32 %). | The reader-chain win is hidden under the DRAM writes. `measured-regression`: 32768x64 46488 → 50683 (+9 %), `low_l1` focus +9 %. Re-measure `half` first if the writes ever stop binding. |
+
+Measurement notes:
+- **Kernel-group artifact** (`noc_region`): splitting the reader/writer into two kernel groups, with no other change, lowers DEVICE KERNEL DURATION by 5–13 % on small ops. The DM RISC-Vs' ~300-cycle start lag behind the TRISCs falls inside the kernel window; DEVICE FW DURATION is flat or worse. Judge any kernel-group change on FW duration.
+- **Profiler hash collisions**: batching more than ~5 variant kernel dirs with zones in one `--profile` session makes the profiler's 16-bit zone hash collide, and the run writes no report.
+
+### Graduated
+- **Kernel paths**: none; nothing was deleted or replaced, and there are no carve-outs.
+- **Instrumentation**: zones on every kernel path, opt-in as described above.
+- **Host**: `defines=_kernel_defines()` on the three `KernelDescriptor`s.
+- **Test hygiene**: the `test_tilize_perf1_*.py` harnesses are opt-in (`TILIZE_PERF_EXPERIMENTS=1`, in the tilize tests' conftest). The generated `kernels_*` variant dirs are git-ignored and each idea dir's generator script rebuilds them.
+- **Whole-op before → after, focus**: unchanged, because with the zones gated off the kernels compile to the HEAD kernels. Same-session HEAD vs zoned source: 23694 / 23009 vs 23599 / 24004 (ungated, within noise).
+
+### Guard set (`test_r3_guard`, final code, one fresh run; Refinement 8 figures in parentheses)
+- narrow_dram 23485 (23538)
+- wide_dram 44494
+- l1_interleaved 5616
+- sharded_resident 1928
+- sharded_accessor 15939
+- tiny_tile16 23144
+- retile_32_to_16 38032
+- grid_2d_short_wide 3516 (3472)
+- low_l1_narrow 23680
+- narrow32_dram 13390
+- wide1024_dram 46709 (46501)
+- tiny_one_position 2276 (2329)
+- l1_one_position 10661 (10844)
+
+All within noise: no regression.
+
+### Golden
+- `eval/golden_tests/tilize/` (test_golden + test_regression + test_translated): 1760 passed, 8 failed, 2604 skipped, 18 xfailed.
+- The **same 8 fail at HEAD** in a full-suite run with this round's kernels and descriptor stashed.
+  - 4 fail deterministically: the translated `test_to_layout_pad_value_dtype[INT32-*]` ×3 and `test_to_from_01d[0]`.
+  - 4 pass in isolation, both at HEAD and with this round's changes: the rank-0 bfloat8_b and 1x1x50x50 bfloat4_b golden cells (unseeded random inputs near the PCC floor; the bfloat4_b one was already noted in Refinement 8), `test_tilize_program_cache_addr_change[sharded_width_l1]`, and `test_tilize_with_val_padding_block_per_node_cb_size[1.0-input_shape5]`.
+- Profiled (zones compiled in) unit nets all pass: knobs 306, tile geometry 102, padding 60, sharded 26, grid 2-D 32.
+
+### Helper bypasses — none
+No graduated path bypasses a helper. The kernels are unchanged, and the zones and host define are not helper-replaceable code.

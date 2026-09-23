@@ -795,11 +795,15 @@ FORCE_INLINE void store_rows(
             uint32_t t = col_rotation % valid_width;
             for (uint32_t n = 0; n < valid_width; ++n) {
                 const uint8_t noc = (noc_split != 0 && (n % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
+
+#ifndef ABL_W
                 noc_async_write(
                     l1_row_addr + t * out_tile_bytes,
                     accessor.get_noc_addr(row_tile_idx + t, 0, noc),
                     out_tile_bytes,
                     noc);
+#endif
+
                 if (++t == valid_width) {
                     t = 0;
                 }
