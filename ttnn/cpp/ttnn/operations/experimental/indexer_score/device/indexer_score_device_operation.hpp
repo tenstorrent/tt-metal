@@ -99,7 +99,8 @@ ttnn::Tensor indexer_score_dsa(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config =
+        std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_len = std::nullopt,
@@ -126,7 +127,8 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     float scale = 1.0f,
     uint32_t block_size = 0,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config =
+        std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_len = std::nullopt,
@@ -158,7 +160,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t num_links = 1,
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config =
+        std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_len = std::nullopt,

@@ -11,6 +11,8 @@
 
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -59,7 +61,8 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // orientations, tiles, num_blocks bounds, grouped→single-block), which the framework runs before this
     // builder on a cache miss. So this function assumes valid inputs and only constructs the descriptor —
     // keep just the values the construction needs.
-    const auto& input_shard = input_tensor.shard_spec().value();
+    const bool input_interleaved = !input_tensor.is_sharded();
+    const auto& input_shard = (input_interleaved ? bias_tensor : input_tensor).shard_spec().value();
     CoreRangeSet all_cores = input_shard.grid;
 
     // num_blocks = how many 32x32 tiles per input shard (one 256-expert block per tile). 256->1, 512->2.
@@ -82,13 +85,11 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // round-trip (the SFPU reads it as a raw 16-bit id; a bf16 numeric convert would corrupt the bits).
     constexpr uint8_t cb_tilize_idx = 9;
 
-    auto in_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(input_cb, input_tensor);
     auto bias_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(bias_cb, bias_tensor);
     auto out_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(output_cb, output_tensor);
     auto in_indices_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(input_indices_cb, input_indices_tensor);
     auto out_indices_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(output_indices_cb, output_indices_tensor);
 
-    set_cb_page_size_for_tile(in_cb_desc, input_tensor);
     set_cb_page_size_for_tile(bias_cb_desc, bias_tensor);
     set_cb_page_size_for_tile(out_cb_desc, output_tensor);
     set_cb_page_size_for_tile(in_indices_cb_desc, input_indices_tensor);
@@ -114,6 +115,14 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // fields before the merge acquire), so 2 bf16 tiles per block. cb_tilize_idx holds 1 uint16 idx/block.
     auto cb_tilize_desc = make_run_cb(cb_tilize, input_tensor, 2 * num_blocks);              // bf16 scratch
     auto cb_tilize_idx_desc = make_run_cb(cb_tilize_idx, input_indices_tensor, num_blocks);  // uint16 scratch
+    // Interleaved input: the reader gathers this core's token row into a plain one tile CB.
+    auto in_cb_desc = input_interleaved ? make_run_cb(input_cb, bias_tensor, 1)
+                                        : ttnn::cb_descriptor_from_sharded_tensor(input_cb, input_tensor);
+    if (!input_interleaved) {
+        set_cb_page_size_for_tile(in_cb_desc, input_tensor);
+    }
+    std::vector<uint32_t> reader_ct_args;
+    tt::tt_metal::TensorAccessorArgs(input_interleaved ? input_tensor.buffer() : nullptr).append_to(reader_ct_args);
 
     KernelDescriptor::NamedCompileTimeArgs ncrisc_named = {
         {"moe_gate_input_cb", input_cb},
@@ -121,6 +130,8 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         {"moe_gate_input_indices_cb", input_indices_cb},
         {"moe_gate_num_blocks", num_blocks},
         {"moe_gate_is_active_core", 1},
+        {"moe_gate_input_interleaved", input_interleaved ? 1u : 0u},
+        {"moe_gate_input_width_tiles", input_interleaved ? uint32_t(input_tensor.padded_shape()[-1] / 32) : 0u},
     };
     KernelDescriptor::NamedCompileTimeArgs brisc_named = {
         {"moe_gate_output_cb", output_cb},
@@ -159,6 +170,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .kernel_source = std::string(kGeneralizedMoeGateKernelPath),
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = all_cores,
+        .compile_time_args = std::move(reader_ct_args),
         .named_compile_time_args = std::move(ncrisc_named),
         .config =
             DataMovementConfigDescriptor{
@@ -167,6 +179,12 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
                 .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
             },
     };
+    if (input_interleaved) {
+        const auto cores = tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, true);
+        for (uint32_t i = 0; i < cores.size(); ++i) {
+            reader.emplace_runtime_args(cores[i], {input_tensor.buffer(), i});
+        }
+    }
 
     KernelDescriptor writer{
         .kernel_source = std::string(kGeneralizedMoeGateKernelPath),
