@@ -482,14 +482,28 @@ resident regardless, so only the 2560-dim residual stream is in scope.
 **Status: unfinished.** The remaining experiment is a two-knob fit (SDPA chunk
 x matmul dataflow footprint) at bs8/16/32.
 
-**Operational note:** do not `kill -9` a run that is mid-device-operation. Doing
-so left the board unable to initialise firmware, and `tt-smi -r` is the wrong
-recovery on this host — it is a 32-chip Galaxy, where tt-smi itself warns that
-`-r` needs CPLD FW v1.16+ and that `-glx_reset` should be used instead. `-r`
-issued RESET_PCIE_LINK across all 32 devices and left every query failing with
-"Query mappings failed on device 0: No such device". Recovery needs sudo
-(`tt-smi -glx_reset` via ipmitool, a `tenstorrent` module reload, or a reboot).
-Stop runs with SIGTERM and let them close the device.
+**Operational note — device resets on this host.** Use **`tt-smi -r` only**.
+Never run `tt-smi -glx_reset`: this is a shared 32-chip Galaxy and `-glx_reset`
+issues an IPMI reset of the whole tray, disrupting every chip on the box, not
+just the one in use. tt-smi's own output suggests `-glx_reset` as a fallback —
+ignore that suggestion on this host.
+
+Do not `kill -9` a run that is mid-device-operation; stop runs with SIGTERM and
+let them close the device. A `kill -9` here left the board unable to initialise
+firmware ("Device 0 init: failed to initialize FW"). Recovery notes:
+
+- `tt-smi -r` restores PCIe and device enumeration (`tt-smi -ls` healthy again).
+- Stale `/dev/shm` state (`sm_segment.*`, `tt_device_*_memory`,
+  `TT_UMD_LOCK.*`, including `CHIP_IN_USE_<n>_PCIe`) is left behind by killed
+  runs and can block later runs on a lock. Safe to delete only once no
+  tt-metal process is running under any user.
+- If after `-r` the chips report `HARVESTING_STATE 0x0` while the working
+  config is a 12x10 grid (one column harvested of a nominal 13x10), the board
+  has not fully re-initialised and ttnn fails with
+  `IndexError: unordered_map::at` on any device open. tt-smi warns that `-r`
+  needs CPLD FW v1.16+ on Galaxy systems; escalate to a system administrator
+  for the CPLD update or a host-level reset rather than reaching for
+  `-glx_reset`.
 
 **Second lesson:** benchmark the op in the *rank and batching* the model uses.
 A `[1,1,M,K]` sweep of the MLP matmul showed 34% -> 57% "efficiency scaling"
