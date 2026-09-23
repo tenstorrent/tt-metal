@@ -5,16 +5,16 @@ SPDX-License-Identifier: Apache-2.0
 
 # `fused_msda` — generic multi-scale deformable attention
 
-Design note for the new MSDA device op. Written before the code; kept next to
-the code so the two stay honest.
+Design note for the MSDA device op, kept next to the code so the two stay
+honest.
 
-Two entry points, one device operation, one compute kernel, one writer kernel,
-two readers:
+Two entry points, one device operation, one compute kernel (which owns both the
+sampling geometry and the reduction), one writer kernel, two readers:
 
 | Entry point                            | Frontend                                             |
 | -------------------------------------- | ---------------------------------------------------- |
 | `ttnn.experimental.fused_msda`         | V1 — caller supplies materialized sampling locations  |
-| `ttnn.experimental.fused_msda_from_offsets` | V2 — reader derives locations from reference points + offsets |
+| `ttnn.experimental.fused_msda_from_offsets` | V2 — locations derived on device from reference points + offsets |
 
 ---
 
@@ -108,8 +108,9 @@ and then runs the identical bilinear + weight + reduce path as V1. `r(l, p)`
 depends on `reference_mode` — see §7.
 
 `sampling_offsets` are **raw**, in feature-map pixel units (spec §13 Option A).
-The `/ [W_l, H_l]` normalization happens in the reader. No BEVFormer-specific
-pre-folding is baked into the op.
+The `/ [W_l, H_l]` normalization is folded into the per-level `secondary_scale`
+and applied on the SFPU (§3, §6). No BEVFormer-specific pre-folding is baked
+into the op.
 
 ### 2.3 Output shape
 
@@ -145,6 +146,15 @@ the `2/[W,H]` scale and the `2*ref - 1` shift folded into its weights, a common
 trick for saving a rescale per forward. Such a caller can feed the op directly.
 It is a coordinate-space flag, not a model hook: no consumer in this repo needs
 it today, since BEVFormer uses `fused_msda_from_offsets` instead (§11).
+
+Both flags are resolved **on host**, into a per-level `(primary_scale,
+secondary_scale, bias)` triple that the SFPU geometry applies as
+`px = primary * primary_scale + secondary * secondary_scale + bias`
+(`axis_constants` in the program factory). Nothing on device branches on them,
+and the `int -> float` conversion of the extent that the old reader repeated
+per evaluation is gone with them. V2's two rows of that table follow from
+substituting `loc = ref + off / extent` into the `[0, 1]` rows, which is why
+`secondary_scale` is exactly 1 in the default case.
 
 Padding: **zeros only**. Any of the four bilinear neighbours that falls outside
 `[0, W_l) x [0, H_l)` contributes 0, matching `padding_mode="zeros"`. The
@@ -190,8 +200,9 @@ whole `4 * L * P` reduction for a tile happens on the core that owns it — **no
 cross-core reduction**.
 
 `Q % 32 != 0` is supported: the trailing tile of each `(b, h)` carries
-`v_rows = Q % 32` and the reader zeroes the scalar lanes of rows `>= v_rows`, so
-they contribute nothing and the writer emits only `v_rows` sticks.
+`v_rows = Q % 32` and the reader zeroes the attention lane of rows `>= v_rows`,
+which makes their scalar zero, so they contribute nothing and the writer emits
+only `v_rows` sticks.
 
 `split_work_to_cores` is used rather than the spec's suggested
 `core.x -> query blocks, core.y -> heads` because `B * H * ceil(Q/32)` rarely
@@ -202,51 +213,98 @@ locality properties (reduction stays local) are identical.
 
 ## 6. Circular-buffer protocol
 
-Reader and compute speak one **sample stream**: a `(input_tiles, scalar_tile)`
-pair per `(level, point, corner)`, `4 * L * P` pairs per output tile.
+Three streams, not one. Per sampling point — one `(level, point)` pair — of an
+output tile:
+
+```text
+reader  -> compute   geom_x, geom_y, attn_tile  [+ offset_x, offset_y for V2]
+compute -> reader    x0, y0                     floor(px), floor(py) as bf16
+reader  -> compute   4 x input_tiles            the gathered bilinear corners
+compute -> compute   4 x scalar_tile            attn * corner coefficient
+```
 
 | CB | Role | Pages | Page size |
 | --- | --- | --- | --- |
 | `c_0` `value_scratch` | reader-only L1 arena, one staged `D`-stick per row | 32 | `align(D*2)` |
-| `c_1` `loc_scratch` | reader-only arena for sampling locations (V1) / offsets (V2) | 32 (packed) or 32*L*P | `align(loc_stick)` |
-| `c_2` `attn_scratch` | reader-only arena for attention weights | 32 (packed) or 32*L | `align(attn_stick)` |
-| `c_3` `input_tile` | reader → compute, the `V_corner` values | `2 * n_d_tiles` | 2048 |
-| `c_4` `scalar_tile` | reader → compute, `attn * bilinear_coeff` per row | 2 | 2048 |
+| `c_1` `attn_scratch` | reader-only arena for attention weights | 32 (packed) or 32*L | `align(attn_stick)` |
+| `c_2` `loc_scratch` | reader-only arena for sampling locations (V1) / offsets (V2) | 32 (packed) or 32*L*P | `align(loc_stick)` |
+| `c_3` `input_tile` | reader → compute, the `V_corner` values | `8 * n_d_tiles` | 2048 |
+| `c_4` `scalar_tile` | compute → compute, `attn * bilinear_coeff` per row | 8 | 2048 |
 | `c_5` `output_scratch` | writer-only stick assembly | 1 | `align(H*D*2)` |
 | `c_6` `ref_scratch` | **V2 only** — reference points arena | 32*R | `align(2*2)` |
+| `c_7` `geom_x`, `c_8` `geom_y` | reader → compute, the primary operand (location, or reference point for V2) | 4 | 2048 |
+| `c_9` `offset_x`, `c_10` `offset_y` | reader → compute, the raw sampling offset (**V2**; allocated but unread on V1) | 4 | 2048 |
+| `c_11` `attn_tile` | reader → compute, the attention weight | 4 | 2048 |
+| `c_12` `x0`, `c_13` `y0` | compute → reader, the floored corner | 3 | 2048 |
+| `c_14` `frac_x`, `c_15` `frac_y` | compute → compute, `px - floor(px)` | 2 | 2048 |
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
 
-`n_d_tiles = ceil(D / 32)`.
+`n_d_tiles = ceil(D / 32)`. CB pressure for the BEVFormer shape
+(`D=32, L=4, P=4`) is ~105 KB.
 
 Deliberately **not** four separate `CB_VALUE_00/01/10/11` CBs and a separate
 `CB_INTERP` / `CB_ATTN_WEIGHT`: the four corners are streamed **sequentially**
-into the same `input_tile` CB, and `dx, dy` never cross the reader/compute
-boundary at all. The reader folds them into the scalar the compute kernel is
-already going to multiply by:
+into the same `input_tile` CB, and `dx, dy` never cross to the reader — they
+exist as `c_14` / `c_15` but stay inside the compute kernel. They are folded
+into the scalar the reduction is already going to multiply by:
 
 ```text
 scalar[row] = attention_weight * corner_coefficient
 ```
 
 That is one scalar per `(row, level, point, corner)` instead of two interpolation
-factors plus a weight, it removes the bilinear blend from the compute kernel
-entirely, and it collapses six CBs into two. CB pressure for the BEVFormer shape
-(`D=32, L=4, P=4`) is ~35 KB.
+factors plus a weight, and it removes the bilinear blend from the reduction
+entirely.
+
+### Why the geometry pipe exists
+
+Deriving `px`, `x0`, `dx` and the four corner weights is per-point float work
+over 32 query rows, and the dataflow RISC has no FPU — every float operation
+there costs ~140 cycles of soft-float emulation. The SFPU does it instead: the
+reader ships the bf16 operands as column-0 tiles and gets `floor(px)` back, and
+the only arithmetic left in the reader is the integer decode, the bounds test
+and the page index.
+
+Both sides run **one sampling point ahead** of the work they feed — the reader
+pushes point `j+1`'s operand tiles before waiting for point `j`'s corners, and
+the compute kernel solves point `j+1` before reducing point `j`. Without that
+lookahead the two ping-pong, each idle through the other's turn. The CB depths
+above are what make it legal: `scalar_tile` and `input_tile` hold two points'
+worth, the geometry pipes three to four.
+
+The floored corner crosses as **bf16**, which is exact for every integer up to
+256 and only some beyond it, so each level's `H` and `W` must be at or below
+256 — validated on host, see §9. `fp32_dest_acc_en` is required for the same
+reason one step earlier: `px` reaches the feature map's extent and bf16's ulp
+at 200 is 1.0, so a 16-bit destination would round `floor(px)` to the wrong
+integer on the larger levels and collapse bilinear sampling to
+nearest-neighbour.
 
 ### Tile packing
 
 32 queries are packed vertically into a tile; `D` spans `n_d_tiles` tiles side by
 side. `msda_tile_layout.hpp` maps row `r` to its `(lo, hi)` face-half byte
 offsets. The compute kernel uses `mul_tiles_bcast<COL>`, which reads only column
-0 of the `TL`/`BL` faces of the scalar tile — so the reader writes 32 bf16 lanes
-per scalar tile, not a 2 KB zero-fill.
+0 of the `TL`/`BL` faces of the scalar tile, and the geometry only ever produces
+a meaningful column 0 — so a query occupies one lane of a 32x32 tile throughout.
 
-### Zero-fill contract (reader → compute)
+### Zero-fill contract
 
-* **scalar tile**: column 0 is written for all 32 rows, every time. Rows
-  `>= v_rows` and rows whose corner is out of bounds get bf16 `0`.
-* **input tile**: only rows that are both in range and in bounds are written.
-  Stale bytes elsewhere are harmless *because* the matching scalar lane is 0.
+* **geometry tiles** (reader → compute): column 0 is written for all 32 rows on
+  every emission; rows `>= v_rows` get bf16 `0`. A zero attn lane is what makes
+  a tail row's scalar zero. Columns 1..31 are zeroed once per CB slot at reader
+  startup, so an uninitialised L1 bit pattern never reaches the SFPU as a NaN.
+* **input tile** (reader → compute): rows that are in range **and** in bounds
+  hold the gathered value stick; every other row is explicitly zeroed.
+* **scalar tile** (compute → compute): column 0 for all 32 rows, from the
+  fractions and the attention weight.
+
+The input-tile zeroing is load-bearing: the scalar comes from a compute kernel
+that cannot know which corners fell outside the feature map, so an un-zeroed
+row would be multiplied by a live weight. A stale row is itself a plausible
+sampled value, so the correlation survives it — which is why
+`test_fused_msda_masks_out_of_bounds_corners` asserts a per-element error ratio
+alongside PCC.
 
 ---
 
@@ -283,29 +341,38 @@ is a different formula, not a different layout.
 ## 8. Kernel responsibilities
 
 ```text
-reader_msda_v1.cpp ─┐
-                    ├─> fused_msda_reader_common.hpp ─> compute_msda.cpp ─> writer_msda.cpp
-reader_msda_v2.cpp ─┘        (geometry, staging, tile scatter)
+reader_msda_v1.cpp ─┐                                      compute_msda.cpp
+                    ├─> fused_msda_reader_common.hpp <──>  + msda_geometry.hpp  ─> writer_msda.cpp
+reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, reduction)
 ```
 
 **Reader** (both variants). Per output tile `(b, h, q_start, v_rows)`:
 
 1. stage attention weights and locations/offsets (+ reference points for V2)
    for all `v_rows` rows into L1 arenas — one `noc.async_read` per page;
-2. for each `(l, p)`: obtain `(x, y)` — V1 reads it, V2 computes
-   `ref + off/[W_l, H_l]` — then map to `(px, py)`, `x0 = floor(px)`,
-   `y0 = floor(py)`, `dx`, `dy`, and the four per-corner in-bounds flags;
-3. for each of the four corners: issue `v_rows` NoC reads of the `D`-wide value
+2. for each `(l, p)`: write the bf16 operands into column 0 of the geometry
+   tiles and push them. No arithmetic — the reader moves bit patterns;
+3. take `x0`, `y0` back from the SFPU, decode them with integer shifts, and
+   form the four per-corner in-bounds flags;
+4. for each of the four corners: issue `v_rows` NoC reads of the `D`-wide value
    stick at page `(b*S + level_start[l] + cy*W_l + cx) * H + h`, scatter them
-   into `n_d_tiles` tile rows, and emit the scalar tile carrying
-   `attn * corner_coeff` (0 for invalid rows).
+   into `n_d_tiles` tile rows, zero the rows it skipped, and push.
 
-Only `fused_msda_reader_common.hpp` differs between V1 and V2, and only in step 2.
+Only the readers differ between V1 and V2, and only in which staged bf16 pair
+step 2 calls the primary and which the secondary.
 
-**Compute** (shared). `4 * L * P` iterations of
-`mul_tiles_bcast<COL>(input, scalar)` packed into the output CB with
-`pack_reconfig_l1_acc(1)` after the first — the accumulator lives in L1 on the
-owning core for the whole reduction. Nothing is written back to DRAM per sample.
+**Compute** (shared), per sampling point, one point ahead of the reduction:
+
+* `msda_geometry::point` — two `axis` windows on the SFPU produce `floor(px)`
+  and `px - floor(px)` per axis; the floors go back to the reader, the
+  fractions stay. Four `corner_weight` windows then form
+  `attn * corner_coeff` — the scalar tile the reduction consumes. Out-of-bounds
+  corners are *not* masked here: this kernel has no bounds information, which
+  is why the reader zeroes the input rows it skipped (§6).
+* the reduction — `4 * L * P` iterations of `mul_tiles_bcast<COL>(input,
+  scalar)` packed into the output CB with `pack_reconfig_l1_acc(1)` after the
+  first, so the accumulator lives in L1 on the owning core for the whole
+  reduction. Nothing is written back to DRAM per sample.
 
 **Writer** (shared). Waits on `n_d_tiles` accumulated tiles, gathers each query
 row's `D` values across them into a stick, and writes it at
@@ -322,6 +389,7 @@ row's `D` values across them into a stick, and writes it at
 | memory | `INTERLEAVED` only | `TensorAccessor` page indexing |
 | `D` | positive multiple of 16, and `D*2` a multiple of the device's buffer alignment when `H > 1` | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves, and the writer's per-head byte offset `h*D*2` must be a legal NoC destination. `D = 16` gives a 32-B stride, which is fine where the alignment is 32 B but is rejected where it is 64 B; `D = 32` and up are unconstrained. Validated in the program factory, not assumed. |
 | `L` | `1 <= L <= 8` | per-level geometry is held in a fixed reader array |
+| `H_l`, `W_l` | `<= 256` | the SFPU floors the bilinear corner and hands it to the reader as bf16, which carries 8 significant bits. Past 256 an in-bounds corner index would round to a *different, still in-bounds* pixel — a silently wrong sample. Rejected in `derive_shapes`, pinned by `test_fused_msda_rejects_spatial_shape_beyond_bf16_exact_integers` |
 | `Q`, `P`, `H`, `B` | any positive value | `Q % 32 != 0` handled by `v_rows` |
 | `S` | must equal `sum_l H_l * W_l` | validated |
 | padding | zeros | |
@@ -335,6 +403,8 @@ Known limitations, to revisit after profiling:
   design brief; both forms are accepted and tested for equality.
 * Sharded inputs unsupported.
 * `fp32` accumulate not exposed; the L1 accumulator runs at the pack format.
+  `fp32_dest_acc_en` is on unconditionally, but that is about the geometry's
+  destination register, not the reduction's accumulator.
 * V2 does not accept BEVFormer's pre-folded offsets (`2/[W,H]` baked into the
   Linear). Those callers use V1 with `locations_in_grid_space=True`, or keep
   their Linear unfolded. A fused "pre-folded offsets" V2 variant is future work.
@@ -357,10 +427,11 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
         ├── dataflow/reader_msda_v1.cpp
         ├── dataflow/reader_msda_v2.cpp
         ├── dataflow/writer_msda.cpp
+        ├── compute/msda_geometry.hpp           sampling geometry on the SFPU
         └── compute/compute_msda.cpp
 
 tests/ttnn/unit_tests/operations/experimental/test_fused_msda.py
-models/experimental/bevformer/tests/pcc/test_fused_msda_bevformer.py
+models/experimental/bevformer/tests/pcc/test_fused_msda.py
 ```
 
 ## 11. BEVFormer integration
@@ -380,13 +451,13 @@ for free: the `sampling_offsets` Linear already emits channels ordered
 
 It also uses the **unfolded** `sampling_offsets` Linear. The `2 / [W, H]` scale
 and the `2 * ref - 1` shift that the module used to fold into its weights are
-exactly what the V2 reader does for itself, so that whole grid-bias chain
+exactly what the V2 path does for itself, so that whole grid-bias chain
 (`reshape`, `mul`, `sub`, `repeat`, `reshape`, `add`) is gone, along with the two
 construction-time `ttnn.mul` calls that produced the folded weights.
 
 Spatial cross-attention and temporal self-attention both build this module, so
 both run on the op. Numerics are pinned by
-`models/experimental/bevformer/tests/pcc/test_fused_msda_bevformer.py` plus the
+`models/experimental/bevformer/tests/pcc/test_fused_msda.py` plus the
 pre-existing `test_ms_deformable_attention.py`, `test_spatial_cross_attention.py`,
 `test_temporal_self_attention.py`, `test_layer.py` and `test_encoder.py`, which
 all pass at their original thresholds.

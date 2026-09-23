@@ -20,6 +20,12 @@ using tt::tt_metal::TensorMemoryLayout;
 // here rather than discovered as a stack smash on device.
 constexpr uint32_t MAX_LEVELS = 8;
 
+// Largest H_l or W_l the op supports, set by bf16's 8 significant bits: the
+// floored bilinear corner crosses from the SFPU geometry to the reader as bf16
+// and has to decode to the integer that was floored, exactly. See
+// device/kernels/compute/msda_geometry.hpp.
+constexpr uint32_t MAX_SPATIAL_EXTENT = 256;
+
 void check_common_tensor(const Tensor& t, std::string_view name, const Tensor& ref) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "fused_msda: {} must be on device", name);
     TT_FATAL(t.device() == ref.device(), "fused_msda: {} must be on the same device as value", name);
@@ -60,6 +66,22 @@ MSDAShapes derive_shapes(
         const uint32_t h = hw[2 * l];
         const uint32_t w = hw[2 * l + 1];
         TT_FATAL(h > 0 && w > 0, "fused_msda: spatial_shapes[{}] must be positive, got ({}, {})", l, h, w);
+        // The floored bilinear corner crosses from the compute kernel to the
+        // reader as bf16, which carries 8 significant bits and so represents
+        // every integer up to MAX_SPATIAL_EXTENT exactly and nothing beyond it
+        // reliably. Past that an in-bounds corner index would round to a
+        // different, still in-bounds pixel — a silently wrong sample rather
+        // than a failure. Refuse instead.
+        TT_FATAL(
+            h <= MAX_SPATIAL_EXTENT && w <= MAX_SPATIAL_EXTENT,
+            "fused_msda: spatial_shapes[{}] = ({}, {}) exceeds the {}-pixel per-axis limit. The sampling geometry "
+            "runs on the SFPU and hands the reader the floored corner as bf16, which is exact only for integers up "
+            "to {}",
+            l,
+            h,
+            w,
+            MAX_SPATIAL_EXTENT,
+            MAX_SPATIAL_EXTENT);
         total_keys += h * w;
     }
 

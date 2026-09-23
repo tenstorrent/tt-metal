@@ -65,16 +65,21 @@ ttnn::Tensor fused_msda(
     bool locations_in_grid_space = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
-// V2: the same operator with sampling-location generation fused into the reader.
+// V2: the same operator with sampling-location generation fused into the op.
 // No (B, Q, H, L, P, 2) location tensor is materialized.
 //
 //   sampling_locations[b, q, h, l, p]
 //       == reference_points[b, q, r(l, p)]
 //        + sampling_offsets[b, q, h, l, p] / [W_l, H_l]
 //
-// sampling_offsets are raw, in feature-map pixel units; the reader applies the
-// per-level normalization. reference_points must be (B, Q, R, 2) normalized
-// (x, y) in [0, 1]; the 4-D box form is rejected rather than reinterpreted.
+// sampling_offsets are raw, in feature-map pixel units; the op applies the
+// per-level / [W_l, H_l] normalization on device. reference_points must be
+// (B, Q, R, 2) normalized (x, y) in [0, 1]; the 4-D box form is rejected rather
+// than reinterpreted.
+//
+// Each level's H_l and W_l must be <= 256: the bilinear corner crosses from the
+// SFPU geometry to the reader as bf16, which represents every integer up to 256
+// exactly and only some beyond it.
 ttnn::Tensor fused_msda_from_offsets(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,
