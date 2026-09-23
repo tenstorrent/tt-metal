@@ -99,30 +99,57 @@ class BgeM3MLP(LightweightModule):
         self.load_device_weights()
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
 
-        wi_core_grid = None if self.config.wi_prg_config is not None else self.config.core_grid
-        wi_activation = None if self.config.wi_prg_config is not None else "gelu"
-        activated = ttnn.linear(
-            hidden_states,
-            self.wi_weight,
-            memory_config=self.config.wi_memcfg,
-            dtype=self.config.wi_output_dtype,
-            bias=self.wi_bias,
-            program_config=self.config.wi_prg_config,
-            compute_kernel_config=self.config.wi_compute_kernel_cfg,
-            activation=wi_activation,
-            core_grid=wi_core_grid,
-        )
-        wo_core_grid = None if self.config.wo_prg_config is not None else self.config.core_grid
-        output = ttnn.linear(
-            activated,
-            self.wo_weight,
-            memory_config=self.config.wo_memcfg,
-            dtype=self.config.wo_dtype,
-            bias=self.wo_bias,
-            program_config=self.config.wo_prg_config,
-            compute_kernel_config=self.config.wo_compute_kernel_cfg,
-            core_grid=wo_core_grid,
-        )
+        # Optimizations sets a minimal_matmul config and no program config for a
+        # shape whose 2D multicast config does not fit L1, such as B32/S512. Take
+        # minimal_matmul there; ttnn.linear would select its own config and clash.
+        if self.config.wi_minimal_config is not None and self.config.wi_prg_config is None:
+            activated = ttnn.experimental.minimal_matmul(
+                input_tensor=hidden_states,
+                weight_tensor=self.wi_weight,
+                bias_tensor=self.wi_bias,
+                fused_activation=(ttnn.UnaryOpType.GELU, True),
+                config=self.config.wi_minimal_config,
+                memory_config=self.config.wi_memcfg,
+                dtype=self.config.wi_output_dtype,
+                compute_kernel_config=self.config.wi_compute_kernel_cfg,
+            )
+        else:
+            wi_core_grid = None if self.config.wi_prg_config is not None else self.config.core_grid
+            wi_activation = None if self.config.wi_prg_config is not None else "gelu"
+            activated = ttnn.linear(
+                hidden_states,
+                self.wi_weight,
+                memory_config=self.config.wi_memcfg,
+                dtype=self.config.wi_output_dtype,
+                bias=self.wi_bias,
+                program_config=self.config.wi_prg_config,
+                compute_kernel_config=self.config.wi_compute_kernel_cfg,
+                activation=wi_activation,
+                core_grid=wi_core_grid,
+            )
+        if self.config.wo_minimal_config is not None and self.config.wo_prg_config is None:
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=activated,
+                weight_tensor=self.wo_weight,
+                bias_tensor=self.wo_bias,
+                fused_activation=None,
+                config=self.config.wo_minimal_config,
+                memory_config=self.config.wo_memcfg,
+                dtype=self.config.wo_dtype,
+                compute_kernel_config=self.config.wo_compute_kernel_cfg,
+            )
+        else:
+            wo_core_grid = None if self.config.wo_prg_config is not None else self.config.core_grid
+            output = ttnn.linear(
+                activated,
+                self.wo_weight,
+                memory_config=self.config.wo_memcfg,
+                dtype=self.config.wo_dtype,
+                bias=self.wo_bias,
+                program_config=self.config.wo_prg_config,
+                compute_kernel_config=self.config.wo_compute_kernel_cfg,
+                core_grid=wo_core_grid,
+            )
         ttnn.deallocate(activated)
         return output
 
