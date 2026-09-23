@@ -140,36 +140,45 @@ def test_sub_devices_mesh(mesh_device):
 
 @skip_for_slow_dispatch()
 def test_mesh_device_lifecycle_queries(mesh_device):
-    assert mesh_device.is_initialized()
-    assert mesh_device.num_hw_cqs() >= 1
+    assert mesh_device.is_initialized(), "mesh_device fixture yielded an uninitialized device"
+    num_hw_cqs = mesh_device.num_hw_cqs()
+    assert num_hw_cqs >= 1, f"expected at least one command queue, got {num_hw_cqs}"
 
     default_manager_id = mesh_device.get_active_sub_device_manager_id()
-    assert default_manager_id == mesh_device.get_active_sub_device_manager_id()
+    repeated_id = mesh_device.get_active_sub_device_manager_id()
+    assert repeated_id == default_manager_id, f"expected {default_manager_id}, got {repeated_id}"
 
     first_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     second_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
     manager_id = mesh_device.create_sub_device_manager(
         [ttnn.SubDevice([first_cores]), ttnn.SubDevice([second_cores])], 3200
     )
+    expected_ids = [ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)]
     try:
         mesh_device.load_sub_device_manager(manager_id)
-        assert mesh_device.get_active_sub_device_manager_id() == manager_id
-        assert mesh_device.get_active_sub_device_manager_id() != default_manager_id
+        active_id = mesh_device.get_active_sub_device_manager_id()
+        assert active_id == manager_id, f"expected {manager_id}, got {active_id}"
+        assert active_id != default_manager_id, f"loading a manager did not replace the default {default_manager_id}"
 
         mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
-        assert mesh_device.get_sub_device_ids() == [
-            ttnn.SubDeviceId(0),
-            ttnn.SubDeviceId(1),
-        ]
+        sub_device_ids = mesh_device.get_sub_device_ids()
+        assert sub_device_ids == expected_ids, f"expected {expected_ids}, got {sub_device_ids}"
+
+        # MeshDevice::get_sub_device_ids returns a reference to manager-owned state, so the binding
+        # must hand Python a copy rather than an alias.
+        sub_device_ids.clear()
+        ids_after_mutation = mesh_device.get_sub_device_ids()
+        assert ids_after_mutation == expected_ids, f"caller mutation reached device state: got {ids_after_mutation}"
     finally:
         mesh_device.reset_sub_device_stall_group()
         mesh_device.clear_loaded_sub_device_manager()
         mesh_device.remove_sub_device_manager(manager_id)
 
-    assert mesh_device.get_active_sub_device_manager_id() == default_manager_id
+    restored_id = mesh_device.get_active_sub_device_manager_id()
+    assert restored_id == default_manager_id, f"expected {default_manager_id}, got {restored_id}"
 
     ttnn.close_mesh_device(mesh_device)
-    assert not mesh_device.is_initialized()
+    assert not mesh_device.is_initialized(), "close_mesh_device left the device initialized"
 
 
 @skip_for_slow_dispatch()
