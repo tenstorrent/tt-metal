@@ -29,6 +29,7 @@
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
+using Timing = D2H2H2DSocket::Timing;
 namespace mh = tt::tt_metal::distributed::multihost;
 
 namespace {
@@ -43,7 +44,14 @@ struct Options {
     uint32_t pct_steady = 10;
     uint32_t payload = 16384;
     uint32_t verify = 1;  // --no-verify for a bandwidth run
+    uint32_t timing = 1;  // --no-timing to drop the per-frame clock reads
 };
+
+// Nearest-rank on a sorted vector, as in the three single-leg benchmarks.
+uint64_t pct(const std::vector<uint64_t>& v, double p) {
+    const size_t i = static_cast<size_t>(p * static_cast<double>(v.size() - 1) + 0.5);
+    return v[i];
+}
 
 // strtoull, not stoull: parse() runs with MPI already up, where an uncaught exception aborts
 // this rank and strands its peers in whatever collective they had reached.
@@ -73,7 +81,8 @@ bool parse_u64(const char* text, uint64_t& out, bool allow_suffix) {
 
 bool parse(int argc, char** argv, Options& o) {
     const auto bad = [&argv]() {
-        std::cerr << "usage: " << argv[0] << " --volume N[K|M|G] --pct-steady 0..99 --payload N\n";
+        std::cerr << "usage: " << argv[0]
+                  << " --volume N[K|M|G] --pct-steady 0..99 --payload N [--no-verify] [--no-timing]\n";
         return false;
     };
     for (int i = 1; i < argc; ++i) {
@@ -96,6 +105,8 @@ bool parse(int argc, char** argv, Options& o) {
             o.payload = static_cast<uint32_t>(v);
         } else if (a == "--no-verify") {
             o.verify = 0;
+        } else if (a == "--no-timing") {
+            o.timing = 0;
         } else {
             return bad();
         }
@@ -120,11 +131,12 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    // Padding, not a separate phase: timing is not collected yet, so --pct-steady only
-    // lengthens the run by the share that will later be discarded.
+    // The run is padded by --pct-steady and the clock starts once that padding is behind,
+    // so the rate covers steady state rather than the ramp.
     const uint64_t measured = std::max<uint64_t>(1, o.volume / (static_cast<uint64_t>(kCores) * o.payload));
     const uint32_t iters = static_cast<uint32_t>(measured + measured * o.pct_steady / 100);
     const uint64_t msgs = static_cast<uint64_t>(kCores) * iters;
+    const uint64_t warmup_msgs = static_cast<uint64_t>(kCores) * (iters - measured);
 
     // A unit mesh is opened against a world of one, or every rank claims every device.
     {
@@ -144,6 +156,7 @@ int main(int argc, char** argv) {
     cfg.grid_width = static_cast<uint32_t>(grid.x);
     cfg.grid_height = static_cast<uint32_t>(grid.y);
     cfg.payload_bytes = o.payload;
+    cfg.collect_timing = o.timing != 0;
 
     std::string err;
     std::unique_ptr<D2H2H2DSocket> sock = D2H2H2DSocket::create(mesh, device, cfg, err);
@@ -235,9 +248,17 @@ int main(int argc, char** argv) {
     auto deadline = std::chrono::steady_clock::now() + kStall;
     uint64_t last_moved = 0;
     bool stalled = false;
+    // Latched on the pass that clears the padding, so the interval excludes the ramp. The
+    // progress field is the one done() uses: end-to-end on the receiver, own-leg on the sender.
+    bool timing = false;
+    std::chrono::steady_clock::time_point t0;
     while (!done() && !sock->failed()) {
         sock->poll();
         const auto& p = sock->counters();
+        if (!timing && (sending ? p.retired : p.drained) >= warmup_msgs) {
+            timing = true;
+            t0 = std::chrono::steady_clock::now();
+        }
         const uint64_t moved = p.sent + p.retired + p.received + p.drained;
         if (moved != last_moved) {
             last_moved = moved;
@@ -248,6 +269,7 @@ int main(int argc, char** argv) {
             break;
         }
     }
+    const auto t1 = std::chrono::steady_clock::now();
 
     // Collective verdict BEFORE the collective calls below: done() is asymmetric, so one rank
     // finishing while the other stalls would leave the healthy one hung in MPI_Barrier.
@@ -261,6 +283,24 @@ int main(int argc, char** argv) {
     Finish(mesh->mesh_command_queue());
     if (const std::string be = sock->barrier(); !be.empty()) {
         std::cerr << "barrier: " << be << "\n";
+    }
+
+    // As test_d2h_bw.cpp: the sending kernel stamps its own loop window into L1, so the
+    // chip's view of the rate is readable here and includes the whole chain's backpressure.
+    uint64_t dev_begin = UINT64_MAX;
+    uint64_t dev_end = 0;
+    if (sending && o.timing != 0) {
+        for (uint32_t i = 0; i < kCores; ++i) {
+            std::vector<uint32_t> r;
+            slow_dispatch::ReadFromL1(*mesh, core_list[i], l1.verify_addr, 7 * sizeof(uint32_t), r);
+            if (r.size() < 7) {
+                continue;
+            }
+            // r[5..6] is the steady-state stamp, r[2..3] the loop end. The chip clock is
+            // global, so the earliest begin and the latest end bound one window.
+            dev_begin = std::min(dev_begin, static_cast<uint64_t>(r[5]) | (static_cast<uint64_t>(r[6]) << 32));
+            dev_end = std::max(dev_end, static_cast<uint64_t>(r[2]) | (static_cast<uint64_t>(r[3]) << 32));
+        }
     }
 
     uint64_t bad_cores = 0;
@@ -280,8 +320,46 @@ int main(int argc, char** argv) {
     const bool ok = !sock->failed() && bad_cores == 0 && (sending ? c.retired >= msgs : c.drained >= msgs);
     std::cout << "rank " << rank << ": sent " << c.sent << " received " << c.received << " drained " << c.drained
               << " of " << msgs << "\n";
+    // Receiver only for the end-to-end figure: drained means the frame crossed all three
+    // legs, where the sender's retired only means its own leg let go.
+    if (ok && timing) {
+        const double secs = std::chrono::duration<double>(t1 - t0).count();
+        const double gb = static_cast<double>(msgs - warmup_msgs) * o.payload / 1e9;
+        if (secs > 0.0) {
+            std::cout << "rank " << rank << ": " << (sending ? "push" : "end-to-end") << " bandwidth "
+                      << (gb / secs) << " GB/s over " << secs << " s\n";
+        }
+    }
     if (!ok) {
         std::cout << "  first error: " << sock->first_error() << "\n";
+    }
+    if (ok && o.timing != 0) {
+        if (sending && dev_end > dev_begin) {
+            const double cyc = static_cast<double>(dev_end - dev_begin);
+            std::cout << "rank " << rank << ": d2h  device window " << (dev_end - dev_begin) << " cyc, "
+                      << (static_cast<double>(msgs - warmup_msgs) * o.payload / cyc) << " B/cyc\n";
+        }
+        Timing t = sock->timing();
+        std::sort(t.d2h_issue_cycles.begin(), t.d2h_issue_cycles.end());
+        std::sort(t.d2h_stall_cycles.begin(), t.d2h_stall_cycles.end());
+        std::sort(t.h2h_put_to_credit_ns.begin(), t.h2h_put_to_credit_ns.end());
+        std::sort(t.h2d_publish_to_drained_ns.begin(), t.h2d_publish_to_drained_ns.end());
+        // Cycles stay cycles: nothing establishes that the chip's wall-clock register ticks
+        // at the AICLK get_clock_rate_mhz() reports, and it differs per chip.
+        if (!t.d2h_issue_cycles.empty()) {
+            std::cout << "rank " << rank << ": d2h  issue " << pct(t.d2h_issue_cycles, 0.50) << " cyc, slot wait "
+                      << pct(t.d2h_stall_cycles, 0.50) << " cyc  (" << t.d2h_issue_cycles.size() << " frames)\n";
+        }
+        if (!t.h2h_put_to_credit_ns.empty()) {
+            std::cout << "rank " << rank << ": h2h  put->credit "
+                      << (static_cast<double>(pct(t.h2h_put_to_credit_ns, 0.50)) / 1e3) << " us  ("
+                      << t.h2h_put_to_credit_ns.size() << " frames)\n";
+        }
+        if (!t.h2d_publish_to_drained_ns.empty()) {
+            std::cout << "rank " << rank << ": h2d  publish->drained "
+                      << (static_cast<double>(pct(t.h2d_publish_to_drained_ns, 0.50)) / 1e3) << " us  ("
+                      << t.h2d_publish_to_drained_ns.size() << " frames)\n";
+        }
     }
     std::cout << (ok ? "PASS" : "FAIL") << "\n";
     return ok ? 0 : 1;
