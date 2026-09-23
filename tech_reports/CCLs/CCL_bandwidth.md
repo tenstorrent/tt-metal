@@ -213,7 +213,7 @@ In our data, every curve keeps falling as size shrinks, and none of them flatten
 **Line versus ring.** In our data, at eight devices a ring runs `all_gather`, `reduce_scatter` and `all_reduce` 1.5 to 1.8 times faster than a line, short of the ideal 2×. Besides the fabric cost of a ring, the ops behave differently:
 
 - `all_gather` relays each chunk through worker cores, hop by hop. On a line it multicasts, and the routers forward.
-- `reduce_scatter` runs 4 workers per direction at large sizes against 8 on a line, and synchronizes more often.
+- `reduce_scatter` synchronizes with its neighbor every 4 chunks on a ring, against every 20 on a line.
 - `all_reduce` is a reduce-scatter followed by an all-gather, so it inherits both.
 
 ## L1 versus DRAM tensors
