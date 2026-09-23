@@ -45,6 +45,10 @@ endif()
 add_library(zoo_headers INTERFACE)
 target_include_directories(zoo_headers INTERFACE ${zoo_SOURCE_DIR}/inc)
 
+# Establishes std::function's real inline buffer for this configuration; the benchmark pins the
+# candidates to whatever it reports.
+add_executable(sbo_probe sbo_probe.cpp)
+
 add_executable(bench bench.cpp)
 target_link_libraries(
     bench

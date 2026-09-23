@@ -6,6 +6,8 @@
 // ttsl::move_only_function. Compares zoo and fu2 against std::function at a common inline
 // capacity. See README.md for how to run and how to read the numbers.
 
+#include "inline_capacity.hpp"
+
 #include <benchmark/benchmark.h>
 
 #include <function2/function2.hpp>
@@ -30,11 +32,8 @@ std::atomic<std::size_t> g_allocations{0};
 
 std::size_t take_allocations() { return g_allocations.exchange(0, std::memory_order_relaxed); }
 
-// Common inline capacity for all three contenders.
-// libstdc++'s std::function has a fixed 16-byte buffer and no knob, so 16 is the only value at
-// which the comparison is apples-to-apples.
-constexpr std::size_t kInlineBytes = 16;
-constexpr std::size_t kInlinePointers = kInlineBytes / sizeof(void*);
+using bench_config::kInlineBytes;
+using bench_config::kInlinePointers;
 
 using StdFn = std::function<void()>;
 using Fu2Fn = fu2::function_base<
@@ -52,6 +51,15 @@ struct SmallCapture {
     std::uint64_t b = 2;
 };
 static_assert(sizeof(SmallCapture) <= kInlineBytes);
+
+// 24 bytes: inline under libc++, heap under libstdc++. Probes exactly the band where the two
+// standard libraries disagree.
+struct BoundaryCapture {
+    std::uint64_t a = 1;
+    std::uint64_t b = 2;
+    std::uint64_t c = 3;
+};
+static_assert(sizeof(BoundaryCapture) == 24);
 
 struct LargeCapture {
     std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
@@ -178,7 +186,10 @@ void BM_QueueThroughput(benchmark::State& state) {
 struct SizeReport {
     SizeReport() {
         std::printf(
+            "inline capacity in use: %zu B (%s)\n"
             "sizes: std::function=%zu/%zu zoo=%zu/%zu fu2=%zu/%zu (bytes: sizeof/alignof)\n",
+            kInlineBytes,
+            bench_config::kStdlibName,
             sizeof(StdFn),
             alignof(StdFn),
             sizeof(ZooFn),
@@ -202,12 +213,15 @@ void* operator new(std::size_t size) {
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
-#define BENCH_ALL_CAPTURES(bm)                   \
-    BENCHMARK_TEMPLATE(bm, StdFn, SmallCapture); \
-    BENCHMARK_TEMPLATE(bm, ZooFn, SmallCapture); \
-    BENCHMARK_TEMPLATE(bm, Fu2Fn, SmallCapture); \
-    BENCHMARK_TEMPLATE(bm, StdFn, LargeCapture); \
-    BENCHMARK_TEMPLATE(bm, ZooFn, LargeCapture); \
+#define BENCH_ALL_CAPTURES(bm)                      \
+    BENCHMARK_TEMPLATE(bm, StdFn, SmallCapture);    \
+    BENCHMARK_TEMPLATE(bm, ZooFn, SmallCapture);    \
+    BENCHMARK_TEMPLATE(bm, Fu2Fn, SmallCapture);    \
+    BENCHMARK_TEMPLATE(bm, StdFn, BoundaryCapture); \
+    BENCHMARK_TEMPLATE(bm, ZooFn, BoundaryCapture); \
+    BENCHMARK_TEMPLATE(bm, Fu2Fn, BoundaryCapture); \
+    BENCHMARK_TEMPLATE(bm, StdFn, LargeCapture);    \
+    BENCHMARK_TEMPLATE(bm, ZooFn, LargeCapture);    \
     BENCHMARK_TEMPLATE(bm, Fu2Fn, LargeCapture)
 
 BENCH_ALL_CAPTURES(BM_ConstructInvokeDestroy);

@@ -5,6 +5,8 @@
 // Item 7 of #57444: compile-time impact. Instantiates the chosen candidate over many distinct
 // signatures and capture types; time this TU per candidate, best-of-N.
 
+#include "inline_capacity.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -17,8 +19,8 @@
 #endif
 
 namespace {
-constexpr std::size_t kInlineBytes = 16;
-constexpr std::size_t kInlinePointers = kInlineBytes / sizeof(void*);
+using bench_config::kInlineBytes;
+using bench_config::kInlinePointers;
 }  // namespace
 
 #if defined(CANDIDATE_STD)

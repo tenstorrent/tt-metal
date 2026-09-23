@@ -5,6 +5,8 @@
 // Item 6 of #57444: object-size comparison. One translation unit, compiled once per candidate via
 // -DCANDIDATE_{STD,ZOO,FU2}, so the resulting .o sizes are directly comparable.
 
+#include "inline_capacity.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -17,8 +19,8 @@
 #endif
 
 namespace {
-constexpr std::size_t kInlineBytes = 16;
-constexpr std::size_t kInlinePointers = kInlineBytes / sizeof(void*);
+using bench_config::kInlineBytes;
+using bench_config::kInlinePointers;
 }  // namespace
 
 #if defined(CANDIDATE_STD)
