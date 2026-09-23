@@ -9,7 +9,8 @@ PCC-checks every layer's post-RoPE K / raw V / MSA index_k against the golden tr
 scripts/generate_golden_kv_cache.py.
 
 Env:
-  PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors)   [required]
+  PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors)   [required in single-run;
+                      in multi-run optional: seeds the initial capacity and the default PREFILL_GOLDEN_ROOT]
   PREFILL_CHUNKED     "1" -> chunked prefill (chunk loop, cache-read path); "0" -> one-shot  [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
@@ -31,7 +32,8 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
                         -             read specs from stdin line by line (interactive)
                         fifo:<path>   create the FIFO if needed and SERVE: block on it, run every
                                       line written to it, reopen on EOF; a line "quit" exits
-                      A spec is whitespace-separated key=value pairs (# starts a comment):
+                      A spec is whitespace-separated key=value pairs; `#` starts a comment anywhere on the
+                      line (so paths may not contain `#`); a `quit` line ends any source, batch files too:
                         trace=<dir|name>   golden trace dir, or a name under PREFILL_GOLDEN_ROOT  [required]
                         iters=N            PREFILL_TPS_ITERS for this run                [default: env]
                         skip_pcc=0|1       PREFILL_SKIP_PCC for this run                 [default: env]
@@ -50,11 +52,13 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
                       standalone run would. [default: unset -> fit]
   PREFILL_RESULTS_JSONL  append one JSON line per run (perf + min PCC + status)         [default: unset]
   PREFILL_ISL         default isl= for every run (single-run mode too)                   [default: trace length]
-  PREFILL_WARMUP_ITERS untimed whole-sequence passes before the timed iterations of each run. The JIT
-                      compiles per new sequence length, so iteration 0 is cold; drop it here      [default 0]
-  PREFILL_COMPILE     "0" -> skip runtime.compile()'s per-bucket warm-up sweep (one chunk prefill per chunk
-                      of capacity: 196 at 1M). It does not pre-empt the per-ISL JIT anyway; use
-                      PREFILL_WARMUP_ITERS instead                                                [default 1]
+  PREFILL_WARMUP_ITERS untimed whole-sequence passes before the timed iterations of each run. Programs are
+                      keyed by cache capacity and chunk kind (first / cache-read / ragged), not by ISL, and
+                      compile() warms those three; iteration 0 still carries host-side first-call costs
+                      (e.g. the per-actual_isl MoE padding-config upload), so 1 is a good default for perf
+                                                                                                   [default 0]
+  PREFILL_COMPILE     "0" -> skip runtime.compile()'s three-variant warm-up entirely (then iteration 0 pays
+                      the program-cache misses)                                                    [default 1]
   The chunk size (PREFILL_CHUNK_SIZE) is FIXED for the process: it is baked into the MoE dispatch
   buffers at build time. Multi-run mode is therefore chunked-only (PREFILL_CHUNKED=0 is rejected); a
   one-shot run is just a trace whose padded length equals the chunk size. The cache capacity is NOT
@@ -130,6 +134,12 @@ def _raise_nproc_limit():
 MSA_MIN_TOKENS = 16 * 128  # = 2048
 
 
+class GateFailure(AssertionError):
+    """A measurement gate (perf band / KV PCC threshold / capacity fit) failed. Subclasses AssertionError so
+    external callers that caught the old assert keep working; the multi-run loop tells it apart from a real
+    runtime invariant (which is reported as ERROR with a traceback, not FAIL)."""
+
+
 def plan(n_tokens, chunk_size, chunked):
     """Resolve (n_chunks, chunk, total). chunked: full chunk_size chunks (tail padded). one-shot:
     a single chunk == total, padded up to a multiple of 1024 and at least MSA_MIN_TOKENS (MSA needs
@@ -148,9 +158,11 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
     Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so permute the golden's
     rotary slice (identity tail) before comparing. V is raw (no swizzle).
 
-    The whole slot is read back ONCE (``read_slot_kv``: a device-side slot slice plus one mesh compose
-    per cache) and each layer is un-rotated on host. Reading per layer instead would re-copy the packed
-    cache num_layers times over PCIe.
+    The slot is read back ONCE (``read_slot_kv``: a device-side slot slice plus one mesh compose per
+    cache), bounded to the first ceil(n_tokens / chunk) chunks — the block-cyclic layout keeps them in the
+    first rows of every chip, so a 55k check inside a 1M-capacity cache reads 55k, not 1M (which would be
+    hundreds of GB on host). Each layer is un-rotated on host; reading per layer instead would re-copy
+    the packed cache num_layers times over PCIe.
 
     Fails if overall min PCC is below PREFILL_STANDALONE_CHUNKED_PCC (default 0.88), matching
     models/demos/minimax_m3/tt/runners/prefill_kv_validation.py.
@@ -173,8 +185,12 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
     kv_dir = Path(golden_dir) / "kv_cache"
     logger.info(f"[kv-pcc] per-layer K / V / index_k vs golden ({golden_dir}):")
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
-    k_blk, v_blk, ik_blk = runtime.read_slot_kv(kv_cache, 0)  # still block-cyclic; un-rotated per layer below
-    sp, chunk, seq = runtime.config.sp_factor, runtime.config.chunk_size, runtime.config.max_seq_len
+    assert kv_cache.max_seq_len == runtime.config.max_seq_len, (
+        f"KV cache capacity {kv_cache.max_seq_len} != runtime capacity {runtime.config.max_seq_len}: the un-rotation "
+        f"below would decode the wrong block-cyclic layout (stale handle after a re-target?)"
+    )
+    k_blk, v_blk, ik_blk = runtime.read_slot_kv(kv_cache, 0, n_tokens)  # block-cyclic; un-rotated per layer below
+    sp, chunk, seq = runtime.config.sp_factor, runtime.config.chunk_size, runtime.read_seq_len(n_tokens)
     for L in range(num_layers):
         dev_k = naturalize_kv_block(k_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
         dev_v = naturalize_kv_block(v_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
@@ -202,7 +218,8 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
         f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} "
         f"(overall {min_pcc:.5f}, threshold {threshold})"
     )
-    assert min_pcc >= threshold, f"KV-cache PCC {min_pcc:.5f} < threshold {threshold}"
+    if min_pcc < threshold:
+        raise GateFailure(f"KV-cache PCC {min_pcc:.5f} < threshold {threshold}")
     return mins
 
 
@@ -218,7 +235,9 @@ class RunSpec:
     expected_tps: float | None = None
     perf_margin: float = 0.05
     pcc_threshold: float | None = None  # None -> PREFILL_STANDALONE_CHUNKED_PCC (0.88)
-    capacity: int | None = None  # KV-cache tokens for this run; None -> PREFILL_MAX_SEQ_LEN, else fit the trace
+    capacity: int | None = (
+        None  # KV-cache tokens for this run; None -> fit the padded length (from_env pre-fills PREFILL_MAX_SEQ_LEN)
+    )
     isl: int | None = None  # tokens to prefill (trace tiled cyclically / truncated); None -> the trace length
     label: str = ""
 
@@ -274,6 +293,12 @@ class RunSpec:
                 spec.label = v
             else:
                 raise ValueError(f"unknown key {k!r}")
+        if spec.tps_iters < 1:
+            raise ValueError(f"iters={spec.tps_iters}: need >= 1")
+        if spec.isl is not None and spec.isl < 1:
+            raise ValueError(f"isl={spec.isl}: need >= 1")
+        if spec.capacity is not None and spec.capacity < 1:
+            raise ValueError(f"capacity={spec.capacity}: need >= 1")
         return spec
 
     @property
@@ -294,6 +319,18 @@ def tile_tokens(token_ids: list, isl: int) -> list:
     assert token_ids, "empty trace"
     reps = math.ceil(isl / len(token_ids))
     return (token_ids * reps)[:isl]
+
+
+def ensure_fifo(source: str) -> str:
+    """Create the FIFO of a ``fifo:<path>`` source if missing and check it IS a FIFO. Called from main()
+    BEFORE the 10+ minute model build: an `echo spec > path` issued before the server got there would
+    otherwise create a regular file and the assert would kill the server after the build."""
+    path = source[len("fifo:") :]
+    if not os.path.exists(path):
+        os.mkfifo(path)
+    if not stat.S_ISFIFO(os.stat(path).st_mode):
+        raise SystemExit(f"ERROR: PREFILL_RUNS={source}: {path} exists and is not a FIFO (remove it first)")
+    return path
 
 
 def iter_run_specs(source: str, golden_root: str | None):
@@ -319,13 +356,11 @@ def iter_run_specs(source: str, golden_root: str | None):
         yield from parse_lines(sys.stdin)
         return
     if source.startswith("fifo:"):
-        path = source[len("fifo:") :]
-        if not os.path.exists(path):
-            os.mkfifo(path)
-        assert stat.S_ISFIFO(os.stat(path).st_mode), f"{path} exists and is not a FIFO"
+        path = ensure_fifo(source)
         print(
             f"[prefill-pcc] multi-run: SERVING on {path} — weights stay resident.\n"
-            f"    echo 'trace=<dir|name> [iters=N] [skip_pcc=1] [expected_tps=X] [label=..]' > {path}\n"
+            f"    echo 'trace=<dir|name> [isl=N] [capacity=N] [iters=N] [skip_pcc=1] [expected_tps=X] "
+            f"[perf_margin=F] [pcc_threshold=F] [label=..]' > {path}\n"
             f"    echo quit > {path}",
             flush=True,
         )
@@ -356,10 +391,11 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     n_chunks = max(1, math.ceil(n_tokens / chunk))
     total = n_chunks * chunk
     capacity = math.ceil((spec.capacity or total) / chunk) * chunk
-    assert total <= capacity, (
-        f"trace {spec.trace_dir} pads to {total} tokens ({n_chunks} x {chunk}) but the requested capacity "
-        f"is {capacity} (capacity= / PREFILL_MAX_SEQ_LEN); drop it or raise it"
-    )
+    if total > capacity:
+        raise GateFailure(
+            f"trace {spec.trace_dir} pads to {total} tokens ({n_chunks} x {chunk}) but the requested capacity "
+            f"is {capacity} (capacity= / PREFILL_MAX_SEQ_LEN); drop it or raise it"
+        )
     tps_iters = spec.tps_iters
     warmup_iters = int(os.getenv("PREFILL_WARMUP_ITERS", "0"))
     print(
@@ -370,15 +406,25 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         flush=True,
     )
     recompile_s = 0.0
-    if capacity != runtime.config.max_seq_len:
+    if capacity != runtime.config.max_seq_len or state["kv_cache"] is None:
         t0 = time.perf_counter()
+        warm = (
+            "re-warming the 3 chunk program variants"
+            if os.getenv("PREFILL_COMPILE", "1") != "0"
+            else "no warm-up (PREFILL_COMPILE=0)"
+        )
         print(
             f"[prefill-pcc] capacity {runtime.config.max_seq_len} -> {capacity}: re-allocating the KV cache, "
-            f"rebuilding indexed RoPE, re-warming {capacity // chunk} JIT buckets (weights stay resident) ...",
+            f"rebuilding indexed RoPE, {warm} (weights stay resident) ...",
             flush=True,
         )
-        state["kv_cache"].deallocate()
-        runtime.reconfigure_capacity(capacity)
+        # Free first (the new cache may not fit next to the old one), and drop the handle BEFORE anything
+        # that can raise: a failed re-target must leave state["kv_cache"] None, so the next spec
+        # re-allocates instead of feeding a dead handle into prefill_chunk.
+        if state["kv_cache"] is not None:
+            state["kv_cache"].deallocate()
+            state["kv_cache"] = None
+        runtime.reconfigure_capacity(capacity)  # on failure keeps the old capacity + rope
         state["kv_cache"] = allocate_kv_caches(
             mesh, num_layers=num_layers, max_seq_len=capacity, num_users=1, head_dim=hf_config.head_dim
         )
@@ -448,10 +494,11 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         flush=True,
     )
     lc = statistics.median(last_times)
-    last_tps = last_len / lc
+    last_tps = last_len / lc  # processed (padded) tokens, the historical basis of this line
+    last_real = n_tokens - a_last  # real tokens in the final chunk (== last_len unless the trace is ragged)
     print(
         f"[prefill-pcc] LAST CHUNK over {tps_iters} iters: {last_len} tok @ {a_last} cache, "
-        f"median {last_tps:.1f} tok/s; "
+        f"median {last_tps:.1f} tok/s (processed), {last_real / lc:.1f} tok/s ({last_real} real); "
         f"wall median {lc * 1000:.1f} ms [min {min(last_times) * 1000:.1f}, max {max(last_times) * 1000:.1f}]",
         flush=True,
     )
@@ -464,11 +511,13 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         "n_chunks": n_chunks,
         "capacity": capacity,
         "recompile_s": recompile_s,
+        "warmup_iters": warmup_iters,
         "tps_iters": tps_iters,
         "whole_ms": w * 1000,
         "whole_tps": whole_tps,
         "last_chunk_ms": lc * 1000,
         "last_chunk_tps": last_tps,
+        "last_chunk_real_tokens": last_real,
         "min_pcc": None,
     }
 
@@ -481,10 +530,11 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
             f"{spec.expected_tps:.1f} +/- {spec.perf_margin * 100:.1f}% band [{low:.1f}, {high:.1f}]",
             flush=True,
         )
-        assert low <= whole_tps <= high, (
-            f"whole-sequence throughput {whole_tps:.1f} tok/s outside baseline "
-            f"{spec.expected_tps:.1f} tok/s +/- {spec.perf_margin * 100:.1f}% band [{low:.1f}, {high:.1f}]"
-        )
+        if not (low <= whole_tps <= high):
+            raise GateFailure(
+                f"whole-sequence throughput {whole_tps:.1f} tok/s outside baseline "
+                f"{spec.expected_tps:.1f} tok/s +/- {spec.perf_margin * 100:.1f}% band [{low:.1f}, {high:.1f}]"
+            )
 
     # --- accuracy: per-layer KV PCC vs golden (skipped in perf-only mode; synthetic
     # traces carry only metadata.json, so there is no golden KV cache to compare against) ---
@@ -585,6 +635,8 @@ def main():
         if golden_dir:
             n0 = int(os.environ.get("PREFILL_ISL") or len(load_trace_tokens(golden_dir)))
             known_totals.append(plan(n0, chunk, True)[2])
+        if runs_source.startswith("fifo:"):
+            ensure_fifo(runs_source)  # fail fast, before the build; the serve loop re-checks
         if runs_source != "-" and not runs_source.startswith("fifo:"):
             batch_specs = []
             for line, item in iter_run_specs(runs_source, golden_root):
@@ -594,7 +646,8 @@ def main():
                     print(f"ERROR: PREFILL_RUNS line {line!r}: {item}", file=sys.stderr)
                     return 1
                 batch_specs.append(item)
-                known_totals.append(plan(item.isl or len(load_trace_tokens(item.trace_dir)), chunk, True)[2])
+                fit = plan(item.isl or len(load_trace_tokens(item.trace_dir)), chunk, True)[2]
+                known_totals.append(max(fit, math.ceil(item.capacity / chunk) * chunk) if item.capacity else fit)
             if not batch_specs:
                 print(f"ERROR: no run specs in {runs_source}", file=sys.stderr)
                 return 1
@@ -727,10 +780,10 @@ def main():
             try:
                 r = run_one(runtime, state, mesh, spec, num_layers, hf_config)
                 r["status"] = "ok"
-            except AssertionError as e:  # a gate (perf band / PCC threshold / capacity) failed
+            except GateFailure as e:  # perf band / PCC threshold / capacity fit: a measurement verdict, not a crash
                 r = {"label": spec.name, "trace": spec.trace_dir, "status": "FAIL", "error": str(e)}
                 print(f"[prefill-pcc] run '{spec.name}' FAILED: {e}", flush=True)
-            except Exception as e:  # noqa: BLE001 — keep the resident model alive for the next spec
+            except Exception as e:  # anything else is a real error; keep the resident model alive for the next spec
                 r = {
                     "label": spec.name,
                     "trace": spec.trace_dir,
@@ -747,22 +800,30 @@ def main():
             results.append(r)
             return r
 
+        clean_exit = False  # a streaming session that ended on quit/EOF/Ctrl-C with no runs is not a failure
         if runs_source is None:
-            do_run(RunSpec.from_env(golden_dir))
+            spec = RunSpec.from_env(golden_dir)
+            spec.capacity = capacity  # single-run: exactly the historical capacity (padded length); PREFILL_MAX_SEQ_LEN is multi-run only
+            do_run(spec)
         elif batch_specs is not None:
             for spec in batch_specs:
                 do_run(spec)
         else:
-            for line, item in iter_run_specs(runs_source, golden_root):
-                if item is None:
-                    print("[prefill-pcc] quit received", flush=True)
-                    break
-                if isinstance(item, Exception):
-                    print(f"[prefill-pcc] ignoring bad spec {line!r}: {item}", flush=True)
-                    continue
-                do_run(item)
-                if runs_source.startswith("fifo:"):
-                    print(f"[prefill-pcc] idle — waiting for the next spec on {runs_source[5:]}", flush=True)
+            try:
+                for line, item in iter_run_specs(runs_source, golden_root):
+                    if item is None:
+                        print("[prefill-pcc] quit received", flush=True)
+                        break
+                    if isinstance(item, Exception):
+                        print(f"[prefill-pcc] ignoring bad spec {line!r}: {item}", flush=True)
+                        continue
+                    do_run(item)
+                    if runs_source.startswith("fifo:"):
+                        print(f"[prefill-pcc] idle — waiting for the next spec on {runs_source[5:]}", flush=True)
+                clean_exit = True
+            except KeyboardInterrupt:
+                print("[prefill-pcc] interrupted — summarising the runs done so far", flush=True)
+                clean_exit = True
 
         if len(results) > 1 or runs_source is not None:
             print("[prefill-pcc] ===== SUMMARY =====", flush=True)
@@ -771,7 +832,8 @@ def main():
         print("[prefill-pcc] DONE", flush=True)
     finally:
         ttnn.close_mesh_device(mesh)
-    return 0 if results and all(r["status"] == "ok" for r in results) else 1
+    ok = all(r["status"] == "ok" for r in results)
+    return 0 if ok and (results or clean_exit) else 1
 
 
 if __name__ == "__main__":

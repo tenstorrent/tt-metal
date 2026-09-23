@@ -177,7 +177,12 @@ class TtPrefillRuntime:
 
         def build(dev_mat):
             # one-time D2H of the model's replicated cos/sin (device-0 copy), sliced to the cache capacity
-            full = ttnn.to_torch(ttnn.get_device_tensors(dev_mat)[0])[:, :, :cache_seq, :]
+            full = ttnn.to_torch(ttnn.get_device_tensors(dev_mat)[0])
+            assert full.shape[2] >= cache_seq, (
+                f"KV capacity {cache_seq} exceeds the model's RoPE table ({full.shape[2]} positions = "
+                f"max_position_embeddings); the indexed rope would be silently truncated"
+            )
+            full = full[:, :, :cache_seq, :]
             bc = block_cyclic_reorder(full, chunk_local, sp, seq_dim=2)
             return ttnn.from_torch(bc, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
 
@@ -206,10 +211,18 @@ class TtPrefillRuntime:
         if max_seq_len == self.config.max_seq_len:
             return
         logger.info(f"TtPrefillRuntime.reconfigure_capacity: max_seq_len {self.config.max_seq_len} -> {max_seq_len}")
-        for t in self.rope_indexed:
-            ttnn.deallocate(t)
+        old_config, old_rope = self.config, self.rope_indexed
         self.config = replace(self.config, max_seq_len=max_seq_len)
-        self._build_indexed_rope()
+        try:
+            self._build_indexed_rope()  # builds the NEW tables first: a failure leaves the old capacity intact
+        except Exception:
+            self.config, self.rope_indexed = old_config, old_rope
+            raise
+        for t in old_rope:
+            ttnn.deallocate(t)
+        # The CCL scratch (ring-gather / high_bw-gather) is keyed by shape and the cache-read entries are
+        # capacity-sized: drop them so re-targets do not accumulate dead DRAM (~0.7 GB/chip per capacity at 1M).
+        self.model.ccl_manager.release_scratch_buffers()
         self.compiled = False
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
@@ -276,20 +289,35 @@ class TtPrefillRuntime:
         return x
 
     def compile(self, kv_cache) -> None:
-        """Warm up every KV-length the served loop can reach so no served chunk pays a first-run JIT.
-        Sweep the full per-user cache in chunk steps; each warm-up writes slot 0, which the real run overwrites."""
+        """Warm the program cache so no served chunk pays a first-run JIT.
+
+        For a fixed cache capacity a chunk runs one of exactly THREE program sets per layer, so three warm-up
+        chunks cover the served loop: (i) the FIRST chunk (actual_start == 0: no-cache attention variants,
+        exact-size gathers), (ii) a full CACHE-READ chunk (actual_start > 0), (iii) a RAGGED chunk
+        (actual_end < actual_start + chunk_size: the MoE padding-config variant). Every per-chunk offset —
+        kv_actual / cached_len, logical_n, kv_len, chunk_start_idx, gathered_dim_size, slot — is a runtime
+        argument excluded from the op hashes (update_padded_kv_cache, ring_joint SDPA with kv_actual_isl,
+        indexer_score_msa, topk_large_indices valid_length, sparse_sdpa_msa, high_bw_all_gather), so sweeping
+        every KV-length bucket (the previous behaviour: max_seq_len / chunk_size chunks, 196 at 1M) re-ran
+        the same programs and still missed variant (iii). What IS hashed is the cache capacity itself (gather
+        buffer shapes, sparse_sdpa T), which is why reconfigure_capacity() invalidates this warm-up.
+        Each warm-up writes slot 0, which the real run overwrites."""
         assert self.model_built
         chunk = self.config.chunk_size
-        starts = list(range(0, self.config.max_seq_len - chunk + 1, chunk))
-        logger.info(f"TtPrefillRuntime.compile() — warming {len(starts)} KV-length buckets ({chunk}-token chunks)")
+        cache_read_start = chunk if self.config.max_seq_len >= 2 * chunk else 0
+        plan = [(0, chunk), (cache_read_start, chunk), (cache_read_start, chunk // 2)]  # (actual_start, real tokens)
+        logger.info(
+            f"TtPrefillRuntime.compile() — warming first / cache-read / ragged chunk variants ({chunk}-token chunks, "
+            f"capacity {self.config.max_seq_len})"
+        )
         t0 = time.perf_counter()
-        for start in starts:
+        for start, real in plan:
             self.prefill_chunk(
-                self.make_chunk_input([0] * chunk), kv_cache, slot_id=0, actual_start=start, actual_end=start + chunk
+                self.make_chunk_input([0] * chunk), kv_cache, slot_id=0, actual_start=start, actual_end=start + real
             )
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"[prefill timing] task_id=WARMUP buckets={len(starts)} runtime.compile() = {warmup_ms:.2f} ms")
+        logger.info(f"[prefill timing] task_id=WARMUP variants={len(plan)} runtime.compile() = {warmup_ms:.2f} ms")
         self.compiled = True
 
     def prefill_chunk(
@@ -503,10 +531,17 @@ class TtPrefillRuntime:
             stage_layouts=stage_layouts,
         )
 
-    def read_slot_kv(self, kv_cache, slot: int):
+    def read_slot_kv(self, kv_cache, slot: int, n_tokens: int | None = None):
         """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache
-        tensor, each ``[num_layers, heads(or 1), seq_cache, head_dim]`` (index_k collapsed to one TP
+        tensor, each ``[num_layers, heads(or 1), seq_read, head_dim]`` (index_k collapsed to one TP
         replica), in the raw on-device (block-cyclic) layout — not un-rotated to natural token order.
+
+        ``n_tokens`` bounds the read to the first ``ceil(n_tokens / chunk_size)`` chunks: the block-cyclic
+        writer puts slab k of every chip at local rows ``[k*chunk_local, (k+1)*chunk_local)``, so the first
+        ``k`` chunks live in the first ``k*chunk_local`` rows of EVERY chip and the composed block is exactly
+        the layout of a ``k*chunk_size`` cache — un-rotate it with ``naturalize_kv_block(...,
+        max_seq_len=k*chunk_size)`` (see ``read_seq_len``). Without the bound a 1M-capacity slot is ~120 GB
+        of fp32 per cache on host. ``None`` reads the whole capacity.
 
         One device slice + one mesh compose per cache. DRAM_MEMORY_CONFIG on the slice is required —
         the cache is ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM
@@ -514,6 +549,8 @@ class TtPrefillRuntime:
         """
         start = slot * self.config.num_layers
         end = start + self.config.num_layers
+        seq_read = self.read_seq_len(n_tokens)
+        rows = seq_read // self.config.sp_factor  # per-chip rows holding the first seq_read positions
         composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=self.mesh_device.shape)
 
         def _slot_block(tensor, *, collapse_tp: bool = False):
@@ -528,7 +565,7 @@ class TtPrefillRuntime:
             sl = ttnn.slice(
                 tensor,
                 [start, 0, 0, 0],
-                [end, s[1], s[2], s[3]],
+                [end, s[1], min(rows, s[2]), s[3]],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             host = ttnn.to_torch(sl, mesh_composer=composer).float()
@@ -540,6 +577,14 @@ class TtPrefillRuntime:
             _slot_block(kv_cache.v),
             _slot_block(kv_cache.index_k, collapse_tp=True),
         ]
+
+    def read_seq_len(self, n_tokens: int | None) -> int:
+        """Cache length (tokens) that ``read_slot_kv(n_tokens=...)`` returns: the first ``ceil(n_tokens /
+        chunk_size)`` chunks, i.e. the ``max_seq_len`` to pass to ``naturalize_kv_block`` for that block."""
+        if n_tokens is None:
+            return self.config.max_seq_len
+        chunk = self.config.chunk_size
+        return min(self.config.max_seq_len, -(-n_tokens // chunk) * chunk)
 
     def kv_cache_pcc_check(
         self,
