@@ -52,6 +52,8 @@ class BgeM3AttentionConfig:
     score_dtype: ttnn.DataType | None = None
     output_dtype: ttnn.DataType | None = None
     qkv_memcfg: ttnn.MemoryConfig | None = None
+    # QKV output placement when SDPA takes no mask; None uses qkv_memcfg.
+    qkv_nomask_memcfg: ttnn.MemoryConfig | None = None
     create_heads_memcfg: ttnn.MemoryConfig | None = None
     score_memcfg: ttnn.MemoryConfig | None = None
     output_memcfg: ttnn.MemoryConfig | None = None
@@ -154,10 +156,13 @@ class BgeM3Attention(LightweightModule):
             )
 
         # Stage 1: fused QKV projection
+        qkv_memcfg = self.config.qkv_memcfg
+        if attention_mask is None and self.config.qkv_nomask_memcfg is not None:
+            qkv_memcfg = self.config.qkv_nomask_memcfg
         qkv_fused = ttnn.linear(
             hidden_states,
             self.wqkv,
-            memory_config=self.config.qkv_memcfg,
+            memory_config=qkv_memcfg,
             dtype=self.config.qkv_dtype,
             bias=self.bqkv,
             program_config=self.config.qkv_prg_config,

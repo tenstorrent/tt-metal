@@ -57,6 +57,7 @@ class AttentionOptimizations:
     output_prg_config: object | None = None
     qkv_minimal_config: object | None = None
     output_minimal_config: object | None = None
+    qkv_nomask_memcfg: ttnn.MemoryConfig | None = None
 
 
 @dataclass
@@ -201,6 +202,7 @@ def _build_attention_optimizations(mesh_device, max_seq_len, max_batch, dtype, h
         ),
         score_compute_kernel_cfg=sdpa_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
         qkv_memcfg=act_mem,
+        qkv_nomask_memcfg=_qkv_nomask_output_memory_config(max_seq_len, max_batch, mesh_device),
         create_heads_memcfg=_create_heads_output_memory_config(max_seq_len, max_batch, mesh_device),
         score_memcfg=act_mem,
         output_memcfg=_attention_output_memory_config(max_seq_len, max_batch, mesh_device),
@@ -286,6 +288,16 @@ def _attention_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     if max_seq_len == 512 and max_batch in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch)
+
+
+def _qkv_nomask_output_memory_config(max_seq_len, max_batch_size, mesh_device):
+    # B32 writes the fused QKV output to L1 when SDPA takes no mask: sustained
+    # 52.884 ms to 49.830 ms. The masked SDPA circular buffers overlap it by 243 KB,
+    # so the masked path keeps it in DRAM. Placement does not change the result.
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        return ttnn.L1_MEMORY_CONFIG
+    return None
 
 
 def _create_heads_output_memory_config(max_seq_len, max_batch_size, mesh_device):

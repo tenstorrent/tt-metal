@@ -193,6 +193,7 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
             output_compute_kernel_cfg=attn_opts.output_compute_kernel_cfg,
             score_compute_kernel_cfg=attn_opts.score_compute_kernel_cfg,
             qkv_memcfg=attn_opts.qkv_memcfg,
+            qkv_nomask_memcfg=attn_opts.qkv_nomask_memcfg,
             create_heads_memcfg=attn_opts.create_heads_memcfg,
             score_memcfg=attn_opts.score_memcfg,
             output_memcfg=attn_opts.output_memcfg,
