@@ -30,9 +30,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        compressor_state_exchange.cpp
-        device/compressor_state_select.cpp
-        device/compressor_state_select_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_COMPRESSOR_STATE_EXCHANGE_SRCS}
 )
 
 target_link_libraries(
