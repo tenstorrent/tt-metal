@@ -34,11 +34,17 @@ void kernel_main() {
     const auto weights = TensorAccessor(tensor::weights);
 
     // The local weight cache exists only for the embeddings types that serve some weight rows out of
-    // local SRAM, so it is bound (and named) only on those builds.
+    // local SRAM, so it is bound (and named) only on those builds. On Quasar it is a scratchpad
+    // (scratch::local_cache), not a self-loop DFB.
+#ifdef ARCH_QUASAR
+#define LOCAL_CACHE_BINDING scratch::local_cache
+#else
+#define LOCAL_CACHE_BINDING dfb::local_cache
+#endif
 #if defined PADDED
-    prepare_local_cache(noc, dfb::local_cache, weights, weight_stick_size, get_arg(args::pad_token));
+    prepare_local_cache(noc, LOCAL_CACHE_BINDING, weights, weight_stick_size, get_arg(args::pad_token));
 #elif defined BINARY
-    prepare_local_cache(noc, dfb::local_cache, weights, weight_stick_size);
+    prepare_local_cache(noc, LOCAL_CACHE_BINDING, weights, weight_stick_size);
 #endif
 
     // dfb_in0 stages the weight sticks this reader gathers; a writer kernel drains it to the output

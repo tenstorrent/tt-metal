@@ -149,6 +149,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     const ScratchpadSpecName INDEX_SCRATCH_SP{"index_scratch_sp"};
     const DFBSpecName OUTPUT{"output"};
     const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+    // On Quasar the weight cache is a node-local scratchpad too (same Gen2 self-loop rule as the index
+    // scratch): the reader fills it and reads tokens back out of it, both over the NoC.
+    const ScratchpadSpecName WEIGHT_CACHE_SP{"weight_cache_sp"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName WEIGHTS_PARAM{"weights"};
@@ -214,12 +217,18 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = WEIGHT_CACHE,
-            .entry_size = cache_page_size,
-            .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
-            .data_format_metadata = weights_data_format,
-        });
+        const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
+        if (index_as_scratchpad) {
+            scratchpads.push_back(
+                ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
+        } else {
+            spec.dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = WEIGHT_CACHE,
+                .entry_size = cache_page_size,
+                .num_entries = cache_entries,
+                .data_format_metadata = weights_data_format,
+            });
+        }
     }
     uint32_t weight_block_size;
     if (output_sharded) {
@@ -276,17 +285,23 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     }
     if (use_local_cache) {
         // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel.
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        // hand-off to another kernel. On Quasar that self-loop is illegal, so bind a node-local
+        // scratchpad once instead (same "local_cache" accessor -> scratch::local_cache vs dfb::local_cache).
+        if (index_as_scratchpad) {
+            reader_scratchpad_bindings.push_back(
+                KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
+        } else {
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = WEIGHT_CACHE,
+                .accessor_name = "local_cache",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            reader_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = WEIGHT_CACHE,
+                .accessor_name = "local_cache",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
     }
 
     // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
