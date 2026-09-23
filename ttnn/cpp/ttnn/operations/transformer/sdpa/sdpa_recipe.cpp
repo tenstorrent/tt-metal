@@ -45,8 +45,18 @@ uint32_t recipe_q_tiles(const std::optional<SDPAProgramConfig>& program_config) 
     return q_chunk / 32;
 }
 
+uint32_t recipe_k_tiles(const std::optional<SDPAProgramConfig>& program_config) {
+    const uint32_t k_chunk = program_config ? program_config->k_chunk_size : 512;
+    // QK/PV subblocks are four tiles wide; the early max-reduce trigger needs at least two of them.
+    TT_FATAL(
+        k_chunk == 256 || k_chunk == 384 || k_chunk == 512,
+        "Named SDPA recipes support K chunks of 256, 384 or 512 rows, got {}",
+        k_chunk);
+    return k_chunk / 32;
+}
+
 ProgramDescriptor recipe_compute_program(
-    const PrecisionPolicy& policy, const CoreRangeSet& grid, uint32_t k_chunks, uint32_t q_tiles) {
+    const PrecisionPolicy& policy, const CoreRangeSet& grid, uint32_t k_chunks, uint32_t q_tiles, uint32_t k_tiles) {
     const bool fp32 = policy.fp32_destination;
     const bool compensated = policy.recurrent_state == RecurrentState::CompensatedBF16;
     const uint32_t stride = compensated ? 2 : 1;
@@ -72,12 +82,12 @@ ProgramDescriptor recipe_compute_program(
     // K/V one slot for FP32, two slots for BF16. No hidden geometry retuning.
     // Q-row buffers scale with the Q chunk; K/V depths and per-row state do not change.
     add_cb(0, 2 * q_tiles * 4, 2048, tt::DataFormat::Float16_b);
-    add_cb(1, fp32 ? 64 : 128, kv_bytes, kv_format);
-    add_cb(2, fp32 ? 64 : 128, kv_bytes, kv_format);
+    add_cb(1, k_tiles * 4 * (fp32 ? 1 : 2), kv_bytes, kv_format);
+    add_cb(2, k_tiles * 4 * (fp32 ? 1 : 2), kv_bytes, kv_format);
     add_cb(3, 1, 2048, tt::DataFormat::Float16_b);
     add_cb(4, 1, 2048, tt::DataFormat::Float16_b);
     add_cb(5, 1, state_bytes, state_format);
-    add_cb(6, q_tiles * 16, state_bytes, state_format);
+    add_cb(6, q_tiles * k_tiles, state_bytes, state_format);
     for (uint8_t index : {8, 9}) {
         add_cb(index, q_tiles * 4 * stride, state_bytes, state_format);
     }
@@ -103,7 +113,7 @@ ProgramDescriptor recipe_compute_program(
     KernelDescriptor compute{
         .kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_recipe.cpp",
         .core_ranges = grid,
-        .compile_time_args = {k_chunks, std::bit_cast<uint32_t>(1.0f / std::sqrt(128.0f)), q_tiles},
+        .compile_time_args = {k_chunks, std::bit_cast<uint32_t>(1.0f / std::sqrt(128.0f)), q_tiles, k_tiles},
         .defines =
             {{"EXP_APPROX_MODE", "1"},
              {"STATS_GRANULARITY", fp32 ? "4" : "8"},
@@ -151,7 +161,8 @@ PrecisionPolicy resolve_recipe_policy(
 }
 
 // Reject a recipe CB layout that cannot fit the device's unreserved L1.
-static void check_recipe_l1_fit(const ProgramDescriptor& program, IDevice& device, uint32_t q_chunk) {
+static void check_recipe_l1_fit(
+    const ProgramDescriptor& program, IDevice& device, uint32_t q_chunk, uint32_t k_chunk) {
     uint64_t bytes = 0;
     for (const auto& cb : program.cbs) {
         bytes += cb.total_size;
@@ -160,9 +171,10 @@ static void check_recipe_l1_fit(const ProgramDescriptor& program, IDevice& devic
         device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     TT_FATAL(
         bytes <= available,
-        "SDPA recipe needs {} bytes of L1 per core at Q{}/K512, but only {} are available; use a smaller Q chunk",
+        "SDPA recipe needs {} bytes of L1 per core at Q{}/K{}, but only {} are available; use a smaller Q or K chunk",
         bytes,
         q_chunk,
+        k_chunk,
         available);
 }
 
@@ -226,13 +238,14 @@ static std::vector<Tensor> run_recipe_segments(
         q_tiles % 2 == 0 || policy.recurrent_state != RecurrentState::CompensatedBF16,
         "COMPENSATED and LOW_PRECISION recipes pair query tile rows and need a Q chunk that is a multiple of 64, got {}",
         q_chunk);
+    const uint32_t k_tiles = recipe_k_tiles(program_config);
+    const uint32_t k_chunk = k_tiles * 32;
     if (program_config) {
-        TT_FATAL(program_config->k_chunk_size == 512, "Named SDPA recipes currently require K512 blocking");
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");
         TT_FATAL(program_config->max_cores_per_head_batch > 0, "SDPA max_cores_per_head_batch must be positive");
     }
     const uint32_t jobs_per_head = (q_length + q_chunk - 1) / q_chunk;
-    const uint32_t k_chunks = (k_length + 511) / 512;
+    const uint32_t k_chunks = (k_length + k_chunk - 1) / k_chunk;
     TT_FATAL(
         qs[1] <= grid_size.x * grid_size.y && qs[0] <= grid_size.x * grid_size.y / qs[1],
         "SDPA recipes require at least one compute core per batch/query head");
@@ -256,9 +269,9 @@ static std::vector<Tensor> run_recipe_segments(
         outputs.push_back(create_device_tensor(segment[0].tensor_spec(), q.device()));
     }
     const auto& output = outputs.front();
-    auto program = recipe_compute_program(policy, grid, k_chunks, q_tiles);
-    check_recipe_l1_fit(program, *q.device(), q_chunk);
-    if (k_length % 512 != 0 || k.logical_shape()[2] % 32 != 0 || joint_k_rows % 32 != 0) {
+    auto program = recipe_compute_program(policy, grid, k_chunks, q_tiles, k_tiles);
+    check_recipe_l1_fit(program, *q.device(), q_chunk, k_chunk);
+    if (k_length % k_chunk != 0 || k.logical_shape()[2] % 32 != 0 || joint_k_rows % 32 != 0) {
         program.kernels.front().defines.emplace_back(
             "SDPA_RECIPE_K_PRIMARY_ROWS", std::to_string(k.logical_shape()[2]));
         program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_JOINT_ROWS", std::to_string(joint_k_rows));
@@ -276,6 +289,7 @@ static std::vector<Tensor> run_recipe_segments(
     if (segments.size() == 2) {
         reader.defines.emplace_back("SDPA_JOINT", "1");
     }
+    reader.defines.emplace_back("SDPA_K_CHUNK_TILES", std::to_string(k_tiles));
     if (qs[1] != k.logical_shape()[1]) {
         reader.defines.emplace_back("SDPA_RECIPE_Q_PER_KV_HEAD", std::to_string(qs[1] / k.logical_shape()[1]));
     }

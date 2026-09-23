@@ -83,6 +83,9 @@ struct AccumulatorHalf {
 // Q chunks up to 320 rows (10 tiles) form at most five BF16 row pairs.
 constexpr uint32_t kRecipeMaxQTiles = 10;
 constexpr uint32_t kRecipeMaxRowGroups = kRecipeMaxQTiles / 2;
+// K256/K384/K512: whole 4-wide QK/PV subblocks, at least two per chunk for the early max reduce.
+template <uint32_t Sk_chunk_t>
+constexpr bool kRecipeValidKTiles = Sk_chunk_t == 8 || Sk_chunk_t == 12 || Sk_chunk_t == 16;
 
 struct RecipeAccumulatorState {
     AccumulatorHalf prev, cur;
@@ -1060,7 +1063,8 @@ static void sdpa_inner_loop_step(
 #else
     // Row groups pair two query tile rows; odd Q chunks need a single-row group (not yet supported).
     static_assert(
-        Sq_chunk_t % 2 == 0 && Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && Sk_chunk_t == 16 && vDHt == 4 &&
+        Sq_chunk_t % 2 == 0 && Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> &&
+        vDHt == 4 &&
         qkt_subblock_h == 2 && qktv_subblock_h == 2);
 #endif
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
@@ -1318,7 +1322,8 @@ static void sdpa_inner_loop_step(
 
 #ifdef SDPA_RECIPE_FP32
         static_assert(
-            Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && Sk_chunk_t == 16 && vDHt == 4 && qktv_h == 1);
+            Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt == 4 &&
+            qktv_h == 1);
         // FP32 recipes use single-row QK and PV groups, so odd Q chunks need no remainder group.
         uint32_t inplace_numerator = !is_first_iter;
         if (inplace_numerator) {
@@ -1821,7 +1826,8 @@ template <
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
-    static_assert(Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && Sk_chunk_t == 16 && DHt == 4 && vDHt == 4);
+    static_assert(
+        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == 4 && vDHt == 4);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;

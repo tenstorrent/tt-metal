@@ -31,6 +31,8 @@ void kernel_main() {
     constexpr uint32_t k_chunks = get_compile_time_arg_val(0);
     constexpr uint32_t scale = get_compile_time_arg_val(1);
     constexpr uint32_t q_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t k_tiles = get_compile_time_arg_val(3);
+    static_assert(k_tiles == 8 || k_tiles == 12 || k_tiles == 16, "Named recipes support K256/K384/K512");
     const uint32_t jobs = get_arg_val<uint32_t>(0);
     static_assert(q_tiles >= 4 && q_tiles <= 10, "Named recipes support Q128-Q320");
     // Odd Q chunks use single-row QK/PV subblocks for FAST; subblock height only
@@ -45,9 +47,9 @@ void kernel_main() {
         DeviceZoneScopedN("SDPA_RECIPE");
         sdpa_standard_v2<
             q_tiles,
-            16,
+            k_tiles,
 #ifdef SDPA_RECIPE_BASELINE
-            16 * k_chunks,
+            k_tiles * k_chunks,
 #endif
             4,
             4,
