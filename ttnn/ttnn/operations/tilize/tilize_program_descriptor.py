@@ -41,6 +41,7 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE_WIDTH = 32  # elements per tile row (a tile's width is always 32)
+FULL_TILE_HEIGHT = 32  # rows of a full (non-tiny) tile; tiny tiles are power-of-two fractions of it
 
 # CB slots (semantic names; the index is just a slot).
 CB_INPUT_STICKS = 0  # reader -> compute: tile_h stick segments per tile-row, block_width tile-sized pages
@@ -252,6 +253,7 @@ def create_program_descriptor(
     output_tensor: ttnn.Tensor,
     *,
     tile_h: int = 32,
+    in_tile_h: int | None = None,
     low_l1: bool = False,
 ) -> ttnn.ProgramDescriptor:
     device = input_tensor.device()
@@ -350,13 +352,17 @@ def create_program_descriptor(
         num_input_cbs, input_resident=input_resident, output_resident=output_resident
     )
     max_positions = core_row_tiles_max * _div_up(core_col_tiles_max, block_width)  # busiest core's walk length
+    # QUANTUM_MIN_TILES counts full 32-row tiles: a tiny tile carries tile_h / 32 of one
+    # tile's bytes and per-quantum costs are per handshake, so the floor scales with 32 / tile_h
+    # (at tile_h = 1 one "tile" is a single stick segment).
+    quantum_min_tiles = QUANTUM_MIN_TILES * (FULL_TILE_HEIGHT // tile_h)
     if split_reader:
         rows_per_quantum = 1
     else:
         rows_per_quantum = max(
             1,
             min(
-                _div_up(QUANTUM_MIN_TILES, block_width),
+                _div_up(quantum_min_tiles, block_width),
                 max_positions // DEPTH_IN,
                 CB_BUDGET_BYTES[low_l1] // max(1, per_row_bytes),
             ),

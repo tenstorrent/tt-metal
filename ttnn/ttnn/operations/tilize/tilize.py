@@ -217,7 +217,7 @@ SUPPORTED = {
     "pad_mode": ["none"],
     "pad_value": ["none"],
     "alignment": ["tile_aligned"],
-    "tile_height": [32],
+    "tile_height": list(LEGAL_TILE_HEIGHTS),
     "in_tile_height": ["none"],
     "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],
 }
@@ -430,6 +430,41 @@ def _check_well_formed(input_tensor, *, output_padded_shape, pad_value, tile):
 
 
 # ---------------------------------------------------------------------------
+# Output allocation
+# ---------------------------------------------------------------------------
+
+
+def _allocate_output(shape, dtype, device, mem_config, *, tile_h):
+    """Device tensor in Layout::TILE with tile [tile_h, 32] on `mem_config`.
+
+    allocate_tensor_on_device(shape, dtype, layout, device, mem_config) always
+    lays out 32x32 tiles, so a tiny output tile goes through a TensorSpec that
+    carries `tile` (the TensorSpec constructor takes the MemoryConfig's parts,
+    one overload per placement: interleaved, legacy 2-D shard, ND shard).
+    """
+    if tile_h == 32:
+        # CRITICAL: allocate_tensor_on_device takes positional args only.
+        return ttnn.allocate_tensor_on_device(shape, dtype, ttnn.TILE_LAYOUT, device, mem_config)
+    tile = ttnn.Tile([tile_h, TILE_WIDTH])
+    nd_spec = getattr(mem_config, "nd_shard_spec", None)
+    if nd_spec is not None and (mem_config.shard_spec is None or _created_with_nd_shard_spec(mem_config)):
+        spec = ttnn.TensorSpec(shape, dtype, ttnn.TILE_LAYOUT, nd_spec, mem_config.buffer_type, tile)
+    elif mem_config.memory_layout in _SHARDED_LAYOUTS:
+        spec = ttnn.TensorSpec(
+            shape,
+            dtype,
+            ttnn.TILE_LAYOUT,
+            mem_config.memory_layout,
+            mem_config.shard_spec,
+            mem_config.buffer_type,
+            tile,
+        )
+    else:
+        spec = ttnn.TensorSpec(shape, dtype, ttnn.TILE_LAYOUT, mem_config.buffer_type, tile)
+    return ttnn.allocate_tensor_on_device(spec, device)
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -460,16 +495,16 @@ def tilize(
     out_mem_config = memory_config if memory_config is not None else input_tensor.memory_config()
     out_dtype = _resolve_output_dtype(input_tensor, dtype)
     tile_h = _tile_height_of(tile) or 32
-
-    # CRITICAL: allocate_tensor_on_device takes positional args only.
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(list(input_tensor.shape)),
-        out_dtype,
-        ttnn.TILE_LAYOUT,
-        device,
-        out_mem_config,
+    output_tensor = _allocate_output(
+        ttnn.Shape(list(input_tensor.shape)), out_dtype, device, out_mem_config, tile_h=tile_h
     )
 
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, tile_h=tile_h, low_l1=low_l1)
+    program_descriptor = create_program_descriptor(
+        input_tensor,
+        output_tensor,
+        tile_h=tile_h,
+        in_tile_h=_input_tile_height(input_tensor),
+        low_l1=low_l1,
+    )
     # Output tensor MUST be last in the list.
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
