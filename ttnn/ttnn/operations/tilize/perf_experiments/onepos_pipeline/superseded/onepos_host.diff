@@ -1,0 +1,96 @@
+--- a/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
++++ b/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
+@@ -302,6 +302,25 @@
+ # ([1,1,2048,W], 64 cores: 128 B -14 %, 512 B -24 %, 1 KiB -17 %, 2 KiB -28 %). A sharded L1 input
+ # that streams (i.e. is not consumed resident) reads the same L1 banks through the accessor.
+ CO_READ_SEGMENT_BYTES = {ttnn.BufferType.DRAM: (0, 128), ttnn.BufferType.L1: (0, None)}
++
++# ---- Perf 2 onepos_pipeline (perf_experiments/onepos_pipeline/README.md). On a Tensix core whose
++# walk is ONE position (one tile-row of one column block) read -> tilize -> write run back to back.
++# ONEPOS_SUB_BLOCK_TILES > 0 cuts that tile-row into column sub-blocks of at most that many tiles
++# (never 1 tile): compute pushes each sub-block's tiles (raw WH fast-tilize LLK, the row stride
++# decoupled from the sub-block width: the helper cannot tilize a column slice of a wider row, and a
++# resident input shard's row IS wider) and the writer writes each one at once, in store_rows' tile
++# order (the production order starts at the sub-block holding the rotated first tile; a column-order
++# start put the Tensix cores' first writes on half the DRAM banks: +8.6 % [1,1,32,8192], +13 %
++# [1,1,64,4096]). On a RESIDENT output (the writer RISC-V idle) with the plain stick reader, the
++# reader lands the tile-row as 2 column parts (one transaction id each) instead, while each part's
++# stick segment keeps >= ONEPOS_SPLIT_MIN_PART_BYTES, and compute tilizes part 0 while part 1 lands
++# (256-B parts: +11 % on [1,1,2048,512] DRAM -> HEIGHT_SHARDED). 0 = off (the op's kernels exactly).
++# Measured WH B0, 64 Tensix cores, device-kernel ns, medians of 10 / 6, off -> on:
++#   [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM   17189 -> 15823 (-7.9 %)
++#   [1,1,2048,512] DRAM -> HEIGHT_SHARDED L1   12105 -> 11859 (-2.0 %)
++#   L1-interleaved source, resident inputs of other widths / dtypes: -4 .. -7 %; DRAM -> DRAM: flat
++ONEPOS_SUB_BLOCK_TILES = 2
++ONEPOS_SPLIT_MIN_PART_BYTES = 512
+
+
+ # ---- Numeric formats (Refinement 7). cb_input_sticks carries the input dtype and cb_output_tiles
+@@ -965,6 +984,34 @@
+                 )
+             ],
+         )
++
++    # ---------------- onepos_pipeline (ONEPOS_SUB_BLOCK_TILES) ----------------
++    # Engaged per program when some Tensix core's walk is one position; each kernel re-checks its own
++    # core's walk at run time, so a mixed grid runs the plain path on its multi-position cores.
++    onepos = {}  # kernel file -> extra defines
++    if (
++        ONEPOS_SUB_BLOCK_TILES > 0
++        and "wormhole" in str(device.arch()).lower()  # raw WH LLK (port the BH fast-tilize branch first)
++        and not split_reader
++        and any(rows * _div_up(cols, block_width) == 1 for _, _, rows, _, cols in assignment)
++    ):
++        if not output_resident:
++            common = [("ONEPOS_NSB", str(_div_up(block_width, max(2, ONEPOS_SUB_BLOCK_TILES))))]
++            onepos = {"tilize_reader.cpp": common, "tilize_writer.cpp": common, "tilize_compute.cpp": common}
++        elif (
++            stick_reader
++            and not padded
++            and co_read == 0
++            and not coalesce
++            and pages_per_stick == 1
++            and block_width * TILE_WIDTH * in_elem_bytes // 2 >= ONEPOS_SPLIT_MIN_PART_BYTES
++        ):
++            common = [("ONEPOS_NSB", "2"), ("ONEPOS_NO_ROTATE", "1")]  # a resident output packs in column order
++            onepos = {
++                "tilize_reader.cpp": common + [("ONEPOS_SPLIT_READS", "1")],
++                "tilize_writer.cpp": common,
++                "tilize_compute.cpp": common,
++            }
+
+     # ---------------- kernel args ----------------
+     # CT args: config only (dtype pair, tile, block_width, residency, accessor args) ->
+@@ -1077,11 +1124,12 @@
+             in_addr,
+             stick_rotation,
+         ]
+-        compute_rt_args[core.x][core.y] = [core_row_tiles, core_col_tiles]
++        # onepos: RT arg 2 = stick_rotation (compute derives the writer's first sub-block from it)
++        compute_rt_args[core.x][core.y] = [core_row_tiles, core_col_tiles] + ([stick_rotation] if onepos else [])
+
+     reader_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+-        defines=_kernel_defines(),
++        defines=_kernel_defines() + onepos.get("tilize_reader.cpp", []),
+         core_ranges=all_cores,
+         compile_time_args=reader_ct_args,
+         runtime_args=reader_rt_args,
+@@ -1095,7 +1143,7 @@
+     )
+     writer_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+-        defines=_kernel_defines(),
++        defines=_kernel_defines() + onepos.get("tilize_writer.cpp", []),
+         core_ranges=all_cores,
+         compile_time_args=writer_ct_args,
+         runtime_args=writer_rt_args,
+@@ -1109,7 +1157,7 @@
+     )
+     compute_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+-        defines=_kernel_defines(),
++        defines=_kernel_defines() + onepos.get("tilize_compute.cpp", []),
+         core_ranges=all_cores,
+         compile_time_args=compute_ct_args,
+         runtime_args=compute_rt_args,

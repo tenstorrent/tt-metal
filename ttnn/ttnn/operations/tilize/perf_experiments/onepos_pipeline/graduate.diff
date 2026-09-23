@@ -1,0 +1,416 @@
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_compute.cpp
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_compute.cpp
+@@ -29,6 +29,13 @@
+ // input (Float32 / Int32 / UInt32) is tagged UnpackToDestFp32 on the host and runs with
+ // fp32_dest_acc_en=true, so the helper is asked for Fp32Mode::Lossless: tilize IS the final
+ // consumer here, so the fast path's fp32 -> tf32 truncation would corrupt the output.
++//
++// Column sub-blocks (define TILIZE_SUB_BLOCK_TILES, Perf 2 onepos_pipeline; host knob
++// SUB_BLOCK_TILES): each tile-row is tilized as column sub-blocks of that many tiles in the
++// writer's rotated production order (tilize_sub_blocks.hpp), pushing each sub-block's output pages
++// as soon as it is packed, so the writer's tile writes start after the first sub-block instead of
++// after the whole tile-row. RT arg 2 = stick_rotation (the writer's first column). Raw WH LLK: see
++// tilize_cols_fast below for what the helper cannot express and the measured helper-vs-raw ns.
+
+ #include <cstdint>
+
+@@ -75,6 +82,144 @@
+
+ }  // namespace
+
++#if defined(TILIZE_SUB_BLOCK_TILES) && defined(ARCH_WORMHOLE)
++#include "tilize_sub_blocks.hpp"
++namespace tilize_sub_blocks {
++
++// RAW LLK — HELPER BYPASS (compute_kernel_lib::tilize, tilize_helpers.hpp). Kind: compute, tilize
++// of a COLUMN SLICE of a wider tile-row. What the helper cannot express: it (and the compute API
++// fast_tilize_block / tilize_block under it, tt_metal/hw/inc/api/compute/tilize.h) ties the
++// unpacker's row stride to the width being tilized (WH fast_tilize_block: `full_dim = block`;
++// llk_unpack_tilize_block(icb, block_c_tiles, ...) passes block_c_tiles as the stride) and takes no
++// column offset inside the row. A tile-row's sticks in cb_input_sticks (or in a resident input shard)
++// have stride block_width tiles, so a 2-tile sub-block needs stride = block_width with width = 2 at
++// column offset `in_col`. The WH unpack LLK takes them separately:
++// llk_unpack_fast_tilize_block(icb, tile_index, unit_dim, num_units, full_dim) and
++// llk_unpack_tilize(icb, tile_index, block_ct_dim). tilize_cols_fast / tilize_cols_slow are the WH
++// branches of fast_tilize_block / tilize_block with full_dim decoupled from the sub-block width;
++// init / uninit and the fast-vs-lossless selection mirror the helper's InitAndUninit call
++// (NoReconfigure, as the helper call below: compute_kernel_hw_startup configured these CBs).
++// Measured (WH B0 n150, 64 Tensix cores, DEVICE KERNEL DURATION, same-session medians, bit-exact):
++//   LOOSE_CASES[7] [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM: helper (whole row) 16997 ns vs raw
++//   2-tile sub-blocks 15568 ns (-8.4 %, n=6); 16950 vs 15856 ns (-6.5 %, n=8). TRISC_2 kernel span
++//   1672 (helper) -> 1878 cycles (raw), hidden under the writes: writer_wait 1361 -> 385 cycles.
++//   Do not revert to the helper without re-measuring (perf_experiments/onepos_pipeline/README.md).
++// WH only: the BH fast-tilize LLK has another signature (unit chunks, row begin / end); the host
++// engages this path on Wormhole only.
++ALWI void tilize_cols_fast(uint32_t icb, uint32_t block, uint32_t full_dim, uint32_t ocb, uint32_t in_col) {
++    uint32_t packed_tiles = 0;
++    uint32_t remaining_tiles = block;
++    constexpr uint32_t dest_size = DST_ACCUM_MODE ? 4 : 8;
++    const uint32_t unit_dim = full_dim == 1 ? 1 : 2;  // what fast_tilize_init(icb, full_dim, ocb) programmed
++    uint32_t num_units = dest_size / unit_dim;
++    while (packed_tiles < block) {
++        const uint32_t read_tile_index = in_col + packed_tiles;
++        const uint32_t write_tile_index = packed_tiles;
++        MATH((llk_math_wait_for_dest_available()));
++        PACK((llk_packer_wait_for_math_done()));
++        if (remaining_tiles > 2 * dest_size) {
++            UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
++            MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
++            PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
++            packed_tiles += dest_size;
++            remaining_tiles -= dest_size;
++        } else if (remaining_tiles > dest_size) {
++            const uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
++            num_units = even_remainder / unit_dim;
++            UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
++            MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
++            PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
++            packed_tiles += even_remainder;
++            remaining_tiles -= even_remainder;
++        } else {
++            if (remaining_tiles % 2 == 0 || unit_dim == 1) {
++                num_units = remaining_tiles / unit_dim;
++                UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
++                MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
++                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
++            } else if (remaining_tiles == 3) {
++                UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, 3, 1, full_dim)));
++                MATH((llk_math_fast_tilize_block_(0, icb, 3, 1)));
++                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, 3, 1)));
++            } else {
++                num_units = (remaining_tiles - 3) / unit_dim;
++                UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index, unit_dim, num_units, full_dim)));
++                MATH((llk_math_fast_tilize_block_(0, icb, unit_dim, num_units)));
++                PACK((llk_pack_fast_tilize_block(0, ocb, write_tile_index, unit_dim, num_units)));
++                UNPACK((llk_unpack_fast_tilize_block(icb, read_tile_index + remaining_tiles - 3, 3, 1, full_dim)));
++                MATH((llk_math_fast_tilize_block_(remaining_tiles - 3, icb, 3, 1)));
++                PACK((llk_pack_fast_tilize_block(remaining_tiles - 3, ocb, write_tile_index + remaining_tiles - 3, 3, 1)));
++            }
++            packed_tiles += remaining_tiles;
++            remaining_tiles = 0;
++        }
++        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
++        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
++    }
++}
++
++// The slow (lossless fp32 / tiny tile / non-fast-format) tilize of a column slice: tilize_block's WH
++// body with llk_unpack_tilize(icb, column, full_dim) per tile instead of llk_unpack_tilize_block.
++ALWI void tilize_cols_slow(uint32_t icb, uint32_t block, uint32_t full_dim, uint32_t ocb, uint32_t in_col) {
++    for (uint32_t t = 0; t < block; ++t) {
++        UNPACK((llk_unpack_tilize(icb, in_col + t, full_dim)));
++    }
++    for (uint32_t t = 0; t < block; ++t) {
++        MATH((llk_math_wait_for_dest_available()));
++        PACK((llk_packer_wait_for_math_done()));
++        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
++            0, icb)));
++        PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0, ocb, t)));
++        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
++        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
++    }
++}
++
++// num_blocks tile-rows (the walk's positions, column block outer: Walker order), each block_width
++// pages in cb_in, tilized as SubBlocks<block_width, sb_tiles> column sub-blocks in production order.
++template <uint32_t block_width, uint32_t cb_in, uint32_t cb_out, Fp32Mode fp32_mode, uint32_t sb_tiles>
++ALWI void tilize_rows(uint32_t num_blocks, uint32_t core_row_tiles, uint32_t core_col_tiles, uint32_t stick_rotation) {
++    using SB = SubBlocks<block_width, sb_tiles>;
++    constexpr bool lossless = fp32_mode == Fp32Mode::Lossless && compute_kernel_lib::is_fp32_input_format<cb_in>();
++    constexpr bool use_fast = compute_kernel_lib::can_use_fast_tilize<block_width, cb_in, cb_out>() && !lossless;
++    if constexpr (use_fast) {
++        fast_tilize_init(cb_in, block_width, cb_out);
++    } else {
++        tilize_init(cb_in, block_width, cb_out);
++    }
++    uint32_t row_in_block = 0;
++    uint32_t cols_left = core_col_tiles;  // tile-columns of this column block onwards
++    for (uint32_t seq = 0; seq < num_blocks; ++seq) {
++        const uint32_t valid_width = cols_left < block_width ? cols_left : block_width;
++        const uint32_t j0 = SB::start(stick_rotation, valid_width);
++        cb_wait_front(cb_in, block_width);
++        for (uint32_t p = 0; p < SB::n; ++p) {
++            const uint32_t k = SB::at(j0, p);
++            const uint32_t w = SB::width(k);
++            cb_reserve_back(cb_out, w);
++            if constexpr (use_fast) {
++                tilize_cols_fast(cb_in, w, block_width, cb_out, SB::first(k));
++            } else {
++                tilize_cols_slow(cb_in, w, block_width, cb_out, SB::first(k));
++            }
++            cb_push_back(cb_out, w);
++        }
++        cb_pop_front(cb_in, block_width);
++        if (++row_in_block == core_row_tiles) {
++            row_in_block = 0;
++            cols_left -= valid_width;
++        }
++    }
++    if constexpr (use_fast) {
++        fast_tilize_uninit(cb_in, cb_out, block_width);
++    } else {
++        tilize_uninit(cb_in, cb_out);
++    }
++}
++
++}  // namespace tilize_sub_blocks
++#endif  // TILIZE_SUB_BLOCK_TILES && ARCH_WORMHOLE
++
+ void kernel_main() {
+     constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(0);
+     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(1);
+@@ -94,6 +239,15 @@
+     // cb_reserve_back (pack), so this zone includes starvation on the reader and back-pressure
+     // from the writer.
+     MaybeDeviceZoneScope("compute_tilize");
++#if defined(TILIZE_SUB_BLOCK_TILES) && defined(ARCH_WORMHOLE)
++    // Host-engaged (SUB_BLOCK_TILES) where the writer streams the output with store_rows (not
++    // resident, no split reader) and block_width >= 4 (n > 1), on every walk: the writer makes the
++    // same decision from the same define.
++    static_assert(!split_reader, "sub-blocks: one input CB");
++    static_assert(tilize_sub_blocks::SubBlocks<block_width, TILIZE_SUB_BLOCK_TILES>::n > 1, "host: block_width >= 4");
++    tilize_sub_blocks::tilize_rows<block_width, cb_input_sticks, cb_output_tiles, fp32_mode, TILIZE_SUB_BLOCK_TILES>(
++        num_blocks, core_row_tiles, core_col_tiles, get_arg_val<uint32_t>(2));
++#else
+     if constexpr (!split_reader) {
+         compute_kernel_lib::tilize<
+             block_width,
+@@ -114,4 +268,5 @@
+             }
+         }
+     }
++#endif  // TILIZE_SUB_BLOCK_TILES && ARCH_WORMHOLE
+ }
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_writer.cpp
+@@ -33,12 +33,72 @@
+ // cb_output_tiles is backed on this Tensix core's own output shard and compute
+ // packs straight into it, so store_block issues no NoC write; this kernel only
+ // waits for the shard to be complete (it stays the CB's single consumer).
++//
++// Column sub-blocks (define TILIZE_SUB_BLOCK_TILES, Perf 2 onepos_pipeline; host knob
++// SUB_BLOCK_TILES): compute pushes each tile-row as column sub-blocks in production order
++// (tilize_sub_blocks.hpp), and store_row_sub_blocked writes each sub-block as soon as it is packed
++// instead of waiting for the whole tile-row, in exactly store_rows' tile order.
+
+ #include <cstdint>
+
+ #include "api/dataflow/dataflow_api.h"
+ #include "tilize_stick_reads.hpp"
+
++#if defined(TILIZE_SUB_BLOCK_TILES) && defined(ARCH_WORMHOLE)
++#include "tilize_sub_blocks.hpp"
++namespace tilize_sub_blocks {
++
++// store_rows (tilize_stick_reads.hpp) for ONE tile-row whose pages compute pushes as
++// SubBlocks<block_width, sb_tiles> sub-blocks in production order. store_rows writes columns
++// t0, t0 + 1, ..., wrapping (t0 = col_rotation mod valid_width); here that sequence is regrouped
++// by sub-block: sub-block j0 (holding t0) is produced first and its columns [t0, end) written at
++// once, the other sub-blocks follow as they land, and j0's columns [first, t0) go last. Pops the
++// tile-row's block_width pages. Zones as store_rows' (writer_issue also covers the waits on the
++// later sub-blocks, which interleave with the writes).
++template <uint32_t cb, uint32_t block_width, uint32_t out_tile_bytes, uint32_t sb_tiles, typename Accessor, typename Walk>
++FORCE_INLINE void store_row_sub_blocked(const Accessor& accessor, Walk& walk, uint32_t tiles_per_row, uint32_t col_rotation) {
++    using SB = SubBlocks<block_width, sb_tiles>;
++    const uint32_t row_tile_idx = walk.row() * tiles_per_row + walk.first_col();
++    const uint32_t valid_width = walk.valid_width();
++    const uint32_t base = get_read_ptr(cb);
++    const uint32_t t0 = col_rotation % valid_width;
++    const uint32_t j0 = SB::start(col_rotation, valid_width);
++    auto write_cols = [&](uint32_t cb_off, uint32_t first, uint32_t lo, uint32_t hi) {
++        for (uint32_t c = lo; c < hi; ++c) {
++            noc_async_write(
++                base + (cb_off + c - first) * out_tile_bytes, accessor.get_noc_addr(row_tile_idx + c), out_tile_bytes);
++        }
++    };
++    {
++        MaybeDeviceZoneScope("writer_wait");  // starved on read + the first sub-block's tilize
++        cb_wait_front(cb, SB::width(j0));
++    }
++    {
++        MaybeDeviceZoneScope("writer_issue");
++        uint32_t cb_off = 0;  // CB page of the current sub-block's first tile (production order)
++        for (uint32_t p = 0; p < SB::n; ++p) {
++            const uint32_t k = SB::at(j0, p);
++            const uint32_t first = SB::first(k);
++            const uint32_t end = first + SB::width(k);
++            if (p != 0) {
++                cb_wait_front(cb, cb_off + SB::width(k));
++            }
++            write_cols(cb_off, first, p == 0 ? t0 : first, end < valid_width ? end : valid_width);
++            cb_off += SB::width(k);
++        }
++        write_cols(0, SB::first(j0), SB::first(j0), t0);
++    }
++    {
++        MaybeDeviceZoneScope("writer_flush");  // the tile-row's L1 source reads done (not landed)
++        noc_async_writes_flushed();
++    }
++    cb_pop_front(cb, block_width);
++    walk.advance();
++}
++
++}  // namespace tilize_sub_blocks
++#endif  // TILIZE_SUB_BLOCK_TILES && ARCH_WORMHOLE
++
+ void kernel_main() {
+     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
+     constexpr uint32_t block_width = get_compile_time_arg_val(1);     // tiles per column block (CB quantum)
+@@ -116,6 +176,21 @@
+     tilize_dataflow::Walker<block_width> store_walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+     const uint32_t num_positions = store_walk.num_positions();
+
++#if defined(TILIZE_SUB_BLOCK_TILES) && defined(ARCH_WORMHOLE)
++    // Host-engaged (SUB_BLOCK_TILES) wherever this RISC-V streams the output with store_rows (no
++    // split reader, one write quantum in flight, no write NoC split), on every walk; compute makes
++    // the same decision from the same define.
++    static_assert(
++        !output_resident && !split_reader && write_ahead == 1 && write_noc_split == 0, "sub-blocks: store_rows path");
++    for (uint32_t seq = 0; seq < num_positions; ++seq) {
++        tilize_sub_blocks::store_row_sub_blocked<cb_output_tiles, block_width, out_tile_bytes, TILIZE_SUB_BLOCK_TILES>(
++            output_accessor, store_walk, tiles_per_row, stick_rotation);
++    }
++    MaybeDeviceZoneScope("writer_barrier");  // every tile write landed
++    noc_async_write_barrier();
++    return;
++#endif
++
+     // Split reader runs one tile-row per quantum (host-enforced), so this stores one position.
+     auto store_next = [&]() {
+         tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes>(
+--- /dev/null
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_sub_blocks.hpp
+@@ -0,0 +1,46 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Column sub-blocks of one tile-row (Perf 2, onepos_pipeline), shared by compute and the writer.
++//
++// Compute tilizes a tile-row of block_width tiles as column sub-blocks and pushes each sub-block's
++// output pages as soon as it is packed; the writer waits for them cumulatively and writes each
++// sub-block at once. On a one-position walk (the Tensix core owns ONE tile-row of one column block)
++// read -> tilize -> write otherwise run strictly back to back: the writer idles for the whole
++// tilize before its first tile write.
++//
++// Sub-block k covers tile-columns [first(k), first(k) + width(k)) of the tile-row. Every sub-block is
++// at least 2 tiles wide: on a row wider than one tile the WH fast-tilize unit is 2 tiles (1-tile
++// units are only legal when the whole row is 1 tile, tilize.h WH branch), so a trailing 1-tile
++// remainder is merged into the previous sub-block. n == 1 means "nothing to cut" (block_width <= 3).
++//
++// Production order: step p handles sub-block (j0 + p) mod n, where j0 holds the tile the op's
++// store_rows writes first (it rotates every tile-row's writes to start at column
++// stick_rotation mod valid_width, which spreads the Tensix cores' first writes over all DRAM banks).
++// Compute and the writer derive j0 identically, so the output CB's page counts stay cumulative in
++// production order. Measured: a column-order start put every Tensix core's first sub-block on half
++// the DRAM banks (+8.6 % [1,1,32,8192], +13 % [1,1,64,4096]).
++
++#pragma once
++
++#include <cstdint>
++
++namespace tilize_sub_blocks {
++
++template <uint32_t block_width, uint32_t sb_tiles>
++struct SubBlocks {
++    static constexpr uint32_t sb = sb_tiles < 2 ? 2 : sb_tiles;
++    static constexpr uint32_t n_raw = block_width <= sb ? 1 : (block_width + sb - 1) / sb;
++    static constexpr uint32_t rem = block_width - (n_raw - 1) * sb;
++    static constexpr uint32_t n = (n_raw > 1 && rem == 1) ? n_raw - 1 : n_raw;  // merge a 1-tile tail
++    static constexpr uint32_t first(uint32_t k) { return k * sb; }
++    static constexpr uint32_t width(uint32_t k) { return k + 1 < n ? sb : block_width - (n - 1) * sb; }
++    // The sub-block holding the rotated first tile (valid_width: the tile-row's written columns).
++    static uint32_t start(uint32_t stick_rotation, uint32_t valid_width) {
++        const uint32_t j = (stick_rotation % valid_width) / sb;
++        return j < n ? j : n - 1;  // the last sub-block may be wider (merged 1-tile tail)
++    }
++    static uint32_t at(uint32_t j0, uint32_t p) { return j0 + p < n ? j0 + p : j0 + p - n; }
++};
++
++}  // namespace tilize_sub_blocks
+--- a/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
++++ b/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
+@@ -357,6 +357,36 @@
+ # cut is equivalent and only the issue chain counts ([1,1,128,64] / [1,1,256,64]: 8 / 16 cores).
+ CO_READ_LIST_MIN_GAIN_CYCLES = 250
+
++# ---- Perf 2 onepos_pipeline (perf_experiments/onepos_pipeline/README.md): column sub-blocks.
++# Compute tilizes each tile-row as column sub-blocks of SUB_BLOCK_TILES tiles (never 1: a trailing
++# 1-tile remainder merges into the previous sub-block) and pushes each sub-block's output pages as
++# soon as it is packed; the writer writes each sub-block at once, in store_rows' tile order
++# (production starts at the sub-block holding the rotated first tile). The writer's first write then
++# waits for one sub-block instead of the whole tile-row: on a one-position walk it otherwise idles
++# for the whole tilize (writer_wait 1361 -> 385 cycles on LOOSE_CASES[7]). Raw WH LLK on compute (the
++# helper cannot tilize a column slice of a wider row: kernels/tilize_compute.cpp, tilize_cols_fast).
++# 0 = off: exactly the pre-sub-block programs (no define, no extra RT arg).
++# Engages on EVERY walk (one or many positions) where it is expressible: Wormhole (the BH
++# fast-tilize LLK has another signature), the output streamed by store_rows (not resident: compute
++# packs into the shard and nothing is written; no split reader, write_ahead == 1, no write NoC
++# split: the parked knobs' other store paths), block_width >= 4 (fewer tiles cannot form two
++# >= 2-tile sub-blocks). Multi-position walks measured flat or faster, so no one-position carve-out.
++# Measured (WH B0 n150, 64 Tensix cores, DEVICE KERNEL DURATION ns, same-session medians, off -> on,
++# bit-exact vs off on every case):
++#   LOOSE_CASES[7] [1,1,2048,512] HEIGHT_SHARDED L1 -> DRAM  16997 -> 15568 (-8.4 %, n=6), 16950 -> 15856
++#   (-6.5 %, n=8); LOOSE_CASES[4] [1,1,32,8192] -2.2 / -1.9 %; resident input -> DRAM / L1 other widths and
++#   dtypes -4 .. -10 %; L1-interleaved source -1 .. -5 %; DRAM -> DRAM one-position -3 .. +1 %;
++#   multi-position DRAM -> DRAM ([1,1,4096..16384,128..1024], tiny / fp32 / retile / low_l1): -2.5 .. +1.7 %
++#   (noise), HEIGHT_SHARDED multi-row shards -1 .. -5 %. 2-tile sub-blocks beat 4-tile (-2.4 %) and 8-tile.
++SUB_BLOCK_TILES = 2
++
++
++def _sub_block_count(block_width, sb_tiles):
++    """tilize_sub_blocks::SubBlocks<block_width, sb_tiles>::n (kernels/tilize_sub_blocks.hpp)."""
++    sb = max(2, sb_tiles)
++    n = 1 if block_width <= sb else _div_up(block_width, sb)
++    return n - 1 if n > 1 and block_width - (n - 1) * sb == 1 else n
++
+
+ def _co_read_bank_xy(device):
+     """Physical NoC0 (x, y) of each DRAM bank (bank b = DRAM view b), or None when the geometric
+@@ -1131,6 +1161,19 @@
+             ],
+         )
+
++    # ---------------- column sub-blocks (SUB_BLOCK_TILES) ----------------
++    sub_block_tiles = 0
++    if (
++        SUB_BLOCK_TILES > 0
++        and str(device.arch()).lower().split(".")[-1] == "wormhole_b0"
++        and not (output_resident or split_reader)
++        and write_ahead == 1
++        and write_noc_split == 0
++        and _sub_block_count(block_width, SUB_BLOCK_TILES) > 1
++    ):
++        sub_block_tiles = max(2, SUB_BLOCK_TILES)
++    sub_block_defines = [("TILIZE_SUB_BLOCK_TILES", str(sub_block_tiles))] if sub_block_tiles else []
++
+     # ---------------- kernel args ----------------
+     # CT args: config only (dtype pair, tile, block_width, residency, accessor args) ->
+     # program-cache friendly; buffer addresses ride on RT args and on the resident CBs.
+@@ -1246,7 +1289,8 @@
+             reader_tail, writer_tail = co_read_lists[(core.x, core.y)]
+             reader_rt_args[core.x][core.y].extend(reader_tail)
+             writer_rt_args[core.x][core.y].extend(writer_tail)
+-        compute_rt_args[core.x][core.y] = [core_row_tiles, core_col_tiles]
++        # sub-blocks: RT arg 2 = stick_rotation (compute derives the writer's first sub-block from it)
++        compute_rt_args[core.x][core.y] = [core_row_tiles, core_col_tiles] + ([stick_rotation] if sub_block_tiles else [])
+
+     co_read_defines = [("CO_READ_LISTED", "1")] if co_read_lists else []
+     reader_kernel = ttnn.KernelDescriptor(
+@@ -1265,7 +1309,7 @@
+     )
+     writer_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+-        defines=_kernel_defines() + co_read_defines,
++        defines=_kernel_defines() + co_read_defines + sub_block_defines,
+         core_ranges=all_cores,
+         compile_time_args=writer_ct_args,
+         runtime_args=writer_rt_args,
+@@ -1279,7 +1323,7 @@
+     )
+     compute_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+-        defines=_kernel_defines(),
++        defines=_kernel_defines() + sub_block_defines,
+         core_ranges=all_cores,
+         compile_time_args=compute_ct_args,
+         runtime_args=compute_rt_args,
