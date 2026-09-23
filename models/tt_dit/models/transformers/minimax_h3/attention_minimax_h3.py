@@ -16,6 +16,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import sdpa_recipe
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
@@ -100,8 +101,22 @@ class MiniMaxH3Attention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_sequence_parallel: bool = True,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
+
+        # Opt-in named SDPA recipe (see models/tt_dit/utils/sdpa_recipe.py). None keeps the legacy
+        # attention configuration exactly; validated before anything touches the device.
+        self.sdpa_kv_dtype = sdpa_recipe.validate_recipe_args(
+            sdpa_precision,
+            sdpa_kv_dtype,
+            head_dim=head_dim,
+            model="MiniMaxH3Attention",
+            is_blackhole=True if sdpa_precision is None else is_blackhole(),
+        )
+        self.sdpa_precision = sdpa_precision
+        self._recipe_sdpa_program_configs: dict[tuple[int, bool], ttnn.SDPAProgramConfig] = {}
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -305,6 +320,24 @@ class MiniMaxH3Attention(Module):
             )
         return self._sdpa_program_configs[key]
 
+    def _attn_program_config(self, seq_local: int, *, ring: bool) -> ttnn.SDPAProgramConfig:
+        """The ring/dense program config: legacy as-is, or mapped to recipe-supported chunks.
+
+        Under a recipe the measured / generic (q, k) is kept where the recipe supports it (ring needs
+        an even Q tile count), else Q256 / K512, on the same grid and with exp_approx_mode unset.
+        """
+        legacy = self._sdpa_program_config(seq_local, ring=ring)
+        if self.sdpa_precision is None:
+            return legacy
+        key = (seq_local, ring)
+        if key not in self._recipe_sdpa_program_configs:
+            self._recipe_sdpa_program_configs[key] = sdpa_recipe.recipe_program_config(legacy, ring=ring)
+        return self._recipe_sdpa_program_configs[key]
+
+    def _sdpa_kwargs(self) -> dict:
+        """Recipe kwargs, or the legacy compute config read at call time (it may be reassigned)."""
+        return sdpa_recipe.sdpa_kwargs(self.sdpa_precision, self.sdpa_compute_kernel_config)
+
     # One accumulator entry and one Q chunk per pass, in tiles of `_EXP_L1_TILE_BYTES`. Mirrors the
     # CB table in exp_ring_joint_sdpa_program_factory.cpp; reproduces its measured 1,302,528 B at
     # (224, 512) exactly. Nothing in the op validates this, so an oversized shape would only surface
@@ -392,7 +425,10 @@ class MiniMaxH3Attention(Module):
         if not self.use_exp_ring_sdpa:
             return None
         if seq_local not in self._exp_sdpa_program_configs:
-            self._exp_sdpa_program_configs[seq_local] = self._build_exp_sdpa_program_config(seq_local)
+            if self.sdpa_precision is not None:
+                self._exp_sdpa_program_configs[seq_local] = self._build_recipe_exp_sdpa_program_config(seq_local)
+            else:
+                self._exp_sdpa_program_configs[seq_local] = self._build_exp_sdpa_program_config(seq_local)
         return self._exp_sdpa_program_configs[seq_local]
 
     def _build_exp_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig | None:
@@ -434,6 +470,50 @@ class MiniMaxH3Attention(Module):
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,  # NOTE: False is more correct
+        )
+
+    # Recipe exp ring blocking (docs/sdpa_precision.md): Q 128-320 in 32-row steps (odd tile counts
+    # allowed -- recipes keep exp-ring state resident), K512 only, at most 3 passes.
+    _RECIPE_EXP_Q_RANGE = (128, 320)
+    _RECIPE_EXP_K_CHUNK = 512
+    _RECIPE_EXP_MAX_PASSES = 3
+
+    def _build_recipe_exp_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig | None:
+        """`_build_exp_sdpa_program_config`'s (cols, segs_per_head) search, restricted to recipe shapes.
+
+        Keeps the same column/segment geometry and score (passes * q_chunk, then wider grids), but
+        only admits q_chunk in 128..320, fixes k_chunk at 512 and caps passes at 3. The legacy L1
+        model and streaming-compute predicate describe the legacy exp-ring CB layout, which recipes
+        replace with their own (single-slot Q, fixed recipe CBs), so neither is applied here; the op's
+        host check rejects a recipe shape that overflows L1. None (no recipe shape) falls back to
+        ring joint SDPA, exactly as the legacy path does when exp is infeasible.
+        """
+        tile = ttnn.TILE_SIZE
+        rows = self.full_grid.y
+        q_lo, q_hi = self._RECIPE_EXP_Q_RANGE
+        max_passes = min(self.exp_ring_max_passes, self._RECIPE_EXP_MAX_PASSES)
+        best = None
+        for cols in range(self.full_grid.x - 1, 1, -1):
+            for segs in (1, 2, 3):
+                chunks = cols * segs
+                q_chunk = math.ceil(math.ceil(seq_local / chunks) / tile) * tile
+                if math.ceil(seq_local / q_chunk) != chunks:
+                    continue  # this (cols, segs) admits no tile-multiple q_chunk
+                if not q_lo <= q_chunk <= q_hi:
+                    continue
+                passes = math.ceil(self.n_local_heads * segs / rows)
+                if passes > max_passes:
+                    continue
+                score = (passes * q_chunk, -cols)
+                if best is None or score < best[0]:
+                    best = (score, cols, q_chunk)
+        if best is None:
+            return None
+        _, cols, q_chunk = best
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.full_grid.y),
+            q_chunk_size=q_chunk,
+            k_chunk_size=self._RECIPE_EXP_K_CHUNK,
         )
 
     # ------------------------------------------------------------------ forward
@@ -512,6 +592,11 @@ class MiniMaxH3Attention(Module):
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
         v_BHNE = create_heads(v_1BNF)
+        # LOW_PRECISION prepares Q/K/V after norm/RoPE and before the ring gathers K/V (the persistent
+        # buffers below then take the prepared KV dtype). Every other recipe and legacy: unchanged.
+        q_BHNE, k_BHNE, v_BHNE = sdpa_recipe.prepare_recipe_inputs(
+            self.sdpa_precision, self.sdpa_kv_dtype, q_BHNE, k_BHNE, v_BHNE
+        )
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
@@ -533,7 +618,7 @@ class MiniMaxH3Attention(Module):
                 joint_strategy="rear",
                 logical_n=N,
                 program_config=exp_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                **self._sdpa_kwargs(),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(self.sp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
@@ -560,8 +645,8 @@ class MiniMaxH3Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=N,
-                program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self._attn_program_config(q_BHNE.shape[2], ring=True),
+                **self._sdpa_kwargs(),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
@@ -578,8 +663,8 @@ class MiniMaxH3Attention(Module):
                 k_BHNE,
                 v_BHNE,
                 is_causal=False,
-                program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=False),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self._attn_program_config(q_BHNE.shape[2], ring=False),
+                **self._sdpa_kwargs(),
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)

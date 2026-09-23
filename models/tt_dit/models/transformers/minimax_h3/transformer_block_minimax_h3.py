@@ -67,6 +67,8 @@ class MiniMaxH3TransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         precomputed_adaln: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -103,6 +105,8 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
