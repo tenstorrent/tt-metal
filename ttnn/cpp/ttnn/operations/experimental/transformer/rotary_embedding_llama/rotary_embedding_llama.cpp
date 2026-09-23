@@ -15,9 +15,10 @@ Tensor rotary_embedding_llama(
     const Tensor& trans_mat,
     const bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<float> rms_norm_eps) {
     return ttnn::prim::rotary_embedding_llama(
-        input_tensor, cos_cache, sin_cache, trans_mat, is_decode_mode, memory_config, compute_kernel_config);
+        input_tensor, cos_cache, sin_cache, trans_mat, is_decode_mode, memory_config, compute_kernel_config, rms_norm_eps);
 }
 
 }  // namespace ttnn::experimental
