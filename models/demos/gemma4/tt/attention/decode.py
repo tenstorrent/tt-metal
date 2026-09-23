@@ -580,15 +580,20 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
 
 def _packed_seq_kv_enabled():
     """Write P new KV rows with serialized ``paged_update_cache`` instead of
-    embedding-merge + ``paged_fill_cache`` of the whole hot block. Default on;
-    ``GEMMA4_PACKED_VERIFY_SEQ_KV=0`` restores staging fill."""
-    return os.environ.get("GEMMA4_PACKED_VERIFY_SEQ_KV", "1").lower() not in ("0", "false", "no", "off")
+    embedding-merge + ``paged_fill_cache`` of the whole hot block.
+
+    Off unless ``GEMMA4_PACKED_VERIFY_SEQ_KV=1``. dFlash does not supply the
+    sequential-write positions, so the default stays the staging fill.
+    """
+    return os.environ.get("GEMMA4_PACKED_VERIFY_SEQ_KV", "0").lower() not in ("0", "false", "no", "off")
 
 
 def _packed_fused_kv_enabled():
     """One ``paged_fused_update_cache`` per position instead of separate K then V.
-    Default on; ``GEMMA4_PACKED_FUSED_KV=0`` restores two ``paged_update_cache`` ops."""
-    return os.environ.get("GEMMA4_PACKED_FUSED_KV", "1").lower() not in ("0", "false", "no", "off")
+
+    Used only by the sequential KV write. Off unless ``GEMMA4_PACKED_FUSED_KV=1``.
+    """
+    return os.environ.get("GEMMA4_PACKED_FUSED_KV", "0").lower() not in ("0", "false", "no", "off")
 
 
 _PACKED_KV_MEM_CACHE: dict = {}
@@ -690,9 +695,12 @@ def _write_packed_kv_sequential(
 
 
 def _packed_batch_sdpa_enabled():
-    """Native decode-batch SDPA for packed verify (B==1 only). Default on;
-    ``GEMMA4_PACKED_VERIFY_BATCH_SDPA=0`` restores the packed-head + mask path."""
-    return os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in ("0", "false", "no", "off")
+    """Native decode-batch SDPA for packed verify (B==1 and a cur_pos tensor).
+
+    Off unless ``GEMMA4_PACKED_VERIFY_BATCH_SDPA=1``. Callers without
+    ``position_idx_cache`` stay on the packed-head + mask path.
+    """
+    return os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "0").lower() not in ("0", "false", "no", "off")
 
 
 def packed_decode_forward(
@@ -929,9 +937,8 @@ def packed_decode_forward(
 
     k_cache_use, v_cache_use = kv_cache
 
-    if _packed_batch_sdpa_enabled() and B == 1:
-        if position_idx_cache is None:
-            raise ValueError("batch-SDPA packed verify requires position_idx_cache")
+    # No cur_pos: stay on the mask path even if the flag is set.
+    if _packed_batch_sdpa_enabled() and B == 1 and position_idx_cache is not None:
         tt_q_decode = ttnn.transpose(tt_q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tt_q)
         device_grid = mesh_device.compute_with_storage_grid_size()
@@ -1012,11 +1019,19 @@ def packed_decode_forward(
     _grid = sdpa_program_config.compute_with_storage_grid_size
     n_sdpa_splits = _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=_grid.x * _grid.y)
     eff_bs_sdpa = effective_block_size(k_cache_use, head_dim, nkv_local)
+    # paged decode-SDPA uses the page-table row count as its batch. This path's
+    # batch is B; P is packed into the query heads. The P-row table is for the
+    # sequential KV write above, so attend with the first B rows.
+    sdpa_page_table = page_table
+    owns_sdpa_pt = False
+    if page_table is not None and int(page_table.shape[0]) != B:
+        sdpa_page_table = ttnn.slice(page_table, [0, 0], [B, page_table.shape[1]])
+        owns_sdpa_pt = True
     tt_sdpa = _packed_verify_sdpa(
         q_packed,
         k_cache_use,
         v_cache_use,
-        page_table,
+        sdpa_page_table,
         attn_mask,
         1.0,
         sdpa_program_config,
@@ -1029,6 +1044,8 @@ def packed_decode_forward(
         nkv_local,
     )
     ttnn.deallocate(q_packed)
+    if owns_sdpa_pt:
+        sdpa_page_table.deallocate(True)
 
     # ── ⑦ Unpack head-major SDPA output → concat heads + o_proj + AR ────────
     tt_sdpa = ttnn.to_layout(tt_sdpa, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1)  # DRAM TILE → L1 RM

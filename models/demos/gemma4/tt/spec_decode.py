@@ -805,15 +805,17 @@ class SpeculativeDecoder:
         return int(self._pv_pages_t[lt].shape[0])
 
     def _seq_kv_enabled(self):
-        """Serialized ``paged_update_cache`` instead of staging fill (default).
+        """Serialized ``paged_update_cache`` instead of staging fill.
 
-        Delegates to ``attention.decode`` so the inputs staged here and the path
-        taken there can never disagree about the same env flag.
+        Off unless ``GEMMA4_PACKED_VERIFY_SEQ_KV=1``. Delegates to
+        ``attention.decode`` so the inputs staged here and the path taken there
+        can never disagree about the same env flag.
         """
         return _packed_seq_kv_enabled()
 
     def _batch_sdpa_enabled(self):
-        """Native decode-batch SDPA for packed verify (default); see ``_seq_kv_enabled``."""
+        """Native decode-batch SDPA for packed verify. Off unless
+        ``GEMMA4_PACKED_VERIFY_BATCH_SDPA=1``; see ``_seq_kv_enabled``."""
         return _packed_batch_sdpa_enabled()
 
     def _pv_page_table_batch(self, P):
