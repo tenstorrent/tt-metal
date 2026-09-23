@@ -227,3 +227,103 @@ def test_device_cfm_matches_torch_reference(device):
     passed, pcc = comp_pcc(want, got, GATE_BF16)
     print(f"\n  device CausalConditionalCFM (4-step Euler) PCC {pcc}")
     assert passed, pcc
+
+
+needs_l1_small_trace = pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 50_000_000}], indirect=True
+)
+
+
+@needs_l1_small_trace
+def test_device_cfm_trace_cache_across_utterances_and_replays(device):
+    """Regression for the two hard requirements on the 2026-09-22 traced Euler-step solve
+    (`TtCausalConditionalCFM._capture`/`_forward_traced`, ported from the CosyVoice1
+    reference repo's `tt/flow/cfm.py`):
+
+    1. **The trace captures exactly ONE Euler step and is replayed N times from the host
+       -- step count is never baked into the capture.** Proven here by reusing the SAME
+       cached trace (same `(t_len, channels)` key) across DIFFERENT `n_timesteps` values --
+       if step count were somehow baked in, either the second call would silently replay
+       the wrong number of times (a shape-correct but numerically wrong result) or the
+       trace would need to be recaptured every time `n_timesteps` changed, which
+       `_trace_key_for` deliberately does not key on.
+    2. **Replay-vs-eager PCC holds at several step counts and across multiple utterances,
+       not just the first replay.** Four cases run against the same `tt_cfm` instance in
+       sequence: a first capture, a same-geometry reuse at a DIFFERENT step count, a
+       different-geometry forced recapture, and a return to the first geometry -- each
+       compared against its own independent eager (`use_trace=False`) run on fresh random
+       conditioning, not against a cached "golden" answer.
+    """
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import (
+        CausalConditionalCFMRef,
+        CausalConditionalDecoderRef,
+        TtCausalConditionalCFM,
+        TtCausalConditionalDecoder,
+    )
+
+    torch.manual_seed(7)
+    dec = CausalConditionalDecoderRef()
+    dec.eval()
+    cfm = CausalConditionalCFMRef(dec)
+    tt_dec = TtCausalConditionalDecoder(device, dec)
+    tt_cfm = TtCausalConditionalCFM(device, tt_dec, cfm.rand_noise, cfm)
+
+    # (t_len, n_timesteps): A first-captures at t_len=32; B reuses that SAME trace at a
+    # different step count; C forces a recapture at a different length; D returns to the
+    # first geometry, forcing a second recapture there.
+    cases = [(32, 4), (32, 10), (48, 10), (32, 6)]
+    try:
+        for i, (t_len, n_timesteps) in enumerate(cases):
+            mu = torch.randn(1, t_len, 80) * 0.1
+            cond = torch.randn(1, t_len, 80) * 0.1
+            spks = torch.randn(1, 80) * 0.1
+            mask = torch.ones(1, t_len, 1)
+            with torch.no_grad():
+                want = cfm.forward(mu, mask, n_timesteps=n_timesteps, spks=spks, cond=cond)
+            got = tt_cfm.forward(mu, mask, n_timesteps, spks, cond, use_trace=True)
+            assert got.shape == want.shape
+            passed, pcc = comp_pcc(want, got, GATE_BF16)
+            print(f"\n  case {i} t_len={t_len} n_timesteps={n_timesteps} (traced) PCC {pcc}")
+            assert passed, f"case {i} (t_len={t_len}, n_timesteps={n_timesteps}): {pcc}"
+    finally:
+        tt_cfm.release_cfm_trace()
+
+
+@needs_l1_small_trace
+@pytest.mark.parametrize("n_timesteps", [3, 5, 10])
+def test_device_cfm_traced_matches_eager_per_step_count(device, n_timesteps):
+    """Traced vs. eager at several individual step counts (not just the 4-step case
+    `test_device_cfm_trace_cache_across_utterances_and_replays` exercises as one point
+    among several) -- each a fresh `TtCausalConditionalCFM`, so this also confirms a
+    from-cold first capture is correct at each count on its own, not only as part of a
+    reuse sequence."""
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import (
+        CausalConditionalCFMRef,
+        CausalConditionalDecoderRef,
+        TtCausalConditionalCFM,
+        TtCausalConditionalDecoder,
+    )
+
+    torch.manual_seed(100 + n_timesteps)
+    dec = CausalConditionalDecoderRef()
+    dec.eval()
+    cfm = CausalConditionalCFMRef(dec)
+    b, t_len = 1, 40
+    mu = torch.randn(b, t_len, 80) * 0.1
+    cond = torch.randn(b, t_len, 80) * 0.1
+    spks = torch.randn(b, 80) * 0.1
+    mask = torch.ones(b, t_len, 1)
+    with torch.no_grad():
+        want = cfm.forward(mu, mask, n_timesteps=n_timesteps, spks=spks, cond=cond)
+
+    tt_dec = TtCausalConditionalDecoder(device, dec)
+    tt_cfm = TtCausalConditionalCFM(device, tt_dec, cfm.rand_noise, cfm)
+    try:
+        got = tt_cfm.forward(mu, mask, n_timesteps, spks, cond, use_trace=True)
+    finally:
+        tt_cfm.release_cfm_trace()
+
+    assert got.shape == want.shape
+    passed, pcc = comp_pcc(want, got, GATE_BF16)
+    print(f"\n  device CausalConditionalCFM traced ({n_timesteps}-step Euler) PCC {pcc}")
+    assert passed, pcc

@@ -266,3 +266,11 @@ class TtCausalMaskedDiffWithXvec:
         feat = feat[:, mel_len1:, :]
         assert feat.shape[1] == mel_len2
         return feat
+
+    def release_traces(self) -> None:
+        """Release both the encoder's and the CFM's captured traces (see
+        `TtUpsampleConformerEncoder.release_encoder_trace` / `TtCausalConditionalCFM.release_cfm_trace`),
+        if either is opted in (`COSYVOICE2_FLOW_ENCODER_TRACE` / `COSYVOICE2_FLOW_CFM_TRACE`). Safe to
+        call unconditionally, including when neither is enabled."""
+        self.encoder.release_encoder_trace()
+        self.decoder.release_cfm_trace()

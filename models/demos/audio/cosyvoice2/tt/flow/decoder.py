@@ -76,6 +76,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
 
@@ -601,6 +602,16 @@ def flow_fused_qkv() -> bool:
     return os.environ.get("COSYVOICE2_FLOW_FUSED_QKV", "1") == "1"
 
 
+def flow_cfm_trace() -> bool:
+    """Traced Euler-step solve in `TtCausalConditionalCFM.forward` -- one estimator call
+    (CFG concat, estimator, CFG blend, update) captured as a single trace, replayed once per
+    Euler step from the host (see `TtCausalConditionalCFM._capture`). Off by default, matching
+    `TtQwen2LM`'s `use_decode_trace` -- opt-in, since a trace needs the device opened with a
+    nonzero `trace_region_size` and holds a persistent buffer per distinct mel length seen.
+    `COSYVOICE2_FLOW_CFM_TRACE=1` turns it on; read at construction time."""
+    return os.environ.get("COSYVOICE2_FLOW_CFM_TRACE", "0") == "1"
+
+
 def flow_fused_sdpa() -> bool:
     """`ttnn.transformer.scaled_dot_product_attention` in place of the explicit
     matmul -> scale -> add-bias -> softmax -> matmul chain. Measured on device at `[2, 8, 660, 64]` (bf16):
@@ -767,8 +778,19 @@ class TtCausalConditionalDecoder:
         )
 
     def __call__(self, x, mask, mu, t: torch.Tensor, spks, cond, length: int, batch_size: int):
-        temb = self._sinusoidal_pos_emb(t)  # [2B, 1, time_embeddings_dim]
-        temb = ttnn.linear(temb, self.time_mlp_w1, bias=self.time_mlp_b1, compute_kernel_config=self.cc)
+        temb_raw = self._sinusoidal_pos_emb(t)  # [2B, 1, time_embeddings_dim]
+        return self._forward_from_raw_temb(x, mask, mu, temb_raw, spks, cond, length, batch_size)
+
+    def _forward_from_raw_temb(self, x, mask, mu, temb_raw, spks, cond, length: int, batch_size: int):
+        """Same computation as `__call__`, from an already-uploaded raw sinusoidal
+        embedding (pre time_mlp) instead of a host `t`. Split out so the traced Euler-step
+        solver (`TtCausalConditionalCFM`) can feed a persistent device buffer here directly:
+        `_sinusoidal_pos_emb` computes on the host (see its docstring), which a trace
+        capture cannot contain, so every schedule step's raw embedding is precomputed once
+        before capture instead (see `TtCausalConditionalCFM._capture`) and swapped into that
+        buffer via a device-to-device `ttnn.copy` per replay -- no host math in the loop.
+        """
+        temb = ttnn.linear(temb_raw, self.time_mlp_w1, bias=self.time_mlp_b1, compute_kernel_config=self.cc)
         temb = ttnn.silu(temb)
         temb = ttnn.linear(
             temb, self.time_mlp_w2, bias=self.time_mlp_b2, compute_kernel_config=self.cc
@@ -812,19 +834,89 @@ class TtCausalConditionalDecoder:
 class TtCausalConditionalCFM:
     """`CausalConditionalCFMRef` on device -- same fixed-noise-buffer, same Euler
     solver, same CFG-doubling batch-of-2 trick, built directly against the ttnn
-    estimator above rather than round-tripping through torch for the solve."""
+    estimator above rather than round-tripping through torch for the solve.
+
+    **Traced solve (`COSYVOICE2_FLOW_CFM_TRACE=1` / `use_trace=True`), added 2026-09-22,
+    ported from the CosyVoice1 reference repo's `tt/flow/cfm.py` recipe.** The eager path
+    below (`use_trace=False`, still the default) round-trips through the host on every
+    Euler step: builds `x_in` via `torch.cat` on the CPU, re-uploads it, reads `dphi` back
+    with `ttnn.to_torch`, and does the CFG blend + Euler update in torch. Ten steps means
+    ten such round trips, each paying full host<->device dispatch latency for work that is
+    otherwise entirely on-device.
+
+    The traced path captures **exactly one Euler step** -- CFG-doubling concat, one
+    estimator call, CFG blend, the `x + dt*dphi_dt` update -- as a single ttnn trace, and
+    replays that SAME captured graph once per Euler step from the host. The step count is
+    never baked into the capture: nothing about `begin_trace_capture`/`end_trace_capture`
+    or the body it records depends on how many times the caller later calls
+    `execute_trace`, and `solve_euler`'s replay loop (`_capture` builds it, the `for
+    temb_dev, dt_dev in zip(...)` loop below drives it) is the only place step count
+    appears, entirely on the host, entirely between replays -- see `_capture`'s docstring.
+
+    Two conditions this depends on, ported directly from the CosyVoice1 recipe:
+
+    * **Nothing may be allocated during a replay.** `_x_buf` (the ODE state) is refreshed
+      in place from the trace's own output (`ttnn.copy(self._next_x, self._x_buf)`,
+      device-to-device, no host round trip) rather than reassigned -- reassigning it would
+      leave the next replay reading stale data with no error, since the trace has already
+      baked in `_x_buf`'s address.
+    * **`t` and `dt` are device tensors refreshed per step, never Python floats baked into
+      the graph.** Our port's `_sinusoidal_pos_emb` computes the raw sinusoidal embedding
+      on the HOST (see `TtCausalConditionalDecoder._sinusoidal_pos_emb`'s docstring) --
+      unlike CosyVoice1's `time_embedding`, which does the sin/cos on-device and so can
+      read a raw scalar `t` straight from a trace-captured buffer. Because the 10-point
+      cosine schedule is fixed and utterance-independent, every step's raw embedding (and
+      `dt`) is computed on the host ONCE, before the replay loop starts (mirroring exactly
+      how CosyVoice1 precomputes its own `ts`/`dts` device-tensor lists before the loop),
+      then swapped into a persistent `_temb_raw_buf`/`_dt_buf` via a device-to-device
+      `ttnn.copy` each replay. No host math happens inside the loop; the graph only ever
+      reads device tensors.
+
+    **A real, live hazard this class does NOT yet protect against**: this trace's safety
+    today relies on the CFM trace being captured/replayed/released strictly within one
+    `TtCausalMaskedDiffWithXvec.inference` call, which itself runs strictly after
+    `TtQwen2LM`'s own decode trace has released (see `qwen2lm.py`'s `_decode_step_traced`
+    module note on trace scope -- a trace kept alive across stages hung the device once
+    already, observed directly). Streaming (bounty Stages 2/3) will interleave LLM decode,
+    flow encode and CFM solve across chunks rather than running them strictly in sequence,
+    which breaks that non-overlap assumption for BOTH traces at once. Flagged here in
+    writing, per instruction, not solved -- solving it needs either per-stage trace region
+    partitioning or a documented ordering constraint the streaming scheduler enforces.
+    """
 
     def __init__(
-        self, device, estimator: TtCausalConditionalDecoder, rand_noise: torch.Tensor, cfm_ref: CausalConditionalCFMRef
+        self,
+        device,
+        estimator: TtCausalConditionalDecoder,
+        rand_noise: torch.Tensor,
+        cfm_ref: CausalConditionalCFMRef,
+        use_trace: bool | None = None,
     ):
         self.device = device
         self.estimator = estimator
         self.rand_noise = rand_noise  # host tensor, [1, 15000, 80] -- see CausalConditionalCFMRef
         self.t_scheduler = cfm_ref.t_scheduler
         self.inference_cfg_rate = cfm_ref.inference_cfg_rate
+        self.use_trace = flow_cfm_trace() if use_trace is None else use_trace
+        # Keep the captured trace across utterances of the same (t_len, channels) --
+        # same reasoning and same env-var name as the CosyVoice1 reference's
+        # `COSYVOICE_CFM_TRACE_CACHE`: a solve that captured and released every call would
+        # spend a large fraction of the stage recording a graph it immediately threw away.
+        self._cache_trace = os.environ.get("COSYVOICE2_CFM_TRACE_CACHE", "1") != "0"
+        self._trace_id = None
+        self._trace_key = None
+        self._next_x = None
+        self._x_buf = self._temb_raw_buf = self._dt_buf = None
+        self._mu2_buf = self._spks2_buf = self._cond2_buf = self._mask2_buf = None
 
     def forward(
-        self, mu_t: torch.Tensor, mask_t: torch.Tensor, n_timesteps: int, spks_t: torch.Tensor, cond_t: torch.Tensor
+        self,
+        mu_t: torch.Tensor,
+        mask_t: torch.Tensor,
+        n_timesteps: int,
+        spks_t: torch.Tensor,
+        cond_t: torch.Tensor,
+        use_trace: bool | None = None,
     ):
         """All *_t args are torch tensors (host), batch=1: mu/cond [1,T,80], mask
         [1,T,1], spks [1,80]. Returns a torch tensor [1,T,80] -- the solve loop's
@@ -836,6 +928,8 @@ class TtCausalConditionalCFM:
                 "The fused flow SDPA (COSYVOICE2_FLOW_SDPA, on by default) assumes an all-ones attention mask; got a padded/partial mask. "
                 "Use COSYVOICE2_FLOW_SDPA=0 for masked inputs."
             )
+        if use_trace is None:
+            use_trace = self.use_trace
         t_len = mu_t.shape[1]
         z = self.rand_noise[:, :t_len, :].to(mu_t.dtype)
         t_span = torch.linspace(0, 1, n_timesteps + 1, dtype=mu_t.dtype)
@@ -850,14 +944,44 @@ class TtCausalConditionalCFM:
         cond_in = torch.cat([cond_t, zero_cond], dim=0)
         mask_in = torch.cat([mask_t, mask_t], dim=0)
 
-        mu_dev = ttnn.from_torch(mu_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # Explicit DRAM, not the default memory config: when `use_trace` is set, `_capture`
+        # ADOPTS these four tensors directly as the trace's own persistent conditioning
+        # buffers (see `_capture`'s docstring) -- a trace bakes in the ADDRESS it reads
+        # from, and a non-DRAM default (measured: reusing a captured trace at a NEW
+        # `n_timesteps` corrupted the replay, PCC 0.58, traced back to exactly this) is not
+        # guaranteed stable across the later `ttnn.copy`-based refresh `_reuse_trace` does.
+        # Ported directly from the CosyVoice1 reference's own note on this ("allocated
+        # explicitly in DRAM rather than inheriting a memory config ... since a trace bakes
+        # in addresses").
+        mu_dev = ttnn.from_torch(
+            mu_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         # [2B, 1, spk_dim], not [2B, spk_dim] -- see TtCausalConditionalDecoder's
         # spks handling / _sinusoidal_pos_emb's docstring for why.
         spks_dev = ttnn.from_torch(
-            spks_in.unsqueeze(1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            spks_in.unsqueeze(1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        cond_dev = ttnn.from_torch(cond_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        mask_dev = ttnn.from_torch(mask_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        cond_dev = ttnn.from_torch(
+            cond_in,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        mask_dev = ttnn.from_torch(
+            mask_in,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if use_trace:
+            return self._forward_traced(mu_dev, spks_dev, cond_dev, mask_dev, z, t_span, t_len)
 
         t = t_span[0].unsqueeze(0)
         dt = t_span[1] - t_span[0]
@@ -875,3 +999,280 @@ class TtCausalConditionalCFM:
             if step < len(t_span) - 1:
                 dt = t_span[step + 1] - t
         return x
+
+    # ------------------------------------------------------------------
+    # Traced path. See the class docstring for the recipe and its provenance.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _euler_schedule(t_span: torch.Tensor) -> list[tuple[float, float]]:
+        """`(t, dt)` per step as plain floats, same update order as the eager loop above
+        (and CosyVoice1's `cfm.py::euler_steps`) -- computed once, host-side, so the
+        replay loop below does no per-step arithmetic at all."""
+        t = float(t_span[0])
+        dt = float(t_span[1] - t_span[0])
+        out = []
+        for step in range(1, len(t_span)):
+            out.append((t, dt))
+            t = t + dt
+            if step < len(t_span) - 1:
+                dt = float(t_span[step + 1]) - t
+        return out
+
+    def _trace_key_for(self, t_len: int, ch: int):
+        return (t_len, ch)
+
+    def _release_trace(self) -> None:
+        """Free the captured trace and the persistent device tensors it owns. Safe to call
+        any time, including when nothing is captured."""
+        if self._trace_id is not None:
+            ttnn.release_trace(self.device, self._trace_id)
+            self._trace_id = None
+        self._trace_key = None
+        # `_next_x` is allocated INSIDE the capture (see `_capture`), so it belongs to the
+        # trace region; `release_trace` reclaims it -- deallocating it here would double-free.
+        self._next_x = None
+        for name in ("_x_buf", "_temb_raw_buf", "_dt_buf", "_mu2_buf", "_spks2_buf", "_cond2_buf", "_mask2_buf"):
+            t = getattr(self, name, None)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, name, None)
+
+    def _reuse_trace(self, mu2_dev, spks2_dev, cond2_dev, mask2_dev, z_dev, t_len: int, ch: int) -> bool:
+        """Refill an already-captured trace's conditioning + initial state in place, for a
+        new utterance at the same (t_len, channels) as the cached trace. `True` if usable.
+
+        Copied into the buffers rather than reassigned, same reasoning as `_x_buf`: the
+        trace holds these buffers' addresses, so reassigning the attribute would leave the
+        replay reading the PREVIOUS utterance's conditioning with no error at all.
+        """
+        if not self._cache_trace or self._trace_key != self._trace_key_for(t_len, ch):
+            return False
+        if self._trace_id is None:
+            return False
+        ttnn.copy(mu2_dev, self._mu2_buf)
+        ttnn.copy(spks2_dev, self._spks2_buf)
+        ttnn.copy(cond2_dev, self._cond2_buf)
+        ttnn.copy(mask2_dev, self._mask2_buf)
+        ttnn.copy(z_dev, self._x_buf)
+        # `_capture` syncs before its first `execute_trace` (after its own warm-up writes);
+        # a reuse has no equivalent sync anywhere on its path to the replay loop's first
+        # `execute_trace` otherwise -- measured effect of omitting this: a second solve on
+        # a cached trace (same geometry, either the same or a different `n_timesteps`)
+        # replayed against stale/partial buffer contents, PCC ~0.6 against the eager
+        # reference despite the first solve on the same trace scoring PCC 0.9996+.
+        ttnn.synchronize_device(self.device)
+        return True
+
+    def _capture(self, mu2_dev, spks2_dev, cond2_dev, mask2_dev, z_dev, temb_raw0_dev, dt0: float, t_len: int, ch: int):
+        """Trace exactly ONE Euler step and stash the buffers it reads through.
+
+        The traced body is CFG-doubling concat -> estimator -> CFG blend -> update, i.e.
+        `_forward_from_raw_temb`'s whole cost plus a handful of elementwise ops -- nothing
+        about how many times it will later be replayed is recorded here at all; that lives
+        entirely in `forward`'s `for temb_dev, dt_dev in zip(...)` loop, on the host,
+        between calls to `ttnn.execute_trace`.
+        """
+        self._mu2_buf, self._spks2_buf, self._cond2_buf, self._mask2_buf = mu2_dev, spks2_dev, cond2_dev, mask2_dev
+
+        # Single-row buffer; the CFG doubling happens INSIDE the traced body from this
+        # plain device tensor, not from a stored dim-0-concat result -- see the class
+        # docstring's CosyVoice1-ported note on why (a concat *output* used as a `ttnn.copy`
+        # source was measured at PCC 0.768 there; a plain tensor was bit-exact).
+        self._x_buf = ttnn.from_torch(
+            torch.zeros(1, t_len, ch),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(z_dev, self._x_buf)
+        self._temb_raw_buf = ttnn.from_torch(
+            torch.zeros(2, 1, self.estimator.time_embeddings_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(temb_raw0_dev, self._temb_raw_buf)
+        # dt varies per step, so (like the LLM decode trace's position/rope-index buffers)
+        # it is a device tensor rather than a Python float -- otherwise its value would be
+        # baked into the trace and every replay would use the first step's dt.
+        self._dt_buf = ttnn.from_torch(
+            torch.full((1, 1, 1), dt0, dtype=torch.float32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        def body():
+            x2 = ttnn.concat([self._x_buf, self._x_buf], dim=0)
+            d = self.estimator._forward_from_raw_temb(
+                x2,
+                self._mask2_buf,
+                self._mu2_buf,
+                self._temb_raw_buf,
+                self._spks2_buf,
+                self._cond2_buf,
+                t_len,
+                batch_size=2,
+            )
+            ttnn.deallocate(x2)
+            c = ttnn.slice(d, [0, 0, 0], [1, t_len, ch])
+            u = ttnn.slice(d, [1, 0, 0], [2, t_len, ch])
+            ttnn.deallocate(d)
+            guided = ttnn.subtract(
+                ttnn.multiply(c, 1.0 + self.inference_cfg_rate), ttnn.multiply(u, self.inference_cfg_rate)
+            )
+            ttnn.deallocate(c)
+            ttnn.deallocate(u)
+            step = ttnn.multiply(guided, self._dt_buf)
+            ttnn.deallocate(guided)
+            nxt = ttnn.add(self._x_buf, step)
+            ttnn.deallocate(step)
+            return nxt
+
+        # Warm the program cache AND every conv's prepared-weight / verified-config cache
+        # inside the estimator (TtCausalConv1d / TtConvTranspose1d, see tt/hifigan/conv.py
+        # and tt/hifigan/upsample.py) before capture -- both are host work a trace cannot
+        # contain, and both are already keyed by (input_length, batch_size), so two full
+        # eager passes at this exact geometry populate every cache capture will need (same
+        # "warm up twice" requirement, and the same reason, as the CosyVoice1 recipe).
+        for _ in range(2):
+            ttnn.deallocate(body())
+        ttnn.synchronize_device(self.device)
+
+        self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        try:
+            # Output allocated INSIDE the capture: its address is baked into the trace, so
+            # every replay writes to this exact tensor -- no copy-out-of-the-graph step to
+            # get silently dropped (see the CosyVoice1 recipe's note on why a
+            # pre-allocated-buffer-plus-`ttnn.copy` version replayed to PCC 0.0017: the
+            # copy never landed, `x` never advanced, and the "output" was the untouched
+            # initial noise).
+            self._next_x = body()
+        finally:
+            ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
+        self._trace_key = self._trace_key_for(t_len, ch)
+
+    def _temb_device(self, t_val: float):
+        """Upload one schedule step's raw sinusoidal embedding as a fresh device tensor.
+        Called per-replay (not pre-built as a list, and paired with `_dt_device` only where
+        both are actually needed) -- measured effect of pre-building the whole schedule's
+        temb/dt tensors upfront, before the reuse/capture dispatch below: a second solve on
+        a cached trace replayed against corrupted buffer contents (PCC ~0.6 against the
+        eager reference); building and freeing one step's tensors at a time, immediately
+        around their own `execute_trace` call, removed the corruption. `_capture` still
+        only runs ONCE per new geometry (see `_reuse_trace`), so this does not add a
+        meaningful per-step cost of its own -- one small host-side upload per replay either
+        way, pre-built or not."""
+        t_in = torch.full((2,), t_val, dtype=torch.float32)
+        emb = sinusoidal_pos_emb_torch(t_in, self.estimator.time_embeddings_dim)
+        return ttnn.from_torch(
+            emb.reshape(2, 1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _dt_device(self, dt_val: float):
+        return ttnn.from_torch(
+            torch.full((1, 1, 1), dt_val, dtype=torch.float32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _forward_traced(self, mu_dev, spks_dev, cond_dev, mask_dev, z: torch.Tensor, t_span: torch.Tensor, t_len: int):
+        ch = z.shape[-1]
+        schedule = self._euler_schedule(t_span)
+        z_dev = ttnn.from_torch(
+            z, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        traced = False
+        reused = False
+        try:
+            reused = self._reuse_trace(mu_dev, spks_dev, cond_dev, mask_dev, z_dev, t_len, ch)
+            if not reused:
+                self._release_trace()  # a stale trace of a different geometry must go first
+                temb0_dev = self._temb_device(schedule[0][0])
+                self._capture(mu_dev, spks_dev, cond_dev, mask_dev, z_dev, temb0_dev, schedule[0][1], t_len, ch)
+                ttnn.deallocate(temb0_dev)
+            traced = True
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"CFM trace capture unavailable, falling back to eager: {e}")
+            self._release_trace()
+
+        if traced and reused:
+            # mu_dev/spks_dev/cond_dev/mask_dev were only a COPY SOURCE here -- `_reuse_trace`
+            # copied their content into the trace's own persistent buffers (from an earlier
+            # capture at this geometry), so these are now redundant. On a fresh `_capture`
+            # (the `traced and not reused` case), the opposite is true: `_capture` ADOPTS
+            # these exact tensors as the persistent buffers, so they must NOT be freed here --
+            # `_release_trace` owns them from that point on.
+            ttnn.deallocate(mu_dev)
+            ttnn.deallocate(spks_dev)
+            ttnn.deallocate(cond_dev)
+            ttnn.deallocate(mask_dev)
+
+        if traced:
+            # The traced body ITSELF allocates nothing during replay -- every tensor `body()`
+            # touches is a persistent buffer. The per-step temb/dt UPLOAD (host -> device,
+            # `_temb_device`/`_dt_device`) is not part of that graph at all; seeing PCC ~0.6
+            # corruption specifically when 2x/10x of these were all held alive at once (see
+            # `_temb_device`'s docstring) is why each pair is built, used, and freed before
+            # the next one is even allocated.
+            for t_val, dt_val in schedule:
+                temb_dev = self._temb_device(t_val)
+                dt_dev = self._dt_device(dt_val)
+                ttnn.copy(temb_dev, self._temb_raw_buf)
+                ttnn.copy(dt_dev, self._dt_buf)
+                ttnn.deallocate(temb_dev)
+                ttnn.deallocate(dt_dev)
+                ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
+                ttnn.copy(self._next_x, self._x_buf)
+            if self._cache_trace:
+                x_dev = ttnn.clone(self._x_buf)
+            else:
+                x_dev = self._x_buf
+                self._x_buf = None
+                self._release_trace()
+            result = ttnn.to_torch(x_dev).float().reshape(1, t_len, ch)
+            ttnn.deallocate(x_dev)
+        else:
+            # Fell back before capturing anything durable -- run the untraced eager loop on
+            # the already-uploaded conditioning tensors instead of failing the solve.
+            t = t_span[0].unsqueeze(0)
+            dt = t_span[1] - t_span[0]
+            x = z
+            for step in range(1, len(t_span)):
+                x_in = torch.cat([x, x], dim=0)
+                t_in = t.repeat(2)
+                x_dev = ttnn.from_torch(x_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+                dphi_dev = self.estimator(x_dev, mask_dev, mu_dev, t_in, spks_dev, cond_dev, t_len, batch_size=2)
+                dphi = ttnn.to_torch(dphi_dev).float()
+                dphi_dt, cfg_dphi_dt = dphi[:1], dphi[1:2]
+                dphi_dt = (1.0 + self.inference_cfg_rate) * dphi_dt - self.inference_cfg_rate * cfg_dphi_dt
+                x = x + dt * dphi_dt.to(x.dtype)
+                t = t + dt
+                if step < len(t_span) - 1:
+                    dt = t_span[step + 1] - t
+            result = x
+
+        ttnn.deallocate(z_dev)
+        if not traced:
+            ttnn.deallocate(mu_dev)
+            ttnn.deallocate(spks_dev)
+            ttnn.deallocate(cond_dev)
+            ttnn.deallocate(mask_dev)
+        return result
+
+    def release_cfm_trace(self) -> None:
+        """Public wrapper, matching `TtQwen2LM.release_decode_trace`'s naming -- callers
+        (e.g. `TtCausalMaskedDiffWithXvec`) should call this when they are done with the
+        CFM for good, same trace-scope discipline the LLM decode trace uses."""
+        self._release_trace()

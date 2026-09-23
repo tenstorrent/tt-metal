@@ -180,3 +180,41 @@ def test_device_upsample_conformer_encoder_matches_torch_reference(device, t_len
     passed, pcc = comp_pcc(want, got, GATE_BF16)
     print(f"\n  device UpsampleConformerEncoder (T={t_len}) PCC {pcc}")
     assert passed, pcc
+
+
+needs_l1_small_trace = pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 50_000_000}], indirect=True
+)
+
+
+@needs_l1_small_trace
+@pytest.mark.parametrize("t_len", [20, 33])
+def test_device_upsample_conformer_encoder_traced_matches_eager(device, t_len):
+    """Cached/traced whole-encoder forward (`TtUpsampleConformerEncoder._capture`/
+    `_call_traced`, added 2026-09-22) vs. the untraced eager path, at the SAME instance --
+    two independent calls at the same `(t_len, batch_size)` with DIFFERENT random inputs,
+    so the second call exercises `_reuse_trace`'s cache-hit path (not just a fresh
+    capture), and both are checked against their own eager result rather than a shared
+    golden answer."""
+    import ttnn
+    from models.demos.audio.cosyvoice2.tt.flow.encoder import TtUpsampleConformerEncoder, UpsampleConformerEncoderRef
+
+    torch.manual_seed(t_len)
+    enc = UpsampleConformerEncoderRef()
+    enc.eval()
+    b, d = 1, 512
+    tt_enc = TtUpsampleConformerEncoder(device, enc)
+    try:
+        for rep in range(2):
+            torch.manual_seed(t_len * 1000 + rep)
+            x = torch.randn(b, t_len, d) * 0.1
+            x_dev_eager = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            eager = ttnn.to_torch(tt_enc(x_dev_eager, t_len, 1, use_trace=False)).float()
+            x_dev_traced = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            traced = ttnn.to_torch(tt_enc(x_dev_traced, t_len, 1, use_trace=True)).float()
+            assert traced.shape == eager.shape
+            passed, pcc = comp_pcc(eager, traced, GATE_BF16)
+            print(f"\n  rep {rep} device UpsampleConformerEncoder traced vs eager (T={t_len}) PCC {pcc}")
+            assert passed, f"rep {rep}: {pcc}"
+    finally:
+        tt_enc.release_encoder_trace()

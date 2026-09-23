@@ -67,10 +67,12 @@ real class to call directly.
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
 
@@ -378,6 +380,19 @@ def _bias(device, bias: torch.Tensor, dtype):
     return ttnn.from_torch(bias.detach().float().reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def flow_encoder_trace() -> bool:
+    """Cached/traced whole-encoder forward in `TtUpsampleConformerEncoder.__call__`
+    (embed -> pre-lookahead -> Conformer stack -> upsample -> Conformer stack), added
+    2026-09-22. Unlike the CFM solver (10 replays of one captured step per call), the
+    encoder runs ONCE per utterance -- the trace here buys nothing within a single call;
+    it pays off across calls at the SAME (token_len, batch_size), e.g. the warm-repeat
+    measurement in `rtf_warm.py` or any real session that reuses a prompt length. Off by
+    default, matching `TtQwen2LM`'s `use_decode_trace` / the CFM's `COSYVOICE2_FLOW_CFM_TRACE`
+    -- opt-in, needs a nonzero `trace_region_size`. `COSYVOICE2_FLOW_ENCODER_TRACE=1` turns it
+    on; read at construction time."""
+    return os.environ.get("COSYVOICE2_FLOW_ENCODER_TRACE", "0") == "1"
+
+
 class TtRelPositionMultiHeadedAttention:
     def __init__(self, device, module: RelPositionMultiHeadedAttentionRef, dtype=ttnn.bfloat16):
         self.device = device
@@ -589,9 +604,39 @@ class TtUpsample1D:
 
 class TtUpsampleConformerEncoder:
     """`UpsampleConformerEncoderRef` on device -- `streaming=False` only (see
-    module docstring)."""
+    module docstring).
 
-    def __init__(self, device, module: UpsampleConformerEncoderRef, dtype=ttnn.bfloat16):
+    **Cached/traced forward (`COSYVOICE2_FLOW_ENCODER_TRACE=1` / `use_trace=True`), added
+    2026-09-22.** Unlike the CFM solver, this module runs exactly ONCE per utterance -- so
+    a trace does not amortize a loop the way the CFM's ten-Euler-step trace does. What it
+    amortizes instead is repeated calls at the SAME `(token_len, batch_size)`: the fixed
+    all-zero attention bias and the sinusoidal relative-position table are both pure
+    functions of `length`, so at a fixed length the entire captured graph -- embed,
+    pre-lookahead, the causal Conformer stack, the upsample, the second Conformer stack,
+    and the final LayerNorm -- is byte-for-byte the same computation every time, and only
+    the token embeddings themselves (`xs`) differ between calls. Sized here for whatever
+    `length` the caller actually passes at capture time -- Stage 1 (whole-utterance,
+    non-streaming) passes the real `prompt_token_len + token_len` for a given utterance,
+    NOT a fixed streaming-chunk length (see `tt/flow/flow.py`'s `inference`, which calls
+    this with `full_token.shape[1]`); a streaming caller passing a 100-frame chunk instead
+    would get a trace captured/cached for THAT geometry, which is a different, equally
+    valid use of this same mechanism, not a special case of it.
+
+    **Measured real result, real checkpoint, real Stage 1 lengths (2026-09-22): capture
+    always fails.** `TtRelPositionMultiHeadedAttention._rel_shift` does a deliberate host
+    round-trip once per Conformer layer (see that method's own docstring) -- all 10 layers
+    this encoder calls hit it, so `begin_trace_capture`/`body()`/`end_trace_capture` always
+    raises `TT_FATAL: Reads are not supported during trace capture`, at every geometry, not
+    just some. The fallback in `_call_traced` below is correct (every existing "traced" PCC
+    test actually exercises this exact fallback, hence passing with PCC identical to eager
+    -- not a false positive, just not evidence tracing works) and now remembers the failure
+    (`_trace_unavailable`) rather than re-paying a doomed capture attempt's cost (measured:
+    ~2.5x plain eager) on every subsequent call. Making this module genuinely traceable
+    needs `_rel_shift` ported to run natively on device -- a real, separate piece of work,
+    flagged here rather than solved.
+    """
+
+    def __init__(self, device, module: UpsampleConformerEncoderRef, dtype=ttnn.bfloat16, use_trace: bool | None = None):
         self.device = device
         self.d_model = module.d_model
         self.embed = TtLinearNoSubsampling(device, module.embed, dtype=dtype)
@@ -612,16 +657,46 @@ class TtUpsampleConformerEncoder:
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
+        self.use_trace = flow_encoder_trace() if use_trace is None else use_trace
+        # Keep the captured trace across calls at the same (length, batch_size) -- same
+        # naming convention as the CFM's COSYVOICE2_CFM_TRACE_CACHE.
+        self._cache_trace = os.environ.get("COSYVOICE2_ENCODER_TRACE_CACHE", "1") != "0"
+        self._trace_id = None
+        self._trace_key = None
+        self._next_h = None
+        self._xs_buf = self._bias1_buf = self._pos_emb_buf = self._bias2_buf = self._pos_emb2_buf = None
+        # Measured 2026-09-22, real checkpoint, real Stage 1 lengths: capture always fails
+        # with `TT_FATAL: Reads are not supported during trace capture`, from
+        # `TtRelPositionMultiHeadedAttention._rel_shift`'s deliberate host round-trip (see
+        # that method's own docstring) -- every one of the 10 Conformer layers this encoder
+        # calls hits it, so this module cannot be traced AT ALL as currently built, not
+        # merely at some geometries. `_call_traced` still tries once per new geometry (the
+        # graceful per-call fallback below is what every existing PCC test's "traced" case
+        # actually exercises, and it is correct -- eager, exactly, just not traced) and
+        # remembers a proven failure here so it does not keep re-paying the failed attempt's
+        # cost (measured: ~2.5x plain eager, from the 2 warm-up passes plus the aborted
+        # capture, every call) once it is known to be futile. Making this module genuinely
+        # traceable needs `_rel_shift`'s relative-position shift ported to run natively on
+        # device -- out of scope for this round, flagged here rather than silently eaten by
+        # the fallback.
+        self._trace_unavailable = False
 
     def _pos_emb(self, t_len: int):
         emb = sinusoidal_rel_pos_table_torch(t_len, self.d_model)
         return ttnn.from_torch(emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
-    def __call__(self, xs, length: int, batch_size: int = 1):
+    def __call__(self, xs, length: int, batch_size: int = 1, use_trace: bool | None = None):
         """xs: ttnn [B, T, d_model] -> ttnn [B, T*stride, d_model]. No padding
         (single full-length utterance, matching this package's batch=1/
         no-padding testing scope) -- `attn_bias` is all-zero (all-valid) at both
         stages."""
+        if use_trace is None:
+            use_trace = self.use_trace
+        if not use_trace:
+            return self._call_eager(xs, length, batch_size)
+        return self._call_traced(xs, length, batch_size)
+
+    def _call_eager(self, xs, length: int, batch_size: int = 1):
         bias1 = ttnn.from_torch(
             torch.zeros(batch_size, 1, 1, length), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
         )
@@ -642,3 +717,120 @@ class TtUpsampleConformerEncoder:
             h = layer(h, pos_emb2, bias2)
 
         return ttnn.layer_norm(h, weight=self.after_norm_w, bias=self.after_norm_b, epsilon=EMBED_LAYER_NORM_EPS)
+
+    # ------------------------------------------------------------------
+    # Traced path. One capture per distinct (length, batch_size); replayed once per call
+    # at that geometry. See the class docstring.
+    # ------------------------------------------------------------------
+
+    def _trace_key_for(self, length: int, batch_size: int):
+        return (length, batch_size)
+
+    def _release_trace(self) -> None:
+        if self._trace_id is not None:
+            ttnn.release_trace(self.device, self._trace_id)
+            self._trace_id = None
+        self._trace_key = None
+        self._next_h = None  # allocated inside the capture; release_trace reclaims it
+        for name in ("_xs_buf", "_bias1_buf", "_pos_emb_buf", "_bias2_buf", "_pos_emb2_buf"):
+            t = getattr(self, name, None)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, name, None)
+
+    def release_encoder_trace(self) -> None:
+        """Public wrapper, matching `TtQwen2LM.release_decode_trace` / `TtCausalConditionalCFM.release_cfm_trace`."""
+        self._release_trace()
+
+    def _capture(self, xs, length: int, batch_size: int):
+        self._xs_buf = ttnn.from_torch(
+            torch.zeros(batch_size, length, self.d_model),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(xs, self._xs_buf)
+        # Bias and position tables are pure functions of `length` (no padding, this
+        # package's whole testing scope) -- built once here, at capture time, and never
+        # refreshed on replay or reuse, unlike the CFM's per-step buffers.
+        self._bias1_buf = ttnn.from_torch(
+            torch.zeros(batch_size, 1, 1, length),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._pos_emb_buf = self._pos_emb(length)
+        length2 = length * self.up_layer.stride
+        self._bias2_buf = ttnn.from_torch(
+            torch.zeros(batch_size, 1, 1, length2),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._pos_emb2_buf = self._pos_emb(length2)
+
+        def body():
+            h = self.embed(self._xs_buf)
+            h = self.pre_lookahead_layer(h, length, batch_size)
+            for layer in self.encoders:
+                h = layer(h, self._pos_emb_buf, self._bias1_buf)
+            h = self.up_layer(h, length, batch_size)
+            h = self.up_embed(h)
+            for layer in self.up_encoders:
+                h = layer(h, self._pos_emb2_buf, self._bias2_buf)
+            return ttnn.layer_norm(h, weight=self.after_norm_w, bias=self.after_norm_b, epsilon=EMBED_LAYER_NORM_EPS)
+
+        # Warm the program cache and every conv's prepared-weight / verified-config cache
+        # (TtPaddedConv1d in this module, TtConvTranspose1d inside TtUpsample1D) before
+        # capture -- both are host work a trace cannot contain, and both are already keyed
+        # by (input_length, batch_size), so two full eager passes at this exact geometry
+        # populate every cache capture will need.
+        for _ in range(2):
+            ttnn.deallocate(body())
+        ttnn.synchronize_device(self.device)
+
+        self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        try:
+            self._next_h = body()  # allocated inside the capture -- see TtCausalConditionalCFM._capture's note
+        finally:
+            ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
+        self._trace_key = self._trace_key_for(length, batch_size)
+
+    def _reuse_trace(self, xs, length: int, batch_size: int) -> bool:
+        if not self._cache_trace or self._trace_key != self._trace_key_for(length, batch_size):
+            return False
+        if self._trace_id is None:
+            return False
+        ttnn.copy(xs, self._xs_buf)
+        # See TtCausalConditionalCFM._reuse_trace's note: `_capture` syncs before its first
+        # `execute_trace` (after its own warm-up writes); a reuse has no equivalent sync on
+        # its path to the replay otherwise.
+        ttnn.synchronize_device(self.device)
+        return True
+
+    def _call_traced(self, xs, length: int, batch_size: int = 1):
+        if self._trace_unavailable:
+            return self._call_eager(xs, length, batch_size)
+
+        traced = False
+        try:
+            if not self._reuse_trace(xs, length, batch_size):
+                self._release_trace()  # a stale trace of a different geometry must go first
+                self._capture(xs, length, batch_size)
+            traced = True
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"encoder trace capture unavailable, falling back to eager permanently: {e}")
+            self._release_trace()
+            self._trace_unavailable = True
+
+        if not traced:
+            return self._call_eager(xs, length, batch_size)
+
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
+        # Always clone out: `_next_h` is allocated INSIDE the capture, so its address is
+        # reused by every future replay -- handing it to the caller uncloned would let the
+        # NEXT call silently overwrite output the caller may still be holding.
+        return ttnn.clone(self._next_h)
