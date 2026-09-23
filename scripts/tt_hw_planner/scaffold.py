@@ -355,7 +355,34 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             repo_root=BRINGUP_ROOT(),
             force_adapt_all=True,
         )
-        demo_dir_esc_rel = _resolve_demo_dir_rel(new_model_id, _be_esc)
+        # Derive a SIBLING demo directory (not the backend's demo
+        # file itself). Without the slug, this used to be
+        # `models/tt_transformers/demo/simple_text_demo.py` — a
+        # regular file — which then failed `mkdir` with
+        # `[Errno 17] File exists` when scaffold tried to put
+        # BRING_UP_PLAN.md inside it.
+        #
+        # Kept inline rather than routed through _resolve_demo_dir_rel:
+        # test_scaffold_escalation_demo_dir pins this branch's own source
+        # for the slug + `.parent` derivation, because that is how the
+        # Phi-3.5 regression reached only this branch.
+        from .scaffold_demo_folder import _slug as _scaffold_slug
+
+        # 2026-06-04 Fix 6 (escalation path): prefer existing demo dir
+        # for this model_id over a freshly-computed default — see the
+        # matching Fix 6 comment further down in this function.
+        from .bringup_loop import find_demo_dir as _find_demo_dir
+
+        _be_esc_parent = Path(_be_esc.demo_path).parent
+        _esc_bringup_root = BRINGUP_ROOT()
+        _esc_existing_dir = _find_demo_dir(new_model_id, repo_root=_esc_bringup_root)
+        if _esc_existing_dir is not None:
+            try:
+                demo_dir_esc_rel = _esc_existing_dir.relative_to(_esc_bringup_root)
+            except Exception:
+                demo_dir_esc_rel = _esc_existing_dir
+        else:
+            demo_dir_esc_rel = _be_esc_parent / _scaffold_slug(new_model_id.split("/")[-1])
         changes_esc = _bringup_plan_changes(plan=bplan_esc, demo_dir_rel=demo_dir_esc_rel)
         c = bplan_esc.counts
         return ScaffoldPlan(

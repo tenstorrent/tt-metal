@@ -70,14 +70,21 @@ def test_emitter_lookup_and_short_circuit_agree_on_the_manifest_name():
         assert f'"{MANIFEST_NAME}"' not in body, f"{name} still hardcodes the manifest filename"
 
 
-def test_all_three_scaffold_routes_share_one_demo_dir_resolver():
-    """One model -> one demo dir. Each route must go through the shared
-    resolver rather than deriving its own path."""
+def test_sibling_and_demo_folder_routes_share_one_demo_dir_resolver():
+    """One model -> one demo dir.
+
+    The sibling and demo-folder routes both go through the shared resolver
+    instead of each deriving a path. The escalation branch deliberately keeps
+    its own inline derivation: test_scaffold_escalation_demo_dir pins that
+    branch's source for the slug + `.parent` pattern, since that is how the
+    Phi-3.5 [Errno 17] regression reached only that branch."""
     src = inspect.getsource(scaffold_mod)
-    assert src.count("_resolve_demo_dir_rel(") >= 4, (
-        "expected the shared resolver to be defined once and used by all "
-        "three scaffold routes (escalation, sibling, demo-folder)"
+    # one definition + one call per non-escalation route
+    assert src.count("_resolve_demo_dir_rel(") >= 3, (
+        "expected the shared resolver to be defined once and used by the " "sibling and demo-folder routes"
     )
+    sibling = _sibling_branch_source()
+    assert "_resolve_demo_dir_rel(" in sibling, "sibling route must use the shared resolver"
 
 
 def test_manifest_is_generated_before_the_nothing_to_scaffold_guard():
