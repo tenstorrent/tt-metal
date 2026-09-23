@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import SLIDING_K_CHUNK_SIZE, ring_cache_capacity
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
@@ -144,6 +144,11 @@ def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len):
         return "sequence and chunk lengths must be positive"
     if prefill_chunk_size % (cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
         return "prefill chunks must divide max_seq_len and contain whole CP-local tiles"
+    if (prefill_chunk_size // cp_degree) % SLIDING_K_CHUNK_SIZE:
+        return (
+            f"prefill chunk {prefill_chunk_size} gives a {prefill_chunk_size // cp_degree}-token Q slab at "
+            f"CP={cp_degree}, which is not a multiple of the {SLIDING_K_CHUNK_SIZE}-token sliding K chunk"
+        )
     hops = sliding_halo_hop_count(prefill_chunk_size, cp_degree)
     if hops > cp_degree:
         return (
