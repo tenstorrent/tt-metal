@@ -29,6 +29,18 @@ void validate_state(const ttnn::Tensor& tensor, std::string_view name) {
     TT_FATAL(!tensor.is_sharded(), "{} must use interleaved memory", name);
     TT_FATAL(tensor.logical_shape().rank() == 4, "{} must be rank 4", name);
     TT_FATAL(
+        tensor.logical_shape()[0] == 1 && tensor.logical_shape()[1] == 1,
+        "{} must have leading dimensions [1, 1], got [{}, {}]",
+        name,
+        tensor.logical_shape()[0],
+        tensor.logical_shape()[1]);
+    TT_FATAL(
+        tensor.logical_shape()[-2] == kStateRows,
+        "{} must contain exactly {} rows, got {}",
+        name,
+        kStateRows,
+        tensor.logical_shape()[-2]);
+    TT_FATAL(
         tensor.logical_shape()[-1] > 0 && tensor.logical_shape()[-1] % kTileWidth == 0,
         "{} head dimension must be a positive multiple of {}, got {}",
         name,
@@ -121,10 +133,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> compressor_state_exchange(
     const auto mesh_shape = local_kv_state.device()->shape();
     TT_FATAL(mesh_shape.dims() == 2, "compressor_state_exchange requires a 2D mesh, got {}", mesh_shape);
     TT_FATAL(cluster_axis < 2, "cluster_axis must be 0 or 1, got {}", cluster_axis);
-    TT_FATAL(
-        local_kv_state.logical_shape()[-2] == kStateRows,
-        "Each device's local state must contain exactly {} rows",
-        kStateRows);
 
     auto predecessor_kv = shift_state(local_kv_state, initial_kv_state, cluster_axis, topology);
     auto predecessor_score = shift_state(local_score_state, initial_score_state, cluster_axis, topology);
