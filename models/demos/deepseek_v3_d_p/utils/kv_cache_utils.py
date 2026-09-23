@@ -5,6 +5,7 @@
 Utilities for KVPE cache initialization and management.
 """
 
+import math
 import socket
 from dataclasses import dataclass
 from enum import Enum
@@ -849,6 +850,37 @@ def kda_segments_per_layer(geometry, kind: str) -> int:
     raise ValueError(f"unknown KDA state kind {kind!r}")
 
 
+# The contract's KDA position axis (k3_disagg_contract.md, tt-blaze #3634). A KDA config has no token
+# axis, so its positions are synthetic: one version of BOTH states spans a window of kda_window()
+# positions, recurrent segment i sits at i * 96 and convolution segment i at i * 64 inside it (at 96
+# heads), and each of the decode side's KDA_VERSIONS windows aliases the one prefill state. Segment
+# indices would not pair: the KV Manager requires equal chunk_n_tokens on both sides, and one
+# /migrate position range serves every config of a layer, so both states must fill the same window.
+KDA_POSITION_QUANTUM = 32  # decode's minimum position stride (one tile edge)
+KDA_VERSIONS = 8  # decode's per-user state ring (speculative-decode versions)
+
+
+def kda_window(geometry) -> int:
+    """Positions per version: the least window both states fill evenly at a stride of whole tiles."""
+    return (
+        math.lcm(geometry.recurrent_segments_per_layer, geometry.convolution_segments_per_layer)
+        * KDA_POSITION_QUANTUM
+    )
+
+
+def kda_chunk_n_tokens(geometry, kind: str) -> int:
+    return kda_window(geometry) // kda_segments_per_layer(geometry, kind)
+
+
+def kda_max_sequence_length(geometry) -> int:
+    return KDA_VERSIONS * kda_window(geometry)
+
+
+def kda_position(geometry, kind: str, segment: int, version: int = 0) -> int:
+    """Table position of global segment ``segment`` in window ``version``."""
+    return version * kda_window(geometry) + segment * kda_chunk_n_tokens(geometry, kind)
+
+
 def populate_kv_chunk_address_table_kda(
     lookup_table,
     config,
@@ -868,9 +900,11 @@ def populate_kv_chunk_address_table_kda(
 
     The KDA analogue of the block-cyclic and dflash walks, differing in three ways:
 
-      * **No token axis.** A KDA layer's state is a fixed set of segments, so the table's position axis
-        IS the global segment index: ``chunk_n_tokens == 1`` and ``max_sequence_length`` is the number
-        of unique segments per layer (384 recurrent / 576 convolution at 96 heads).
+      * **No token axis.** A KDA layer's state is a fixed set of segments, placed on the contract's
+        synthetic axis: global segment ``i`` at ``v * kda_window + i * chunk_n_tokens`` for every version
+        window ``v`` (see ``kda_position``), strides 96 recurrent / 64 convolution and a 36864-position
+        window at 96 heads. All ``KDA_VERSIONS`` windows alias the same bytes, so a migration request
+        for any decode version resolves to this rank's one state.
       * **TP shards heads, SP replicates.** Column ``g // H_local`` is the only column holding global
         head ``g``, and every SP row of that column holds the same bytes, so a device group is one TP
         column spanning all SP rows -- the worker reads any member as a replica. (The MLA cache is the
@@ -892,16 +926,17 @@ def populate_kv_chunk_address_table_kda(
     if stage_layout is None:
         raise ValueError("populate_kv_chunk_address_table_kda needs the gathered stage layout of the slab")
     segment_bytes = kda_segment_bytes(geometry, kind)
-    segments_per_layer = kda_segments_per_layer(geometry, kind)
     shards_per_layer = (
         geometry.recurrent_shards_per_layer if kind == "kda_recurrent" else geometry.convolution_shards_per_layer
     )
+    stride = kda_chunk_n_tokens(geometry, kind)
     assert (
-        config.chunk_n_tokens == 1
-    ), f"KDA configs are segment-addressed (chunk_n_tokens 1), got {config.chunk_n_tokens}"
-    assert (
-        config.max_sequence_length == segments_per_layer
-    ), f"KDA {kind} config spans {config.max_sequence_length} positions but a layer has {segments_per_layer} segments"
+        config.chunk_n_tokens == stride
+    ), f"KDA {kind} config has chunk_n_tokens {config.chunk_n_tokens}; the contract stride is {stride}"
+    assert config.max_sequence_length == kda_max_sequence_length(geometry), (
+        f"KDA {kind} config spans {config.max_sequence_length} positions, not "
+        f"{KDA_VERSIONS} windows of {kda_window(geometry)}"
+    )
     assert (
         config.chunk_size_bytes == segment_bytes
     ), f"KDA {kind} config chunk is {config.chunk_size_bytes} bytes but a segment is {segment_bytes}"
@@ -942,7 +977,10 @@ def populate_kv_chunk_address_table_kda(
                         location.noc_addr = ((shard % num_banks) << 32) | (base + (shard // num_banks) * segment_bytes)
                         location.size_bytes = segment_bytes
                         location.device_group_index = group_idx
-                        lookup_table.set(row, segment, slot, location, config_id)
+                        for version in range(KDA_VERSIONS):
+                            lookup_table.set(
+                                row, kda_position(geometry, kind, segment, version), slot, location, config_id
+                            )
     return lookup_table
 
 
