@@ -40,7 +40,7 @@ uint32_t reduce_scatter_default_workers(
     uint32_t ring_size,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link,
-    const CoreCoord& core_grid_offset = CoreCoord{0, 0});
+    const tt::tt_metal::CoreCoord& core_grid_offset = tt::tt_metal::CoreCoord{0, 0});
 
 // Returns the default chunks_per_sync value for the given topology and chunking geometry.
 //

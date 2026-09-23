@@ -39,7 +39,7 @@ uint32_t reduce_scatter_default_workers(
     uint32_t ring_size,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link,
-    const CoreCoord& core_grid_offset) {
+    const tt::tt_metal::CoreCoord& core_grid_offset) {
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     // choose_worker_cores shifts every core it picks by core_grid_offset, so a core only counts as
@@ -48,7 +48,8 @@ uint32_t reduce_scatter_default_workers(
     for (const auto& core_range : subdevice_core_range_set.ranges()) {
         for (size_t x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
             for (size_t y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
-                if (subdevice_core_range_set.contains(CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))) {
+                if (subdevice_core_range_set.contains(
+                        tt::tt_metal::CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))) {
                     ++num_cores;
                 }
             }
