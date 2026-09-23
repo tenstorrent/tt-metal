@@ -509,6 +509,43 @@ through to the activation placement — which is itself L1 under
 `TT_BATCHED_L1_PREFILL` — so the knobs could move an op output *into* L1 but
 never *out*. Identical behaviour in the DRAM-activation regime.
 
+### Where the time goes — steady state, per iteration (2026-09-23)
+
+From the FINAL profiles, **warmup excluded** (the profiler CSVs also contain the
+Generator's warmup passes, which run the LM head over the full vocabulary — 10
+`[32×2560]×[2560×16032/7648]` matmuls plus S2Is per pass; those are *not* in the
+traced iteration and must be filtered out before computing shares). Rescaled to
+e2e so the columns sum to the measured latency.
+
+| op (calls/layer) | bs1 | bs32 | note |
+|---|---|---|---|
+| Matmuls QKV+WO+FF13+FF2 (5) | 10.4 ms · 40% | 228 ms · 41% | bs32 at 80–89% of peak; **bs1 ~40%** |
+| LayerNorm (3.9) | 1.3 · 5% | 84 · 15% | bs32 ≈ 2.7× off DRAM roofline |
+| GenericOp head-split + concat (2) | 2.2 · 8.5% | **73 · 13%** | our custom op, 2.7× off roofline at bs32 |
+| BinaryNg: 2 residual adds + SwiGLU mul (3) | **7.8 · 30%** | 72 · 13% | bs32 at ~DRAM roofline; **bs1 see below** |
+| Rotary (2) | 1.9 · 7% | 46 · 8% | 3.3× off roofline |
+| SDPA (1) | 1.9 · 7% | 37 · 7% | swept every axis; tapped |
+| Typecast Q→bfp8 (1, batch only) | — | 18 · 3% | see below: not removable for free |
+
+Gap to 3× H200: bs1 25.9 → **16.3** (−37%); bs32 557.8 → **417.5** (−25%). At bs32
+the matmuls are near roofline so the −140 ms has to come from the non-matmul 59%;
+at bs1 the lever is op count (~21 ops/layer at ~30 µs each).
+
+**BinaryNg at bs1 is the op, not the model.** Standalone `ttnn.add` on
+`[1,1,512,2560]` bf16 takes **150 µs from L1-interleaved inputs and 92 µs from
+DRAM** (roofline ~19 µs); the model's 51–109 µs matches. Interleaved-L1 reads go
+tile-by-tile over the NoC from other cores' L1, which is worse than DRAM bursts.
+The fix under test is a block-sharded residual on the LayerNorm grid (each core
+reads its own shard; also deletes the I2S before every LN).
+
+**Q→BFP8 typecast before SDPA (batch only): tested, neutral-to-negative, kept.**
+The cast exists to match Q to K/V, but with `skip_kv_cache_fill` K and V reach
+SDPA as bf16 anyway, so it looked like 18 ms/iter of pure overhead at bs32.
+Skipping it (`_prepare_q_for_sdpa` returning Q unchanged, gate confirmed active):
+bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA on
+bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
+real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
+
 **Operational note — device resets on this host.** Use **`tt-smi -r` only**.
 Never run `tt-smi -glx_reset`: this is a shared 32-chip Galaxy and `-glx_reset`
 issues an IPMI reset of the whole tray, disrupting every chip on the box, not
