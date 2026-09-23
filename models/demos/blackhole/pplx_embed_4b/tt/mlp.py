@@ -121,8 +121,14 @@ class PplxFusedSwigluMLP(MLP):
         if self.args.is_galaxy or self.args.num_devices > 1:
             return False
         # Only where the stock path would already have used minimal_matmul; the
-        # legacy 2D path (bs=1 short-seq on this model) is faster left alone.
-        if not self.args.use_minimal_prefill_matmul(seq_len):
+        # legacy 2D path (bs=1 short-seq on this model) is faster left alone --
+        # except that at bs=1 the three ops it replaces (FF1 104 us + FF3 104 us
+        # + SwiGLU mul 156 us = 364 us/layer, the mul alone being 3.8 ms/iter)
+        # make one fused minimal_matmul worth trying. QWEN_FUSE_SWIGLU_BS1=1
+        # opts the legacy-path shapes in; forward() then builds a bs=1-tuned
+        # MinimalMatmulConfig since get_mlp_ff1_3_prg_config returns the legacy
+        # config there.
+        if not self.args.use_minimal_prefill_matmul(seq_len) and os.getenv("QWEN_FUSE_SWIGLU_BS1", "0") != "1":
             return False
         # fuse_swiglu needs the packed width to be an even number of tiles.
         return (2 * self.args.hidden_dim) % (2 * TILE) == 0
@@ -130,6 +136,8 @@ class PplxFusedSwigluMLP(MLP):
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         seq_len = x.shape[-2]
         if not self._can_fuse(x, mode, seq_len):
+            if self._can_silu_in_ff1(mode, seq_len):
+                return self._forward_silu_in_ff1(x, mode, seq_len)
             return super().forward(x, mode)
 
         layer = max(self.layer_num, 0)
@@ -138,7 +146,9 @@ class PplxFusedSwigluMLP(MLP):
         )
         pc = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
         if not isinstance(pc, ttnn.MinimalMatmulConfig):
-            return super().forward(x, mode)
+            if os.getenv("QWEN_FUSE_SWIGLU_BS1", "0") != "1":
+                return super().forward(x, mode)
+            pc = self._bs1_fused_config(ckc)
 
         prefill_mem_seq = int(seq_len)
         w2_in = ttnn.experimental.minimal_matmul(
@@ -150,6 +160,79 @@ class PplxFusedSwigluMLP(MLP):
             fuse_swiglu=True,
         )
         ttnn.deallocate(x)
+        return self._down_project(w2_in, mode, seq_len)
+
+    def _bs1_fused_config(self, ckc) -> "ttnn.MinimalMatmulConfig":
+        """MinimalMatmulConfig for the fused FF1/FF3 at bs=1 (M=512).
+
+        The fused kernel keeps a gate and an up tile per output tile in DST, so
+        subblock_w is capped at 4 (1x8 fails the DST-volume check); with
+        fp32_dest_acc_en the budget halves again. Grid is the full device,
+        clamped for harvested parts. QWEN_MM_BLOCK_FF13 / QWEN_MM_SUBBLOCK_FF13
+        are honoured if set so the config can be swept like the others.
+        """
+        gx, gy = self.args._clamp_grid_to_device((12, 10))
+        mb, kb, nb = self.args._resolve_mm_blocks("QWEN_MM_BLOCK_FF13", default=(4, 8, 8))
+        fp32 = bool(getattr(ckc, "fp32_dest_acc_en", False))
+        sbh, sbw = self.args._resolve_mm_subblocks("QWEN_MM_SUBBLOCK_FF13", default=(1, 2 if fp32 else 4))
+        # The resolver falls back to the global QWEN_MM_SUBBLOCK (1,8 in the demo),
+        # which the fused kernel cannot take: clamp to the fused DST budget and keep
+        # the op's N_block_size % subblock_w == 0 invariant.
+        cap = 2 if fp32 else 4
+        sbw = min(sbw, cap)
+        while sbw > 1 and nb % sbw:
+            sbw -= 1
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=mb,
+            K_block_size=kb,
+            N_block_size=nb,
+            subblock_h=sbh,
+            subblock_w=sbw,
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        )
+
+    # ------------------------------------------------------------------ #
+    def _can_silu_in_ff1(self, mode, seq_len) -> bool:
+        """Unfused FF1/FF3 with the SiLU moved into FF1's matmul epilogue.
+
+        Where fuse_swiglu is off (bs=32: the fused matmul lost more than the mul
+        saved) the SwiGLU multiply is a BinaryNg with a SiLU on input A. Standalone
+        that SiLU is ~55% of the op (75 vs 34 us at bs=1 shapes) and at bs=32 the
+        mul is ~50 ms/iter of kernel time. minimal_matmul exposes
+        ``fused_activation``, so FF1 can emit silu(x@w1) directly and the mul
+        becomes a plain multiply. Opt-in: QWEN_SILU_IN_FF1=1.
+        """
+        if os.getenv("QWEN_SILU_IN_FF1", "0") != "1" or mode != Mode.PREFILL:
+            return False
+        if self.args.is_galaxy or self.args.num_devices > 1:
+            return False
+        return self.args.use_minimal_prefill_matmul(seq_len)
+
+    def _forward_silu_in_ff1(self, x, mode, seq_len):
+        layer = max(self.layer_num, 0)
+        ckc = self.decoders_optimizations.get_math_fidelity(
+            decoder_id=layer, op=OpGroup.LI_FF1_FF3, configuration=self.args
+        )
+        pc = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
+        if not isinstance(pc, ttnn.MinimalMatmulConfig):
+            return super().forward(x, mode)
+        mem = self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher, prefill_seq_len=int(seq_len))
+        w1_out = ttnn.experimental.minimal_matmul(
+            x,
+            self.w1,
+            config=pc,
+            compute_kernel_config=ckc,
+            memory_config=mem,
+            dtype=self.ff1_3_dtype,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        )
+        w3_out = ttnn.experimental.minimal_matmul(
+            x, self.w3, config=pc, compute_kernel_config=ckc, memory_config=mem, dtype=self.ff1_3_dtype
+        )
+        ttnn.deallocate(x)
+        w2_in = ttnn.mul(w1_out, w3_out, dtype=self.ff1_3_dtype or ttnn.bfloat8_b, memory_config=w1_out.memory_config())
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
         return self._down_project(w2_in, mode, seq_len)
 
     # ------------------------------------------------------------------ #

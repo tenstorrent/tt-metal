@@ -546,6 +546,38 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### Correction: use DEVICE KERNEL DURATION, not FW DURATION, for op shares (2026-09-23)
+
+`DEVICE FW DURATION` starts when a core receives the launch, which on a traced
+run is *before* the previous op has finished — it includes the wait for GO. Its
+per-iteration sum exceeds wall time by 46% at bs1 (32.7 vs 25.9 ms) and 13% at
+bs32. `DEVICE KERNEL DURATION` is the op's own work. Re-ranked on kernel time:
+
+| op | bs1 kernel ms (% of 21.0) | bs32 kernel ms (% of 497) |
+|---|---|---|
+| Matmuls QKV+WO+FF13+FF2 | **13.0 (62%)** — ~42% of device peak on 64 cores | 243 (49%) — 80–89% of peak |
+| SDPA | 2.2 (10.6%) | 39.9 (8.0%) |
+| BinaryNg (2 adds + SwiGLU mul) | 2.0 (9.6%) — *not* 30% | 78.5 (15.8%) — at DRAM roofline |
+| LayerNorm ×3.9 | 1.2 (5.7%) | 51.7 (10.4%) — q_norm alone 24 ms |
+| Rotary ×2 | 1.4 (6.6%) | 27.2 (5.5%) |
+| GenericOp head-split+concat | 0.9 (4.2%) | 41.3 (8.3%) — at DRAM roofline |
+| inter-op gaps (e2e − kernel sum) | **4.9 (19% of e2e)** | 60.6 (11% of e2e) |
+
+The bs1 matmuls are at ~79% of the peak of the 64 cores the legacy 2D path can
+use (Mt=16 requires gy | 16); the loss is the grid cap, not the kernel.
+
+### Tested and rejected, round 2 (2026-09-23)
+
+| experiment | result | why |
+|---|---|---|
+| `minimal_matmul` at bs1 on 120 cores, 1×8 subblocks (`QWEN_FORCE_MINIMAL_MM=1`) | 45.6 ms vs 25.9; 2×4: 45.6; + fused SwiGLU: 55.6 | still far slower than legacy 2D at M=512 |
+| SiLU moved into FF1's matmul epilogue at bs32 (`QWEN_SILU_IN_FF1=1`) | 569.8 vs 557.8 (+2.2%) | SFPU epilogue serialises with a matmul already at 80% of peak |
+| head-split kernels: 1 barrier per Q/K/V unit instead of 3 | bit-exact; bs1 60.5→69.2 µs, B=8 137.4→135.9 µs | op is at DRAM roofline (53 MB in 136 µs = 390 GB/s); only fusion removes the pass |
+| standalone eager microbenchmarks of small ops | invalid | eager timing is host-dispatch-bound (I2S 85 µs eager vs 3.4 µs device); use trace replay |
+
+Knobs retained default-off as probes: `QWEN_FORCE_MINIMAL_MM`, `QWEN_FUSE_SWIGLU_BS1`,
+`QWEN_SILU_IN_FF1`.
+
 **Operational note — device resets on this host.** Use **`tt-smi -r` only**.
 Never run `tt-smi -glx_reset`: this is a shared 32-chip Galaxy and `-glx_reset`
 issues an IPMI reset of the whole tray, disrupting every chip on the box, not

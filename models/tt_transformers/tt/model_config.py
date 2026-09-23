@@ -2225,6 +2225,14 @@ class ModelArgs:
         # and, with the in0_block_w cap lifted, reaches 69-70% of BFP4/LoFi peak
         # while minimal_matmul sits at 42-51% on the batched shapes — so the
         # batched path is worth re-testing on legacy.
+        # QWEN_FORCE_MINIMAL_MM=1 is the opposite probe: route the short-seq (bs=1)
+        # prefill matmuls to minimal_matmul too. When minimal lost at bs=1 (49.0 vs
+        # 33.1 ms) every MinimalMatmulConfig still ran 1x1 subblocks; with 1x8 and
+        # the full 120-core grid it has not been re-measured, and the legacy 2D path
+        # is capped at 8x8 = 64 cores for M=512 (per_core_M must divide 16 tiles),
+        # where the four matmuls run at ~42% of LoFi peak.
+        if os.getenv("QWEN_FORCE_MINIMAL_MM", "0") == "1":
+            return True
         if os.getenv("QWEN_FORCE_LEGACY_MM", "0") == "1":
             return False
 
