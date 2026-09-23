@@ -68,7 +68,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // ISSUE tt-llk #988: For unpack to dest cannot init the unpacker with 1 tile per unpack, because it will
             // keep writing to dest_idx=0.
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, OUTPUT_NUM_TILES_IN_BLOCK /*num_tiles_per_unpack*/);
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+                ckernel::DEFAULT_TENSOR_SHAPE,
+                OUTPUT_NUM_TILES_IN_BLOCK /*num_tiles_per_unpack*/);
         }
         else
         {
@@ -160,8 +162,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
 
-            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
-                static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.pack_src));
+            const DataFormat math_format = static_cast<DataFormat>(formats.math);
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
