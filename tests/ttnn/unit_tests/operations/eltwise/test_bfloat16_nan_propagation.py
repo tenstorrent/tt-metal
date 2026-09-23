@@ -26,6 +26,8 @@ The tests below assert the behaviour we want, not the behaviour we have, and are
 xfail(strict=True) so that fixing either layer turns them into failures rather than silent
 passes. When that happens, also delete the bfloat16 skip in
 test_backward_relu6.py::test_bw_relu6_boundaries, which exists only because of this.
+The layout half of this is tracked as #31406; the conversion and compute halves are the same
+defect seen through different paths.
 """
 
 import pytest
@@ -100,6 +102,24 @@ def test_bfloat16_nan_produced_on_device(device):
     result = ttnn.to_torch(ttnn.divide(zeros, zeros))
 
     assert torch.isnan(result).all(), f"returned 0x{result.view(torch.int16)[0, 0, 0, 0].item() & 0xFFFF:04x}"
+
+
+@pytest.mark.xfail(strict=True, reason="#31406: a layout change mangles a bfloat16 NaN into an infinity")
+@pytest.mark.parametrize("target_layout", (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), ids=["to_row_major", "to_tile"])
+def test_bfloat16_nan_survives_layout_change(device, target_layout):
+    """#31406's own reproducer: a layout change must not alter values.
+
+    float32 passes today; bfloat16 still returns an infinity, so this is the bfloat16 half of
+    that issue and the same conversion defect the tests above describe.
+    """
+    shape = torch.Size([1, 1, 32, 32])
+    host = _bf16_from_bits(shape, 0x7FC0)
+    start_layout = ttnn.TILE_LAYOUT if target_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.ROW_MAJOR_LAYOUT
+
+    on_device = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=start_layout, device=device)
+    moved = ttnn.to_torch(ttnn.to_layout(on_device, layout=target_layout))
+
+    assert torch.isnan(moved).all(), f"became 0x{moved.view(torch.int16).flatten()[0].item() & 0xFFFF:04x}"
 
 
 def test_float32_nan_propagates_through_eltwise(device):
