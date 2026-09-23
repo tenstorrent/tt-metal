@@ -42,7 +42,7 @@ def assert_correlated(actual, expected, threshold=0.99):
     return pcc
 
 
-@pytest.mark.parametrize("batch,length", [(1, 129), (9, 1025), (32, 128)])
+@pytest.mark.parametrize("batch,length", [(1, 129), (1, 1214), (9, 1025), (32, 128)])
 def test_decoder(qb2_mesh, batch, length):
     """Compare with HF, then replay shared families through a page remapping."""
     torch.set_num_threads(8)

@@ -51,7 +51,7 @@
 //   words the same core wrote. The sender page and every receiver page share this layout, so
 //   the same slot offset addresses the mirror counter on the peer.
 //
-//   Active lane count P (Attach num_pipe_consumer_threads / relay num_producers) is not in
+//   Active lane count P (receiver kernel num_threads / relay num_producers) is not in
 //   the page: it is packed into the program's kernel-config slot so it arrives in CQ order
 //   with the program that uses it. It is armed once per pipe lifetime (1 -> P) because the
 //   persistent credit block below is interpreted through it. Layout stride per receiver is

@@ -1,0 +1,150 @@
+name: "T3K tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      # These 3 inputs shape a dispatch only. A scheduled run ignores them and
+      # covers every suite. run-e2e-tests defaults to false because the e2e suite
+      # is 195 of the 279 machine-minutes of a full run, and 1 leg of it,
+      # t3k_fabric_stability_tests, holds a box for about 97 minutes. A dispatcher
+      # who wants e2e asks for it; the nightly run covers it either way.
+      run-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run the T3K unit tests"
+      run-integration-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run the T3K integration tests"
+      run-e2e-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Run the T3K e2e tests (about 195 machine-minutes; off by default on a dispatch)"
+      # The values below are the model-name fields in the tests YAMLs the impls
+      # read. A value that matches no model-name filters the matrix down to the
+      # entries that carry no model-name, which reads as a pass.
+      unit-model:
+        description: "Unit tests: select model to test (model-name in t3k_unit_tests.yaml)"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - t3k_ttmetal_tests
+          - t3k_ttnn_tests
+      integration-model:
+        description: "Integration tests: select model to test (model-name in t3k_integration_tests.yaml)"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - tteager
+          - trace stress
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+  schedule:
+    - cron: "0 6 * * *" # runs every day at 6am UTC, 1am EST
+
+run-name: >-
+  T3K tests
+  Tests[${{ github.event_name == 'schedule' && 'All'
+  || format('{0}{1}{2}{3}{4}',
+     inputs.run-unit-tests && 'unit' || '',
+     inputs.run-unit-tests && inputs.run-integration-tests && ',' || '',
+     inputs.run-integration-tests && 'integration' || '',
+     (inputs.run-unit-tests || inputs.run-integration-tests) && inputs.run-e2e-tests && ',' || '',
+     inputs.run-e2e-tests && 'e2e' || '') }}]
+
+jobs:
+  # A scheduled run covers every suite, thus it carries no inputs to check.
+  check-selection:
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: ubuntu-slim
+    steps:
+      - name: Make sure at least one suite is selected
+        run: |
+          if [[ "${{ inputs.run-unit-tests }}" != "true" \
+             && "${{ inputs.run-integration-tests }}" != "true" \
+             && "${{ inputs.run-e2e-tests }}" != "true" ]]; then
+            echo "::error::No suite selected. Enable at least one of run-unit-tests, run-integration-tests or run-e2e-tests."
+            exit 1
+          fi
+
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: [check-harbor, check-selection]
+    if: ${{ !cancelled() && needs.check-selection.result != 'failure' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-inplace-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  t3000-unit-tests:
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-unit-tests) && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_llmbox"
+      model: ${{ inputs.unit-model || 'all' }}
+
+  t3000-integration-tests:
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-integration-tests) && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/t3000-integration-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_llmbox"
+      model: ${{ inputs.integration-model || 'all' }}
+
+  t3000-e2e-tests:
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-e2e-tests) && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/t3000-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_llmbox"

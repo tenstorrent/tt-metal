@@ -521,12 +521,13 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
-@pytest.mark.parametrize("enable_trace", [True])
+@pytest.mark.parametrize("enable_trace", [True, False], ids=["trace", "notrace"])
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 0,
