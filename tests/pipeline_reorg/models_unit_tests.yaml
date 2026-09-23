@@ -1956,7 +1956,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 16
+      timeout: 6
       tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
