@@ -39,8 +39,28 @@ several requests. The control's site is exactly the one the vLLM benchmark repor
 in-projection, which fits the device stalling on something earlier and the host merely blocking
 at its next enqueue. So the specific op is an observation point, not the cause.
 
-Next narrowing step: run ``prefill_paged_slots`` with ONE request per call instead of N, to
-separate "batched per-slot prefill" from "this prefill path at all".
+REPRODUCTION IS FLAKY -- READ THIS BEFORE TRUSTING A PASS
+---------------------------------------------------------
+It hung on the two runs above, then two consecutive 20-cycle runs passed cleanly -- including a
+deliberate N>1 positive control that was supposed to hang. So a PASS here does NOT mean the bug
+is absent, and this test cannot yet validate a fix or compare configurations.
+
+That already invalidated one experiment: ``QWEN36_STRESS_PREFILL=one`` (one request per
+prefill_paged_slots call, 20 cycles) passed, but so did the N>1 control in the same session, so
+nothing can be concluded about batched-vs-single prefill from it.
+
+MEASURED HIT RATE: 1 hang in 8 runs (12.5%) at ``QWEN36_STRESS_CYCLES=8``, ~20 s per run. The
+hang landed at cycle 7/8 there, at cycle 5/6 in one earlier run, and at the initial admission in
+another, so the hazard looks roughly per-cycle (~1.6%/cycle) rather than tied to one spot.
+
+HOW TO USE IT ANYWAY
+--------------------
+At 12.5%/run a single pass is meaningless, but repetition is cheap: P(no hang | 12.5%) is
+0.875^N, so ~30 consecutive clean runs (~10 min) is strong evidence (p ~ 0.02) that a fix works.
+Raising ``QWEN36_STRESS_CYCLES`` should raise the per-run rate roughly proportionally if the
+hazard really is per-cycle -- 40 cycles would be a much sharper single run. Always pair a
+candidate fix with an unfixed positive control in the same session; the reason this test's first
+narrowing attempt was void is that the control silently failed to reproduce.
 
 WHY ISL < 2048 MATTERS
 ----------------------
@@ -134,9 +154,24 @@ def test_trace_eager_alternation_stress(mesh_device, B, reset_seeds, ensure_gc):
     prompt_lens = [PROMPT_LENS[u % len(PROMPT_LENS)] for u in range(B)]
     prompts = [torch.randint(0, vocab, (prompt_lens[u],)).tolist() for u in range(B)]
 
+    # NARROWING knob: "one" calls prefill_paged_slots once per request (N=1) instead of once
+    # with N requests. Separates "batched per-slot prefill" from "this prefill path at all".
+    prefill_mode = os.environ.get("QWEN36_STRESS_PREFILL", "batch").lower()
+
+    def admit(tok_list, slots, lens):
+        """Prefill requests into slots. page_table is indexed by REQUEST, not slot."""
+        if prefill_mode == "one":
+            out = []
+            for k, u in enumerate(slots):
+                pt1 = page_table[torch.tensor([u], dtype=torch.long)]
+                out.extend(model.prefill_paged_slots([tok_list[k]], pt1, [u], valid_lens=[lens[k]]))
+            return out
+        pt = page_table[torch.tensor(slots, dtype=torch.long)]
+        return model.prefill_paged_slots(tok_list, pt, slots, valid_lens=lens)
+
     # ---- initial admission of all B slots (eager masked-bucket prefill) ----
     token_list = [torch.tensor([prompts[u]], dtype=torch.long) for u in range(B)]
-    pf_host = model.prefill_paged_slots(token_list, page_table, list(range(B)), valid_lens=prompt_lens)
+    pf_host = admit(token_list, list(range(B)), prompt_lens)
     toks = [int(torch.argmax(pf_host[u].reshape(-1, vocab)[0])) for u in range(B)]
     pos = list(prompt_lens)
 
@@ -190,7 +225,7 @@ def test_trace_eager_alternation_stress(mesh_device, B, reset_seeds, ensure_gc):
         restore(snap)
     logger.info(
         f"decode {'EAGER (control arm)' if eager_decode else 'trace captured'} "
-        f"(B={B}, layers={n_layers}); starting {cycles} alternation cycles"
+        f"(B={B}, layers={n_layers}, prefill={prefill_mode}); starting {cycles} alternation cycles"
     )
 
     def decode_step():
@@ -223,10 +258,7 @@ def test_trace_eager_alternation_stress(mesh_device, B, reset_seeds, ensure_gc):
             slots = [(cycle * SLOTS_PER_CYCLE + k) % B for k in range(SLOTS_PER_CYCLE)]
             new_lens = [PROMPT_LENS[(cycle + k) % len(PROMPT_LENS)] for k in range(len(slots))]
             new_toks = [torch.randint(0, vocab, (1, new_lens[k])).long() for k in range(len(slots))]
-            # page_table is indexed by REQUEST, not slot: one row per prefilled request, with
-            # empty_slots[u] naming its destination slot (see prefill_paged_slots' assert).
-            slot_pt = page_table[torch.tensor(slots, dtype=torch.long)]
-            pf = model.prefill_paged_slots(new_toks, slot_pt, slots, valid_lens=new_lens)
+            pf = admit(new_toks, slots, new_lens)
             for k, u in enumerate(slots):
                 row = pf[k].reshape(-1, vocab)[0].float()
                 assert torch.isfinite(row).all(), f"cycle {cycle}: prefill logits non-finite for slot {u}"
