@@ -343,13 +343,6 @@ def agmm_k_block_size(k_local, default=8):
 def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
     """Persistent gather buffer for all_gather_minimal_matmul_async on activation x [.,S,K/tp].
 
-    The op writes every device's K-slice straight into its peers' gather buffer with no receiver-ready
-    handshake (its barrier_semaphore is not wired up). Without a persistent buffer the op allocates one per
-    call, on the host, from whatever the preceding ops just freed — so a device that reaches the op early can
-    write into memory a lagging peer's preceding kernels still use. A persistent buffer never aliases
-    transient data. DRAM, one ping-pong pair per (S, K) shared by every layer through tt_ccl, allocated on
-    first use (the warm-up run, before any trace capture).
-
     TODO(#57458): once all_gather_minimal_matmul_async honours barrier_semaphore (an in-kernel receiver-ready
     handshake), drop this buffer and pass barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis)
     instead; test_gdn_out_agmm_deterministic_under_device_skew must keep passing."""
