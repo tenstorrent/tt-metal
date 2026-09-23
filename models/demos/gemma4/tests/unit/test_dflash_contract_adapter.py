@@ -426,6 +426,39 @@ def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model):
     assert proposal.num_valid.tolist() == [0, 0]
 
 
+def test_straddle_verify_finds_the_owner_through_slot_remap(model):
+    """The peer took row 0 and the owner moved to row 1 while its state still
+    sits in slot 0; the runner says so with slot_remap and reports the move
+    only after the step."""
+    _start_solo(model)
+    out = _verify(
+        model,
+        [[40, 0, 0, 0, 0, 0], [150, 201, 202, 203, 204, 205]],
+        [[9, 10, 11, 12, 13, 14], list(range(3, 9))],
+        [0, 5],
+        keys=[20, 10],
+        result=DeviceResult(_tensor([600, 0])),
+        slot_remap=[1, 0],
+    )
+    assert out.argmax_ids[1].tolist() == [250, 251, 252, 253, 254, 255]
+    assert int(out.argmax_ids[0, 0]) == 600
+    assert _names(model, "decode") == [("decode", [40, 150], [9, -1])]
+    assert not model._spec_active
+    model.note_state_slots_moved({0: 1, 1: 0})  # the runner settles the permutation afterwards
+
+
+def test_ordinary_step_finds_the_owner_through_slot_remap(model):
+    _start_solo(model)
+    out = _ordinary(model, [0, 150], [-1, 3], [0, 10], slot_remap=[1, 0])
+    assert out.tolist() == [0, 250]
+
+
+def test_verify_for_a_row_whose_slot_owns_nothing_raises_even_at_the_owners_row(model, expect_error):
+    _start_solo(model)
+    with expect_error(RuntimeError, "owns no drafter session"):
+        _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10], slot_remap=[3])
+
+
 def test_straddle_verify_converts_host_logits_at_the_steps_row_count(model):
     _start_solo(model)
     out = _verify(

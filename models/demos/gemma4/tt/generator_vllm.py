@@ -3869,6 +3869,23 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         v = values if isinstance(values, torch.Tensor) else torch.as_tensor(values)
         return [int(x) for x in v.reshape(int(rows), -1)[int(row)].tolist()]
 
+    @staticmethod
+    def _dflash_slot_of(row, kwargs):
+        """The state slot row ``row`` reads on this step.
+
+        The runner permutes per-slot state with ``slot_remap`` (``slot_remap[i]``
+        is the slot whose state row ``i`` reads) and reports the move through
+        ``note_state_slots_moved`` only after the model accepted the step, so
+        during the step a request's row and its owner slot can differ.
+        """
+        remap = kwargs.get("slot_remap")
+        if remap is None:
+            return int(row)
+        try:
+            return int(remap[int(row)])
+        except (IndexError, TypeError, ValueError):
+            return int(row)
+
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         spec_mode = kwargs.pop("spec_mode", None)
         num_valid = kwargs.pop("num_valid_drafts", None)
@@ -3900,9 +3917,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         row = live[0]
         if kwargs.get("sampling_params") is None:
             # Host sampling reads logits; the fused replay yields ids only.
-            if self._dflash_owns(self._dflash_pending_owner, row):
+            slot = self._dflash_slot_of(row, kwargs)
+            if self._dflash_owns(self._dflash_pending_owner, slot):
                 self._dflash_drop_pending()
-            if self._dflash_owns(self._dflash_live_owner, row):
+            if self._dflash_owns(self._dflash_live_owner, slot):
                 self._dflash_end_session()
             return plain()
         token = self._dflash_solo_next_token(row, tokens, start_pos, rows, kwargs, page_tables_per_layer)
@@ -3920,8 +3938,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         """
         anchor = self._dflash_row(tokens, rows, row)[0]
         position = self._dflash_row(start_pos, rows, row)[0] if start_pos is not None else None
+        slot = self._dflash_slot_of(row, kwargs)
         if self._spec_active:
-            if not self._dflash_owns(self._dflash_live_owner, row):
+            if not self._dflash_owns(self._dflash_live_owner, slot):
                 # Another request's session; its owner is not in this step.
                 self._dflash_end_session()
             else:
@@ -3942,7 +3961,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
                 return None
         if self._spec_pending is None:
             return None
-        if not self._dflash_owns(self._dflash_pending_owner, row):
+        if not self._dflash_owns(self._dflash_pending_owner, slot):
             # Taps of a request that never decoded alone (finished, preempted).
             self._dflash_drop_pending()
             return None
@@ -4024,7 +4043,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
             )
         if drafted:
             row = drafted[0]
-            retained = self._dflash_take_retained(row, tokens, start_pos, rows, int(valid[row]))
+            retained = self._dflash_take_retained(
+                row, self._dflash_slot_of(row, kwargs), tokens, start_pos, rows, int(valid[row])
+            )
             posterior = retained.posterior[:width]
             ids[row, : len(posterior)] = torch.tensor(posterior, dtype=torch.int32)
             if len(live) == 1:
@@ -4051,18 +4072,19 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         ids[:, 0] = self._dflash_plain_argmax(args, kwargs, page_tables_per_layer, rows)
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
 
-    def _dflash_take_retained(self, row, tokens, start_pos, rows, valid):
+    def _dflash_take_retained(self, row, slot, tokens, start_pos, rows, valid):
         """The retained proposal that answers ``row``'s block, marked consumed.
 
-        Raises when the row owns no session, when no unconsumed proposal is
-        retained, or when the block's anchor, position or first ``valid``
-        draft columns differ from the proposal. Truncation to fewer drafts is
-        fine: the posterior at column j depends only on columns before it.
+        ``slot`` is the state slot the row reads this step. Raises when that
+        slot owns no session, when no unconsumed proposal is retained, or when
+        the block's anchor, position or first ``valid`` draft columns differ
+        from the proposal. Truncation to fewer drafts is fine: the posterior at
+        column j depends only on columns before it.
         """
         block = self._dflash_row(tokens, rows, row)
         position = self._dflash_row(start_pos, rows, row)[0] if start_pos is not None else None
-        where = f"row {row}, position {position}, anchor {block[0]}"
-        if not self._spec_active or not self._dflash_owns(self._dflash_live_owner, row):
+        where = f"row {row} (slot {slot}), position {position}, anchor {block[0]}"
+        if not self._spec_active or not self._dflash_owns(self._dflash_live_owner, slot):
             raise RuntimeError(
                 f"Gemma4DFlash speculative contract: verify carries {valid} drafts for {where}, "
                 "but this row owns no drafter session"
