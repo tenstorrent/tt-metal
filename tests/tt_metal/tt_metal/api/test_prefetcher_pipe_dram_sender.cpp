@@ -29,6 +29,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -268,13 +269,13 @@ void expect_ring_slot(
     experimental::PrefetcherPipe& pipe,
     const CoreCoord& receiver_logical,
     uint32_t slot,
-    uint32_t expected_receiver_label,
-    uint32_t expected_entry_label,
+    uint32_t receiver_label,
+    uint32_t entry_label,
     uint32_t entry_size = kEntrySize) {
     const auto got = read_ring_slot(mesh_device, pipe, receiver_logical, slot, entry_size);
     ASSERT_EQ(got.size(), entry_size / sizeof(uint32_t));
     for (uint32_t w = 0; w < got.size(); ++w) {
-        const uint32_t expected = pattern_word(expected_receiver_label, expected_entry_label, w);
+        const uint32_t expected = pattern_word(receiver_label, entry_label, w);
         ASSERT_EQ(got[w], expected) << "receiver " << receiver_logical.str() << " ring slot " << slot << " word " << w
                                     << ": expected 0x" << std::hex << expected << ", got 0x" << got[w] << std::dec;
     }

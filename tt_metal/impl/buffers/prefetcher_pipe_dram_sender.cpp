@@ -32,7 +32,7 @@ std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefe
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards) {
     TT_FATAL(!bank_to_receivers.empty(), "CreatePrefetcherPipesForTensorPrefetcher requires at least one DRAM bank");
-    auto* mesh_device = space.get_device();
+    const auto* mesh_device = space.get_device();
     TT_FATAL(mesh_device != nullptr, "CreatePrefetcherPipesForTensorPrefetcher requires a live space");
 
     // Multi-receiver shards (the legacy interleaved layout) force one sender per bank; the
