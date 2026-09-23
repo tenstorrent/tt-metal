@@ -48,6 +48,8 @@ from models.demos.blackhole.qwen36.tt.sp_prefill import BLOCK_SIZE, SPPrefill
 from models.tt_transformers.tt.common import copy_host_to_device
 
 N_DECODE = int(os.environ.get("E2E_DECODE_STEPS", "8"))
+# "device" (default): reshard on the mesh. "host": the sp_handoff v1 round-trip, for comparison.
+HANDOFF = os.environ.get("E2E_HANDOFF", "device")
 
 
 def test_e2e_prefill_handoff_decode():
@@ -55,6 +57,13 @@ def test_e2e_prefill_handoff_decode():
     span_len = T // SP_DIES
     torch.manual_seed(0)
     tokens = torch.randint(1000, 100000, (1, T), dtype=torch.long)
+    # SP's paged cache must (a) have room for the decode positions past T, so decode can share
+    # it outright, and (b) keep num_blocks a MULTIPLE OF 32 -- forward_prefill_paged pads the
+    # page table for chunked SDPA and does a host write during trace capture otherwise
+    # ("Writes are not supported during trace capture"). T=4096 gives 64 blocks and worked by
+    # luck; T+128 gives 66 and breaks capture. Round up.
+    sp_blocks = (((T + 128) // BLOCK_SIZE + 31) // 32) * 32
+    sp_max_seq = sp_blocks * BLOCK_SIZE
 
     mesh, parent = _open_sp_mesh(trace_region_size=200_000_000)  # (mesh, owner) -- owner is what close takes
     sp = None
@@ -64,7 +73,7 @@ def test_e2e_prefill_handoff_decode():
             n_spans=SP_DIES,
             tp=SP_TP,
             span_len=span_len,
-            max_seq_len=T,
+            max_seq_len=sp_max_seq,  # room for decode positions + 32-block aligned (see above)
             hf_model=model_path(),
             layer_indices=_e2e_layer_indices(),
         )
@@ -79,18 +88,36 @@ def test_e2e_prefill_handoff_decode():
         dec = Qwen36Model.from_pretrained(
             sp.subs[-1],
             max_batch_size=1,
-            max_seq_len=T + 128,  # decode runs positions T..T+N-1; multiple of the 128 SDPA chunk
+            max_seq_len=sp_max_seq,  # same cache geometry as SP, so the buffers are shareable
             layer_indices=_e2e_layer_indices(),
             sequence_parallel=False,
         )
         mesh_d = dec.mesh_device
-        num_blocks = (((T + 128) // BLOCK_SIZE + 31) // 32) * 32
+        num_blocks = sp.num_blocks  # identical to SP's, so the paged buffers are interchangeable
         dec.allocate_kv_caches(
             [num_blocks, dec.args.n_local_kv_heads, BLOCK_SIZE, dec.args.head_dim],
             ttnn.bfloat16,
             batch_size=1,
         )
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+        pt_tt = ttnn.from_torch(
+            page_table,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_d,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_d),
+        )
+
+        # ZERO-COPY KV HANDOFF. Both models are on sp.subs[-1] with identical paged layouts, and
+        # the last SP die's cache already accumulates the whole sequence. Rather than move ~50 MB
+        # (through host: 275 ms; device-to-device copy: 371 ms), just point the decode model at
+        # those same buffers. Prefill then fills them in place and decode sees it with no handoff
+        # at all. Must happen BEFORE trace capture: the trace bakes in buffer addresses.
+        dec.reset_tp()
+        _last = sp.models[-1]
+        for _li, _sl in enumerate(_last.layers):
+            if _sl.is_full_attention:
+                dec.layers[_li].attention.set_paged_kv_cache(_sl.attention.paged_k, _sl.attention.paged_v)
 
         # Traced decode, exactly as demo/text_demo.py drives it: persistent input buffers, the
         # Generator-interface forward, per-shard argmax folded INTO the trace so each step reads
@@ -135,48 +162,72 @@ def test_e2e_prefill_handoff_decode():
         first_token = sp.last_first_token
         t_after_prefill = time.perf_counter()
 
-        kv_snap, gdn_snap, export_s = sp.export_state_host()
-
-        # export_state_host's docstring says it returns the FULL layout, but ttnn.to_torch with
-        # ConcatMeshToTensor(dim=0) actually yields the per-device STACKED form
-        # ([nd,1,S,HD] for KV), which is what inject_into_tp_model re-shards FROM full. Convert
-        # with the inverse helpers. This host-side reshape is part of the handoff, so it stays
-        # inside the timed region.
-        nd = dec.device.get_num_devices()
-        a = dec.args
-        k0 = next(iter(kv_snap.values()))[0]
-        logger.info(f"[e2e] exported KV shape {tuple(k0.shape)} (nd={nd}, n_kv_heads={a.n_kv_heads})")
-        if k0.shape[0] == nd and k0.shape[1] == 1:
-            kv_snap = {
-                li: kv_tp_host_to_full(K, V, num_devices=nd, n_kv_heads=a.n_kv_heads) for li, (K, V) in kv_snap.items()
-            }
-        r0, c0 = next(iter(gdn_snap.values()))
-        logger.info(f"[e2e] exported GDN rec {tuple(r0.shape)} conv {tuple(c0.shape)}")
-        if r0.shape[0] == nd:
-            kd, vd = a.gdn_key_dim, a.gdn_value_dim
-            fixed = {}
-            for li, (rec, conv) in gdn_snap.items():
-                rec_f = gdn_rec_tp_host_to_full(rec, num_devices=nd)
-                cl = [torch.zeros(nd, 1, conv.shape[-1], dtype=conv.dtype)] + [
-                    conv[:, m : m + 1, :].reshape(nd, 1, -1) for m in range(conv.shape[1])
-                ]
-                fixed[li] = (rec_f, gdn_conv_tp_host_to_full(cl, num_devices=nd, key_dim=kd, value_dim=vd))
-            gdn_snap = fixed
-        t_after_export = time.perf_counter()
-
-        dec.reset_tp()
-        inject_into_tp_model(dec, kv_snap, gdn_snap)
+        if HANDOFF == "host":
+            # sp_handoff v1, kept for comparison: device -> host torch -> reshard -> device.
+            # NOTE it writes attn.k_caches, while forward_decode with a page_table reads
+            # attn.paged_k (attention/tp.py:601), so this path does NOT actually feed the paged
+            # decode. Timing only.
+            kv_snap, gdn_snap, export_s = sp.export_state_host()
+            nd, aa = dec.device.get_num_devices(), dec.args
+            k0 = next(iter(kv_snap.values()))[0]
+            if k0.shape[0] == nd and k0.shape[1] == 1:
+                kv_snap = {
+                    li: kv_tp_host_to_full(K, V, num_devices=nd, n_kv_heads=aa.n_kv_heads)
+                    for li, (K, V) in kv_snap.items()
+                }
+            r0, _ = next(iter(gdn_snap.values()))
+            if r0.shape[0] == nd:
+                kd, vd = aa.gdn_key_dim, aa.gdn_value_dim
+                gdn_snap = {
+                    li: (
+                        gdn_rec_tp_host_to_full(rec, num_devices=nd),
+                        gdn_conv_tp_host_to_full(
+                            [torch.zeros(nd, 1, conv.shape[-1], dtype=conv.dtype)]
+                            + [conv[:, m : m + 1, :].reshape(nd, 1, -1) for m in range(conv.shape[1])],
+                            num_devices=nd,
+                            key_dim=kd,
+                            value_dim=vd,
+                        ),
+                    )
+                    for li, (rec, conv) in gdn_snap.items()
+                }
+            t_after_export = time.perf_counter()
+            inject_into_tp_model(dec, kv_snap, gdn_snap)
+        else:
+            # KV: nothing to do -- decode already shares the SP die's paged buffers (above).
+            # Only the GDN recurrent/conv state needs moving, and it is small (~2.3 MB of rec
+            # plus 3 conv rows per layer) and stays on the mesh.
+            export_s = 0.0
+            t_after_export = time.perf_counter()
+            for _li, _sl in enumerate(sp.models[-1].layers):
+                if _sl.is_full_attention:
+                    continue
+                rec, conv = sp.last_die_gdn_state[_li]
+                dn = dec.layers[_li].attention
+                ttnn.copy(rec, dn.rec_state)
+                for m in range(1, len(dn.conv_states)):
+                    row = ttnn.slice(conv, (0, m - 1, 0), (1, m, conv.shape[-1]))
+                    ttnn.copy(ttnn.reshape(row, dn.conv_states[m].shape), dn.conv_states[m])
+                    ttnn.deallocate(row)
+            ttnn.synchronize_device(mesh_d)
         t_after_inject = time.perf_counter()
 
         tok, pos, toks, step_ms = first_token, T, [first_token], []
+        ph = {"update": 0.0, "exec_sync": 0.0, "readback": 0.0}
         for _ in range(N_DECODE):
             st = time.perf_counter()
             _update(tok, pos)
+            a = time.perf_counter()
             ttnn.execute_trace(mesh_d, dec_trace, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_d)
+            b = time.perf_counter()
             idxs = ttnn.to_torch(tt_idx, mesh_composer=read_comp).reshape(-1)
             tok = int(idxs[0].item())  # vocab-shard 0's local argmax; greedy seed for the next step
-            step_ms.append((time.perf_counter() - st) * 1e3)
+            c = time.perf_counter()
+            ph["update"] += (a - st) * 1e3
+            ph["exec_sync"] += (b - a) * 1e3
+            ph["readback"] += (c - b) * 1e3
+            step_ms.append((c - st) * 1e3)
             toks.append(tok)
             pos += 1
         t_end = time.perf_counter()
@@ -199,8 +250,8 @@ def test_e2e_prefill_handoff_decode():
         logger.info("=" * 68)
         logger.info(f"  prefill (true TTFT)        {prefill_ms:8.2f} ms   [wavefront {wave_s * 1e3:.2f}]")
         logger.info(f"    (+ debug-only full-logits readback, NOT counted: {debug_readback_ms:.2f} ms)")
-        logger.info(f"  handoff: export dev->host  {export_ms:8.2f} ms")
-        logger.info(f"  handoff: inject host->dev  {inject_ms:8.2f} ms")
+        logger.info(f"  handoff ({HANDOFF}): phase 1  {export_ms:8.2f} ms")
+        logger.info(f"  handoff ({HANDOFF}): phase 2  {inject_ms:8.2f} ms")
         logger.info(f"  handoff TOTAL              {export_ms + inject_ms:8.2f} ms")
         logger.info(
             f"  {N_DECODE} decode tokens            {decode_ms:8.2f} ms   "
@@ -214,7 +265,30 @@ def test_e2e_prefill_handoff_decode():
             f"decode {100 * decode_ms / total_ms:.0f}%"
         )
         logger.info(f"  per-step decode (ms): {['%.2f' % x for x in step_ms]}")
+        logger.info(
+            f"  decode phases (ms/token): update {ph['update'] / N_DECODE:.2f}  "
+            f"exec+sync {ph['exec_sync'] / N_DECODE:.2f}  readback {ph['readback'] / N_DECODE:.2f}"
+        )
         logger.info(f"  tokens: {toks}")
+        # CORRECTNESS PROBE. An earlier version of this harness injected into attn.k_caches while
+        # forward_decode with a page_table reads attn.paged_k, so decode silently ran on an EMPTY
+        # KV cache and still produced plausible-looking ids. Prove the shared cache is actually
+        # read: zero it, decode the same first token again, and require a different result.
+        if os.environ.get("E2E_SKIP_PROBE") != "1":
+            for _li, _sl in enumerate(sp.models[-1].layers):
+                if _sl.is_full_attention:
+                    za = dec.layers[_li].attention
+                    ttnn.copy(ttnn.zeros_like(za.paged_k), za.paged_k)
+                    ttnn.copy(ttnn.zeros_like(za.paged_v), za.paged_v)
+            _update(first_token, T)
+            ttnn.execute_trace(mesh_d, dec_trace, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_d)
+            tok_zeroed = int(ttnn.to_torch(tt_idx, mesh_composer=read_comp).reshape(-1)[0].item())
+            logger.info(f"  [probe] first decode token with shared KV={toks[1]}, with KV zeroed={tok_zeroed}")
+            assert tok_zeroed != toks[1], (
+                "decode produced the SAME token with the KV cache zeroed -- it is not reading the "
+                "shared paged cache, so the handoff is not actually wired up"
+            )
         assert len(set(toks[1:])) >= 1
     finally:
         try:

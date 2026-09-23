@@ -582,54 +582,75 @@ the window / steps gives **7.69 ms**, so quote 6.99 as median with 7.69 as the w
 
 | phase | ms | share |
 |---|---|---|
-| prefill, true TTFT | **38.14** | 10% |
-| handoff: export device->host | 178.42 | |
-| handoff: inject host->device | 96.10 | |
-| **handoff total** | **274.52** | **69%** |
-| **8 decode tokens** (10.54 ms/token, traced) | **84.29** | 21% |
-| **E2E TOTAL** | **396.95 ms** | |
+| prefill, true TTFT | **38.26** | 27% |
+| **handoff** (GDN state only, on-mesh) | **13.9 - 23.9** | 11-17% |
+| **8 decode tokens** (9.85-10.22 ms/token, traced) | **78.8 - 81.8** | 57-60% |
+| **E2E TOTAL** | **131 - 144 ms** | |
 
-(A further ~57 ms of full-logits readback happens inside `prefill_traced` for PCC/debug and is
-excluded; production reads only the on-device-argmax token.)
+Getting here took three fixes, each an order of magnitude:
 
-#### Decode must be TRACED -- 116.79 -> 10.54 ms/token
+| | e2e | what was wrong |
+|---|---|---|
+| first run | 1357.78 ms | decode eager, handoff through host |
+| + traced decode | 396.95 ms | `decode_tp` in a Python loop: 116.79 ms/token vs 6.99 of device time |
+| + zero-copy KV | **131 - 144 ms** | ~50 MB was being moved that never needed to move |
 
-The first e2e run called `model.decode_tp()` in a Python loop and measured **116.79 ms/token**
-against 6.99 ms/token of device time. `decode_tp` is eager: ~24 layers of ops dispatched from
-host every step. That is not how decode is meant to be driven.
+#### 1. Decode must be TRACED (116.79 -> ~10 ms/token)
 
-The reference is `demo/text_demo.py`, and our model already implements the tt_transformers
-Generator interface for it (`prepare_inputs_decode` / `ttnn_decode_forward` /
-`process_output_decode`). The pattern:
+The reference is `demo/text_demo.py`; this model already implements the tt_transformers
+Generator interface for it. `prepare_inputs_decode` once for **persistent** device buffers, a
+throwaway eager pass to compile, `begin_trace_capture` around `ttnn_decode_forward` with a
+per-shard `ttnn.argmax` **folded into the same trace**, then per step: copy only tokens/pos/rope
+into those buffers (the page table is constant, its address baked into the trace), one
+`execute_trace`, and read back the tiny argmax instead of the full vocab.
 
-1. `prepare_inputs_decode(...)` once -> **persistent** device input buffers (`dev`).
-2. Throwaway eager pass to compile, then `begin_trace_capture` around `ttnn_decode_forward`,
-   with a **per-shard `ttnn.argmax` folded into the same trace**, then `end_trace_capture`.
-3. Per step: `copy_host_to_device` of only tokens/pos/rope into the persistent buffers (the
-   page table is constant and its address is baked into the trace), one `execute_trace`, and a
-   readback of the tiny argmax tensor rather than the full vocab.
+#### 2. The handoff should move ZERO bytes (274 -> 14 ms)
 
-That is **11x**: 84.29 ms for 8 tokens instead of 934.35. Per-step is now
-`9.84 9.69 9.84 9.91 9.80 9.81 10.14 15.26` ms. The remaining ~3.5 ms/token over the 6.99 ms
-device figure is the host input update, the sync and the token readback.
+Both models live on `sp.subs[-1]` with identical paged layouts, and the last SP die's cache
+already accumulates the whole sequence. So the decode model is simply **pointed at those same
+buffers** via `set_paged_kv_cache`, before trace capture (the trace bakes in addresses).
+Prefill then fills them in place and decode sees it with no transfer at all.
 
-#### The handoff is now 69% of e2e, and it should not exist at all
+Measured alternatives, both worse and both unnecessary:
 
-274.52 ms to move ~70 MB out to host and back. It is not bandwidth-bound: it is a per-layer
-Python loop of `ttnn.to_torch` -> host reshard -> `ttnn.from_torch`, 24 layers x several
-tensors, each its own round-trip. (An earlier estimate of ~35 ms from bytes/bandwidth was
-therefore ~8x too optimistic -- the wrong model of the cost entirely.)
+| KV handoff | ms |
+|---|---|
+| through host (`sp_handoff` v1: to_torch -> reshard -> from_torch) | 274.5 |
+| device-to-device copy (`_kv_paged_to_seq` + `paged_fill_cache` per layer) | 370.5 |
+| **share the buffers (no copy)** | **0** |
 
-**In `demo/text_demo.py` there is no handoff.** Prefill and decode share one model and one
-paged KV cache, so decode simply continues. Ours needs a handoff only because SP prefill runs
-on four separate submesh models and decode on a fifth. But **the last SP die already holds the
-whole 4096-token KV and the final GDN state** -- the data never needs to leave the mesh.
+What remains (13.9-23.9 ms) is the **GDN** recurrent/conv state, still an eager per-layer copy
+loop -- 18 layers x (1 rec copy + 3 slice/reshape/copy). It could go the same way: have SP's
+last die write its final state directly into the buffers decode already owns.
 
-The blocker is not the data, it is the model config: `sp.models[-1]` is built
-`sequence_parallel=True`, and under the replicated residual its norms hold full-width gamma
-while `decode_tp` feeds hidden-fractured activations (`Gamma's last padded dim needs to equal
-tile width`). Make the last span's model decode-compatible -- or reshard on device instead of
-through host -- and e2e goes to roughly **38 + small + 84 = ~125 ms**.
+Gotcha: SP's `num_blocks` must be a **multiple of 32**. `forward_prefill_paged` pads the page
+table for chunked SDPA and does a host write during trace capture otherwise ("Writes are not
+supported during trace capture"). T=4096 gives 64 blocks and works by luck; T+128 gives 66 and
+breaks capture. The harness rounds up (96 blocks / 6144 tokens).
+
+#### Correctness probe
+
+An earlier version of this harness injected into `attn.k_caches`, while `forward_decode` with a
+page table reads `attn.paged_k` (`attention/tp.py:601`) -- so decode ran on an **empty KV cache**
+and still produced plausible-looking token ids. The harness now proves the cache is read: it
+zeroes the shared paged KV, re-runs the first decode step, and asserts the token **changes**
+(247198 with the cache, 148637 zeroed). Any future handoff change is checked by this.
+
+#### On the 94 ms target: 6.99 ms/token is a 512-context number
+
+`38.26 + 8 x 6.99 = 94.18 ms` uses the TPOT from `perf_decode_layers.py`, which defaults to
+`QWEN_DEC_PREFILL=512` -- i.e. ~512 tokens of context. At the real 4096-token context the 6 FA
+layers run SDPA over **8x more keys**, and decode measures **9.05 ms/token** of device+sync.
+Per-token phases: `update 0.67 | exec+sync 9.05 | readback 0.49`.
+
+| target | e2e |
+|---|---|
+| 38.26 + 8 x 6.99 (512-ctx TPOT) | 94.18 ms |
+| 38.26 + 8 x 9.05 (4K-ctx device+sync) | **110.66 ms** |
+| 38.26 + 8 x 10.22 (4K-ctx wall) | 120.02 ms |
+
+**~111 ms is the like-for-like floor at ISL 4096**, and we are at 131-144. The remaining gap is
+the GDN handoff (14-24 ms) plus ~1.2 ms/token of host update+readback.
 
 ## Per-layer cost, prefill and decode (measured 2026-09-23)
 
