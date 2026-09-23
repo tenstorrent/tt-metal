@@ -15,6 +15,7 @@ so the diag suite is invoked directly rather than in a nested container. The
 orchestration's supporting logic lives in the ``utils`` package:
 
     utils/diag_execution.py  run the diag suite as a subprocess (timeout/kill aware)
+    utils/job_termination.py stop the run, diag suite included, on scancel
     utils/system_info.py     tt-smi / kmd / fw version discovery
     utils/telemetry.py       tt-telemetry (Prometheus) collection + formatting
     utils/report.py          post-reset normalization + actionable-failure verdict
@@ -37,7 +38,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-from utils.diag_execution import run_diag_subprocess
+from utils.diag_execution import kill_active_diag, run_diag_subprocess
+from utils.job_termination import (
+    DIAG_KILL_GRACE_SECONDS,
+    await_exit,
+    terminating,
+    watch as watch_for_termination,
+)
 from utils.jira_client import (
     add_comment_to_jira,
     artifact_upload_name,
@@ -313,6 +320,7 @@ def remove_path(base: str, target: str) -> None:
 
 def main() -> int:
     args = parse_args()
+    watch_for_termination(lambda: kill_active_diag(grace_seconds=DIAG_KILL_GRACE_SECONDS))
 
     node = args.node
     log_dir = args.log_dir
@@ -370,6 +378,10 @@ def main() -> int:
         diag_runner=Path(args.diag_runner) if args.diag_runner else None,
         tt_metal_path=Path(args.tt_metal_path) if args.tt_metal_path else None,
     )
+
+    # A cancelled suite's exit code is not a verdict; don't ticket or reboot on it.
+    if terminating():
+        await_exit()
 
     full_output = version_header + prom_output + "\n" + test_output
     print(test_output, flush=True)
