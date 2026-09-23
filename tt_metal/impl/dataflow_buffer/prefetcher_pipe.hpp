@@ -79,7 +79,8 @@ public:
         CoreCoord dram_sender,
         const CoreRangeSet& receivers,
         uint32_t recv_index_base = 0,
-        uint64_t tensor_prefetcher_factory_id = 0);
+        uint64_t tensor_prefetcher_factory_id = 0,
+        uint32_t tensor_prefetcher_factory_num_pipes = 0);
 
     // Used by PrefetcherPipeImpl. `pending` holds cores claimed earlier in the same create_pipes
     // batch (validation runs before any claim is taken).
@@ -141,7 +142,8 @@ public:
         const CoreRangeSet& receiver_cores,
         std::shared_ptr<DriscL1Allocation> drisc_config_page,
         uint32_t recv_index_base,
-        uint64_t tensor_prefetcher_factory_id);
+        uint64_t tensor_prefetcher_factory_id,
+        uint32_t tensor_prefetcher_factory_num_pipes);
 
     PrefetcherPipeImpl(const PrefetcherPipeImpl&) = delete;
     PrefetcherPipeImpl& operator=(const PrefetcherPipeImpl&) = delete;
@@ -186,6 +188,8 @@ public:
     uint32_t initial_entry_size() const { return initial_entry_size_; }
     uint64_t identity() const { return identity_; }
     uint64_t tensor_prefetcher_factory_id() const { return tensor_prefetcher_factory_id_; }
+    // How many pipes the CreatePrefetcherPipesForTensorPrefetcher call that made this one returned.
+    uint32_t tensor_prefetcher_factory_num_pipes() const { return tensor_prefetcher_factory_num_pipes_; }
     uint32_t recv_index_base() const { return recv_index_base_; }
     DeviceAddr sender_state_drisc_l1_base() const;
 
@@ -212,6 +216,7 @@ private:
     uint32_t initial_entry_size_ = 0;
     uint32_t recv_index_base_ = 0;
     uint64_t tensor_prefetcher_factory_id_ = 0;
+    uint32_t tensor_prefetcher_factory_num_pipes_ = 0;
     std::shared_ptr<DriscL1Allocation> drisc_config_page_;
 };
 
