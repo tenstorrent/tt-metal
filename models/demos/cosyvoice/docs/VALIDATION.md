@@ -306,8 +306,8 @@ trace owns its output instead (`TtConditionalCFM._capture`).
 preparation at some input lengths, on both architectures, and nothing is raised. On Wormhole,
 lengths 8193–8704 are off by up to `1e37` for the vocoder's `Conv1d(128 → 128, k=11, pad=5)`. On
 Blackhole (p150a), the vocoder's `Conv1d(256 → 256, k=7)` and `k=11` return `inf` at length 8264
-when the device reserves the 512 KB of L1_SMALL a cross-lingual run needs, and are exact with
-32 KB; the length regulator's `Conv1d(80 → 80, k=3, pad=1)` scores PCC 0.32–0.41 against torch at
+with a 512 KB L1_SMALL reservation and are exact with 32 KB (other sizes are not measured); the
+length regulator's `Conv1d(80 → 80, k=3, pad=1)` scores PCC 0.32–0.41 against torch at
 T = 1717–1910 with either reservation. Cross-lingual flows run at those lengths, because the
 flow length includes the 1289-frame prompt: four of five cross-lingual utterances came out as
 the right voice saying nothing, and the fifth, at 1033 mel frames, as a railed waveform.

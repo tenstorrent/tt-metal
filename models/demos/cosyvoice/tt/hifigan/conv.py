@@ -61,13 +61,13 @@ def prepare_weights_default(device) -> bool:
     `scripts/repro_conv1d_wormhole.py` is a standalone case). On Blackhole the vocoder's
     `Conv1d(256 -> 256, k=7)` and `k=11` at length 8264, a 1033-frame mel after the first
     upsample, return `inf` and `3e38` where the op's own preparation gives values near 10,
-    and the waveform comes out railed. That needs the 512 KB L1_SMALL reservation a
-    cross-lingual run uses; with 32 KB the same geometry is exact, so whether a prepared
+    and the waveform comes out railed. That was with a 512 KB L1_SMALL reservation; with
+    32 KB the same geometry is exact (other sizes are not measured), so whether a prepared
     weight is right depends on the device's memory budget as well as on the length. So the
-    generator verifies every geometry once on
-    both architectures (`TtConv1d._verify_prepared`). `COSYVOICE_CONV_PREPARE=1` uses
-    preparation unchecked and `=0` verifies, so the default can go in one line once
-    upstream is fixed. `device` is kept for callers; the answer no longer depends on it.
+    generator verifies every geometry once on both architectures
+    (`TtConv1d._verify_prepared`). `COSYVOICE_CONV_PREPARE=1` uses preparation unchecked
+    and `=0` verifies, so the default can go in one line once upstream is fixed. `device`
+    is kept for callers; the answer no longer depends on it.
 
     Applies to the vocoder only. The flow estimator uses the same `TtConv1d` inside a
     captured trace, which unprepared weights make impossible (PERF.md Part II §3.2).

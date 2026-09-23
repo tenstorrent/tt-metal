@@ -150,8 +150,8 @@ def test_device_verified_conv1d_matches_torch(device, channels, kernel, length):
 
     Prepared weights at (80, k=3, 1895) return values of the right size in the wrong places
     (PCC 0.35). At (256, k=7 or 11, 8264) they return `inf` or values off by 1e4, but only
-    with the larger L1_SMALL reservation, the one a cross-lingual sweep needs; with the
-    usual 32 KB that geometry is exact. Verification has to catch both kinds, the first only
+    with the 512 KB L1_SMALL reservation; with the usual 32 KB that geometry is exact.
+    Verification has to catch both kinds, the first only
     by comparing outputs element by element, and fall back to the op's own preparation.
     """
     import ttnn
