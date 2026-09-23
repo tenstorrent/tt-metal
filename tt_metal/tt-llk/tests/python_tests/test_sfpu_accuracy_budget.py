@@ -607,7 +607,9 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     # sent exactly these to TOLERANCE_CONTRACT, so they are the regression's witnesses.
     # Less the documented tolerance-only ops, which are input-keyed as well now that
     # every input format is swept -- they are excused above, by name and with numbers.
-    assert _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT - ONLY_EVER_TOLERANCE <= saw_ulp
+    assert (
+        _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT - ONLY_EVER_TOLERANCE <= saw_ulp
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
