@@ -1036,6 +1036,126 @@ def _stage_items_gate(demo_dir: Path):
     )
 
 
+# The tool's OWN protocol for a pipeline whose final output is a RENDERED SIGNAL rather than
+# tokens or a tensor -- a waveform, in practice. Nothing here names a model, a stage or a
+# component: a pipeline declares itself a signal renderer by returning the rate its output is
+# rendered at, because a bare float tensor has no other way to say what it is.
+_OUTPUT_RATE_FIELDS = ("sampling_rate", "sample_rate")
+
+# What such an output must additionally be SCORED on, beyond PCC against the golden. PCC answers
+# "did the tensor come out the same"; these answer "is the thing it renders to any good" --
+# intelligibility (word error rate against the text that was asked for) and predicted naturalness
+# (a no-reference mean-opinion-score estimate). These apply ONLY to a signal-rendering output;
+# a token or tensor output is fully covered by PCC and exact agreement.
+_SIGNAL_QUALITY_CHECKS = ("wer", "mos")
+
+
+def _identifier_mentions(identifier: str, token: str) -> bool:
+    """True when `identifier` names `token` -- as the whole name or one underscore-separated part.
+
+    `wer` matches wer, WER, min_wer, wer_max; it does not match `lower` or `answer`.
+    """
+    parts = identifier.lower().split("_")
+    return token in parts
+
+
+def _names_in_asserts(tree) -> set:
+    """Every identifier that appears inside an `assert` statement, lowercased."""
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name):
+                found.add(sub.id.lower())
+            elif isinstance(sub, ast.Attribute):
+                found.add(sub.attr.lower())
+    return found
+
+
+def _renders_signal(demo_dir: Path) -> bool:
+    """True when the pipeline declares the rate its output is rendered at.
+
+    Discovered from the pipeline's own source, not from a model list: a stage that returns a
+    sampling rate alongside its output is saying the output is a rendered signal. Anything else
+    -- tokens, logits, a hidden state, an embedding -- is not, and the signal-quality scores
+    below do not apply to it.
+    """
+    tt_dir = demo_dir / "tt"
+    if not tt_dir.is_dir():
+        return False
+    for path in sorted(tt_dir.rglob("*.py")):
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            name = None
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                name = node.value
+            elif isinstance(node, ast.Name):
+                name = node.id
+            elif isinstance(node, ast.Attribute):
+                name = node.attr
+            elif isinstance(node, ast.keyword) and node.arg:
+                name = node.arg
+            if name and name.lower() in _OUTPUT_RATE_FIELDS:
+                return True
+    return False
+
+
+def _signal_quality_gate(demo_dir: Path):
+    """Return a failure reason (or None): a pipeline that renders a SIGNAL must score it, not
+    only correlate it.
+
+    WHY THIS EXISTS. PCC against the golden passed at 0.99+ on every stage and on the final
+    waveform of a text-to-speech port whose audio was unintelligible noise. It was not a wiring
+    bug and not a numerics bug: the correctness run was ending on its safety cap after a fraction
+    of the real output, so the part that degraded was never in the comparison, and PCC over a
+    matched prefix cannot see that the thing does not sound like speech at all. A high
+    correlation against a reference is not evidence that the output is GOOD -- only that it is
+    the SAME over the window that was compared.
+
+    So a signal output carries two more scores, and they are ASSERTED, not printed: what fraction
+    of the requested words come back out of it (intelligibility), and how natural it is predicted
+    to sound. Both are no-argument questions about the output itself, which is exactly what PCC
+    over a truncated window cannot answer.
+
+    This applies ONLY where the pipeline itself declares an output rate. A model that emits
+    tokens or a tensor is not asked for these, and the gate returns None for it.
+    """
+    if not _renders_signal(demo_dir):
+        return None
+    e2e_dir = demo_dir / "tests" / "e2e"
+    if not e2e_dir.is_dir():
+        return None
+    asserted = set()
+    for path in sorted(e2e_dir.glob("test_*.py")):
+        try:
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except SyntaxError:
+            continue
+        asserted |= _names_in_asserts(tree)
+    missing = [
+        check for check in _SIGNAL_QUALITY_CHECKS if not any(_identifier_mentions(name, check) for name in asserted)
+    ]
+    if not missing:
+        return None
+    return (
+        "G7 signal-quality: this pipeline renders a signal (it declares its own output rate) but "
+        "tests/e2e asserts no %s. PCC against the golden says the output MATCHES over the window "
+        "that was compared; it cannot say the output is any GOOD, and a run that ends on its "
+        "safety cap compares a fraction of it. Score the FULL decoded output and assert the "
+        "score: intelligibility (WER of a speech-recognition pass over the output against the "
+        "text the pipeline was asked to render) and predicted naturalness (a no-reference MOS "
+        "estimate). Compute both on the real, full-length output -- not on a truncated gate "
+        "window -- and assert each against a threshold, do not merely print them."
+        % " and no ".join(check.upper() for check in missing)
+    )
+
+
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons)."""
     reasons = []
@@ -1064,6 +1184,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     _items_reason = _stage_items_gate(demo_dir)
     if _items_reason:
         reasons.append(_items_reason)
+
+    _signal_reason = _signal_quality_gate(demo_dir)
+    if _signal_reason:
+        reasons.append(_signal_reason)
 
     _self_opens = _pipeline_self_opens_device(demo_dir)
     if _self_opens:
@@ -1454,6 +1578,49 @@ DECODE HORIZON (autoregressive models — how long to decode; the `N` above):
   helper — use its stop condition. This applies to the PCC/correctness test only;
   trace capture still runs at a FIXED max capacity C (variable-length decode
   must not make the traced shapes dynamic).
+
+  TERMINATION — the safety cap is a backstop, NOT the horizon. ASSERT that the
+  correctness run ended on the model's own stop rule and did NOT end by hitting
+  the cap. A cap that binds silently shrinks the test to a prefix of the real
+  output: everything that degrades later is then outside the comparison and the
+  gate passes on a fraction of the work. This has happened — a port whose every
+  stage read PCC >= 0.99 produced unusable output, because the run ended on its
+  cap after a small fraction of the real length. The one exception: when the
+  harness itself caps the horizon for profiling (TT_PERF_OSL_TOKENS is set in
+  the environment), the run is capped BY DESIGN — skip the termination assert
+  then, and only then, and say so in the skip reason.
+
+OUTPUT CORRECTNESS (what the PCC/correctness test must ASSERT, not report):
+
+  1. WHOLE OUTPUT, NO WINDOW. Compare the FULL produced output. Do not slice a
+     prefix, a fixed number of steps, or a fixed duration out of it before
+     measuring. If the two sides ran the same model-grounded stop rule they are
+     already the same length; if you find yourself truncating to make them
+     match, the stop rule is what is wrong, not the length.
+
+  2. EXACT AGREEMENT OF DISCRETE OUTPUT. If the pipeline emits discrete values
+     (tokens, codes, ids, class indices), assert that the TT ones EQUAL the
+     reference's under teacher forcing — the reference must consume the TT
+     output at each step, so the two run the same trajectory and any difference
+     is the pipeline's, not accumulated divergence. Printing the agreement rate
+     is not enough: a number that nothing fails on is a report, and a report
+     does not hold. Assert it.
+
+  3. SCORE A RENDERED SIGNAL, DO NOT ONLY CORRELATE IT. This applies ONLY when
+     the pipeline's output is a rendered signal — i.e. it returns the RATE the
+     output is rendered at alongside it. It does NOT apply to a model whose
+     output is tokens, logits, a hidden state or any other tensor; those are
+     fully covered by PCC plus (2), so do not add these scores to them.
+     For a signal output, PCC against the golden only says the samples MATCH
+     over the compared window; it cannot say the result is any GOOD. Add two
+     scores over the FULL output and ASSERT each against a threshold:
+       - intelligibility: run a speech-recognition model over the output and
+         take its word error rate against the text the pipeline was asked to
+         render;
+       - predicted naturalness: a no-reference MOS estimate of the output.
+     Read the thresholds from the reference (score the HF golden the same way
+     and require the TT output to be no worse by a stated margin) rather than
+     inventing absolute numbers.
 
 ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
   1. hf_model.config.<X> / hf_model.generation_config.<X> — pure attribute reads
@@ -2476,13 +2643,15 @@ CRITICAL REQUIREMENTS:
     final assert — so the measured number is visible in the test output
     regardless of the verdict (not only surfaced in the assert message on fail).
   - GENERATIVE heads (reference is `model.generate()`): reproduce generate()'s
-    real chain and compare the TT-generated output to it. To keep the on-device
-    gate fast, CAP BOTH SIDES to the same small horizon N (e.g. 40): pass
-    `max_new_tokens=N` to `model.generate()` AND stop the TT decode loop at N,
-    then compare the first-N sequence (+ per-step PCC). Do NOT run full-length
-    generation (too slow — the gate times out). Do NOT cap only the TT side
-    while HF runs full length (lengths won't match → false fail, and HF is still
-    slow). Both sides capped to the same N → fast, faithful, no false mismatch.
+    real chain and compare the TT-generated output to it, over the model's own
+    stop rule — see DECODE HORIZON and OUTPUT CORRECTNESS in the contract below.
+    BOTH sides run the SAME rule, so they stop at the same place and the whole
+    output is compared. Do NOT cap both sides to a small invented horizon to
+    make the gate fast: that is the defect the contract names — it shrinks the
+    test to a prefix and everything that degrades after it passes unmeasured.
+    Do NOT cap only the TT side while HF runs full length (lengths won't match →
+    false fail). Keep a safety cap from the model's own max length so a
+    non-terminating run cannot hang, and ASSERT the run did not end on it.
 
 STRUCTURE — emit a complete, runnable package in the standard demo layout
 (the same demo/ + tt/ + tests/ package style used by demos under models/demos/).
