@@ -441,6 +441,12 @@ Tensor lerp(
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}",
+        input.dtype(),
+        end.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
@@ -472,6 +478,13 @@ Tensor lerp(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32 && weight.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}, weight={}",
+        input.dtype(),
+        end.dtype(),
+        weight.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =
