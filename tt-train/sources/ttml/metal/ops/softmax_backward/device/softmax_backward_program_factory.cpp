@@ -97,24 +97,49 @@ namespace ttml::metal::ops::softmax_backward::device {
 
 struct KernelMode {
     uint32_t buffering_multiplier;
-    uint32_t required_memory_bytes;
+    uint64_t required_memory_bytes;
     uint32_t tiles_per_block;
 };
 
-static constexpr uint32_t memory_estimator(uint32_t width_tiles, uint32_t tile_size) {
-    return (width_tiles * tile_size) * 3U + (1U * tile_size) * 3U;  // src0, src1, out; sum_reduce, ones, partial
+static constexpr uint64_t memory_estimator(
+    uint32_t width_tiles,
+    uint32_t buffering_multiplier,
+    uint32_t input_tile_size,
+    uint32_t output_tile_size,
+    uint32_t reduction_tile_size) {
+    const uint64_t row_buffer_bytes = static_cast<uint64_t>(width_tiles) * (2U * input_tile_size + output_tile_size);
+    const uint64_t scratch_bytes = input_tile_size + 2U * reduction_tile_size;
+    return buffering_multiplier * row_buffer_bytes + scratch_bytes;  // src0, src1, out; ones, sum, partial
 }
 
-static KernelMode get_kernel_mode(uint32_t width_tiles, uint32_t tile_size, const tt::tt_metal::IDevice* device) {
-    const uint32_t available_L1_in_bytes =
+static KernelMode get_kernel_mode(
+    uint32_t width_tiles,
+    uint32_t input_tile_size,
+    uint32_t output_tile_size,
+    uint32_t intermed_tile_size,
+    const tt::tt_metal::IDevice* device) {
+    const uint64_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint32_t full_row_memory_needed = memory_estimator(width_tiles, tile_size);
-    const uint32_t tiles_per_block = (full_row_memory_needed < available_L1_in_bytes) ? width_tiles : 4U;
-    const uint32_t new_estimation_memory_needed = memory_estimator(tiles_per_block, tile_size);
+    const uint64_t full_row_memory_needed =
+        memory_estimator(width_tiles, 1U, input_tile_size, output_tile_size, intermed_tile_size);
+    const uint32_t tiles_per_block =
+        (full_row_memory_needed <= available_L1_in_bytes) ? width_tiles : std::min(width_tiles, 4U);
     // Double buffering when total L1 with 2x fits: for streaming (small blocks) and for short rows (e.g. 6000x5).
     // Long full rows (e.g. 127 tiles) get 1x so we stay under L1.
-    const uint32_t buffering_multiplier = (new_estimation_memory_needed * 2U <= available_L1_in_bytes) ? 2U : 1U;
-    return {buffering_multiplier, new_estimation_memory_needed, tiles_per_block};
+    const uint32_t buffering_multiplier =
+        memory_estimator(tiles_per_block, 2U, input_tile_size, output_tile_size, intermed_tile_size) <=
+                available_L1_in_bytes
+            ? 2U
+            : 1U;
+    const uint64_t selected_memory_needed =
+        memory_estimator(tiles_per_block, buffering_multiplier, input_tile_size, output_tile_size, intermed_tile_size);
+    TT_FATAL(
+        selected_memory_needed <= available_L1_in_bytes,
+        "SoftmaxBackward: minimum {}-tile plan needs {} bytes of L1, but only {} bytes are available",
+        tiles_per_block,
+        selected_memory_needed,
+        available_L1_in_bytes);
+    return {buffering_multiplier, selected_memory_needed, tiles_per_block};
 }
 
 static void get_tensor_properties(
@@ -153,8 +178,9 @@ static void get_tensor_properties(
     num_rows = num_outer_dims * height_tiles;
     input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
     output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    // y*grad and reduction tiles use the same format as activations (BFLOAT16 or FLOAT32 today).
-    intermed_data_format = input_data_format;
+    // Avoid narrowing the two reduction scratch stores to the input format. Float32 scratch is
+    // subsequently consumed through the compute kernel's configured unpack path.
+    intermed_data_format = tt::DataFormat::Float32;
     input_tile_size = tile_size(input_data_format);
     output_tile_size = tile_size(output_data_format);
     intermed_tile_size = tile_size(intermed_data_format);
@@ -198,7 +224,7 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         tensor_return_value);
 
     const auto [buffering_multiplier, required_memory_bytes, tiles_per_block] =
-        get_kernel_mode(width_tiles, intermed_tile_size, device);
+        get_kernel_mode(width_tiles, input_tile_size, output_tile_size, intermed_tile_size, device);
 
     log_debug(
         tt::LogOp,
@@ -227,8 +253,8 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     auto c_in1_config = CircularBufferConfig(block_cb_size_in0, {{src1_cb_index, input_data_format}})
                             .set_page_size(src1_cb_index, input_tile_size);
     CreateCircularBuffer(program, worker_cores, c_in1_config);
-    auto c_scaler_config = CircularBufferConfig(intermed_tile_size, {{ones_cb_index, intermed_data_format}})
-                               .set_page_size(ones_cb_index, intermed_tile_size);
+    auto c_scaler_config = CircularBufferConfig(input_tile_size, {{ones_cb_index, input_data_format}})
+                               .set_page_size(ones_cb_index, input_tile_size);
     CreateCircularBuffer(program, worker_cores, c_scaler_config);
     auto c_out_config = CircularBufferConfig(block_cb_size_out, {{out_cb_index, output_data_format}})
                             .set_page_size(out_cb_index, output_tile_size);
