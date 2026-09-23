@@ -1749,9 +1749,9 @@
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      # An estimate, sized for a cold CI container: single-galaxy MTP4 on this rig spans warm to cold-JIT
-      # by roughly 4x on the same configuration, and MTP7 adds three more modules on top of the slow end.
-      timeout: 75
+      # Sized off a cold host like the DFlash runner leg: one rank builds all 78 trunk layers plus
+      # seven MTP modules out of the NFS-mounted TTNN cache, which dominates the run.
+      timeout: 120
       tier: 1
       release_ready: false
   owner_id: U09L76N1MAT # Nenad Babin
