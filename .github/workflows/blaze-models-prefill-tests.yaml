@@ -104,7 +104,21 @@ jobs:
       HOME: /home/user
     runs-on: exabox-multihost-ci-sc1
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Setup multihost job
+        uses: ./.github/actions/setup-multihost-job
+        timeout-minutes: 90
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          check-mnt-models: true
+          hang-detection-timeout: 0
+
       - name: Time /mnt/models Kimi checkpoint read
+        continue-on-error: true
         run: |
           mpirun --bind-to none --pernode --tag-output bash -lc '
             set -euo pipefail
@@ -114,8 +128,8 @@ jobs:
             echo "Reading $sample"
             time dd if="$sample" of=/dev/null bs=4M count=16 status=none
           '
-
       - name: Time /mnt/weka Kimi checkpoint read
+        continue-on-error: true
         run: |
           mpirun --bind-to none --pernode --tag-output bash -lc '
             set -euo pipefail
@@ -127,6 +141,7 @@ jobs:
           '
 
       - name: Time /mnt/models Kimi TTNN cache read
+        continue-on-error: true
         run: |
           mpirun --bind-to none --pernode --tag-output bash -lc '
             set -euo pipefail
@@ -138,6 +153,7 @@ jobs:
           '
 
       - name: Time /mnt/weka Kimi TTNN cache read
+        continue-on-error: true
         run: |
           mpirun --bind-to none --pernode --tag-output bash -lc '
             set -euo pipefail
@@ -149,6 +165,7 @@ jobs:
           '
 
       - name: Time /mnt/models Kimi trace read
+        continue-on-error: true
         run: |
           mpirun --bind-to none --pernode --tag-output bash -lc '
             set -euo pipefail
@@ -160,6 +177,7 @@ jobs:
           '
 
       - name: Time /mnt/weka Kimi trace read
+        continue-on-error: true
         run: |
           mpirun --bind-to none --pernode --tag-output bash -lc '
             set -euo pipefail
