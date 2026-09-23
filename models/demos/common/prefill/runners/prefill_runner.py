@@ -29,9 +29,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     build_h2d_service,
     compute_layer_split,
 )
-from models.demos.common.prefill.runners.runner_utils import (
-    d2d_activation_rows as d2d_rows_for,
-)
+from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
 
