@@ -19,6 +19,7 @@ on:
 
 permissions:
   actions: read
+  checks: write
   contents: read
   packages: read
 
@@ -300,6 +301,14 @@ jobs:
           name: ttnop-junit-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/junit.xml
           if-no-files-found: warn
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/junit.xml
+          include_passed: true
+          annotate_only: true
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

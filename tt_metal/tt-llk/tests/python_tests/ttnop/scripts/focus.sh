@@ -6,7 +6,7 @@
 # that the jump itself is not the problem. The flags match the TTNOP_* settings
 # described in FOCUS.md.
 #
-# Defaults to 8 Tensix cores on that one case:
+# Defaults to 8 Tensix cores on that one case. Quasar is forced to 1: one simulator.
 #   pytest-xdist starts 8 workers, each on its own Tensix core. `--dist each`
 #   gives every worker the case, then TTNOP_SHARD_VARIANTS splits the NOP plan
 #   between those workers.
@@ -47,6 +47,11 @@ if [[ ${#NODE_IDS[@]} -ne 1 ]]; then
     exit 4
 fi
 NODE_ID="${NODE_IDS[0]}"
+
+# One simulator. --device-jobs and TTNOP_DEVICE_JOBS do not raise this.
+if [[ "${CHIP_ARCH}" == "quasar" ]]; then
+    DEVICE_JOBS=1
+fi
 
 # Default 10: one shot is pass/fail, ten is a rate.
 export TTNOP_REPEATS="${TTNOP_REPEATS:-10}"
