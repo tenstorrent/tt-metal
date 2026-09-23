@@ -152,9 +152,8 @@ jobs:
         run: |
           set -e
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "ttnop"
+            --tests-dir ./tests/pipeline_reorg \
+            --budget-file ./.github/time_budget.yaml
       - name: Build test matrix
         id: build-matrix
         env:
