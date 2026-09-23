@@ -546,6 +546,22 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### SwiGLU product as a model-local op at bs32 (2026-09-23)
+
+On the unfused path (bs32) the SwiGLU product is `ttnn.mul(a, b,
+input_tensor_a_activations=[SILU])`; the multiply alone is at 95% of DRAM roofline but the
+SiLU adds 333 µs per call (1258 → 1591 µs) — 12 ms per forward. `custom_ops/silu_mul`
+streams a and b tile-by-tile, runs `silu_tile` on the DST tile and multiplies b in with a
+dest-reuse FPU multiply, so the SFPU work overlaps the reads: **1373 µs (−13.7%)** at the
+bs32 shape, and closer to torch than the stock path (PCC 0.99941 vs 0.99897; the stock
+activation path is the less precise one). Same-chip A/B (chip 6): **bs32 443.8 → 438.1 ms
+(−1.3%)**. At bs1 the op is slower (62 vs 59 µs — 40 tiles per core), so it applies from
+8192 rows (`QWEN_SILU_MUL=1`, `QWEN_SILU_MUL_MIN_ROWS=8192`); bs8/bs16 run the fused SwiGLU
+kernel and never reach it. Rejected variants: x·sigmoid_fast(x) (slower, PCC 0.9985) and
+the Blackhole `clamped_silu_glu` SFPU op (slower and clamps at |x| = 10 — DeepSeek-V4
+semantics, wrong for this model). `QWEN_SILU_MUL_VERIFY=1` prints per-call PCCs against
+the stock op on live tensors.
+
 ### bs16 fused-SwiGLU matmul blocks 4,8,8 / 1×4 (2026-09-23)
 
 A `minimal_matmul` block/subblock sweep with model-faithful weights (bfp4, DRAM
