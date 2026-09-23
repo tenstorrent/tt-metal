@@ -8,17 +8,17 @@ Architecturally this is the flow encoder's block with two names changed
 so `TtRelPosAttention` and the layer body are shared rather than duplicated.
 The differences that matter are all at the edges:
 
-**The input layer has a ReLU.** `input_layer: 'linear_legacy'` selects
+The input layer has a ReLU. `input_layer: 'linear_legacy'` selects
 `LegacyLinearNoSubsampling`, which is `Linear -> LayerNorm(eps=1e-5) -> Dropout ->
 ReLU`. The plain `LinearNoSubsampling` the flow encoder uses stops at Dropout.
-Nothing downstream would fail if the ReLU were missed -- the model would simply be
+Nothing downstream would fail if the ReLU were left out -- the model would simply be
 wrong. `embed_has_relu` in the exported meta records which one this checkpoint has.
 
-**Two different LayerNorm epsilons.** `subsampling.py` pins `1e-5` on the
+Two different LayerNorm epsilons. `subsampling.py` pins `1e-5` on the
 embedding norm; `encoder_layer.py` pins `1e-12` on the block norms. Both are
 carried in the meta rather than assumed.
 
-**The positional window follows the cache, not the chunk.** `forward_chunk`
+The positional window follows the cache, not the chunk. `forward_chunk`
 recomputes `pos_emb = position_encoding(offset - cache_t1, size=cache_t1 + chunk)`,
 discarding what the embedding produced. With `required_cache_size = -1` -- what
 CosyVoice always passes -- the cache holds everything, so `offset == cache_t1` and
@@ -27,7 +27,7 @@ That is what makes a single `espnet_rel_positional_encoding(key_size, d_model)`
 correct at every step, and it is worth stating because it is only true for this
 configuration.
 
-**Prefill is causal; decode is not.** The prefill mask is `tril`, so the prompt
+Prefill is causal; decode is not. The prefill mask is `tril`, so the prompt
 attends to itself autoregressively. A one-token decode step passes a `[1, 1, 1]`
 all-true mask, and `forward_attention` slices it to the score width -- so it masks
 nothing, which is right: every cached position is real history.
@@ -57,10 +57,8 @@ def causal_bias(size: int, dtype=torch.float32) -> torch.Tensor:
 def _core_grid_from_env(var: str):
     """`ttnn.CoreGrid` from e.g. `COSYVOICE_FF2_GRID=8x2`, or None when unset.
 
-    Off by default. The gain is real and architecture-independent in direction, but the
-    best shape is not: 8x2 measured 1.50x on n300 and 1.98x on p150b, while 4x8 -- the
-    same core count, transposed -- managed only 1.15x on n300. A default that is optimal
-    on one part and mediocre on another is worse than an opt-in that says so.
+    Off by default: the gain holds on both architectures, but the best grid shape
+    differs by part (PERF.md Part II §4.2).
     """
     val = os.environ.get(var, "").strip().lower()
     if not val:
@@ -73,12 +71,9 @@ def kv_inplace_default(device) -> bool:
     """Whether `TracedDecodeStepInPlace` should be the default on `device`.
 
     `COSYVOICE_KV_INPLACE` overrides either direction; this is only the fallback when
-    it is unset. The trade is architecture-dependent -- in-place is worth 1.12-1.15x on
-    Blackhole and 1.42x on Wormhole n300 (PERF.md, *Decode step, and what each change is
-    worth*) -- so the default follows the architecture rather than picking one trade for
-    both. `model.py` and `test_pipeline_perf.py` both call this rather than each
-    hand-coding the check, so the test that is supposed to measure "whatever the model
-    would actually run" cannot silently drift from what the model runs.
+    it is unset. The trade differs by architecture (PERF.md §3.2 and §6), so the
+    default follows the architecture. `model.py` and `test_pipeline_perf.py` both call
+    this, so the perf test measures what the model runs.
     """
     return "WORMHOLE" in str(device.arch())
 
@@ -98,18 +93,14 @@ class TtTransformerLayer:
         self.w2, self.b2 = _linear(device, bag, "feed_forward.w_2", dtype, weights_dtype)
         self.g1, self.bt1 = _layernorm_weights(device, bag, "norm1", dtype)
         self.g2, self.bt2 = _layernorm_weights(device, bag, "norm2", dtype)
-        # `w_2` is `[d_ff, d_model]`, the largest and slowest op in a decode step, and it
-        # is bound by its `K = d_ff` reduction rather than by weight traffic -- `w_1` holds
-        # the same number of weight bytes and responds to `bfloat8_b` weights by -37 %
-        # where this one responds by -2 %. Handing it a *small* explicit grid is what moves
-        # it: at one row, spreading a 4096-deep reduction over the whole grid leaves each
-        # core a sliver and the gather dominates. Measured standalone, `[1,1,4096] x
-        # [4096,1024]`, bf16: 8x2 is 1.50x on n300 and 1.98x on p150b against the default,
-        # and the default is indistinguishable from asking for the full grid explicitly.
+        # `w_2` (`[d_ff, d_model]`) is the slowest op in a decode step, limited by its
+        # `K = d_ff` reduction rather than by weight traffic: at one row, spreading a
+        # 4096-deep reduction over the whole grid leaves each core a sliver and the
+        # gather dominates, so a small explicit grid is faster (PERF.md Part II §4.2).
         #
-        # **Decode only.** The optimum is a property of `M = 1`. Prefill runs this same
-        # linear at `M = 209`, where there is real work to spread and a 16-core grid would
-        # be a pessimisation, so `__call__` applies it only when `T == 1`.
+        # Decode only. The optimum is a property of `M = 1`; prefill runs this linear at
+        # `M = 209`, where a 16-core grid would be slower, so `__call__` applies it only
+        # when `T == 1`.
         self.ff2_grid = _core_grid_from_env("COSYVOICE_FF2_GRID")
 
     def __call__(
@@ -256,25 +247,19 @@ class TtARDecoder:
     # fixed-shape decoding
     # ----------------------------------------------------------------------
     def forward_chunk_fixed(self, xs, caches, max_len: int, valid: int, mask=None):
-        """`forward_chunk` with a **right-aligned, fixed-width** KV cache.
+        """`forward_chunk` with a right-aligned, fixed-width KV cache.
 
-        This is the difference between 0.4 and 35 tok/s, and the reason is not
-        arithmetic. A cache that grows by one slot per token gives every step a new
-        attention key size -- 210, 211, 212 -- and TTNN's program cache is keyed on
-        shape, so *every token pays a fresh JIT compile*. Measured on Blackhole:
-        28 ms for the first step, 3.3 s by the 32nd, and a second pass over the
-        same sizes ran at 28 ms flat. **98.9% of the cold cost was compilation.**
-
-        Holding the key width at `max_len` makes exactly two shapes exist, one for
-        prefill and one for decode, no matter how long the utterance runs.
+        A cache that grows by one slot per token gives every step a new attention key
+        size, and TTNN's program cache is keyed on shape, so every token would pay a
+        JIT compile (PERF.md Part II §1.5). Holding the key width at `max_len` leaves
+        two shapes, one for prefill and one for decode, however long the utterance.
 
         The alignment is what makes it correct. ESPnet's `rel_shift` skews a
-        `[t1, K]` score block on the assumption that the queries are the **last**
-        `t1` of the `K` key positions -- that is precisely the streaming case it
-        was written for. So the live tokens must sit at the *end* of the buffer and
-        the padding at the front, not the other way round. Left-aligning instead
-        gives every query the relative geometry of a position it is not at, which
-        is wrong everywhere and obviously wrong nowhere.
+        `[t1, K]` score block on the assumption that the queries are the last `t1` of
+        the `K` key positions, so the live tokens sit at the end of the buffer and the
+        padding at the front. Left-aligning instead gives every query the relative
+        geometry of a position it is not at, which is wrong everywhere and obviously
+        wrong nowhere.
 
         `valid` is how many of the `max_len` slots hold real history; the caller
         supplies `mask` suppressing the rest.
@@ -331,7 +316,7 @@ class TtARDecoder:
     def empty_cache(self, max_len: int, chunk: int, batch: int = 1):
         """Zeroed `[1, h, max_len - chunk, d_k]` k/v per layer.
 
-        Sized so the attention's own concat with this step's `chunk` tokens lands
+        Sized so the attention's own concat with this step's `chunk` tokens comes
         on `max_len` -- the first chunk takes the same path as every later one, so
         there is no separate prefill shape to compile.
         """
@@ -349,25 +334,21 @@ class TtARDecoder:
 class TracedDecodeStep:
     """One decode step captured as a trace and replayed with a single host command.
 
-    Profiling measured the AR decoder at ~124 us per op over ~280 ops -- **dispatch
-    bound, not compute bound**. Trace capture is the direct answer: it records the
-    op graph once and replays it without re-issuing every op from the host.
+    Untraced, the AR decode step is limited by dispatch: the host issues ~280 ops per
+    token. A trace records the op graph once and replays it with one host command.
 
-    A trace replays *fixed device addresses*, which is what makes this more than a
-    flag. Three things follow:
+    A trace replays fixed device addresses, so:
 
-    * **The KV cache must live in persistent buffers.** The untraced path
-      reallocates it with `concat` on every step, so a replay would write to
-      addresses from the capture. Here the buffers are allocated once and updated
-      with `ttnn.copy` at the end of the traced body -- read at the top, written at
-      the bottom, which is safe within a single replay.
-    * **Inputs must be preallocated too**, and refreshed with
-      `copy_host_to_device_tensor` rather than a fresh `from_torch`. The token
-      embedding changes every step, and the validity mask's *values* change even
-      though its shape does not.
-    * **Two warm-up passes precede capture**, so every kernel variant is
-      JIT-compiled before the graph is recorded -- otherwise the compile lands
-      inside the trace.
+    * The KV cache lives in persistent buffers. The untraced path reallocates it with
+      `concat` on every step, so a replay would write to addresses from the capture.
+      Here the buffers are allocated once and updated with `ttnn.copy` at the end of
+      the traced body -- read at the top, written at the bottom, which is safe within
+      a single replay.
+    * Inputs are preallocated too, and refreshed with `copy_host_to_device_tensor`
+      rather than a fresh `from_torch`: the token embedding changes every step, and the
+      validity mask's values change although its shape does not.
+    * Two warm-up passes precede capture, so every kernel variant is JIT-compiled
+      before the graph is recorded rather than inside it.
 
     Right-alignment is unchanged from `forward_chunk_fixed`: the live tokens sit at
     the end of the buffer because `rel_shift` assumes the queries are the last of
@@ -381,14 +362,12 @@ class TracedDecodeStep:
         # gains a leading dimension: the AR decoder's own ops are written against
         # `[B, ...]` already, and `right_aligned_bias` takes one `valid` per row, so
         # sequences with different prompt lengths batch with no further bookkeeping.
-        # `TtTransformerLM.generate_batch` is the caller, and its docstring carries
-        # why it is worth doing -- a decode step at one row is bound by reading the
-        # decoder's weights out of DRAM, and that read is shared across the batch.
+        # `TtTransformerLM.generate_batch` is the caller.
         #
         # Only the moving cache is batched. `TracedDecodeStepInPlace` captures 65
-        # traces where this captures one, and multiplying that by a batch is a trace
-        # region no board here has. The two are within 1.15x of each other on
-        # Blackhole, and batching moves far more than 1.15x.
+        # traces where this captures one, and multiplying that by a batch needs a trace
+        # region no board here has; batching is worth more than the in-place cache
+        # (PERF.md §4 and §6).
         self.batch = batch
         # Before the first `_body()`, so the projection is computed and cached during
         # warm-up and the trace records only the read.
@@ -399,13 +378,11 @@ class TracedDecodeStep:
         dev, dt = decoder.device, decoder.dtype
 
         self.x_buf = ttnn.from_torch(torch.zeros(batch, 1, d_in), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
-        # Heads on dim 2 when the fused path is on, built on the **host**. Doing the
-        # expansion with a device `ttnn.repeat` inside the traced body is what took
-        # traced-vs-untraced from 1.0 to 0.918: the op is correct on its own
-        # (`scripts/probe_sdpa_decode.py` controls for it) but not as the per-step input to
-        # a replayed trace. The mask is
-        # rebuilt on the host every step anyway, so emitting it already expanded costs
-        # nothing and removes the op from the trace entirely.
+        # Heads on dim 2 when the fused path is on, expanded on the host. A device
+        # `ttnn.repeat` of the per-step mask inside the traced body drops
+        # traced-vs-untraced agreement to PCC 0.918, though the op is correct on its own
+        # (`scripts/probe_sdpa_decode.py`). The mask is rebuilt on the host every step
+        # anyway, so expanding it there costs nothing and keeps the op out of the trace.
         self.mask_heads = self.h if decoder.sdpa_decode else 1
         self.mask_buf = ttnn.from_torch(
             right_aligned_bias(max_len, [max_len] * batch, 1, heads=self.mask_heads),
@@ -414,9 +391,9 @@ class TracedDecodeStep:
             device=dev,
         )
         # Time-major `[1, T, h, d_k]`, not `[1, h, T, d_k]`. `TILE_LAYOUT` tiles the last
-        # two dims, so this puts the time axis on a *free* one -- appending a token then
-        # costs 19.7 us instead of 207.2, and a 13.9 us permute puts it back in
-        # `[1, h, T, d_k]` for the matmuls. See `TtRelPosAttention.forward_cached`.
+        # two dims, so this puts the time axis on a free one, where appending a token is
+        # cheap; a permute puts it back in `[1, h, T, d_k]` for the matmuls. See
+        # `TtRelPosAttention.forward_cached` and PERF.md Part II §1.4.
         shape = (batch, max_len, self.h, self.d_k)
         self.k_buf = [
             ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
@@ -457,7 +434,7 @@ class TracedDecodeStep:
         pos = self.dec.positional(self.max_len)
         h = self.dec.embed(self.x_buf)
         for i, layer in enumerate(self.dec.layers):
-            # Drop the oldest slot so the attention's own concat lands on max_len.
+            # Drop the oldest slot so the attention's own concat comes to max_len.
             trimmed = (
                 ttnn.slice(self.k_buf[i], [0, 1, 0, 0], [self.batch, self.max_len, self.h, self.d_k]),
                 ttnn.slice(self.v_buf[i], [0, 1, 0, 0], [self.batch, self.max_len, self.h, self.d_k]),
@@ -526,54 +503,41 @@ class TracedDecodeStepInPlace:
     """The same decode step, with a KV cache that is written rather than rebuilt.
 
     `TracedDecodeStep` keeps the newest token at the last row of a `max_len` buffer,
-    which means every step must **move the whole cache down by one**. Time-major
-    storage made that move cheap -- a free-axis append is 19.7 us where a tiled one
-    is 207 -- but cheap is not free, and what is left is still the largest block in
-    the step: per tensor per layer, a slice, two permutes, a concat and a writeback
-    copy, ~95 us together, 14 layers and two tensors deep.
+    so every step moves the whole cache down by one: per tensor per layer, a slice, two
+    permutes, a concat and a writeback copy. This class stops moving it. The buffer is
+    a scratch zone wider than the window; token `i` of the current group is written
+    straight into row `max_len + i` with `ttnn.update_cache`, and the buffer walks
+    forward through the scratch zone. Only when the zone is full does anything move,
+    and then it is a tile-aligned shift -- the one shift `TILE_LAYOUT` can do without
+    re-tiling.
 
-    The way out is to stop moving it. Hold a buffer `TILE` rows wider than the
-    window, write token `i` of the current group straight into row `max_len + i`
-    with `ttnn.update_cache` (3.7 us, in place), and let the buffer walk forward
-    through its scratch zone for 32 steps. Only then does anything move, and what
-    moves is a **32-row, tile-aligned** shift -- the one shift `TILE_LAYOUT` can do
-    without re-tiling. Amortised, 95 us a tensor a layer a step becomes about 11.
+    The scratch zone is two tiles, not one. A decode step's cost tracks the parity of
+    its key-axis tile count: on Blackhole each odd count costs about a millisecond more
+    than its even neighbours (`out_subblock_w` falls back to 1), so a one-tile zone,
+    which turns a 12-tile window into a 13-tile buffer, costs more than the in-place
+    write saves. Two tiles keep the parity and halve how often the shift runs, at two
+    traces per row instead of one.
 
-    **The scratch zone is two tiles, not one, and that is not a tuning choice.** A
-    decode step's cost tracks the *parity* of its key-axis tile count, not its size:
-    swept on Blackhole at a 384-row window, 10/12/14/16 tiles cost 6.32/6.73/7.09/
-    7.99 ms while 11/13/15 cost 7.33/7.92/8.54 -- every odd count about a millisecond
-    dearer than its even neighbours, which is `out_subblock_w` falling back to 1. A
-    one-tile scratch zone turns a 12-tile window into a 13-tile buffer and pays that
-    penalty on every step: measured, +1.21 ms, against the +0.82 ms the in-place write
-    is worth. The mechanism was never the problem; the odd width was. Two tiles keeps
-    the parity, doubles the interval between shifts, and costs two traces per row
-    instead of one.
+    Two more consequences make this a separate class rather than a flag:
 
-    Two more things follow, and both are the reason this is a separate class
-    rather than a flag:
+    * The query is no longer the last key position, so `rel_shift`'s `T = 1` identity
+      is false and the positional window is selected explicitly:
+      `bd_offset = scratch - 1 - slot` (derivation in `forward_cached`).
+    * Both `update_idx` and that offset are baked at capture, because a trace records
+      runtime arguments as well as addresses. So there is one trace per scratch row,
+      plus one for the shift. (`paged_update_cache` takes its index as a device tensor
+      and would need one trace, but it wants a paged block cache and rejects this
+      layout.)
 
-    * **The query is no longer the last key position**, so `rel_shift`'s `T = 1`
-      identity is false and the positional window has to be selected explicitly.
-      `bd_offset = scratch - 1 - slot` does it; the derivation is in `forward_cached`.
-    * **Both `update_idx` and that offset are baked at capture**, because a trace
-      records runtime arguments, not just addresses. So there is one trace per scratch
-      row, plus one for the periodic shift. (`paged_update_cache` takes its index as a
-      *device tensor* and would need only one trace -- but it wants a paged block
-      cache, not this layout, and rejects it.)
+    The 65 traces need a large trace region. The allocator fills whatever region it is
+    given before reporting a shortfall -- it asks for 68.6 MB when offered 64 MB and
+    134.3 MB when offered 128 MB -- so 384 MB is a size known to work rather than a
+    requirement. A device opened with the usual 64 MB fails at capture, and
+    `generate()` then falls back to the moving cache.
 
-    Those 65 traces are the practical cost of the design, and the trace region has to
-    be sized for them. How much is not a tidy multiple: offered 64 MB the capture
-    asked for 68.6, offered 128 MB it asked for 134.3, so the allocator fills what it
-    is given before reporting a shortfall and neither number is "the requirement".
-    384 MB is a size this has been observed to capture in. A device opened with the
-    usual 64 MB fails at capture -- which is why this is opt-in rather than default,
-    and why `generate()` catches that failure and falls back rather than dying.
-
-    The mask does the rest of the bookkeeping. Exactly `max_len` rows are live at
-    every sub-step -- `[slot + 1, max_len + slot]` -- so the rows the shift discards
-    are precisely the rows the mask has already been suppressing, and the window
-    slides at the same rate it does in the moving version.
+    The mask does the rest: exactly `max_len` rows are live at every sub-step,
+    `[slot + 1, max_len + slot]`, so the rows the shift discards are the rows the mask
+    already suppresses, and the window slides at the same rate as in the moving version.
     """
 
     TILE = 32  # `TILE_LAYOUT`'s row granularity: the one shift width that is free
@@ -769,7 +733,7 @@ def right_aligned_bias(max_len: int, valid, chunk: int = 1, causal: bool = False
     query `i` (sitting at slot `max_len - chunk + i`) additionally may not see any
     slot beyond its own.
 
-    **`valid` may be a sequence, one entry per batch row**, which is what makes a
+    `valid` may be a sequence, one entry per batch row, which is what makes a
     batched decode step possible at all. Utterances batched together have different
     prompt lengths and stop at different tokens, so at any given step they have
     different amounts of real history -- but because the cache is *right*-aligned,

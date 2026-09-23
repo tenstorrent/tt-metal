@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """`ConditionalDecoder.forward` in plain torch, driven only by the flat weight export.
 
-This exists to split one question into two. When the TTNN UNet misses its PCC gate
-the cause is either *the graph is wrong* -- a swapped index, the wrong padding, a
-GroupNorm where a LayerNorm belongs -- or *a TTNN op behaved differently than
-expected*. Those need completely different debugging, and on rented silicon the
-difference is expensive to establish by bisection.
+This exists to split one question into two. When the TTNN UNet falls below its PCC
+threshold, the cause is either *the graph is wrong* -- a swapped index, the wrong
+padding, a GroupNorm where a LayerNorm belongs -- or *a TTNN op behaved differently
+than expected*, and the two need different debugging.
 
 So this reimplements the reference network from `flow_weights.npz` and nothing
 else: no cosyvoice package, no diffusers, no matcha, no device. If it reproduces

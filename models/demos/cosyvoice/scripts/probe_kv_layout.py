@@ -3,23 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Can the KV shift be made cheap by moving time onto a free axis?
 
-`TILE_LAYOUT` tiles only the **last two** dimensions. The cache is `[1, h, T, dk]`, so
-time is a tiled axis, and that is the whole reason slicing from row 1 costs 78 us and
-appending one row costs 207 -- both re-tile the buffer (see `probe_kv_alignment.py`).
+`TILE_LAYOUT` tiles only the last two dimensions. The cache is `[1, h, T, dk]`, so time
+is a tiled axis and every shift re-tiles the buffer (`probe_kv_alignment.py`). Dims 0
+and 1 are not tiled, so with time there the shift should be a cheap strided copy, at
+the price of one `permute` per layer back to `[b, h, T, dk]` for `q @ k^T`. This
+measures `slice + concat + permute` in that layout against the tiled-axis shift.
 
-Dims 0 and 1 are not tiled. If the cache were laid out with time there, the shift should
-be a cheap strided copy, at the price of one `permute` per layer to get back to
-`[b, h, T, dk]` for `q @ k^T`. That trade is worth taking only if
-
-    slice + concat + permute   <<   78 + 207
-
-and if it is, it captures most of what `update_cache` offers **without** the
-32-trace rework that design needs: no baked write index, no per-sub-step positional
-offset, no change to the attention geometry at all.
-
-The catch to watch for is padding. `[1, T, h, dk]` tiles `(h, dk) = (16, 64)`, and 16
-pads to 32 -- so the buffer doubles. That is 1 MB per tensor per layer, 28 MB total,
-which is affordable if the timing works out.
+`[1, T, h, dk]` tiles `(h, dk) = (16, 64)`, and 16 pads to 32, so the buffer doubles: 1
+MB per tensor per layer, 28 MB in all.
 
     python models/demos/cosyvoice/scripts/probe_kv_layout.py
 """

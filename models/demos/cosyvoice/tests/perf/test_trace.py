@@ -3,19 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Trace capture for the AR decode step -- the bring-up's headline perf lever.
 
-Before any of it was traced, the LLM was **81.9 % of end-to-end runtime** at ~124 us
-per op over ~280 ops per token: dispatch bound, not compute bound. That is what made
-trace capture the right lever -- it replays the recorded graph with one host command
-instead of re-issuing every op. (Post-tracing figures live in PERF.md; the number
-here is the *motivation*, so it stays as it was measured.)
+Untraced, the decode step is limited by dispatch: the host issues ~280 ops per token.
+A trace replays the recorded graph with one host command instead (PERF.md §6).
 
 Two things are checked, in this order, because the second is worthless without the
 first:
 
-1. **The traced path computes the same thing.** A trace that is fast and wrong is
-   the worst possible outcome, and the in-place KV cache it requires is exactly the
-   kind of change that can silently corrupt state after a few steps.
-2. **How much faster it is**, against the untraced fixed-shape path measured in
+1. The traced path computes the same thing. A trace that is fast and wrong is the
+   worst outcome, and the persistent KV buffers it requires are exactly the kind of
+   change that can silently corrupt state after a few steps.
+2. How much faster it is, against the untraced fixed-shape path measured in
    `test_llm_perf.py`.
 """
 from __future__ import annotations
@@ -72,7 +69,7 @@ def _setup(device, ttnn, prefix_len=209, max_len=384):
 @needs_weights
 @needs_l1_small
 def test_device_traced_matches_untraced(device):
-    """**Correctness first.** The same 8 decode steps, traced and untraced, must
+    """Correctness first. The same 8 decode steps, traced and untraced, must
     produce the same hidden states.
 
     The in-place cache is what makes this non-obvious: the untraced path allocates
@@ -134,7 +131,7 @@ def test_device_fused_attention_matches_explicit(device):
     """`sdpa_decode` against the explicit rel-pos chain it replaces.
 
     The two are independently reachable — `COSYVOICE_SDPA_DECODE=0` restores the
-    chain — so the equivalence needs its own gate rather than riding on
+    chain — so the equivalence needs its own test rather than riding on
     `test_device_traced_matches_untraced`, which compares each path only to itself.
 
     Untraced on both sides, because this is a test of the *arithmetic*. The identity
@@ -145,13 +142,13 @@ def test_device_fused_attention_matches_explicit(device):
 
     0.998 rather than bit-exactness: flash attention reassociates the softmax across
     k-chunks, so the sums are formed in a different order. That is a real difference
-    and the gate should not pretend otherwise. Per layer it is tiny — both paths measure
+    and the threshold should not pretend otherwise. Per layer it is tiny — both paths measure
     0.99998 against a torch golden — but it compounds twice over, through 14
     layers and then through the KV cache, which is why the measured spread is
     0.9988-0.9999 and drifts down with step index rather than staying flat.
 
-    The gate that actually protects the model is `test_token_agreement`, which is
-    exact-token and unmoved at 95.83 %. This one is here to catch a *structural*
+    The test that protects the model is `test_token_agreement`, which is exact-token
+    (PERF.md §7). This one is here to catch a *structural*
     break — a bias in the wrong convention, a mask in the wrong form — which collapses
     PCC to 0.7-0.9 rather than nudging the fourth decimal.
     """
@@ -197,7 +194,7 @@ def test_device_fused_attention_matches_explicit(device):
 @needs_weights
 @needs_big_trace
 def test_device_inplace_matches_untraced(device):
-    """The in-place cache, over **enough steps to cross a shift boundary**.
+    """The in-place cache, over enough steps to cross a shift boundary.
 
     Eight steps would prove nothing here. The design is that the cache stays still
     for a whole scratch zone of sub-steps and then slides by exactly that much, so
@@ -210,8 +207,8 @@ def test_device_inplace_matches_untraced(device):
     moving the cache instead of the query -- so agreement means the two ways of
     expressing "the last `max_len` tokens" really do line up.
 
-    **The moving cache is also run at the wider buffer**, and that control is the
-    point of the test rather than a garnish. The in-place path does not reproduce the
+    The moving cache is also run at the wider buffer, and that control is the point
+    of the test. The in-place path does not reproduce the
     reference bit-for-bit the way `TracedDecodeStep` does, and there are two possible
     reasons: `update_cache` could be perturbing the cache, or the reduction could
     simply be grouping a different number of tiles -- 14 instead of 12, with the extra
@@ -292,10 +289,10 @@ def test_device_inplace_matches_untraced(device):
             print(f"    step {i:2d}: in-place {p:.10f}   moving@{width} {q:.10f}   max|d| {(a - b).abs().max():.3e}")
     print(f"    worst: in-place {worst:.10f} (step {worst_at})   moving@{width} {worst_ctrl:.10f}")
 
-    # Gated below the moving path's exact match, because it cannot be exact: the
-    # control above shows how much of the gap is the wider reduction alone. What the
-    # gate is really protecting against is the structural failure -- a `bd_offset` or
-    # write row out of step, which collapses PCC rather than nudging it.
+    # Below the moving path's exact match, because it cannot be exact: the control
+    # above shows how much of the gap is the wider reduction alone. What this threshold
+    # protects against is the structural failure -- a `bd_offset` or write row out of
+    # step, which collapses PCC rather than nudging it.
     assert worst >= 0.995, f"worst PCC {worst} at step {worst_at}"
     assert worst >= worst_ctrl - 0.002, (
         f"in-place {worst} is worse than the width alone explains ({worst_ctrl}) -- "
@@ -319,15 +316,13 @@ def test_device_inplace_throughput(device):
         in-place @ width   -- the widening plus `update_cache`
 
     The first gap is the price of the wider tensors; the second is what writing the
-    cache in place is actually worth against rebuilding it. Attributing a regression
-    to the wrong one of those is how a good idea gets abandoned for someone else's
-    reason.
+    cache in place is actually worth against rebuilding it.
     """
     import ttnn
     from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep, TracedDecodeStepInPlace, TtARDecoder
 
     torch.manual_seed(0)
-    n = 64  # two full shift cycles, so the periodic shift is amortised honestly
+    n = 64  # two full shift cycles, so the periodic shift is amortised in full
     width = 384 + TracedDecodeStepInPlace.TILE * TracedDecodeStepInPlace.SCRATCH_TILES
 
     def bench(make, max_len):
@@ -362,7 +357,7 @@ def test_device_inplace_throughput(device):
     print(f"    LLM RTF contribution at 50 tok/s of speech: {50 * inplace_ms / 1e3:.3f}")
 
     # Both cache mechanisms ship -- `kv_inplace_default` picks between them by
-    # architecture -- so both carry the throughput gates, not only the faster one.
+    # architecture -- so both carry the throughput thresholds, not only the faster one.
     report(
         [
             enforce("tok_s", 1e3 / moving_ms, device, extra="moving cache"),
@@ -430,7 +425,7 @@ def test_device_traced_throughput(device):
     print(f"    LLM RTF contribution at 50 tok/s of speech: {50 * traced_ms / 1e3:.3f}")
 
     # The traced step is what `generate()` runs, so it is where the token-throughput
-    # gates are enforced. The untraced figure above is the control, not the claim.
+    # thresholds are enforced. The untraced figure above is the control, not the claim.
     tok_s = 1e3 / traced_ms
     report(
         [enforce("tok_s", tok_s, device), enforce("tok_s_stretch", tok_s, device)],
@@ -473,11 +468,10 @@ def _hift_inputs(device, ttnn):
 def test_hift_trace_is_bit_identical(device):
     """The traced vocoder must return exactly what the untraced one does.
 
-    Bit-identical rather than a PCC gate, because there is nothing here that should
+    Bit-identical rather than a PCC threshold, because there is nothing here that should
     differ: the trace replays the same kernels on the same data. Anything short of
-    `max|d| == 0` means the replay is reading a buffer it should not be -- the failure
-    mode that cost the CFM a `PCC 0.0017` before its output was moved inside the
-    capture.
+    `max|d| == 0` means the replay is reading a buffer it should not be (compare the
+    CFM's trace output, `TtConditionalCFM._capture`).
     """
     import ttnn
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
@@ -496,10 +490,9 @@ def test_hift_trace_is_bit_identical(device):
 
         # Repeated replays, not just one. Each `decode` clones its result out of the
         # trace's output buffer, and TTNN warns that buffers allocated while a trace
-        # is alive may collide with addresses the replay baked in. That is not
-        # hypothetical -- it is what scored the CFM `PCC 0.0017` before its output was
-        # moved inside the capture -- and it shows up on the fourth or fifth call, not
-        # the second. A streamed utterance replays this many times per second.
+        # is alive may collide with addresses the replay baked in; such a collision
+        # shows up on the fourth or fifth call, not the second. A streamed utterance
+        # replays this many times per second.
         for i in range(6):
             runs.append((f"replay {i}", ttnn.to_torch(model.decode(mel, s, mel_frames)).float()))
 
@@ -518,15 +511,12 @@ def test_hift_trace_is_bit_identical(device):
 def test_hift_trace_is_faster(device):
     """How much a replay is worth, and what it costs to take the trace.
 
-    **The capture figure printed here flatters itself, and the break-even derived from it
-    is wrong.** The test above has already captured and released a trace for this same
-    geometry, and a second capture of a geometry the process has seen costs `~110-160 ms`
-    where the first costs `~980 ms`. Reading `break-even at 5 replays` off this line is
-    exactly the mistake that put a 30-chunk crossover into the code as a 3-chunk one.
-
-    The replay number is the trustworthy one, and it is the point: `~3x` at this geometry.
-    For the honest capture cost and crossover see PERF.md, measured with a fresh geometry
-    in a fresh process.
+    The capture cost printed here is not a first capture: the test above has already
+    captured and released a trace for this geometry, and recapturing a geometry the
+    process has seen costs a fraction of a first capture. A break-even derived from this
+    line is therefore too optimistic. The replay figure is the one to read;
+    `TtHiFTGenerator.enable_trace` has the first-capture cost and the crossover, measured
+    with a fresh geometry in a fresh process.
     """
     import ttnn
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Streaming verified on **content**.
+"""Streaming verified on content.
 
 The bring-up scope is explicit about what this must not be:
 
@@ -12,26 +12,25 @@ The bring-up scope is explicit about what this must not be:
 Counting chunks proves the loop ran. It proves nothing about whether the audio is
 the same speech, which is the thing that was actually in doubt.
 
-**The plan asks for a sample-level gate and that gate is not achievable**, by this
-port or by the original. Measured on the PyTorch reference's own streamed and
-non-streamed audio for the same text and seed:
+The scope asks for a sample-level threshold, and none is achievable, by this port
+or by the original. On the PyTorch reference's own streamed and non-streamed audio
+for the same text and seed:
 
     sample corr  -0.0260      mel-space  0.6689      envelope  0.6562
 
-The cause is f0-into-phase integration again. Chunked decoding produces a slightly
-different mel; f0
-derives from that mel; and f0 error *integrates* into excitation phase over tens
-of thousands of samples. Holding the phase vector fixed across both runs -- which
-this test does -- does not rescue it, because the divergence is in f0, not in the
-initial phase.
+The cause is f0-into-phase integration. Chunked decoding produces a slightly
+different mel; f0 derives from that mel; and f0 error integrates into excitation
+phase over tens of thousands of samples. Holding the phase vector fixed across both
+runs -- which this test does -- does not rescue it, because the divergence is in
+f0, not in the initial phase.
 
-So sample correlation is **reported next to the reference's own number** rather
-than gated, and three things are gated instead:
+So sample correlation is reported next to the reference's own number rather than
+asserted, and three things are asserted instead:
 
-* **mel-space PCC** — the content gate. Does the streamed audio say the same
-  thing, with the same prosody?
-* **envelope PCC** — the same question in the energy domain.
-* **seam continuity** — the first difference of the waveform near a chunk
+* mel-space PCC -- the content check. Does the streamed audio say the same thing,
+  with the same prosody?
+* envelope PCC -- the same question in the energy domain.
+* seam continuity -- the first difference of the waveform near a chunk
   boundary, against the utterance's own p99.9. A phase discontinuity at a seam is
   a step, and a step is an outlier here. This is what the three caches exist to
   prevent, and it is the only one of the three that tests them directly.
@@ -132,7 +131,7 @@ def test_session_finish_is_not_reusable(expect_error):
 
 
 def test_window_is_symmetric_hamming_not_periodic():
-    """`np.hamming` is the **symmetric** form; `scipy.signal.get_window` returns the
+    """`np.hamming` is the symmetric form; `scipy.signal.get_window` returns the
     periodic one by default. The discriminator is palindromy: the symmetric window
     satisfies `w[i] == w[N-1-i]`, the periodic one does not.
 
@@ -147,7 +146,7 @@ def test_window_is_symmetric_hamming_not_periodic():
 
 
 def test_the_reference_crossfade_does_not_preserve_level():
-    """CosyVoice's crossfade sums to **1.06–1.08**, not 1.
+    """CosyVoice's crossfade sums to 1.06–1.08, not 1.
 
     `fade_in_out` weights the incoming signal by `w[:n]` and the outgoing by
     `w[n:]`, and for a Hamming window those do not form a complementary pair -- the
@@ -179,7 +178,7 @@ def test_the_golden_utterance_is_long_enough_to_chunk():
     """164 generated tokens against a 120-token chunk: two chunks, one seam.
 
     Stated because a test that silently produced a single chunk would pass every
-    gate below while exercising none of the caching this file exists to check.
+    check below while exercising none of the caching this file exists to check.
     """
     lr = load_golden("flow.length_regulator")
     n_generated = as_torch(lr["call0.in_x2"]).shape[1]
@@ -193,7 +192,7 @@ def test_the_golden_utterance_is_long_enough_to_chunk():
 # device tier
 # --------------------------------------------------------------------------
 def _mel_of(wav: torch.Tensor, n_fft=1024, hop=256, n_mels=80) -> torch.Tensor:
-    """A plain log-magnitude spectrogram for the mel-space gate.
+    """A plain log-magnitude spectrogram for the mel-space check.
 
     Not the model's own mel front-end: the point is to compare two *waveforms* in a
     perceptually weighted space, and any fixed linear-frequency magnitude basis
@@ -245,9 +244,9 @@ def test_device_streamed_matches_non_streamed(device):
 
     # ONE phase vector, shared by both runs and by every chunk. Seeding per chunk
     # would give the two runs different phases, and a different phase gives
-    # ~0 sample correlation by construction -- the gate would then measure the RNG
-    # rather than the streaming. Holding it fixed makes the sample gate a real test
-    # of the excitation splice: with the splice the phase runs continuously across
+    # ~0 sample correlation by construction -- the comparison would then measure the
+    # RNG rather than the streaming. Holding it fixed makes sample correlation a real
+    # test of the excitation splice: with the splice the phase runs continuously across
     # a seam, without it every chunk restarts at this same offset and correlation
     # collapses.
     _g = torch.Generator().manual_seed(1986)
@@ -332,12 +331,7 @@ def test_device_streamed_matches_non_streamed(device):
     assert env_corr >= 0.85, env_corr
     # No step at the seam: the crossfades and the excitation splice did their job.
     assert seam_max <= 4 * global_p999, (seam_max, global_p999)
-    # `sample_corr` is deliberately NOT gated. The plan asks for it, and it is not
-    # achievable by any implementation of this architecture -- the PyTorch reference
-    # scores -0.026 on the same comparison. Chunked decoding yields a slightly
-    # different mel, f0 derives from that mel, and f0 error integrates into
-    # excitation phase over tens of thousands of samples. Holding the phase
-    # vector fixed across both runs, as this test does, does not rescue it. Reported
-    # rather than dropped, and reported next to the reference's own number so the
-    # comparison is legible.
+    # `sample_corr` is reported, not asserted: no implementation of this architecture
+    # reaches a sample-level threshold (module docstring), so it is printed next to
+    # the reference's own figure.
     assert sample_corr > -0.5, sample_corr

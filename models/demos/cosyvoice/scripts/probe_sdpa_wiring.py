@@ -3,21 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Where does the fused decode path lose accuracy in the model?
 
-Standalone (`probe_sdpa_decode.py`) it is PCC 0.99998. Wired in, traced-vs-untraced
-drops to 0.88. `probe_sdpa_mask_shape.py` ruled out the two differences in the mask --
-neither its value (-1e9 vs -1e4) nor a fully-suppressed leading chunk moves the number;
-only `k_chunk_size` does, and the model computes that correctly.
+Walks the three places the fused decode attention can diverge, one at a time, on the
+real decoder:
 
-So the remaining suspects are in the wiring, and they split three ways. This walks them
-one at a time on the real decoder:
+  A. untraced fused vs untraced explicit   -- is the fused path right at all?
+  B. traced fused vs untraced fused        -- does trace capture change it?
+  C. traced explicit vs untraced explicit  -- the known-good control (should be 1.0)
 
-  A. untraced fused vs untraced explicit -- is the fused path right at all?
-  B. traced fused vs untraced fused     -- does trace capture change it?
-  C. traced explicit vs untraced explicit -- the known-good control (should be 1.0)
-
-A failing and B clean means the arithmetic is wrong. B failing and A clean means
-`sdpa_decode` does not survive `begin_trace_capture`, which would be worth knowing
-before any of this ships.
+A failing with B clean means the arithmetic is wrong. B failing with A clean means the
+fused path does not survive `begin_trace_capture` as wired (see `TracedDecodeStep`'s
+mask handling).
 
     python3 models/demos/cosyvoice/scripts/probe_sdpa_wiring.py
 """
@@ -104,7 +99,7 @@ def main() -> int:
         def run_body_untraced(dec, caches):
             """`TracedDecodeStep._body()` called directly, never captured.
 
-            The traced arm differs from `forward_chunk_fixed` in **two** ways: it is
+            The traced path differs from `forward_chunk_fixed` in two ways: it is
             traced, and it keeps a time-major cache (`cache_free=True`), whose k/v reach
             attention as permutes rather than concats. Comparing traced-vs-untraced
             moves both at once. This moves only the cache layout.

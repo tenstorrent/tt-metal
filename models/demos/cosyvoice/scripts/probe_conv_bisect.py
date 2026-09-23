@@ -3,13 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """What makes the model's conv1d fail where a bare one does not?
 
-`repro_conv1d_wormhole.py` calls `ttnn.conv1d` at the failing geometry -- `Conv1d(128 ->
-128, k=11, pad=5)` over `[1, 8321, 128]`, HiFi4 + fp32 accumulation, on Wormhole -- with a
-random weight and a random input, and gets the right answer at **every** length. The model's
-own call at the identical geometry returns `1.58e38`.
-
-So the length is necessary but not sufficient, and something about *this conv object*
-completes it. Four candidates, and one arm each:
+At the failing Wormhole geometry -- `Conv1d(128 -> 128, k=11, pad=5)` over `[1, 8321, 128]`,
+HiFi4 + fp32 accumulation -- the model's own call returns `1.58e38`. Five cases separate
+the candidates:
 
     A  model conv (prepared weights) + model input      the failing path
     B  model conv                    + random input     is it the data?
@@ -17,12 +13,10 @@ completes it. Four candidates, and one arm each:
     D  bare ttnn.conv1d, model weight + random input    weight alone
     E  bare, random weight           + model input      input alone
 
-`TtConv1d` hoists weight preparation out of the op with `ttnn.prepare_conv_weights` so that
-convolutions can be captured in a trace (the op otherwise transfers weights at call time,
-which a trace rejects). That is the one structural difference between the model's call and
-the bare one, which makes C the arm to read first: **if C is clean where A is not, the
-prepared-weight layout is wrong at this geometry** and the bare-call repro was never going
-to show it.
+`TtConv1d` prepares its weights with `ttnn.prepare_conv_weights` so the convolution can
+be traced; that is the one structural difference between the model's call and a bare
+one, so C is the case to read first: if C is clean where A is not, the prepared-weight
+layout is wrong at this geometry (`docs/VALIDATION.md`).
 
     python3 models/demos/cosyvoice/scripts/probe_conv_bisect.py [--frames 8321]
 """

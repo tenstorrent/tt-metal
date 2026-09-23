@@ -3,18 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Is the batch-1 decode matmul core-limited, and does a core grid fix it?
 
-The decode step moves 352 MB of weights per token and does it in 8.25 ms -- about
-42 GB/s, roughly 8 % of what this part can deliver. Two measurements say the
-shortfall is not bandwidth: `bfloat8_b` weights, which halve the bytes, measured
-exactly 1.00x at both 27 and 42 GB/s. If halving the traffic changes nothing, the
-matmul is not waiting on DRAM; the likely cause is that a `[1, K] x [K, N]` product
-lands on few cores.
-
-That is worth one contained experiment before either attempting a sharded rewrite of
-every linear or declaring the RTF target out of reach, because the two conclusions
-differ by a lot of work.
-
-Each shape below is one of the four linears an AR decoder layer issues.
+`bfloat8_b` weights, which halve the bytes a decode step reads, leave it unchanged
+(PERF.md Part II §1.3), so the step's linears are not waiting on DRAM; the likely cause
+is that a `[1, K] x [K, N]` product runs on few cores. This times each of the four
+linears an AR decoder layer issues, with TTNN's default and with explicit core grids.
 
     python models/demos/cosyvoice/scripts/probe_matmul_config.py
 """

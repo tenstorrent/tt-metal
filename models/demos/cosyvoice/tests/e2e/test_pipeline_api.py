@@ -5,7 +5,7 @@
 
 Everything else in `tests/` reaches past `CosyVoiceTTNN` and exercises a stage: the
 decoder, the streaming synthesizer, the vocoder. That is the right level for
-correctness, and it leaves one thing unchecked — **the wiring**. `synthesize`,
+correctness, and it leaves one thing unchecked — the wiring. `synthesize`,
 `synthesize_streaming` and `synthesize_batch` each assemble the same three stages in a
 different order, and an assembly can be wrong while every part is right.
 
@@ -13,18 +13,18 @@ So this file drives the public API, from a `PromptContext` built by
 `scripts/prepare_inputs.py`, and asks the two questions that are specific to the
 assembly rather than to any stage:
 
-1. **Does the interleaved schedule generate the same tokens as the batch one?**
+1. Does the interleaved schedule generate the same tokens as the batch one?
    `synthesize_streaming` runs the flow decoder and the vocoder from inside the AR
    decode loop's callback. If that callback perturbed the decoder's state -- a freed
    buffer, a clobbered trace, a cache written between steps -- the tokens would drift.
    Greedy sampling makes the comparison exact.
 
-2. **Does batched generation produce what generating alone produces?**
+2. Does batched generation produce what generating alone produces?
    `test_device_batched_decode_matches_single` answers that for one decode *step* at
    PCC. This asks it for a whole utterance, through sampling, which is the form that
-   compounds: one different argmax diverges everything after it. Gated on the
-   agreement rate the bring-up scope already sets for token accuracy, and the
-   exact-match prefix is reported next to it.
+   compounds: one different argmax diverges everything after it. Checked against
+   the agreement rate the bring-up scope sets for token accuracy, with the
+   exact-match prefix reported next to it.
 
 Inputs come from `--inputs`-style `.npz` files rather than the golden corpus, because
 a `PromptContext` is exactly what those files are. The tests skip, with a reason, when
@@ -101,9 +101,8 @@ def _agreement(a: list[int], b: list[int]) -> tuple[float, int]:
 
 # Two full syntheses of the same utterance, and the flow decoder and the vocoder
 # JIT-compile per mel length -- so on a machine that has not run this geometry before,
-# the compile bill alone exceeds `pytest.ini`'s 300 s default. It did on p150b, where
-# the same test takes 16 s once the kernels are cached. Same marker, same reason, as
-# `tests/perf/test_streaming_perf.py`.
+# the compile alone exceeds `pytest.ini`'s 300 s default; with the kernels cached the
+# test takes seconds. Same marker, same reason, as `tests/perf/test_streaming_perf.py`.
 @pytest.mark.timeout(1800)
 @needs_weights
 @needs_inputs
@@ -114,8 +113,8 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
     Greedy on both sides, so any difference is the callback's doing rather than the
     sampler's. Audio is *not* compared here: the two paths draw the CFM noise and the
     excitation phase differently by design (per chunk against once per utterance), and
-    `test_device_streamed_matches_non_streamed` already gates streamed content in mel
-    space where that difference does not hide a real one.
+    `test_device_streamed_matches_non_streamed` already checks streamed content in mel
+    space, where that difference does not hide a real one.
     """
     import ttnn
     from models.demos.cosyvoice.tt.pipeline import PromptContext
@@ -186,8 +185,8 @@ def test_device_batched_synthesis_agrees_with_one_at_a_time(device, monkeypatch)
 
     This is the whole-utterance form of `test_device_batched_decode_matches_single`,
     and it is the one that compounds: a single differing argmax diverges everything
-    after it. So it is gated on the agreement *rate* the scope sets for token accuracy
-    (> 95 %) rather than on exact equality, and the exact-match prefix is printed
+    after it. So it asserts the agreement rate the scope sets for token accuracy
+    (> 95 %) rather than exact equality, and the exact-match prefix is printed
     beside it — on Wormhole the batched decode step differs from the single-row one at
     about PCC 0.9985 (see `test_device_batched_decode_matches_single` for why), which
     is enough to move an argmax that sits near a tie.

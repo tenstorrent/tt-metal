@@ -5,11 +5,11 @@
 
 The solver is checked in two independent ways before any device time:
 
-* the **schedule** (t and dt per step) against the captured timesteps, and
-* the **update rule** replayed against the captured per-step `dphi_dt`, with the
+* the schedule (t and dt per step) against the captured timesteps, and
+* the update rule replayed against the captured per-step `dphi_dt`, with the
   network taken entirely out of the loop.
 
-If both hold, then a device miss on `solve_euler` is the estimator drifting, not
+If both hold, then a device failure on `solve_euler` is the estimator drifting, not
 the integration -- and since each step's input is the previous step's output,
 that distinction is otherwise very hard to make.
 """
@@ -161,7 +161,7 @@ def test_device_solve_euler_matches_golden(device):
 def test_device_flow_tokens_to_mel(device):
     """The whole flow stage: semantic tokens in, mel out, nothing on the host.
 
-    This is the flow stage's acceptance gate. It chains the token embedding, the
+    This is the flow stage's acceptance test. It chains the token embedding, the
     6-block Conformer encoder, the projection, the length regulator and all ten
     solver steps -- every piece of the stage, in one graph.
     """

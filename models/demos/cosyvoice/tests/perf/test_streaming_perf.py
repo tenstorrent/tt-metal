@@ -5,7 +5,7 @@
 
 `tests/e2e/test_streaming.py` answers a different question: does chunked vocoding
 reconstruct the same speech? It does -- and that is a content check on an utterance
-that has **already been fully generated**. It says nothing about *when* the first
+that has already been fully generated. It says nothing about *when* the first
 sample can be handed to a caller, and on the batch path the answer is "after the last
 token", because `CosyVoiceTTNN.synthesize` runs the three stages strictly in order.
 
@@ -15,18 +15,17 @@ decoder and the vocoder run on it and emit audio. Nothing overlaps in compute --
 device, one command queue -- so the *total* gets slightly worse. What changes is that
 time to first audio stops scaling with the length of the utterance.
 
-Measured the only way it can be believed: **both schedules, in one process, on one
-device, over the same tokens, with all three stages real.** The AR decoder is prefilled
-from the captured prefix and stepped for every token, so the decode cadence is this
-board's own; the token *identities* are replayed from the golden rather than sampled,
-so both schedules cut chunks at exactly the same boundaries and the comparison is of
-schedules and not of two different utterances.
+Both schedules run in one process, on one device, over the same tokens, with all
+three stages real. The AR decoder is prefilled from the captured prefix and stepped
+for every token, so the decode cadence is this board's own; the token *identities*
+are replayed from the golden rather than sampled, so both schedules cut chunks at
+exactly the same boundaries and the comparison is of schedules and not of two
+different utterances.
 
-**What this does not measure is how first audio behaves as the utterance grows**, and
-that is a device limit rather than a choice -- see the note beside `tokens` below.
+It does not measure how first audio scales with utterance length; see the note beside
+`tokens` below.
 
-Both numbers are printed, in both directions. Reporting only the first-audio win would
-be a sales pitch; reporting only the total would hide what streaming is for.
+Both numbers are printed: the first-audio gain, and what interleaving costs the total.
 """
 from __future__ import annotations
 
@@ -44,14 +43,11 @@ FLOW_WEIGHTS = HIFT_WEIGHTS.replace("hift_", "flow_")
 LLM_WEIGHTS = HIFT_WEIGHTS.replace("hift_", "llm_")
 SAMPLE_RATE = 22050
 
-# All three stages plus **one** decode trace. The 384 MB region the rest of the perf
-# suite asks for is sized for `TracedDecodeStepInPlace`, which captures 65 traces; this
-# test captures a single moving-cache trace and 64 MB covers it comfortably.
-#
-# The difference is not cosmetic on a 12 GB part. This test runs the flow decoder and
-# the vocoder alongside a live trace, so every megabyte the trace region reserves is a
-# megabyte they cannot have — and asking for 384 MB hung n300 outright while both 32 GB
-# Blackhole boards were fine with it. Reserve what is used.
+# All three stages plus one decode trace. The 384 MB region the rest of the perf suite
+# asks for is sized for `TracedDecodeStepInPlace`'s 65 traces; this test captures one
+# moving-cache trace, and 64 MB covers it. The flow decoder and the vocoder run beside
+# the live trace and need the memory a larger region would reserve: on n300's 12 GB,
+# 384 MB here hangs the board (`docs/VALIDATION.md`).
 needs_l1_small = pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 131072, "trace_region_size": 67108864}], indirect=True
 )
@@ -69,10 +65,10 @@ needs_golden = pytest.mark.skipif(
 # is minutes rather than seconds. `pytest.ini`'s 300 s default would fire during
 # warm-up and report a timeout for work that has not started being measured.
 #
-# Most of that bill is paid once per *machine* rather than once per run: mounting
-# `~/.cache/tt-metal-cache` into the container carries the compiled kernels across
-# runs (PERF.md, *Operational notes*). Without it, every configuration of the perf
-# suite recompiles everything, and this test is where that shows up first.
+# Most of that is paid once per machine rather than once per run: mounting
+# `~/.cache/tt-metal-cache` into the container keeps the compiled kernels across runs.
+# Without it, every configuration of the perf suite recompiles everything, and this
+# test is where that shows up first.
 @pytest.mark.timeout(3600)
 @needs_weights
 @needs_golden
@@ -81,16 +77,8 @@ def test_device_streaming_first_audio_latency(device):
     """First-audio latency and total, batch schedule against streaming schedule."""
     import ttnn
 
-    # Skipped on Wormhole: this test wedges n300, and the cause is not established.
-    # An earlier revision of this comment named re-seeding a trace's buffers after
-    # execution as the cause. That was withdrawn: the probe it rested on captured its
-    # trace before the first prefill had compiled its kernels, so the prefill compiled
-    # under a live trace, and that -- not the re-seed -- is what hung it. With a
-    # warm-up before capture the same sequence runs clean on both architectures, four
-    # passes of seed plus 164 traced steps in 14.7 s on n300.
-    # What that does rule out is the decode-only sequence. What remains is the flow
-    # decoder and vocoder running under the live trace, which this test does and
-    # `synthesize_streaming` does not. See docs/VALIDATION.md.
+    # Skipped on Wormhole: this test wedges n300, cause not established.
+    # `docs/VALIDATION.md` has what is ruled out and what to try next.
     if "WORMHOLE" in str(device.arch()).upper():
         pytest.skip("hangs Wormhole n300, cause not established; see docs/VALIDATION.md and PERF.md, Known limitations")
 
@@ -127,32 +115,21 @@ def test_device_streaming_first_audio_latency(device):
     flow = TtMaskedDiffWithXvec(device, flow_bag, flow_bag.meta)
     hift = TtHiFTGenerator(device, WeightBag.load(HIFT_WEIGHTS))
 
-    # **One length, and the reason is a device limit rather than a preference.**
-    # The interleaved schedule runs the flow decoder and the vocoder *while the AR
-    # decode trace is live*, and TTNN says so out loud -- "Allocating device buffers is
-    # unsafe due to the existence of an active trace". At the golden utterance's length
-    # that combination is stable and is what this test measures. Pushing it to a longer
-    # utterance (a wider trace region plus more and larger live buffers) reproducibly
-    # wedged the board: 45 minutes at 100 % CPU with the JIT cache flat, twice, on two
-    # different p150a boards. So the longer arm is not measured and is not claimed;
-    # `PERF.md` records it as an open limitation next to the L1_SMALL growth across
-    # geometries it most likely shares a cause with.
-    #
-    # What is lost is the *scaling* demonstration, and what is not lost is the claim
-    # the review actually turns on: first audio arrives before generation finishes.
-    # That is measured here, head to head, at a length both schedules certify at.
+    # One length: the golden utterance's. At a longer one -- a wider trace region, and
+    # more and larger buffers live beside it -- this test wedged p150a
+    # (`docs/VALIDATION.md`), so how first audio scales with length is not measured.
+    # What is measured, head to head at a length both schedules run at, is that first
+    # audio arrives before generation finishes.
     tokens = generated
 
     prefix_len = prefix.shape[1]
     max_len = ((prefix_len + len(tokens) + 1 + 127) // 128) * 128
 
-    # **One capture for the whole test, re-seeded per pass.** Each pass needs a fresh
-    # KV cache -- stepping consumes it -- but it does not need a fresh *trace*, and
-    # capturing per pass is what broke this test: four 384 MB captures in one process
-    # (two warm-up passes plus two measured) hung the board reproducibly, with the log
-    # and the JIT cache both frozen. `seed()` exists precisely so a prefill can be
-    # loaded into buffers a trace already points at, so the trace is captured once and
-    # each pass re-prefills into it.
+    # One capture for the whole test, re-seeded per pass. Each pass needs a fresh KV
+    # cache -- stepping consumes it -- but not a fresh trace, and four captures in one
+    # process hang the board (`docs/VALIDATION.md`). `seed()` loads a prefill into the
+    # buffers the trace already points at, so the trace is captured once and each pass
+    # re-prefills into it.
     def prefill():
         caches = dec.empty_cache(max_len, prefix_len)
         ys, caches = dec.forward_chunk_fixed(
@@ -260,19 +237,12 @@ def test_device_streaming_first_audio_latency(device):
             ttnn.deallocate(c)
         return {"first_s": first_s, "total_s": total, "n_chunks": n_chunks, "audio_s": n_samples / SAMPLE_RATE}
 
-    # **Warm the flow decoder and the vocoder BEFORE the decode trace is captured, and
-    # do it without the decoder.** Both orderings were tried on the same board. Warming
-    # first and capturing after is stable; capturing first and warming through the
-    # traced path hangs the device outright -- log frozen, JIT cache flat, 100 % CPU,
-    # reproducible with a cleared cache on a freshly reset board. TTNN says why in the
-    # same log: "Allocating device buffers is unsafe due to the existence of an active
-    # trace." A capture reserves its region, and the flow decoder and vocoder then have
-    # to find room around it for geometries the allocator has never seen.
-    #
-    # So every geometry either schedule will ask for is allocated, used and freed here,
-    # with no trace live -- the batch path's whole-utterance shapes and, via one
-    # throwaway streaming run, the chunk shapes that carry the mel cache and the
-    # overlap trim. Only then is the trace captured.
+    # Warm the flow decoder and the vocoder before the decode trace is captured, without
+    # the decoder: every geometry either schedule asks for -- the batch path's
+    # whole-utterance shapes and, via one throwaway streaming run, the chunk shapes that
+    # carry the mel cache and the overlap trim -- is allocated, used and freed here with
+    # no trace live. The reverse order completes on Blackhole and is untested on n300
+    # (`docs/VALIDATION.md`); this test keeps the warm-first order.
     warm_mel, warm_frames = flow_chunk(tokens)
     wp, wn = rng(warm_frames)
     w_wav, _, w_src = hift.inference(
@@ -315,8 +285,7 @@ def test_device_streaming_first_audio_latency(device):
     print(f"    first-audio gain            {batch['first_s'] / stream['first_s']:6.2f}x")
     print(f"    cost of interleaving        {stream['total_s'] / batch['total_s']:6.2f}x on the total")
 
-    # The claim, asserted: audio exists before generation has finished. This is what
-    # "streaming begins after token generation completes" said was missing.
+    # The claim, asserted: audio exists before generation has finished.
     assert stream["first_s"] < batch["total_s"], (
         f"streaming first audio {stream['first_s']:.3f} s is no earlier than the batch "
         f"path's {batch['total_s']:.3f} s -- the interleaving is not happening"
@@ -332,7 +301,7 @@ def test_device_streaming_first_audio_latency(device):
         f"first audio at {stream['first_s']:.3f} s for a {batch['audio_s']:.2f} s utterance "
         "-- the stream cannot stay ahead of playback"
     )
-    # ...and sustain it, which is the bound that matters once playback has started.
+    # ...and sustain it, which is the limit that matters once playback has started.
     assert stream["total_s"] < stream["audio_s"], (
         f"streamed total {stream['total_s']:.3f} s exceeds the {stream['audio_s']:.2f} s it "
         "produces -- the stream cannot sustain real time"

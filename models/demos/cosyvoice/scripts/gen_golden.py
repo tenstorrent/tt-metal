@@ -25,8 +25,7 @@ A TTNN port cannot consume the torch RNG stream in the same order, so seeding
 alone does not make TTNN and PyTorch comparable -- it only makes PyTorch
 reproducible against itself. Every such draw is therefore captured here as a
 named array, and the TTNN modules must accept them as explicit inputs in PCC
-tests. This generalises the DD-5 lesson (pin the DDIM noise) into the stronger
-rule the vocoder needs: capture the noise, then inject it.
+tests: capture the noise, then inject it.
 """
 from __future__ import annotations
 
@@ -56,7 +55,7 @@ CALL_CAPS = {"llm.ar_forward_chunk": 2}
 
 # Float arrays above this many elements are stored fp16. That is 11 mantissa
 # bits -- strictly more precision than the bfloat16 the device will carry, and
-# three orders of magnitude finer than the PCC >= 0.99 gates consume.
+# three orders of magnitude finer than the PCC >= 0.99 thresholds need.
 LARGE_ARRAY = 1 << 20
 
 
@@ -181,7 +180,7 @@ def load_golden(path: str) -> dict[str, np.ndarray]:
     """Read a golden .npz, resolving the alias map save() may have written.
 
     Tests should use this rather than np.load, otherwise deduplicated arrays
-    (e.g. call1.in_att_cache, which aliases call0.out_att_cache) look missing.
+    (e.g. call1.in_att_cache, which aliases call0.out_att_cache) look absent.
     """
     with np.load(path) as z:
         data = {k: z[k] for k in z.files if k != "__aliases__"}

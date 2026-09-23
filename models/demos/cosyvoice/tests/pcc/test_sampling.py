@@ -20,7 +20,7 @@ from models.demos.cosyvoice.tt.llm.sampling import is_repetitive, nucleus_filter
 
 
 def _upstream_nucleus_filter(probs: torch.Tensor, top_p: float = 0.8, top_k: int = 25):
-    """Upstream's own form: full sort, Python accumulation, break on either bound."""
+    """Upstream's own form: full sort, Python accumulation, break on either limit."""
     sorted_value, sorted_idx = probs.sort(descending=True, stable=True)
     keep, cum = 0, 0.0
     for i in range(len(sorted_idx)):
@@ -38,8 +38,8 @@ def test_nucleus_filter_matches_upstream(top_p, top_k):
     """Same retained set, same order, across a spread of distribution shapes.
 
     The `scale` sweep matters more than the seed count: a peaked distribution
-    reaches `top_p` in one or two tokens and exercises the `top_p` bound, a flat
-    one runs into `top_k` instead, and only covering both proves the two bounds
+    reaches `top_p` in one or two tokens and exercises the `top_p` limit, a flat
+    one runs into `top_k` instead, and only covering both proves the two limits
     are not being confused for each other.
     """
     for seed in range(8):

@@ -24,14 +24,12 @@ captured layer bit-exactly):
 `rel_shift` is the awkward part on device: it is a *skew* of the score matrix,
 done by padding a column, reinterpreting the last two axes transposed, dropping a
 row and slicing. In tile layout that is a strided gather rather than an
-elementwise op, which is why a native rel-pos SDPA was scoped as the bring-up's
-high-risk item. Here it is composed from concat + reshape + slice, all of which
+elementwise op; here it is composed from concat + reshape + slice, all of which
 TTNN has.
 
-Stage 1 computes the positional term explicitly.
-Folding it into an SDPA `attn_mask` is a Stage 3 change, and the identity that
-makes it legal is already proven -- with the caveat that the bias must be
-pre-divided by sqrt(d_k), since SDPA scales before adding.
+At decode (`T = 1`) the positional term is an additive bias over the key axis, so
+`forward_cached` passes it to `scaled_dot_product_attention_decode` as `attn_mask`.
+That kernel adds the mask before it scales, so `bd` goes in unscaled.
 """
 from __future__ import annotations
 
@@ -104,15 +102,13 @@ def _linear_fused(device, bag, names, dtype, weights_dtype=None, scales=None):
     matmul over a wider weight. The concatenation happens on the host, once, at
     construction -- the device sees a single weight and never learns there were three.
 
-    **It pays where the matmuls are large and not where they are not**, which is worth
-    stating because the op count alone predicts the opposite. In the flow estimator
-    (T ~ 600, batch 2, 64 blocks x 10 Euler steps) this took the stage from 1.075 s to
-    0.818 s. In the AR decode step, where T = 1, it measured 8.29 -> 8.31 ms: a wash,
-    because `split_query_key_value_and_split_heads` physically rearranges the fused
-    row into three head-major tensors and at that size costs about what the two
-    matmuls it removed did. Fewer ops is a proxy for cost, not the cost itself.
+    It pays where the matmuls are large: it speeds up the flow estimator (T ~ 600) and
+    is a wash in the AR decode step (T = 1), where
+    `split_query_key_value_and_split_heads` rearranges the fused row into three
+    head-major tensors at about the cost of the two matmuls it removes. PERF.md Part II
+    §1.2 has the figures.
 
-    A missing bias among present ones is filled with zeros rather than dropping the
+    An absent bias among present ones is filled with zeros rather than dropping the
     bias for all three, since the fused linear has to be all-or-nothing.
 
     `scales` optionally multiplies each sub-weight (and its bias) by a constant on the
@@ -151,8 +147,7 @@ def _layernorm_weights(device, bag, name, dtype):
 
     A 1-D ROW_MAJOR tensor of shape [C] has padded_shape[-1] == C, and
     ttnn.layer_norm requires gamma.padded_shape[-1] == 32. Reshaping to (1, C)
-    and tilizing is what satisfies it -- the same trap CLAUDE.md records for the
-    TTM-R1 bring-up.
+    and tilizing satisfies it.
     """
     sub = bag.sub(name)
     g = ttnn.from_torch(sub.tensor("weight").reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -163,21 +158,21 @@ def _layernorm_weights(device, bag, name, dtype):
 def decode_mask(mask, n_head: int):
     """`[b, 1, 1, W]` padding mask -> the `[b, 1, h, W]` form `sdpa_decode` wants.
 
-    `sdpa_decode` matches the mask's head axis against Q's **logically**, not by
+    `sdpa_decode` matches the mask's head axis against Q's logically, not by
     broadcast (`sdpa_decode_device_operation.cpp:119`), so the row has to be
     materialised per head.
 
-    **Called once per decode step, by the decoder — not once per layer, by the
-    attention.** All 14 layers share one mask, so this is 1 op per token rather than
+    Called once per decode step, by the decoder — not once per layer, by the
+    attention. All 14 layers share one mask, so this is 1 op per token rather than
     14. The attention cannot do the memoising itself: `TracedDecodeStepInPlace`
     captures 65 traces from the same `mask_buf` object, and any cache keyed on that
     object records the `repeat` into the first trace only, leaving the other 64
     replaying a value the first trace wrote. That is a stale read that no shape check
     catches, so the conversion is hoisted to the one place that runs once per step.
 
-    **No `1/scale` division, deliberately.** The kernel computes
+    No `1/scale` division, deliberately. The kernel computes
     `softmax((QK^T + M) * scale)` — `sdpa_flash_decode.cpp:378` fuses `QK += MASK`
-    into the matmul and `:435` scales after — so an additive term meant to land
+    into the matmul and `:435` scales after — so an additive term meant to apply
     *after* the scale would need pre-dividing. This mask is binary, 0 or `NEG_INF`,
     and both survive the scaling unchanged in effect: a live entry is 0 either way,
     a suppressed one is -1.25e8 rather than -1e9, which softmax kills just as dead.
@@ -192,9 +187,9 @@ class TtRelPosAttention:
 
     def __init__(self, device, bag, n_head: int, d_k: int, dtype=ttnn.bfloat16, cc=None, weights_dtype=None):
         self.device, self.h, self.d_k, self.dtype = device, n_head, d_k, dtype
-        # HiFi4 + fp32 accumulation: high fidelity belongs on the matmuls, not only the
-        # convolutions (PERF.md, *Two levers that mattered more than expected*). The flow encoder is 6
-        # blocks and the AR decoder is 14, and the decoder runs hundreds of times.
+        # HiFi4 with fp32 accumulation on the matmuls as well as the convolutions
+        # (`COSYVOICE_FIDELITY`, PERF.md §9). The flow encoder is 6 blocks and the AR
+        # decoder 14, and the decoder runs once per token.
         self.cc = accurate_compute_config(device) if cc is None else cc
         self.scale = 1.0 / math.sqrt(d_k)
         self.wqkv, self.bqkv = _linear_fused(device, bag, ("linear_q", "linear_k", "linear_v"), dtype, weights_dtype)
@@ -220,29 +215,11 @@ class TtRelPosAttention:
     def _sdpa_program(self, key_w: int):
         """`SDPAProgramConfig` for a key axis `key_w` wide, cached per width.
 
-        **`k_chunk_size` has a value it accepts and computes wrongly, and the rule is
-        narrower than it first looks.** Swept over every value the op admits
-        (`scripts/probe_sdpa_chunk_sweep.py`), scored against a torch golden:
-
-            width  k_chunk 32   64      128     non-power-of-2
-            256    0.396 BAD    0.9999  0.9999  raises
-            384    0.293 BAD    0.9999  0.9999  raises
-            448    0.700 BAD    0.9999  --      raises
-            512    0.9999 ok    0.9999  0.9999  raises
-
-        Non-powers-of-two `TT_FATAL` properly. **32 is the whole problem**, and only
-        at widths under 512 -- at 512 it is fine, so "32 is broken" would be as wrong
-        as "32 is fine". Forcing `max_cores_per_head_batch` down to 1 or 2 makes 32
-        correct at width 384 (0.9999) while 4 gives 0.502 and 8+ gives 0.293, so the
-        fault is in the multi-core split of the key axis when chunks are one tile
-        deep, not in the chunk size as such.
-
-        **Anything >= 64 is correct at every width tested**, which is what this picks:
-        the largest power of two dividing the key width, capped at 128, giving
-        384 -> 128, 448 -> 64, 256 -> 128, 512 -> 128. The op's own tests
-        (`sdpa_test_utils.py:get_chunk_size`) arrive at the same values by the same
-        route -- which is where the real constraint lives, since the op itself
-        validates only `mask_width % k_chunk_size == 0` and power-of-two-ness.
+        `k_chunk_size = 32` is accepted and computes wrong attention at key widths
+        under 512 (`docs/VALIDATION.md`); every power of two from 64 up is correct at
+        every width tested. This picks the largest power of two dividing the key
+        width, capped at 128: 384 -> 128, 448 -> 64, 256 -> 128, 512 -> 128. The op's
+        own tests (`sdpa_test_utils.py:get_chunk_size`) choose the same values.
         """
         prog = self._sdpa_prog.get(key_w)
         if prog is None:
@@ -251,7 +228,7 @@ class TtRelPosAttention:
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
                 q_chunk_size=32,
                 k_chunk_size=min(128, pow2),
-                exp_approx_mode=False,  # accuracy is the gate, not throughput
+                exp_approx_mode=False,  # accuracy decides, not throughput
             )
             self._sdpa_prog[key_w] = prog
         return prog
@@ -261,47 +238,32 @@ class TtRelPosAttention:
     def _pos_proj(self, pos_emb, b):
         """`linear_pos`, head-split and transposed -- cached on the `pos_emb` object.
 
-        **This is the largest matmul in the layer by two orders of magnitude, and on
-        the decode path it recomputes an identical result every token.** `pos_emb` is
-        `[B, 2*key_len - 1, d_model]`, so at `max_len = 256` this projects 511 rows
-        through `[1024, 1024]` -- about 536 MFLOP -- while q, k and v each project a
-        single row, about 1 MFLOP apiece. Roughly 97 % of the layer's arithmetic sits
-        in the one branch that does not depend on the token being decoded.
+        The largest matmul in the layer, and loop-invariant on the decode path:
+        `pos_emb` is `[B, 2*key_len - 1, d_model]`, so at `max_len = 256` this projects
+        511 rows through `[1024, 1024]` (about 536 MFLOP) while q, k and v project one
+        row each (about 1 MFLOP). `TtARDecoder.positional()` returns the same tensor on
+        every step, because the window depends only on `max_len`, so caching `pt`
+        removes a `linear`, a `reshape` and a `permute` per layer per token.
 
-        It is loop-invariant because `TtARDecoder.positional()` hands back the *same
-        cached tensor* on every step: the window is a function of `max_len`, which is
-        fixed for an utterance. Caching `pt` therefore removes a `linear`, a `reshape`
-        and a `permute` per layer per token, and the `linear` is the expensive one.
+        The cache is keyed on `(id(pos_emb), batch)`: identity, because two callers can
+        pass different windows of the same width, and batch, because the projection is
+        widened to the batch (`_project_pos`). Each entry holds a reference to
+        `pos_emb` so CPython cannot reuse its `id` for another tensor. Entries are
+        allocated on first call, which on the traced path is a warm-up pass outside
+        `begin_trace_capture`.
 
-        The cache is keyed on `(id(pos_emb), batch)` rather than on width, because
-        width alone would be a lie: two different callers can legitimately pass
-        different `[B, N, d_model]` windows. Keying on identity makes a hit mean "the
-        very tensor whose projection this is". The entry holds a reference to
-        `pos_emb` precisely so that CPython cannot recycle its `id` into a stale hit.
-        The batch is part of the key because the projection is *widened* to the batch
-        (`_project_pos`), so entries for different batch sizes are different tensors
-        and must not alias -- a batch sweep visits several in one process.
+        Caching is opt-in because entries can never be evicted: a traced decode step
+        holds a device pointer to `pt` for the life of the trace, and freeing one
+        corrupts attention later without raising.
 
-        Allocation happens on first call, which for the traced path is a warm-up pass
-        -- outside `begin_trace_capture`, like the weights, so the replay only reads.
+        * `TtARDecoder`'s fixed-width path passes `positional(max_len)`, one window per
+          utterance, so the cache holds one entry. It calls `enable_pos_proj_cache()`.
+        * The flow encoder's window is `2*T - 1` for each utterance's own `T`, so
+          caching would buy nothing and keep an entry per distinct length. It stays off.
 
-        **Caching is opt-in, and deliberately so.** It pays only where the same window
-        is reused, and it is unsafe wherever entries would have to be evicted: the
-        traced decode step holds a device pointer to `pt` for the life of the trace,
-        so freeing one to make room would be a use-after-free that shows up as
-        corrupted attention several hundred tokens later. The two callers differ:
-
-        * `TtARDecoder`'s fixed-width path always passes `positional(max_len)` -- one
-          window for the whole utterance, so the cache holds exactly one entry and
-          never needs to evict. It calls `enable_pos_proj_cache()`.
-        * The flow encoder's window is `2*T - 1` for the utterance's own `T`, and it
-          runs once per utterance. Caching would buy nothing and leak an entry per
-          distinct length, so it stays off.
-
-        **Ownership follows the flag.** With the cache on, `pt` belongs to the cache
-        and the caller must leave it alone; with it off, `pt` is a fresh tensor the
-        caller must free. `forward_cached` branches on `self.cache_pos_proj` to do
-        exactly that, and getting it backwards leaks a megabyte per layer per token.
+        Ownership follows the flag: with the cache on, `pt` belongs to the cache; with
+        it off, `pt` is a fresh tensor the caller frees. `forward_cached` branches on
+        `self.cache_pos_proj` accordingly.
         """
         if not self.cache_pos_proj:
             pt = self._project_pos(pos_emb, b)
@@ -330,7 +292,7 @@ class TtRelPosAttention:
     def _project_pos(self, pos_emb, b):
         """`linear_pos(pos_emb)`, head-split, transposed, widened to `b` rows.
 
-        **The window does not depend on the batch row.** Relative position is a
+        The window does not depend on the batch row. Relative position is a
         function of the key axis alone, so every sequence in a batch projects the
         *same* `[1, h, d_k, N]` block -- the projection runs once and the result is
         repeated, rather than running `b` identical 536 MFLOP matmuls. `pos_emb`
@@ -355,17 +317,11 @@ class TtRelPosAttention:
     def _heads(self, x, b, t):
         """[B, T, d_model] -> [B, h, T, d_k].
 
-        **At `T == 1` the permute is a relabelling and is skipped.** `[b, 1, h, d_k]`
-        and `[b, h, 1, d_k]` enumerate the same elements in the same order when the
-        time axis has extent 1, so the reshape alone reaches the target shape and
-        the permute has nothing left to move.
-
-        This is a decode-path optimisation with a measured motive rather than a
-        tidiness one. Counting the ops in one decode step (`scripts/count_decode_ops
-        .py`) puts `reshape` and `permute` together at **196 of 636 ops -- 31 %**,
-        more than every `linear` and `matmul` combined, on a step that `bfloat8_b`
-        weights showed to be per-op-bound rather than bandwidth-bound. Attention
-        calls this three times per layer for q, k and v.
+        At `T == 1` the permute is a relabelling and is skipped: `[b, 1, h, d_k]` and
+        `[b, h, 1, d_k]` enumerate the same elements in the same order, so the reshape
+        alone reaches the target shape. That matters on the decode step, which is
+        limited by per-op cost and where `reshape` and `permute` are about a third of the ops
+        (`scripts/count_decode_ops.py`); attention calls this three times per layer.
 
         The positional branch still permutes: its length is `2 * key_len - 1`, not 1.
         """
@@ -382,7 +338,7 @@ class TtRelPosAttention:
         first row, reinterpret back, keep the left half. Every step is a reshape
         or a slice -- no gather op needed.
 
-        **At `t1 == 1` the whole sequence collapses to that final slice.** With one
+        At `t1 == 1` the whole sequence collapses to that final slice. With one
         query row the pad-and-drop is its own inverse: prepending a zero to a length
         `n` row and then dropping the first element of the `(n+1, 1)` reinterpretation
         returns the original `n` elements in the original order, so only the trailing
@@ -442,27 +398,18 @@ class TtRelPosAttention:
         Returns `(output, (k, v) | None)`, where the returned k/v span cache plus
         this chunk and become the caller's to free.
 
-        **`cache_free` switches the cache to a time-major `[B, cache_t, h, d_k]`
-        layout**, and it is worth a great deal on the decode path. `TILE_LAYOUT` tiles
-        only the last two dimensions, so in the default `[B, h, T, d_k]` the time axis
-        is *tiled* -- and appending one row to it re-tiles the whole buffer. Measured on
-        a `[1, 16, 256, 64]` cache:
+        `cache_free` switches the cache to a time-major `[B, cache_t, h, d_k]` layout.
+        `TILE_LAYOUT` tiles only the last two dimensions, so in the default
+        `[B, h, T, d_k]` the time axis is tiled and appending one row re-tiles the whole
+        buffer; appending on a free axis and permuting once is several times cheaper
+        (PERF.md Part II §1.4). The returned k/v are in the free layout too, and the
+        caller writes them straight back to its buffers; the matmuls see the same shapes.
 
-            slice + concat on the tiled time axis   207.2 us
-            slice + concat on a free time axis       19.7 us
-            permute back to [B, h, T, d_k]           13.9 us
-
-        So paying a permute to do the append on a free axis is **6.2x cheaper** than
-        appending on the tiled one. The returned k/v are then in the free layout too --
-        the caller writes those straight back to its buffers, and nothing else about the
-        attention changes: same shapes into the matmuls, same geometry, same trace.
-
-        **`cache_write` goes further and stops moving the cache at all.** It names a row
-        index; `cache` is then a pair of persistent `[B, h, W, d_k]` buffers, this step's
-        k/v are written into row `cache_write` with `ttnn.update_cache`, and the whole
-        buffer -- not a freshly concatenated copy -- goes into the matmuls. Per tensor
-        per layer that replaces a slice, two permutes, a concat and a writeback copy
-        (~95 us together) with one 3.7 us in-place write.
+        `cache_write` stops moving the cache at all. It names a row index; `cache` is
+        then a pair of persistent `[B, h, W, d_k]` buffers, this step's k/v are written
+        into row `cache_write` with `ttnn.update_cache`, and the whole buffer goes into
+        the matmuls. Per tensor per layer, one in-place write replaces a slice, two
+        permutes, a concat and a writeback copy.
 
         The price is that the query is no longer at the last key slot, so `rel_shift`'s
         `T = 1` identity no longer holds and `bd_offset` must be supplied alongside. The
@@ -485,7 +432,7 @@ class TtRelPosAttention:
         if cache is not None and cache_write is not None:
             # In place: write this token's row, then read the buffer whole. Nothing is
             # copied, concatenated or permuted, so the buffers the caller passed in are
-            # the buffers the matmuls see -- and are emphatically **not** ours to free.
+            # the buffers the matmuls see -- and are emphatically not ours to free.
             #
             # `ttnn.update_cache(cache, token, idx)` wants `cache [1, h, W, d_k]` and
             # `token [1, h, 1, d_k]`, which is exactly what the split hands back. Its
@@ -493,25 +440,17 @@ class TtRelPosAttention:
             # factory splits it into `update_idx / 32` tiles plus a byte offset of
             # `update_idx % 32` rows within the tile, so any row is addressable.
             #
-            # `update_idx` is a **runtime argument**, which a trace bakes at capture --
+            # `update_idx` is a runtime argument, which a trace bakes at capture --
             # hence one captured trace per possible row. That is what caps the design at
             # a 32-row scratch zone rather than an arbitrarily long one.
             #
-            # This path does not reproduce the moving cache bit-for-bit -- worst PCC
-            # 0.9986 over 72 steps -- and two tempting explanations are both measured
-            # false. It is not the wider buffer: the moving cache run at the same
-            # width matches the narrow one at 1.0000000000 exactly. And it is not
-            # `update_cache`'s default LoFi compute config, which untilizes and
-            # re-tilizes the whole target tile on every write: forcing the model's
-            # high-fidelity config changed nothing, to the digit.
-            #
-            # What is left, unproven but consistent with the evidence, is where the
-            # live keys fall against tile boundaries. The moving cache always ends at
-            # the last row, so its live block keeps one phase; here the query walks
-            # forward through the scratch zone and the phase moves with it, regrouping
-            # the reduction's partial sums. That fits a deviation that is present at
-            # step 0, varies step to step, and does **not** accumulate -- step 71 is
-            # 0.9997, no worse than step 2, with a shift boundary in between.
+            # This path is not bit-exact with the moving cache (PERF.md §6), and the
+            # deviation does not accumulate across steps. It is not the wider buffer:
+            # the moving cache at the same width matches the narrow one exactly. It is
+            # not `update_cache`'s default LoFi compute config either: the model's
+            # high-fidelity config gives the same result. The likely cause, unproven, is
+            # the live keys' phase against tile boundaries, which moves with the query
+            # here and regroups the reduction's partial sums.
             kb, vb = cache
             ttnn.update_cache(kb, k, cache_write)
             ttnn.update_cache(vb, v, cache_write)
@@ -547,25 +486,19 @@ class TtRelPosAttention:
         qv = ttnn.add(q, self.bias_v)
         ttnn.deallocate(q)
 
-        # **Fused decode attention.** At `T = 1` the whole score row is
+        # Fused decode attention. At `T = 1` the whole score row is
         # `(q+u)K^T + (q+v)P^T`, and the second term is a `[B, h, 1, W]` vector -- an
-        # *additive bias* over the key axis. `scaled_dot_product_attention_decode`
-        # takes exactly that as `attn_mask` when `is_causal=False`, so the four ops
-        # below (score matmul, bias add, masked softmax, context matmul) collapse into
-        # one kernel that never writes the `[1, h, 1, W]` score matrix at all.
+        # additive bias over the key axis. `scaled_dot_product_attention_decode` takes
+        # that as `attn_mask` when `is_causal=False`, so the score matmul, bias add,
+        # masked softmax and context matmul collapse into one kernel that never writes
+        # the score matrix. PERF.md Part II §1.1 has the speedup and the PCC;
+        # `scripts/probe_sdpa_decode.py` measures it.
         #
-        # 3.3x on the attention block with the two layout permutes charged, 1.10 ms
-        # per token at W=384 and 1.26 at 448, PCC 0.99998 against a torch golden
-        # where the chain it replaces scores 0.99998. See `scripts/probe_sdpa_decode.py`
-        # and PERF.md, *The decode attention is expressible as flash attention*.
-        #
-        # This was scoped up front as ~1500 LOC of new C++ at high risk. None of
-        # it was needed; the module docstring above had the identity right all along.
-        # The trigger is the mask's *form*: `[b, 1, h, W]` means the caller ran it
-        # through `decode_mask` and is asking for the fused path; `[b, 1, 1, W]` is
-        # the explicit chain's contract and still takes it. Keying on the argument
-        # rather than on a flag means the two can never disagree — a mask in the wrong
-        # form takes the slow path instead of computing something wrong.
+        # The trigger is the mask's form: `[b, 1, h, W]` means the caller ran it
+        # through `decode_mask` and asks for the fused path; `[b, 1, 1, W]` is the
+        # explicit chain's contract and still takes it. Keying on the argument rather
+        # than on a flag means the two cannot disagree -- a mask in the wrong form takes
+        # the slow path instead of computing something wrong.
         fused = self.sdpa_decode and t == 1 and mask is not None and mask.shape[-2] == self.h
         key_w = k.shape[-2]
 
@@ -587,7 +520,7 @@ class TtRelPosAttention:
         # a one-token decode step still needs the skew.
         if bd_offset is not None:
             # An explicit window into the positional scores, for a cache whose query
-            # does **not** sit at the last slot. `rel_shift`'s `T = 1` fast path takes
+            # does not sit at the last slot. `rel_shift`'s `T = 1` fast path takes
             # `bd[..., :key_w]`, which is the special case `bd_offset == 0` -- correct
             # only when the query is the last key position.
             #
@@ -611,8 +544,8 @@ class TtRelPosAttention:
 
         if fused:
             # Heads move from dim 1 to dim 2: decode-mode q is `[1, B, h, d_k]` and the
-            # bias `[B, 1, h, W]`. Two permutes per layer, and they are the price of
-            # entry -- the 3.3x above is measured with them charged.
+            # bias `[B, 1, h, W]`. Two permutes per layer; the measured speedup includes
+            # them.
             bd_p = ttnn.permute(bd, (0, 2, 1, 3))
             ttnn.deallocate(bd)
             bias = ttnn.add(bd_p, mask)
@@ -621,12 +554,12 @@ class TtRelPosAttention:
             ttnn.deallocate(qu)
             if b > 1:
                 # `sdpa_decode` wants Q as `[1, b, nh, dh]` -- batch on dim 1, not dim
-                # 0 (see the op's own docstring). The permute above lands on
+                # 0 (see the op's own docstring). The permute above produces
                 # `[b, 1, h, d_k]`, which enumerates the same elements in the same
                 # order, so this is a relabelling and not a move. At `b == 1` the two
-                # shapes are identical and the reshape is skipped rather than made a
-                # no-op op, to keep the single-utterance step -- the one every
-                # published figure is measured on -- byte-for-byte what it was.
+                # shapes are identical and the reshape is skipped, so the
+                # single-utterance step, on which the published figures are measured,
+                # carries no extra op.
                 q4 = ttnn.reshape(q4, (1, b, self.h, self.d_k))
             ctx = ttnn.transformer.scaled_dot_product_attention_decode(
                 q4,
@@ -661,7 +594,7 @@ class TtRelPosAttention:
             # exactly the split between this model's two paths: prefill and the text
             # encoder pass a causal mask and take the explicit branch, while a decode
             # step's mask is `[1, 1, 1, max_len]` and is already the wanted form.
-            # So the fusion lands on the path that runs once per token and skips the
+            # So the fusion applies to the path that runs once per token and skips the
             # one that runs once per utterance, which is the right way round.
             attn = ttnn.scale_mask_softmax(raw, self.scale, mask)
         else:
@@ -779,7 +712,7 @@ class TtConformerEncoder:
     def __call__(self, x, pos_emb, mask=None):
         """x: [B, T, input_size] -> [B, T, d_model].
 
-        `mask` is an **additive** score bias, broadcastable to `[B, 1, T, T]`. The
+        `mask` is an additive score bias, broadcastable to `[B, 1, T, T]`. The
         flow encoder passes None: its `static_chunk_size` is 0, so attention is
         full. The LLM's text encoder sets `static_chunk_size: 1`, which
         `subsequent_chunk_mask` turns into a plain causal mask -- same class, same

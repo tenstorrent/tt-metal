@@ -76,7 +76,7 @@ def test_stage_lengths_match_captured_reference():
 
 
 def test_reflection_pad_is_what_aligns_the_source_branch():
-    """The +1 is load-bearing: source_downs[1] is a k=1,s=1 conv over the 18049-frame
+    """The +1 matters: source_downs[1] is a k=1,s=1 conv over the 18049-frame
     excitation spectrogram, so `x = x + si` only aligns because of the pad."""
     t = shape_trace(MEL_FRAMES)
     s1 = t["stages"][-1]
@@ -87,7 +87,7 @@ def test_reflection_pad_is_what_aligns_the_source_branch():
 
 
 def test_source_branch_converges_at_every_stage():
-    """Both stages, not just the last: the strided source_downs[0] must land on
+    """Both stages, not just the last: the strided source_downs[0] must come out at
     exactly the length ups[0] produces."""
     t = shape_trace(MEL_FRAMES)
     for st in t["stages"]:

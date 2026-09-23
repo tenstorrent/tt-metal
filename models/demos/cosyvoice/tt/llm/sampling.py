@@ -10,42 +10,30 @@
 
 The point is to break the degenerate loops autoregressive TTS falls into: if the
 token just chosen already appears at least once in the last ten, reject it and
-resample from the *unfiltered* distribution. Note the threshold is
-`win_size * tau_r = 1.0` and the comparison is `>=`, so **one** repeat inside the
-window is enough. That is far more aggressive than the phrase "repetition aware"
+resample from the *unfiltered* distribution. The threshold is
+`win_size * tau_r = 1.0` and the comparison is `>=`, so one repeat inside the window
+is enough. That is far more aggressive than the phrase "repetition aware"
 suggests, and it fires often in practice.
 
 Two details in `nucleus_sampling` that a from-scratch reimplementation gets wrong:
 
-* the top-p test is `cum_prob < top_p` evaluated **before** adding, so the token
-  that crosses the threshold is included -- the retained mass is >= top_p, not <=;
-* the multinomial draw is over the **unnormalised** retained probabilities. torch
+* the top-p test is `cum_prob < top_p` evaluated before adding, so the token that
+  crosses the threshold is included -- the retained mass is >= top_p, not <=;
+* the multinomial draw is over the unnormalised retained probabilities. torch
   normalises internally, so this is equivalent, but only because it does.
 
-**This stays on the host, and the decision is measured rather than assumed.**
-`ttnn.sampling` does implement softmax -> top-k -> top-p -> multinomial on device,
-and the bring-up scope asks for it. Profiling the per-token tail
-(`scripts/profile_token_tail.py`) says what it could win:
+This stays on the host, by measurement. `ttnn.sampling` implements softmax -> top-k
+-> top-p -> multinomial on device, but moving RAS there would save at most the logits
+transfer and the host sampling, a small share of a token (PERF.md Part II §1.6;
+`scripts/profile_token_tail.py`), and not all of that: the repetition branch needs the
+emitted-token history and rewrites a score before resampling, so it comes back to the
+host whenever it fires, which with `win_size * tau_r = 1.0` is often.
 
-    output head matmul        0.043 ms
-    logits device -> host     0.142 ms
-    RAS sampling on host      0.075 ms
-    embedding row -> device   0.092 ms
-    ------------------------------------
-    tail total                0.352 ms      2.7% of a 12.9 ms token
-
-Moving RAS on device removes the transfer and the host sampling at best -- 0.217 ms,
-**1.7% of a token** -- and cannot remove all of it, because the repetition branch
-needs the emitted-token history and rewrites a score before resampling, so it comes
-back to the host whenever it fires. With `win_size * tau_r = 1.0` it fires on a
-single repeat, which is often.
-
-Against that it costs two mismatches. `ttnn.sampling` selects "cumulative probability
-mass less than or equal to p", where CosyVoice tests `cum_prob < top_p` *before*
-adding and so includes the token that crosses the threshold; and it samples from its
-own seed, which cannot reproduce torch's stream. Trading exactness for 1.7% is the
-wrong way round, so the host path is the shipped one and `nucleus_filter` was made
-fast instead -- 0.245 -> 0.075 ms, bit-identical output.
+It would also give up exact agreement with the reference, twice over. `ttnn.sampling`
+keeps "cumulative probability mass less than or equal to p", where CosyVoice tests
+`cum_prob < top_p` before adding and so includes the token that crosses the threshold;
+and it samples from its own seed, which cannot reproduce torch's stream. So the host
+path ships, with `nucleus_filter` vectorised and bit-identical to the reference.
 """
 from __future__ import annotations
 
@@ -62,10 +50,9 @@ def nucleus_filter(probs: torch.Tensor, top_p: float = 0.8, top_k: int = 25):
     until the mass reaches `top_p`. Two things about that are pure waste and neither
     changes the answer:
 
-    * **at most `top_k` elements are ever kept**, so sorting all 4097 to read the
-      first 25 does 160x the necessary work. `torch.topk` returns them already
-      ordered;
-    * **the walk is a Python loop over a tensor**, and `float(sorted_value[i])` is a
+    * at most `top_k` elements are ever kept, so sorting all 4097 to read the first
+      25 does 160x the necessary work. `torch.topk` returns them already ordered;
+    * the walk is a Python loop over a tensor, and `float(sorted_value[i])` is a
       tensor-to-scalar sync each time round.
 
     The retention rule vectorises exactly. An element is kept iff the mass *before*
@@ -74,8 +61,8 @@ def nucleus_filter(probs: torch.Tensor, top_p: float = 0.8, top_k: int = 25):
     many satisfy it, capped at `top_k`. This is why the retained mass is `>= top_p`
     rather than `<=`: the element that crosses the threshold is included.
 
-    Measured at 0.245 -> 0.056 ms per token, and `tests/pcc/test_sampling.py` asserts
-    it against the literal transcription over random distributions.
+    `tests/pcc/test_sampling.py` asserts it against the literal transcription over
+    random distributions; PERF.md Part II §1.6 has the timing.
     """
     k = min(top_k, probs.numel())
     sorted_value, sorted_idx = probs.topk(k, sorted=True)

@@ -16,7 +16,7 @@ All three stages run on device. The LLM's sampled token IDs come back to the hos
 because RAS needs the full distribution and the emission history; nothing else
 does.
 
-**Randomness is drawn here, on the host, and injected.** The CFM's initial `z`,
+Randomness is drawn here, on the host, and injected. The CFM's initial `z`,
 and `SineGen`'s phase offsets and noise. A device RNG cannot be aligned with
 torch's stream, and the noise in particular is not optional: for unvoiced frames
 `uv` zeroes the sine bank, so the Gaussian noise is the entire excitation there.

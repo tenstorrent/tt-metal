@@ -280,7 +280,7 @@ def test_device_fixed_shape_cache_matches_the_growing_one(device):
     key width fixed leaves exactly two shapes for the whole utterance.
 
     The alignment is the part that has to be right. `rel_shift` skews the score
-    block assuming the queries are the **last** `t1` of the `K` key positions, so
+    block assuming the queries are the last `t1` of the `K` key positions, so
     the live tokens go at the end of the buffer and the padding at the front.
     Left-aligning gives every query the relative geometry of a position it is not
     at -- which this test would catch and a shape check would not.
