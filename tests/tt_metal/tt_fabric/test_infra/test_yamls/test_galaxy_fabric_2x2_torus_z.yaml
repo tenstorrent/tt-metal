@@ -2,20 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Single-galaxy 2x2 inter-mesh torus repro for #56298. Every mesh opens with the
-# SAME fabric config on a 2x2 4-stage ring MGD (four 2x2 stages, ring-connected
-# on one BH galaxy). For each torus topology (X, Y, XY) the InterMesh group drives
-# routing across the inter-mesh links -- which under the fix never enable deadlock
+# Single BH galaxy 2x2 inter-mesh torus repro for #56298 -- Z-routed variant.
+# Four 2x2 RING/LINE stages (mesh_id 0..3) occupy half of one 32-ASIC BH galaxy,
+# ring-connected (mesh 3 -> mesh 0 loops back) with the inter-mesh links forced
+# onto the Z routers (assign_z_direction). Every mesh opens with the SAME fabric
+# config; for each torus topology (X, Y, XY) the InterMesh group drives routing
+# across the Z inter-mesh links -- which under the fix never enable deadlock
 # avoidance, whichever direction -- and the IntraMesh group is the control
-# (intra-mesh routing is untouched). Run against BOTH the Z-routed MGD
-# (single_galaxy_2x2_z_ring_4stage_ring) and the non-Z MGD
-# (single_galaxy_2x2_ring_4stage_ring) so inter-mesh links are exercised on Z and
-# on the normal N/S/E/W routers under all three torus topologies. Checks the torus
-# fabric does not hang/starve.
+# (intra-mesh routing is untouched). Checks the torus fabric does not hang/starve.
+#
+# Galaxy-only: pairs 1:1 with the 2x2 Z MGD below (each stage is a 2x2 mesh:
+# device_topology { dims: [2, 2] }). Wired as galaxy-fabric-2x2-torus-z in
+# tests/pipeline_reorg/galaxy_e2e_tests.yaml. Non-Z counterpart:
+# test_galaxy_fabric_2x2_torus_nonz.yaml.
 #
 #   ./tools/scaleout/exabox/run_fabric_tests.sh --hosts <one BH galaxy> --image none --mpi-if none \
 #     --mesh-graph-desc-path tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_z_ring_4stage_ring_mesh_graph_descriptor.textproto \
-#     --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2x2_torus.yaml \
+#     --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_galaxy_fabric_2x2_torus_z.yaml \
 #     --filter name.Torus
 
 Tests:

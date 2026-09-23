@@ -37,13 +37,14 @@
   team: scaleout
   budget_type: e2e
 
-# Single-galaxy 2x2 Torus-X repro for #56298: every mesh opens with the SAME FABRIC_2D_TORUS_X on a
-# 2x2 RING/LINE 4-stage ring whose inter-mesh links are on Z (assign_z_direction). Checks the torus
-# fabric does not hang when the Z routers run under a torus.
+# Single BH galaxy 2x2 inter-mesh torus repro for #56298: four 2x2 RING/LINE stages ring-connected on
+# one galaxy, every mesh opening with the SAME fabric config under Torus X/Y/XY. This entry routes the
+# inter-mesh links over Z (assign_z_direction); the -nonz entry below routes them over N/S/E/W. Checks
+# the torus fabric does not hang/starve. Config: test_galaxy_fabric_2x2_torus_z.yaml.
 - id: galaxy-fabric-2x2-torus-z
   name: Galaxy Fabric 2x2 Torus X/Y/XY (inter-mesh over Z)
   cmd: |
-    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2x2_torus.yaml
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_galaxy_fabric_2x2_torus_z.yaml
   skus:
     bh_galaxy:
       timeout: 12
@@ -55,7 +56,7 @@
 - id: galaxy-fabric-2x2-torus-nonz
   name: Galaxy Fabric 2x2 Torus X/Y/XY (inter-mesh over N/S/E/W)
   cmd: |
-    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2x2_torus.yaml
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_galaxy_fabric_2x2_torus_nonz.yaml
   skus:
     bh_galaxy:
       timeout: 12
