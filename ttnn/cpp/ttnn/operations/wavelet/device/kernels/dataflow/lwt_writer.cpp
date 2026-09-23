@@ -93,7 +93,7 @@ ALWI void write_dram_output_groups(
     CircularBuffer output_buffer(cb_output);
     Noc noc;
     for (uint32_t group = 0; group < group_count; ++group) {
-        output_buffer.wait_front(3);
+        output_buffer.wait_front(ttnn::operations::wavelet::device_protocol::kLwtOutputBlocksPerRow);
         const uint32_t output_tiles = output_buffer.get_read_ptr();
         const uint32_t group_base = group * ttnn::operations::wavelet::device_protocol::kLwtGroupOutputElements;
 
@@ -114,7 +114,7 @@ ALWI void write_dram_output_groups(
             }
         }
         noc.async_write_barrier();
-        output_buffer.pop_front(3);
+        output_buffer.pop_front(ttnn::operations::wavelet::device_protocol::kLwtOutputBlocksPerRow);
     }
 }
 
@@ -170,7 +170,7 @@ ALWI void write_local_output_groups(
     }
 
     for (uint32_t group = 0; group < group_count; ++group) {
-        output_buffer.wait_front(3);
+        output_buffer.wait_front(ttnn::operations::wavelet::device_protocol::kLwtOutputBlocksPerRow);
         const uint32_t output_tiles = output_buffer.get_read_ptr();
         const uint32_t group_base = group * ttnn::operations::wavelet::device_protocol::kLwtGroupOutputElements;
         if constexpr (HybridTileMirror) {
@@ -237,7 +237,7 @@ ALWI void write_local_output_groups(
             }
         }
         noc.async_writes_flushed();
-        output_buffer.pop_front(3);
+        output_buffer.pop_front(ttnn::operations::wavelet::device_protocol::kLwtOutputBlocksPerRow);
     }
 }
 

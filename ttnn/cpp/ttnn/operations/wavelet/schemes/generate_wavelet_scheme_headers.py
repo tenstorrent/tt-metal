@@ -13,6 +13,7 @@ SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 SCHEME_CATALOG = SCRIPT_DIRECTORY / "wavelet_schemes.json"
 GENERATED_INCLUDE_DIRECTORY = PurePosixPath("ttnn/cpp/ttnn/operations/wavelet/generated/wavelet_schemes")
 SCHEME_COUNT = 106
+FP32_SIGN_BIT = 1 << 31
 LICENSE_HEADER = """// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -69,7 +70,7 @@ def inverse_steps(steps: tuple[Step, ...]) -> tuple[Step, ...]:
     inverse: list[Step] = []
     for step in reversed(steps):
         if step.kind in {"predict", "update"}:
-            coefficient_bits = tuple(bits ^ 0x80000000 for bits in step.coefficient_bits)
+            coefficient_bits = tuple(bits ^ FP32_SIGN_BIT for bits in step.coefficient_bits)
         elif step.kind in {"scale-even", "scale-odd"}:
             scale = float32_value(step.coefficient_bits[0])
             if scale == 0.0:
@@ -107,6 +108,11 @@ def load_scheme(name: str, payload: dict) -> Scheme:
                 coefficient_bits=coefficient_bits,
             )
         )
+
+    if {step.kind for step in steps[-2:]} != {"scale-even", "scale-odd"} or sum(
+        step.kind.startswith("scale-") for step in steps
+    ) != 2:
+        raise ValueError(f"{name}: exactly one scale per parity must terminate the scheme")
 
     return Scheme(
         name=name,

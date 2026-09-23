@@ -66,6 +66,7 @@ constexpr uint32_t kInterleaveCb = tt::CBIndex::c_4;
 constexpr uint32_t kSyncCb = tt::CBIndex::c_5;
 constexpr uint32_t kReaderConfigCb = tt::CBIndex::c_6;
 constexpr uint32_t kWriterConfigCb = tt::CBIndex::c_7;
+constexpr size_t kTensixRuntimeArgWordLimit = 4096;
 constexpr uint32_t kWorkspaceACb = tt::CBIndex::c_8;
 constexpr uint32_t kWorkspaceBCb = tt::CBIndex::c_9;
 constexpr uint32_t kWorkspaceScratchCb = tt::CBIndex::c_10;
@@ -215,16 +216,17 @@ struct Logical1DShape {
     const ArchitecturePolicy& policy,
     const bool hybrid_tile_mirror,
     const uint32_t interleave_batch_sticks) {
-    const uint64_t fixed_bytes =
-        checked_l1_allocation_bytes(0, 0, 0, interleave_batch_sticks, policy.l1_scratch_bytes, available_bytes);
-    constexpr uint64_t mirror_rounding_reserve =
-        uint64_t{3} * (device_protocol::kLwtGroupOutputElements - 1U) * sizeof(float);
+    const uint64_t fixed_bytes = checked_l1_allocation_bytes(
+        0, 0, 0, interleave_batch_sticks, policy.l1_scratch_bytes, available_bytes);
+    constexpr uint64_t mirror_rounding_reserve = uint64_t{device_protocol::kLwtWorkspaceSlotCount} *
+                                                 (device_protocol::kLwtGroupOutputElements - 1U) * sizeof(float);
     const uint64_t physical_workspace_multiplier = hybrid_tile_mirror ? 2U : 1U;
     const uint64_t rounding_reserve = hybrid_tile_mirror ? mirror_rounding_reserve : 0U;
     TT_FATAL(
-        available_bytes >= fixed_bytes + rounding_reserve + 3 * device_protocol::kStickBytes,
+        available_bytes >= fixed_bytes + rounding_reserve +
+                               device_protocol::kLwtWorkspaceSlotCount * device_protocol::kStickBytes,
         "LWT requires at least {} bytes of free per-core L1 after external L1 tensor allocation, but only {} remain",
-        fixed_bytes + rounding_reserve + 3 * device_protocol::kStickBytes,
+        fixed_bytes + rounding_reserve + device_protocol::kLwtWorkspaceSlotCount * device_protocol::kStickBytes,
         available_bytes);
     const uint64_t capacity_limited_budget =
         (available_bytes - fixed_bytes - rounding_reserve) / physical_workspace_multiplier;
@@ -367,7 +369,7 @@ void add_narrow_tile_circular_buffer(
 
     for (size_t chunk_index = 0; chunk_index < plan.chunks.size(); ++chunk_index) {
         const auto& chunk = plan.chunks[chunk_index];
-        std::array<bool, 3> tile_mirror_valid{};
+        std::array<bool, device_protocol::kLwtWorkspaceSlotCount> tile_mirror_valid{};
         TT_FATAL(chunk.routes.size() == route_count, "LWT chunks have inconsistent route counts");
         for (size_t route_index = 0; route_index < route_count; ++route_index) {
             const auto& route = chunk.routes[route_index];
@@ -464,13 +466,12 @@ void add_narrow_tile_circular_buffer(
     return args;
 }
 
-[[nodiscard]] std::vector<uint32_t> compute_runtime_args(const LwtExecutionPlan& plan, const CoreChunkWork& work) {
+[[nodiscard]] std::vector<uint32_t> compute_common_runtime_args(const LwtExecutionPlan& plan) {
     const size_t route_count = plan.chunks.front().routes.size();
     std::vector<uint32_t> args;
-    args.reserve(1 + static_cast<size_t>(work.chunk_count) * route_count);
-    args.push_back(work.chunk_count);
-    for (uint32_t local_chunk = 0; local_chunk < work.chunk_count; ++local_chunk) {
-        const auto& chunk = plan.chunks[(work.chunk_begin + local_chunk) % plan.chunks.size()];
+    args.reserve(1 + plan.chunks.size() * route_count);
+    args.push_back(checked_u32(plan.chunks.size(), "LWT chunks per sample"));
+    for (const auto& chunk : plan.chunks) {
         for (const auto& route : chunk.routes) {
             args.push_back(output_group_count(route.output_length));
         }
@@ -497,8 +498,10 @@ void add_narrow_tile_circular_buffer(
     tt::tt_metal::ProgramDescriptor descriptor;
     add_narrow_tile_circular_buffer(descriptor, cores, kSrcTile0Cb, 2 * kTileGroupBuffering);
     add_narrow_tile_circular_buffer(descriptor, cores, kSrcTile1Cb, 2 * kTileGroupBuffering);
-    add_narrow_tile_circular_buffer(descriptor, cores, kBaseTileCb, 3 * kTileGroupBuffering);
-    add_narrow_tile_circular_buffer(descriptor, cores, kOutputCb, 3 * kTileGroupBuffering);
+    add_narrow_tile_circular_buffer(
+        descriptor, cores, kBaseTileCb, device_protocol::kLwtOutputBlocksPerRow * kTileGroupBuffering);
+    add_narrow_tile_circular_buffer(
+        descriptor, cores, kOutputCb, device_protocol::kLwtOutputBlocksPerRow * kTileGroupBuffering);
     add_circular_buffer(
         descriptor, cores, kSrcCacheCb, device_protocol::kLwtCacheStickCount, device_protocol::kStickBytes);
     add_circular_buffer(descriptor, cores, kInterleaveCb, 1, device_protocol::kStickBytes);
@@ -584,13 +587,18 @@ void add_narrow_tile_circular_buffer(
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dest_mode,
     };
+    compute_descriptor.common_runtime_args = compute_common_runtime_args(plan);
+    TT_FATAL(
+        compute_descriptor.common_runtime_args.size() + 2 <= kTensixRuntimeArgWordLimit,
+        "LWT compute route table exceeds the Tensix runtime-argument limit");
 
     for (const auto& core_work : work) {
         reader_descriptor.emplace_runtime_args(
             core_work.core,
             reader_runtime_args(plan, buffers, input_buffer, core_work, chunks_per_sample, input_pages_per_sample));
         tt::tt_metal::KernelDescriptor::RTArgList compute_args;
-        compute_args.append(compute_runtime_args(plan, core_work));
+        compute_args.push_back(core_work.chunk_begin);
+        compute_args.push_back(core_work.chunk_count);
         compute_descriptor.emplace_runtime_args(core_work.core, compute_args);
         writer_descriptor.emplace_runtime_args(
             core_work.core, writer_runtime_args(plan, buffers, core_work, chunks_per_sample, output_pages_per_sample));
@@ -652,7 +660,7 @@ void add_narrow_tile_circular_buffer(
         std::max(plan.chunks.size() * route_count, size_t{1}) * device_protocol::kRouteConfigWordCount, 0);
     for (size_t chunk_index = 0; chunk_index < plan.chunks.size(); ++chunk_index) {
         const auto& chunk = plan.chunks[chunk_index];
-        std::array<bool, 3> tile_mirror_valid{};
+        std::array<bool, device_protocol::kLwtWorkspaceSlotCount> tile_mirror_valid{};
         TT_FATAL(chunk.routes.size() == route_count, "ILWT chunks have inconsistent route counts");
         for (size_t route_index = 0; route_index < route_count; ++route_index) {
             const auto& route = chunk.routes[route_index];
@@ -747,14 +755,12 @@ void add_narrow_tile_circular_buffer(
     return args;
 }
 
-[[nodiscard]] std::vector<uint32_t> inverse_compute_runtime_args(
-    const IlwtExecutionPlan& plan, const CoreChunkWork& work) {
+[[nodiscard]] std::vector<uint32_t> inverse_compute_common_runtime_args(const IlwtExecutionPlan& plan) {
     const size_t route_count = plan.chunks.front().routes.size();
     std::vector<uint32_t> args;
-    args.reserve(1 + static_cast<size_t>(work.chunk_count) * route_count);
-    args.push_back(work.chunk_count);
-    for (uint32_t local_chunk = 0; local_chunk < work.chunk_count; ++local_chunk) {
-        const auto& chunk = plan.chunks[(work.chunk_begin + local_chunk) % plan.chunks.size()];
+    args.reserve(1 + plan.chunks.size() * route_count);
+    args.push_back(checked_u32(plan.chunks.size(), "ILWT chunks per sample"));
+    for (const auto& chunk : plan.chunks) {
         for (const auto& route : chunk.routes) {
             args.push_back(output_group_count(route.output_length));
         }
@@ -782,8 +788,10 @@ void add_narrow_tile_circular_buffer(
     tt::tt_metal::ProgramDescriptor descriptor;
     add_narrow_tile_circular_buffer(descriptor, cores, kSrcTile0Cb, 2 * kTileGroupBuffering);
     add_narrow_tile_circular_buffer(descriptor, cores, kSrcTile1Cb, 2 * kTileGroupBuffering);
-    add_narrow_tile_circular_buffer(descriptor, cores, kBaseTileCb, 3 * kTileGroupBuffering);
-    add_narrow_tile_circular_buffer(descriptor, cores, kOutputCb, 3 * kTileGroupBuffering);
+    add_narrow_tile_circular_buffer(
+        descriptor, cores, kBaseTileCb, device_protocol::kLwtOutputBlocksPerRow * kTileGroupBuffering);
+    add_narrow_tile_circular_buffer(
+        descriptor, cores, kOutputCb, device_protocol::kLwtOutputBlocksPerRow * kTileGroupBuffering);
     add_circular_buffer(
         descriptor, cores, kSrcCacheCb, device_protocol::kLwtCacheStickCount, device_protocol::kStickBytes);
     add_circular_buffer(descriptor, cores, kInterleaveCb, interleave_batch_sticks, device_protocol::kStickBytes);
@@ -868,6 +876,10 @@ void add_narrow_tile_circular_buffer(
         .fp32_dest_acc_en = true,
         .unpack_to_dest_mode = unpack_to_dest_mode,
     };
+    compute_descriptor.common_runtime_args = inverse_compute_common_runtime_args(plan);
+    TT_FATAL(
+        compute_descriptor.common_runtime_args.size() + 2 <= kTensixRuntimeArgWordLimit,
+        "ILWT compute route table exceeds the Tensix runtime-argument limit");
 
     for (const auto& core_work : work) {
         reader_descriptor.emplace_runtime_args(
@@ -881,7 +893,8 @@ void add_narrow_tile_circular_buffer(
                 chunks_per_sample,
                 input_pages_per_sample));
         tt::tt_metal::KernelDescriptor::RTArgList compute_args;
-        compute_args.append(inverse_compute_runtime_args(plan, core_work));
+        compute_args.push_back(core_work.chunk_begin);
+        compute_args.push_back(core_work.chunk_count);
         compute_descriptor.emplace_runtime_args(core_work.core, compute_args);
         writer_descriptor.emplace_runtime_args(
             core_work.core,
@@ -958,6 +971,7 @@ template <typename Scheme>
 [[nodiscard]] LwtExecutionPlan make_forward_execution_plan(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const size_t input_length,
+    const size_t batch_count,
     const BoundaryMode boundary_mode,
     const uint32_t available_l1_bytes) {
     const SignalBuffer input{
@@ -967,8 +981,10 @@ template <typename Scheme>
     };
     LiftingForwardPlan full_plan = make_forward_lifting_plan<Scheme>(input, boundary_mode);
 
-    const uint32_t max_cores =
+    const uint32_t worker_cores =
         wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core");
+    const uint32_t max_cores = static_cast<uint32_t>(
+        std::max<size_t>(1, tt::div_up(static_cast<size_t>(worker_cores), batch_count)));
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     constexpr WorkspaceLayout initial_layout = WorkspaceLayout::kRowMajor;
     const bool initial_hybrid_tile_mirror =
@@ -1000,20 +1016,24 @@ template <typename Scheme>
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const uint32_t original_length,
     const size_t coefficient_length,
+    const size_t batch_count,
     const BoundaryMode boundary_mode,
     const uint32_t available_l1_bytes) {
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
+    LiftingInversePlan full_plan =
+        make_inverse_lifting_plan<Scheme>(original_length, coefficient_length, boundary_mode);
     const uint32_t interleave_batch_sticks = ilwt_interleave_batch_sticks(architecture_policy.architecture);
     const bool initial_hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, architecture_policy.ilwt_layout);
     const uint32_t signal_budget_bytes = planner_signal_budget_bytes(
         available_l1_bytes, architecture_policy, initial_hybrid_tile_mirror, interleave_batch_sticks);
-    TT_FATAL(architecture_policy.inverse_scale_inline, "ILWT must preserve inline FP32 inverse scaling");
-    LiftingInversePlan full_plan =
-        make_inverse_lifting_plan<Scheme>(original_length, coefficient_length, boundary_mode);
+    const uint32_t worker_cores =
+        wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core");
+    const uint32_t sample_cores = static_cast<uint32_t>(
+        std::max<size_t>(1, tt::div_up(static_cast<size_t>(worker_cores), batch_count)));
     IlwtExecutionPlan plan = make_ilwt_execution_plan(
         std::move(full_plan),
-        wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core"),
+        sample_cores,
         signal_budget_bytes,
         architecture_policy.ilwt_layout,
         architecture_policy.final_interleave_direct);
@@ -1025,7 +1045,7 @@ template <typename Scheme>
             make_architecture_policy(architecture_policy.architecture, preferred_layout);
         plan = make_ilwt_execution_plan(
             std::move(plan.full_plan),
-            wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core"),
+            sample_cores,
             signal_budget_bytes,
             preferred_layout,
             preferred_policy.final_interleave_direct);
@@ -1052,7 +1072,11 @@ template <typename Scheme>
     const auto& input_buffer = *tensor_args.input.buffer();
     const Logical1DShape input_shape = logical_1d_signal_shape(tensor_args.input, "DWT input");
     LwtExecutionPlan plan = make_forward_execution_plan<Scheme>(
-        mesh_device, input_shape.length, operation_attributes.boundary_mode, operation_attributes.available_l1_bytes);
+        mesh_device,
+        input_shape.length,
+        input_shape.batch_count,
+        operation_attributes.boundary_mode,
+        operation_attributes.available_l1_bytes);
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     const bool hybrid_tile_mirror =
         supports_hybrid_tile_mirror(architecture_policy.architecture, plan.workspace_layout);
@@ -1080,15 +1104,9 @@ template <typename Scheme>
             expected_route_count);
     }
     const size_t route_count = plan.chunks.front().routes.size();
-    auto route_config = wavelet_program_utils::create_replicated_dram_pages(
-        mesh_device, std::max(plan.chunks.size() * route_count, size_t{1}), device_protocol::kRouteConfigPageBytes);
-    auto chunk_config = wavelet_program_utils::create_replicated_dram_pages(
-        mesh_device, std::max(plan.chunks.size(), size_t{1}), device_protocol::kLwtChunkConfigPageBytes);
     LwtWorkingBuffers buffers{
         .final_even = std::get<0>(tensor_return_value).buffer(),
         .final_odd = std::get<1>(tensor_return_value).buffer(),
-        .route_config = route_config,
-        .chunk_config = chunk_config,
         .cores = std::move(cores),
     };
 
@@ -1135,7 +1153,7 @@ template <typename Scheme>
         buffers.cores.size(),
         min_work->chunk_count,
         max_work->chunk_count,
-        3 *
+        device_protocol::kLwtWorkspaceSlotCount *
             static_cast<uint64_t>(
                 plan.workspace_elements + tile_mirror_elements(plan.workspace_elements, hybrid_tile_mirror)) *
             sizeof(float),
@@ -1187,6 +1205,7 @@ template <typename Scheme>
         mesh_device,
         operation_attributes.original_length,
         coefficient_shape.length,
+        coefficient_shape.batch_count,
         operation_attributes.boundary_mode,
         operation_attributes.available_l1_bytes);
     using InverseScheme = typename Scheme::inverse;
@@ -1220,14 +1239,8 @@ template <typename Scheme>
             expected_route_count);
     }
     const size_t route_count = plan.chunks.front().routes.size();
-    auto route_config = wavelet_program_utils::create_replicated_dram_pages(
-        mesh_device, std::max(plan.chunks.size() * route_count, size_t{1}), device_protocol::kRouteConfigPageBytes);
-    auto chunk_config = wavelet_program_utils::create_replicated_dram_pages(
-        mesh_device, std::max(plan.chunks.size(), size_t{1}), device_protocol::kLwtChunkConfigPageBytes);
     IlwtWorkingBuffers buffers{
         .output = tensor_return_value.buffer(),
-        .route_config = route_config,
-        .chunk_config = chunk_config,
         .cores = std::move(cores),
     };
 
@@ -1264,7 +1277,7 @@ template <typename Scheme>
         buffers.cores.size(),
         min_work->chunk_count,
         max_work->chunk_count,
-        3 *
+        device_protocol::kLwtWorkspaceSlotCount *
             static_cast<uint64_t>(
                 plan.workspace_elements + tile_mirror_elements(plan.workspace_elements, hybrid_tile_mirror)) *
             sizeof(float),

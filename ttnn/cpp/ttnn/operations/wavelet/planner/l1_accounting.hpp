@@ -40,9 +40,12 @@ static_assert(kOutputTileCircularBufferBytes == 12288);
         workspace_elements);
     TT_FATAL(interleave_batch_sticks > 0, "ILWT interleave batch must be non-zero");
 
-    const uint64_t slots_bytes = uint64_t{3} * max_workspace_elements * sizeof(float);
-    const uint64_t workspace_mirror_bytes = uint64_t{3} * workspace_mirror_elements * sizeof(float);
-    const uint64_t padding_bytes = uint64_t{3} * (workspace_elements - max_workspace_elements) * sizeof(float);
+    const uint64_t slots_bytes =
+        uint64_t{device_protocol::kLwtWorkspaceSlotCount} * max_workspace_elements * sizeof(float);
+    const uint64_t workspace_mirror_bytes =
+        uint64_t{device_protocol::kLwtWorkspaceSlotCount} * workspace_mirror_elements * sizeof(float);
+    const uint64_t padding_bytes = uint64_t{device_protocol::kLwtWorkspaceSlotCount} *
+                                   (workspace_elements - max_workspace_elements) * sizeof(float);
     constexpr uint64_t circular_buffers_bytes =
         l1_detail::kSourceTileCircularBuffersBytes + l1_detail::kBaseTileCircularBufferBytes;
     const uint64_t output_bytes =

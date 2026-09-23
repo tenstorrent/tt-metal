@@ -521,7 +521,9 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
     const uint32_t l1_signal_budget_bytes,
     const WorkspaceLayout workspace_layout = WorkspaceLayout::kRowMajor) {
     TT_FATAL(core_limit > 0, "LWT requires at least one worker core");
-    TT_FATAL(l1_signal_budget_bytes >= 3 * device_protocol::kStickBytes, "LWT L1 budget is too small");
+    TT_FATAL(
+        l1_signal_budget_bytes >= device_protocol::kLwtWorkspaceSlotCount * device_protocol::kStickBytes,
+        "LWT L1 budget is too small");
 
     const size_t max_final_length = full_plan.output_length;
     const uint32_t final_group_count = static_cast<uint32_t>(std::max(
@@ -556,7 +558,8 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
         chunks = std::move(std::get<0>(candidate));
         workspace_elements = std::get<1>(candidate);
         max_workspace_elements = std::get<2>(candidate);
-        const uint64_t workspace_bytes_per_core = uint64_t{3} * workspace_elements * sizeof(float);
+        const uint64_t workspace_bytes_per_core =
+            uint64_t{device_protocol::kLwtWorkspaceSlotCount} * workspace_elements * sizeof(float);
         if (workspace_bytes_per_core <= l1_signal_budget_bytes) {
             break;
         }

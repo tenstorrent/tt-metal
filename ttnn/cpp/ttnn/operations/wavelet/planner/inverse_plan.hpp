@@ -412,7 +412,9 @@ template <typename Scheme>
     const WorkspaceLayout workspace_layout,
     const bool final_interleave_direct) {
     TT_FATAL(core_limit > 0, "ILWT requires at least one worker core");
-    TT_FATAL(l1_signal_budget_bytes >= 3 * device_protocol::kStickBytes, "ILWT L1 budget is too small");
+    TT_FATAL(
+        l1_signal_budget_bytes >= device_protocol::kLwtWorkspaceSlotCount * device_protocol::kStickBytes,
+        "ILWT L1 budget is too small");
 
     constexpr size_t output_group_elements = 2 * device_protocol::kLwtGroupOutputElements;
     const uint32_t final_group_count =
@@ -447,7 +449,8 @@ template <typename Scheme>
         chunks = std::move(std::get<0>(candidate));
         workspace_elements = std::get<1>(candidate);
         max_workspace_elements = std::get<2>(candidate);
-        const uint64_t workspace_bytes_per_core = uint64_t{3} * workspace_elements * sizeof(float);
+        const uint64_t workspace_bytes_per_core =
+            uint64_t{device_protocol::kLwtWorkspaceSlotCount} * workspace_elements * sizeof(float);
         if (workspace_bytes_per_core <= l1_signal_budget_bytes) {
             break;
         }

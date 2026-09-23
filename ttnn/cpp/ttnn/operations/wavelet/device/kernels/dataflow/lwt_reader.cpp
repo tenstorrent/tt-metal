@@ -547,7 +547,7 @@ ALWI void emit_predict_update_tiles(
                 src, src_tiles01, src_tiles23, source_end, source_offset, source_left_pad, group_base);
         }
 
-        base_buffer.reserve_back(3);
+        base_buffer.reserve_back(kOutputBlocksPerRow);
         auto* base_tiles = reinterpret_cast<float*>(base_buffer.get_write_ptr());
         const bool base_is_dense = group_base <= output_length && kGroupOutputElements <= output_length - group_base &&
                                    base_offset <= base_end && group_base <= base_end - base_offset &&
@@ -593,7 +593,7 @@ ALWI void emit_predict_update_tiles(
 
         source0_buffer.push_back(2);
         source1_buffer.push_back(2);
-        base_buffer.push_back(3);
+        base_buffer.push_back(kOutputBlocksPerRow);
     }
 }
 
@@ -613,7 +613,7 @@ ALWI void emit_scale_tiles(
 
     for (uint32_t group = 0; group < group_count; ++group) {
         const uint32_t group_base = group * kGroupOutputElements;
-        scale_buffer.reserve_back(3);
+        scale_buffer.reserve_back(kOutputBlocksPerRow);
         auto* scale_tiles = reinterpret_cast<float*>(scale_buffer.get_write_ptr());
         const bool source_is_dense = group_base <= output_length &&
                                      kGroupOutputElements <= output_length - group_base &&
@@ -656,7 +656,7 @@ ALWI void emit_scale_tiles(
         } else {
             fill_output_row_major<true>(src, scale_tiles, source_end, source_offset, output_length, group_base);
         }
-        scale_buffer.push_back(3);
+        scale_buffer.push_back(kOutputBlocksPerRow);
     }
 }
 

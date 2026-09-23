@@ -48,15 +48,18 @@ constexpr uint32_t kDstSource3 = 6;
 constexpr uint32_t kPackBase0 = 0;
 constexpr uint32_t kPackBase1 = 1;
 constexpr uint32_t kPackBase2 = 2;
-constexpr uint32_t kScaleTileCount = 3;
+constexpr uint32_t kScaleTileCount = device_protocol::kLwtOutputBlocksPerRow;
 constexpr bool kInlineTerminalScale = LWT_INLINE_TERMINAL_SCALE != 0;
 constexpr bool kInlineInverseScale = ILWT_INLINE_INVERSE_SCALE != 0;
 
 static_assert(
-    kDstBase2 < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x16>(),
+    kDstSource3 < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x16>(),
     "1D scale path exceeds the available FP32 narrow-tile destination capacity");
+static_assert(kDstBase0 % 2 == 0 && kPackBase0 == kDstBase0 / 2);
+static_assert(kDstBase1 % 2 == 0 && kPackBase1 == kDstBase1 / 2);
+static_assert(kDstBase2 % 2 == 0 && kPackBase2 == kDstBase2 / 2);
 
-#if defined(TRISC_MATH) || defined(LWT_SCHEME_HEADER)
+#if defined(TRISC_MATH)
 #define WAVELET_1D_STEP_ATTRIBUTES inline
 constexpr bool kSpecializePredictUpdateStep = true;
 #else
@@ -151,6 +154,7 @@ constexpr uint32_t maybe_inverse_scale_bits() noexcept {
         static_assert(first_step < Scheme::num_steps, "Inline inverse scaling requires a predict/update step");
         static_assert(
             scale_count_before<Scheme, first_step>() == 2, "Inline inverse scaling requires two leading scales");
+        static_assert(scale_count_before<Scheme, Scheme::num_steps>() == 2, "Inverse scaling requires exactly two scales");
         constexpr uint32_t bits = terminal_scale_bits<Scheme, ScaleType>();
         static_assert(bits != 0, "Inline inverse scaling could not find the required reciprocal scale");
         return bits;
@@ -178,7 +182,6 @@ WAVELET_1D_STEP_ATTRIBUTES void run_predict_update_step(
     CircularBuffer input1_buffer(cb_input1);
     CircularBuffer base_buffer(cb_base);
     CircularBuffer output_buffer(cb_output);
-
     for (uint32_t group = 0; group < output_group_count; ++group) {
         tile_regs_acquire();
 
@@ -194,12 +197,12 @@ WAVELET_1D_STEP_ATTRIBUTES void run_predict_update_step(
         ckernel::internal::copy_tile_to_dst_32x16(cb_input1, 1, kDstSource3);
         input1_buffer.pop_front(2);
 
-        base_buffer.wait_front(3);
+        base_buffer.wait_front(device_protocol::kLwtOutputBlocksPerRow);
         copy_init(cb_base);
         ckernel::internal::copy_tile_to_dst_32x16(cb_base, 0, kDstBase0);
         ckernel::internal::copy_tile_to_dst_32x16(cb_base, 1, kDstBase1);
         ckernel::internal::copy_tile_to_dst_32x16(cb_base, 2, kDstBase2);
-        base_buffer.pop_front(3);
+        base_buffer.pop_front(device_protocol::kLwtOutputBlocksPerRow);
 
         hstencil_init();
         if constexpr (ScaleSource || ScaleBase) {
@@ -224,11 +227,11 @@ WAVELET_1D_STEP_ATTRIBUTES void run_predict_update_step(
         tile_regs_commit();
         tile_regs_wait();
 
-        output_buffer.reserve_back(3);
+        output_buffer.reserve_back(device_protocol::kLwtOutputBlocksPerRow);
         pack_tile(kPackBase0, cb_output, 0);
         pack_tile(kPackBase1, cb_output, 1);
         pack_tile(kPackBase2, cb_output, 2);
-        output_buffer.push_back(3);
+        output_buffer.push_back(device_protocol::kLwtOutputBlocksPerRow);
 
         tile_regs_release();
     }
@@ -295,7 +298,7 @@ inline void run_static_steps(
                 StepIndex + 1,
                 ExecutableIndex>(cb_input0, cb_input1, cb_base, cb_output, runtime_arg_base);
         } else if constexpr (Step::type == StepType::kPredict || Step::type == StepType::kUpdate) {
-            const uint32_t output_group_count = get_arg_val<uint32_t>(runtime_arg_base + ExecutableIndex);
+            const uint32_t output_group_count = get_common_arg_val<uint32_t>(runtime_arg_base + ExecutableIndex);
             constexpr uint32_t last_predict_update = last_predict_update_step_index<Scheme>();
             constexpr bool inline_terminal_scale = InlineTerminalScale && StepIndex == last_predict_update;
             constexpr bool predict = Step::type == StepType::kPredict;
@@ -315,7 +318,21 @@ inline void run_static_steps(
                     source_scale_bits,
                     base_scale_bits>(cb_input0, cb_input1, cb_base, cb_output, Step::coeff_bits, output_group_count);
             } else {
-                run_predict_update_step<0, false, 0, false, false, 0, 0>(
+                constexpr uint32_t runtime_coefficient_count = 0;
+                constexpr bool inline_terminal_scale = false;
+                constexpr uint32_t terminal_scale_bits = 0;
+                constexpr bool scale_source = false;
+                constexpr bool scale_base = false;
+                constexpr uint32_t source_scale_bits = 0;
+                constexpr uint32_t base_scale_bits = 0;
+                run_predict_update_step<
+                    runtime_coefficient_count,
+                    inline_terminal_scale,
+                    terminal_scale_bits,
+                    scale_source,
+                    scale_base,
+                    source_scale_bits,
+                    base_scale_bits>(
                     cb_input0, cb_input1, cb_base, cb_output, std::array<uint32_t, 0>{}, output_group_count);
             }
             run_static_steps<
@@ -355,7 +372,7 @@ inline void run_static_steps(
                         ExecutableIndex>(cb_input0, cb_input1, cb_base, cb_output, runtime_arg_base);
                 } else {
                     static_assert(Step::k == 1, "Scale steps must have exactly one coefficient");
-                    const uint32_t output_group_count = get_arg_val<uint32_t>(runtime_arg_base + ExecutableIndex);
+                    const uint32_t output_group_count = get_common_arg_val<uint32_t>(runtime_arg_base + ExecutableIndex);
                     run_scale_step(cb_base, cb_output, Step::coeff_bits[0], output_group_count);
                     run_static_steps<
                         Scheme,
@@ -393,7 +410,9 @@ void lwt_compute() {
     constexpr uint32_t inverse_even_scale =
         maybe_inverse_scale_bits<Scheme, kInlineInverseScale, StepType::kScaleEven>();
     constexpr uint32_t inverse_odd_scale = maybe_inverse_scale_bits<Scheme, kInlineInverseScale, StepType::kScaleOdd>();
-    const uint32_t chunk_count = get_arg_val<uint32_t>(0);
+    const uint32_t chunk_begin = get_arg_val<uint32_t>(0);
+    const uint32_t chunk_count = get_arg_val<uint32_t>(1);
+    const uint32_t chunks_per_sample = get_common_arg_val<uint32_t>(0);
 
     for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {
         run_static_steps<
@@ -405,7 +424,7 @@ void lwt_compute() {
             inverse_even_scale,
             inverse_odd_scale,
             0,
-            0>(cb_input0, cb_input1, cb_base, cb_output, 1 + chunk * route_count);
+            0>(cb_input0, cb_input1, cb_base, cb_output, 1 + ((chunk_begin + chunk) % chunks_per_sample) * route_count);
     }
 }
 
