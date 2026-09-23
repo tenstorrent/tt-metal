@@ -59,11 +59,31 @@ void layer_barrier() {
 #else
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrivals), generation * cores);
 #endif
+#if LAYER_BARRIER_MULTICAST
+            const uint32_t rectangles = get_arg_val<uint32_t>(LOOP_MCAST_RT_OFFSET);
+            for (uint32_t i = 0; i < rectangles; ++i) {
+                const uint32_t offset = LOOP_MCAST_RT_OFFSET + 1 + 5 * i;
+                const uint32_t x0 = get_arg_val<uint32_t>(offset), y0 = get_arg_val<uint32_t>(offset + 1);
+                const uint32_t x1 = get_arg_val<uint32_t>(offset + 2), y1 = get_arg_val<uint32_t>(offset + 3);
+                const uint32_t destinations = get_arg_val<uint32_t>(offset + 4);
+                const uint64_t address = get_noc_multicast_addr(x0, y0, x1, y1, release);
+                if (destinations == 1) {
+                    noc_async_write(epoch_address, get_noc_addr(x0, y0, release), 4);
+                } else if (coordinator_x >= x0 && coordinator_x <= x1 && coordinator_y >= y0 && coordinator_y <= y1) {
+                    // Loopback counts the sender; all recipients have a live
+                    // global release field, even if they are outside the loop.
+                    noc_semaphore_set_multicast_loopback_src(epoch_address, address, destinations);
+                } else {
+                    noc_semaphore_set_multicast(epoch_address, address, destinations);
+                }
+            }
+#else
             for (uint32_t i = 0; i < cores; ++i) {
                 noc_async_write(epoch_address,
                     get_noc_addr(get_arg_val<uint32_t>(LOOP_RT_OFFSET + 14 + 2 * i),
                                  get_arg_val<uint32_t>(LOOP_RT_OFFSET + 15 + 2 * i), release), 4);
             }
+#endif
             noc_async_write_barrier();
         }
 #if BOUNDED_LAYER_BARRIER

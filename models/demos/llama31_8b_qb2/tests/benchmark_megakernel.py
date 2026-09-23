@@ -100,6 +100,7 @@ def parse_args():
     parser.add_argument("--bank-vc", action="store_true")
     parser.add_argument("--wide-subblocks", action="store_true")
     parser.add_argument("--bounded-layer-barrier", action="store_true")
+    parser.add_argument("--multicast-layer-barrier", action="store_true")
     parser.add_argument("--gu-workers", type=int, choices=(8, 16), default=8)
     parser.add_argument("--reuse-mlp-scratch", action="store_true")
     args = parser.parse_args()
@@ -125,7 +126,7 @@ def run(args):
 
     tuning = ProjectionTuning(
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
-        bounded_barrier=args.bounded_layer_barrier, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
+        bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,

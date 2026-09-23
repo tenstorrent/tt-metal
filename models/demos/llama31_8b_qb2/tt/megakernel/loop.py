@@ -70,8 +70,32 @@ class DecoderLoop:
                 ttnn.ShardSpec(self.grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
+        self.barrier_rectangles = []
+        release_grid = self.grid
+        if body.tuning.multicast_barrier:
+            # Reserve the release field on every multicast recipient, including
+            # idle terminal workers. Split around non-worker NoC columns/rows.
+            size = body.mesh.compute_with_storage_grid_size()
+            all_cores = [ttnn.CoreCoord(x, y) for y in range(size.y) for x in range(size.x)]
+            physical = [body.mesh.worker_core_from_logical_core(c) for c in all_cores]
+            points = {(c.x, c.y) for c in physical}
+            xs, ys = sorted({c.x for c in physical}), sorted({c.y for c in physical})
+            if points != {(x, y) for x in xs for y in ys}:
+                raise ValueError("Multicast release requires a Cartesian worker coordinate map")
+            def segments(values):
+                result = []
+                first = previous = values[0]
+                for value in values[1:]:
+                    if value != previous + 1:
+                        result.append((first, previous)); first = value
+                    previous = value
+                return [*result, (first, previous)]
+            self.barrier_rectangles = [(x0, y0, x1, y1, (x1-x0+1)*(y1-y0+1))
+                for x0, x1 in segments(xs) for y0, y1 in segments(ys)]
+            release_grid = _grid(all_cores)
         self.barriers = [
-            ttnn.create_global_semaphore(body.mesh, self.grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(3)
+            ttnn.create_global_semaphore(body.mesh, grid, 0, ttnn.BufferType.L1_SMALL)
+            for grid in (self.grid, release_grid, self.grid)
         ]
         self.barrier_addresses = [ttnn.get_global_semaphore_address(s) for s in self.barriers]
         self.head_ready = (
@@ -222,6 +246,8 @@ class DecoderLoop:
                     len(self.cores),
                     indices[c.x, c.y],
                     *coordinates,
+                    *([len(self.barrier_rectangles), *[v for rect in self.barrier_rectangles for v in rect]]
+                      if self.barrier_rectangles else []),
                 ]
             kernel.runtime_args = rt
             kernel.defines = [
@@ -229,6 +255,8 @@ class DecoderLoop:
                 ("LOOP_SOURCE", '"' + original + '"'),
                 ("LOOP_PATCH", str(patch)),
                 ("BOUNDED_LAYER_BARRIER", str(int(self.body.tuning.bounded_barrier))),
+                ("LAYER_BARRIER_MULTICAST", str(int(self.body.tuning.multicast_barrier))),
+                ("LOOP_MCAST_RT_OFFSET", str(offset + 14 + 2 * len(self.cores))),
                 ("SCRATCH_INIT_ONCE", str({"off":0, "padding":1, "norm":2, "all":3}[self.body.tuning.scratch_init_once])),
                 ("LOOP_RT_OFFSET", str(offset)),
                 ("LOOP_CT_OFFSET", str(len(kernel.compile_time_args))),

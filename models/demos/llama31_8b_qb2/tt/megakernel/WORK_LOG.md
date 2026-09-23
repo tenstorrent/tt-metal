@@ -145,3 +145,13 @@ Prepared scratch-init-once flag: selected norm constants/statistic padding and R
 ## 11:54 UTC — once-per-token scratch initialization gate passes
 
 The combined padding/norm scratch-init-once configuration passed exact focused layer0/31 output/allKV, inactive(-1), page migration/boundaries and replay under worker-only Watcher onall4chips. No extra scratch storage is allocated. Norm constant rings are republished after metadata reset; selected statistic padding and RoPE/V-cache/concat padding keep initialized lanes within one invocation. Full128 all/padding/norm isolation next, plus early-prefix2/3 excluding down.
+
+## 12:03 UTC — scratch/full-prefix isolation and multicast candidate
+
+Source269afedd context128/32 five-trial strict-exact medians: scratch all8.363791099ms, padding-only8.417085707, norm-only8.449468093. Their savings are approximately additive versus8.506229. Early-prefix without down:2blocks8.425361807 and3blocks8.414819127; all/2 remains slightly stronger8.407293838. Combine scratch-all plus early2 next, and finally test contiguous activation reads across full QKV/head (prior GU8 component showed no gain but did not qualify that full combination).
+
+Prepared multicast release replaces86 individual semaphore writes with two worker-only NoC rectangles on this mesh. Release field is allocated onall110 recipients, including idle head workers; arrival/epoch remain on actual layer workers. Rectangles are derived from the checked logical-to-physical worker map and split across missing NoC columns/rows. Sender-containing rectangle uses loopback with inclusive destination count; others use ordinary multicast. Arrival reset/sense ordering and both layer boundaries remain unchanged. Focused combined scratch/early/coalesced-input Watcher gate next.
+
+## 12:05 UTC — multicast combined focused gate passes; checkpoint
+
+Multicast release + scratch-all + early-prefix2 + contiguous activation reads passed focused strict exact layer/page/inactive/replay validation under worker-only Watcher onall4chips (multicast-combined-loop-watcher). Release broadcasts target two reserved worker rectangles without crossing DRAM/nonworker columns. Full-model separate/composite latency screening next. New screening-summary JSON contains every unprofiled full run's source/tuning/trials/setup and exact comparison metadata, excluding Watcher/profile timings. Hourly durable bundle and evidence refreshed.

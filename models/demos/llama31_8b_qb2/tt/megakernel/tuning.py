@@ -10,6 +10,7 @@ class ProjectionTuning:
     reader: str = "original"
     wide_subblocks: bool = False
     bounded_barrier: bool = False
+    multicast_barrier: bool = False
     buffer_count: int = 2
     lookahead: int = 2
     hoist_pack_config: bool = False
@@ -27,6 +28,8 @@ class ProjectionTuning:
     share_qkv_workers: bool = False
 
     def __post_init__(self):
+        if self.multicast_barrier and not self.bounded_barrier:
+            raise ValueError("Multicast release currently requires the bounded layer barrier")
         if self.scratch_init_once not in ("off", "padding", "norm", "all"):
             raise ValueError("Scratch initialization must be off, padding, norm or all")
         if self.early_weight_blocks not in (0, 2, 3) or self.early_weight_blocks > self.buffer_count:
