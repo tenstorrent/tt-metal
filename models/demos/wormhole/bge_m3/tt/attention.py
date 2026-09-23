@@ -488,6 +488,10 @@ def _sdpa_program_config(seq_len, mesh_device, batch_size=None, data_parallel=Fa
     # B1/S512 on Blackhole: an 8x8 grid beats the default 11x10.
     if seq_len == 512 and batch_size == 1 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         grid = ttnn.CoreCoord(8, 8)
+    # B32 on a 12-column grid (Galaxy Blackhole): 120 cores hold larger L1 head
+    # shards, and the k512 circular buffers overlap them by 30 KB. k256 fits.
+    if seq_len == 512 and batch_size == 32 and int(grid.x) < 13:
+        k_chunk = min(k_chunk, 256)
     kwargs = {
         "compute_with_storage_grid_size": grid,
         "q_chunk_size": q_chunk,

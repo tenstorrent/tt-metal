@@ -544,18 +544,25 @@ def _s512_mlp_wi_program_config(mesh_device, *, batch, hidden_size, intermediate
     # 4. In-model sweeps: B8 13.101 to 12.704 ms, B16 25.133 to 24.356 ms, B32
     # 54.108 to 51.645 ms (minimal_matmul before). A larger M block overlaps the L1
     # output at B16 and B32; at B8 per_core_M is 13 already.
-    grid_x, grid_y = 13, 10
+    # A 12-column grid (Galaxy Blackhole) takes 11x10, ibw4 and a 1x6 subblock: 12
+    # columns give per_core_N 11, which allows only 1-wide subblocks. B8 on Galaxy:
+    # 20.819 ms (ttnn.linear's choice) to 14.097 ms. At B16 ttnn.linear's choice
+    # overlaps the L1 activations.
     if mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
     g = mesh_device.compute_with_storage_grid_size()
-    if int(g.x) < grid_x or int(g.y) < grid_y:
+    if int(g.y) < 10 or int(g.x) < 11:
         return None
+    if int(g.x) >= 13:
+        grid_x, grid_y, in0_block_w, out_subblock_w = 13, 10, 8, 5
+    else:
+        grid_x, grid_y, in0_block_w, out_subblock_w = 11, 10, 4, 6
     m_tiles = (batch * 512) // 32
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=min(8, hidden_size // 32),
+        in0_block_w=min(in0_block_w, hidden_size // 32),
         out_subblock_h=1,
-        out_subblock_w=5,
+        out_subblock_w=out_subblock_w,
         out_block_h=13,
         per_core_M=(m_tiles + grid_y - 1) // grid_y,
         per_core_N=(intermediate_size // 32 + grid_x - 1) // grid_x,
