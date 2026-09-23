@@ -51,8 +51,8 @@ inline void push_completion_counter(
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
     noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
         NOC_INDEX, completion_src_l1_addr, completion_pcie_xy_enc, pcie_addr, sizeof(uint32_t));
-    // The wide with_state form leaves NOC_RET_ADDR_MID routed to PCIe and the plain write path no longer
-    // rewrites it, so the tensor writes that follow would go to host memory.
+    // This leaves MID routed to host, and plain writes don't program MID, so the tensor writes that follow
+    // would go to host memory.
     noc_async_write_clear_pcie_state(NOC_INDEX, write_cmd_buf);
 }
 
