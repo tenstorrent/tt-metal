@@ -87,8 +87,8 @@ def parse_args():
     parser.add_argument("--projection-lookahead", type=int, choices=(2, 3, 4), default=2)
     parser.add_argument("--projection-buffers", type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument("--compact-activations", choices=("off", "norm", "all"), default="off")
-    parser.add_argument("--qkv-buffers", type=int, choices=(0, 3, 4, 5, 6, 8), default=0)
-    parser.add_argument("--qkv-early-blocks", type=int, choices=(-1, 0, 2, 3, 4, 5, 6, 8), default=-1)
+    parser.add_argument("--qkv-buffers", type=int, choices=(0, 3, 4, 5, 6), default=0)
+    parser.add_argument("--qkv-early-blocks", type=int, choices=(-1, 0, 2, 3, 4, 5, 6), default=-1)
     parser.add_argument("--head-placement", choices=("row", "order", "select"), default="row")
     parser.add_argument("--projection-tile-height", type=int, choices=(16, 32), default=32)
     parser.add_argument("--batch-swiglu", action="store_true")
@@ -169,6 +169,8 @@ def run(args):
         "context": args.context,
         "tokens": args.tokens,
         "profile_run": args.profile,
+        "watcher_enabled": bool(os.environ.get("TT_METAL_WATCHER")),
+        "headline_latency_eligible": not args.profile and not bool(os.environ.get("TT_METAL_WATCHER")),
         "sampling": {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},
         "limitations": (
             "B1; mode-dependent experimental composition. decoder_loop places all32 layers in one program; "

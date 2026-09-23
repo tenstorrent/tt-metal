@@ -41,7 +41,7 @@ class ProjectionTuning:
             raise ValueError("Projection tile height must be sixteen or thirty-two")
         if self.projection_tile_height == 16 and self.share_qkv_workers:
             raise ValueError("Tiny projection tiles currently require separate QKV workers")
-        if self.qkv_buffers not in (0, 3, 4, 5, 6, 8) or self.qkv_early_blocks not in (-1, 0, 2, 3, 4, 5, 6, 8):
+        if self.qkv_buffers not in (0, 3, 4, 5, 6) or self.qkv_early_blocks not in (-1, 0, 2, 3, 4, 5, 6):
             raise ValueError("Unsupported independent QKV buffering/prefix")
         if self.qkv_early_blocks > (self.qkv_buffers or self.buffer_count):
             raise ValueError("QKV prefix must fit its independent ring")

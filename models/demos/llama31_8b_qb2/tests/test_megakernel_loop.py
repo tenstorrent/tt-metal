@@ -92,9 +92,14 @@ def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None):
     try:
         for call in calls:
             trace = ttnn.begin_trace_capture(mesh, cq_id=0)
-            outputs.append(call())
-            ttnn.end_trace_capture(mesh, trace, cq_id=0)
             traces.append(trace)
+            try:
+                output = call()
+            finally:
+                # A host compile/allocation error must not leave capture open
+                # and hang mesh teardown. Outer cleanup releases this handle.
+                ttnn.end_trace_capture(mesh, trace, cq_id=0)
+            outputs.append(output)
         for pos in (127, 128, 129):
             if pos == 128:
                 next_mapping = mapping.flip(1).contiguous()
