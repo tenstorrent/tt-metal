@@ -22,7 +22,7 @@ Everything else is one of:
 |---|---|---|
 | **measured** (Tracy / traced microbenchmarks) | per-op costs, collective costs, peak TFLOPS, MLP floor per split | yes -- these are the "now" columns |
 | **estimated** (formula or judgment) | the 8-11 ms budget's "target" column, every pipeline-parallel number | no -- not verified, do not quote as results |
-| **implemented, unverified** | the `QWEN36_REPL_RESIDUAL` path | its A/B produced no output, including the baseline control; treat as broken |
+| **implemented, unverified** | the `QWEN36_REPL_RESIDUAL` path | its A/B runs all timed out -- now attributed to a **device wedge**, not the code (see *Hang diagnosis*); re-verification pending |
 | **implemented, A/B in flight** | the `QWEN36_ATUPE_OPTS` port of Aniruddha's round-4 GDN/SDPA/L1 changes | default OFF until verified; see the port section |
 
 **Verified savings so far: zero.** The 8-11 ms plan below is a budget of estimated cuts against
@@ -207,14 +207,14 @@ deliberate, not an oversight: bf16 partial sums on the GDN out-proj took PCC to 
 
 ## Change in flight: replicated residual (`QWEN36_REPL_RESIDUAL=1`)
 
-**Status: implemented; A/B ran and produced NO usable output -- including the baseline
-control. Treat as broken until debugged.** The four-run A/B (baseline TTFT, baseline PCC, repl
-TTFT, repl PCC) completed with exit 0 but none of the runs printed a wavefront time, a PCC, or
-even a pytest PASSED/FAILED line. Because the *baseline* also printed nothing, the likely cause
-is that the refactor broke the default path too (e.g. the `tpc` import or `residual_all_reduce`
-signature), not the new mode. Diagnosis was started and interrupted; the next step is a single
-baseline run with full stdout captured. Off by default, so `b9356ef71e3` behaviour is unaffected
-only if the default path is in fact intact -- verify this first.
+**Status: implemented; A/B produced no numbers -- but that is now attributed to a wedged
+device, not to this code.** The four-run A/B (baseline TTFT, baseline PCC, repl TTFT, repl PCC)
+printed neither a wavefront time nor a PASSED/FAILED line. Each run had `timeout 1500`; a later
+baseline with full stdout captured showed exactly what that looks like: the process hangs
+silently at `Loading 24 transformer layers` (weight upload, before any forward pass) and is
+killed at 25 min with no error. All six modules import cleanly, so it was not an import break.
+See *Hang diagnosis* under the port section for the evidence and recovery. Re-verification of
+this path is pending a clean-device run; it stays off by default.
 
 Today each half-layer pays three collectives:
 
@@ -398,6 +398,50 @@ the real cause.
 
 Results to be filled in when the runs land; per-feature isolation runs follow only if the
 combined run moves the number.
+
+### Hang diagnosis: the first A/B attempt timed out, and it was the device, not the code
+
+The first baseline of this A/B ran for 25 min and was killed by its timeout (`BASE_EXIT=124`)
+having printed no result. Its log ends at `Loading 24 transformer layers` (15:16:32) and is
+silent for the next 25 minutes: it hung during **weight upload**, before any forward pass,
+trace capture, or collective. That is the same signature as the four blank replicated-residual
+runs the day before.
+
+Why the code is the unlikely culprit:
+
+- The baseline process was started *before* the port was written, so it ran pre-port code.
+- The earlier refactor (`dc36369ff8f`) changes nothing at model-construction time that touches
+  the device; and all six qwen36 modules import cleanly.
+- The worker was at ~300% CPU the whole time -- busy on the host, blocked on the device.
+
+Why the device is the likely culprit:
+
+- On 2026-09-22 `bench_allreduce.py` hung on a second submesh and was killed by `timeout` mid
+  collective (exit 124). **Every mesh run after that hung** -- the four A/B runs and this
+  baseline, five in a row, ~2 hours -- and nothing had worked on the mesh in between.
+- The "HEALTH OK" probe run after that kill opened a **single device** (`open_device(0)`) and
+  did one add. That does not exercise the other 31 chips or their dispatch queues, and it said
+  OK while the mesh was wedged. This was the blind spot.
+
+Recovery (2026-09-23): `tt-smi -r` -- all 32 PCI devices, rc=0. It prints *"CPLD FW v1.16 or
+higher is required ... please continue to use tt-smi -glx_reset instead"*; it did not fail,
+and `-glx_reset` must never be used on this box regardless. Then a **full-mesh probe**:
+`open_mesh_device(MeshShape(4, 8))`, replicate a tensor to all 32, `add`, `synchronize`, read
+back -- passed (sum 65536 / 65536). That is the probe to run after any killed or timed-out mesh
+job; the single-device one is not sufficient.
+
+The A/B was then restarted on the verified device as one sequential script
+(baseline -> ported -> PCC), each step gated on the previous one producing a wavefront number
+and on the device being free. **If the baseline hangs again on a clean device, the HEAD default
+path is the culprit and the next step is to bisect against `b9356ef71e3`.** If it passes, the
+wedge diagnosis is confirmed.
+
+A second, self-inflicted bug found on the way: the original chain waited on
+`ps | grep '[p]ytest'` returning 0 as its "device free" check. That pattern matches any bash
+whose *script text* contains the word pytest -- i.e. the chain's own wrapper -- so it could
+never clear, and the chain sat deadlocked on itself for 35 min. The replacement checks for
+open `/dev/tenstorrent` file descriptors, which is the actual busy signal and is what revealed
+the device was free.
 
 ## Path to ~11 ms: measured costs, estimated cuts, zero verified so far
 
