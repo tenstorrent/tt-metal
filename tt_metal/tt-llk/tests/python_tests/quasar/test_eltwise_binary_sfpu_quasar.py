@@ -274,7 +274,7 @@ def test_eltwise_binary_sfpu_int_quasar(
     formats,
     dest_acc,
     mathop,
-    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
+    tile_indices,
     *,
     approx_mode=ApproximationMode.No,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -435,7 +435,7 @@ def test_eltwise_binary_sfpu_float_quasar(
     mathop,
     approx_mode,
     implied_math_format,
-    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
+    tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -497,7 +497,7 @@ BF16_RNE_SWEEP = dict(
 )
 def test_eltwise_binary_sfpu_bf16_rne_quasar(
     binary_op_mathop,
-    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
+    tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -796,7 +796,7 @@ def _run_max_min(
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
-    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
+    tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -830,7 +830,7 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
-    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
+    tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -1062,7 +1062,7 @@ def _run_quant(
 def test_eltwise_binary_sfpu_quant_quasar(
     binary_op,
     sign_magnitude,
-    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
+    tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
