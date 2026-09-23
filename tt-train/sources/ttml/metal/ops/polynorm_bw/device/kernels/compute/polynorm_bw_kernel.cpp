@@ -193,16 +193,8 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     binop_with_scalar_tile_init();
     add_unary_tile(reg_acc, get_eps_fp32_bits());
 
-    // REDUCE_ROW output: only column 0 carries data. sqrt uses the first-column variant
-    // (8 iterations instead of 32). recip stays on recip_tile<false>, restricted to
-    // VectorMode::C (16 instead of 32): PolyNorm compiles with fp32_dest_acc_en = true, so
-    // recip_tile<false> resolves to _calculate_reciprocal_fast_24b_5c_ on Blackhole, while
-    // the only first-column recip body in tree (calculate_recip_first_column) uses
-    // sfpu_reciprocal_iter<2> - a different algorithm there. (On Wormhole recip_tile<false>
-    // already resolves to sfpu_reciprocal_iter<2>, so the swap would be numerically neutral.)
-    // The extra 2x is worth ~0.04% end-to-end (PR #56288), below what
-    // polynorm_fusion_benchmark resolves, and PolyNormOpTest's 2e-2 tolerance cannot show
-    // the swap is bit-safe on Blackhole.
+    // PolyNorm only reduces on first column (32 elements). 
+    // Instead of processing the whole tile, we use `sqrt_tile_first_column()` and `recip_tile` with `VectorMode::C`, which only processes the first columns of the tile. 
     // TODO(#42980): revisit in a separate change with lane-level accuracy tests, ideally by
     // fusing sqrt+recip into a first-column rsqrt (_calculate_sqrt_body_ has a RECIPROCAL flag).
     sqrt_tile_init();
