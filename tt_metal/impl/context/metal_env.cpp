@@ -9,6 +9,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
+#include <optional>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
 #include "metal_env_accessor.hpp"
@@ -658,6 +659,29 @@ distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();
 }
+namespace {
+// Owns a freshly-created MetalContext instance until explicitly released. If a fallible step runs between
+// MetalContext::create_instance() and the point where the mesh device takes over ownership (via
+// set_destroy_metal_context_instance_on_close), this guard destroys the context on unwind instead of leaking it.
+// See https://github.com/tenstorrent/tt-metal/issues/57286.
+class NewContextGuard {
+public:
+    explicit NewContextGuard(ContextId context_id) : context_id_(context_id) {}
+    NewContextGuard(const NewContextGuard&) = delete;
+    NewContextGuard& operator=(const NewContextGuard&) = delete;
+    ~NewContextGuard() {
+        if (!released_) {
+            MetalContext::destroy_instance(/*check_device_count=*/false, context_id_);
+        }
+    }
+    void release() { released_ = true; }
+
+private:
+    ContextId context_id_;
+    bool released_ = false;
+};
+}  // namespace
+
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const distributed::MeshDeviceConfig& config,
     size_t l1_small_size,
@@ -674,6 +698,10 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    std::optional<NewContextGuard> new_context_guard;
+    if (!env_owns_context) {
+        new_context_guard.emplace(context_id);
+    }
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
         config,
@@ -685,6 +713,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
         worker_l1_size);
     if (!env_owns_context) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        new_context_guard->release();
     }
     return mesh_device;
 }
@@ -700,6 +729,10 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    std::optional<NewContextGuard> new_context_guard;
+    if (!env_owns_context) {
+        new_context_guard.emplace(context_id);
+    }
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
         device_id,
@@ -711,6 +744,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
         worker_l1_size);
     if (!env_owns_context) {
         mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        new_context_guard->release();
     }
     return mesh_device;
 }
@@ -726,6 +760,10 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
+    std::optional<NewContextGuard> new_context_guard;
+    if (!env_owns_context) {
+        new_context_guard.emplace(context_id);
+    }
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
         device_ids,
@@ -739,6 +777,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         const auto& parent = result.begin()->second->get_parent_mesh();
         if (parent) {
             parent->impl().set_destroy_metal_context_instance_on_close(true);
+            new_context_guard->release();
         }
     }
     return result;
