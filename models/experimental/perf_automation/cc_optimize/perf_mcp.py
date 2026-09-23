@@ -7736,6 +7736,20 @@ def termination_check() -> dict:
             # repeated failure; when the kernel has reported a board-management fault it is a
             # diagnosis, and the two call for different actions. Run 39 halted with the vague form and
             # sat dead until morning -- a reboot would have taken two minutes.
+            # SOFTWARE BEFORE HARDWARE. On 2026-09-22 this verdict said "reboot the host" for a
+            # runtime whose pre-compiled firmware (tt_metal/pre-compiled) no longer matched the
+            # libtt_metal.so that profiler_heal had relinked -- every open timed out in FW init and
+            # hung NOC0, which is exactly what a wedged board looks like. The board was fine; the
+            # reboot and a day of resets could not help. That mismatch is a pure mtime comparison,
+            # so it is asked FIRST, and when it holds it IS the verdict.
+            _stale = None
+            try:
+                _stale = _dr().stale_precompiled_firmware(str(Path(_PKG).parent.parent.parent))
+            except Exception:  # noqa: BLE001
+                pass
+            if _stale:
+                _why = "%s Last error: %s" % (_stale, str(exc)[-300:])
+                return {"can_stop": True, "halt": "stale_precompiled_fw", "halt_reason": _why, "error": _why}
             _reboot = False
             try:
                 _reboot = _dr().board_needs_host_reboot()

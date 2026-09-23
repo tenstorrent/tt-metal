@@ -100,6 +100,49 @@ def board_needs_host_reboot(kernel_text: str = None) -> bool:
     return any(sig in txt for sig in UNRESETTABLE_KERNEL_SIGS)
 
 
+def stale_precompiled_firmware(tt_metal_root) -> str | None:
+    """Is the pre-compiled firmware OLDER than the tt-metal library that will load it?
+
+    THE ONE CHECK THAT WOULD HAVE SAVED 2026-09-22. Every device open failed with "Device 0 init:
+    failed to initialize FW! Try resetting the board", then NOC0 hung and the ARC dropped off the
+    bus -- the exact shape of a wedged board. Resets, a warm host reboot and a day were spent on it.
+    The board was fine: profiler_heal had relinked libtt_metal.so after an upstream sync changed the
+    Blackhole L1 routing-table layout, while tt_metal/pre-compiled/ (which the runtime prefers over a
+    JIT build) still held the previous day's firmware. Old-layout firmware under a new-layout runtime
+    never reports FW init done.
+
+    Pure mtime comparison, no device access, so it is safe to call from any verdict path. Returns an
+    actionable sentence when the pre-compiled tree is older than the newest libtt_metal.so under
+    build*/; None when there is nothing to compare or nothing is stale.
+    """
+    try:
+        root = Path(str(tt_metal_root))
+        pre = root / "tt_metal" / "pre-compiled"
+        if not pre.is_dir():
+            return None
+        elfs = list(pre.rglob("*.elf"))
+        if not elfs:
+            return None
+        fw_newest = max(f.stat().st_mtime for f in elfs)
+        libs = [q for q in root.glob("build*/tt_metal/libtt_metal.so")] + [
+            q for q in root.glob("build*/lib/libtt_metal.so")
+        ]
+        if not libs:
+            return None
+        lib = max(libs, key=lambda q: q.stat().st_mtime)
+        if lib.stat().st_mtime <= fw_newest:
+            return None
+        return (
+            "STALE PRE-COMPILED FIRMWARE, not a board fault: %s is newer than every firmware image in "
+            "%s. The runtime loads that firmware in preference to a JIT build, and firmware built "
+            "against a different L1 layout never finishes FW init (all cores time out, NOC0 hangs, "
+            "the ARC drops off the bus). Fix: `ninja -C %s precompile-fw` (or remove %s), then "
+            "`tt-smi -r` the chips and re-run." % (lib, pre, lib.parent.parent, pre)
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 HEALTH_TIMEOUT_S = float(os.environ.get("TT_RECOVERY_HEALTH_TIMEOUT_S", "45") or "45")
 RESET_FAIL_LIMIT = int(
     os.environ.get("TT_RECOVERY_FAIL_LIMIT", os.environ.get("PERF_MCP_RESET_FAIL_LIMIT", "3")) or "3"

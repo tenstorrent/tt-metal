@@ -478,6 +478,12 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
 _HALT_REMEDY = {
     "needs_host_reboot": "reboot the host, then re-run",
     "device_unrecoverable": "the device could not be recovered — check the board, then re-run",
+    # Not a board fault: tt_metal/pre-compiled is older than the libtt_metal.so that loads it
+    # (a targeted relink skipped the precompile-fw target). 2026-09-22 spent a day and a host
+    # reboot on this under the "board wedge" remedy.
+    "stale_precompiled_fw": (
+        "rebuild the pre-compiled firmware (ninja -C build_Release precompile-fw), " "tt-smi -r the chips, then re-run"
+    ),
     "": "install tt-lang first, then re-run",
 }
 

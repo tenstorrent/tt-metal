@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -185,6 +186,51 @@ def _build_dir(root: Path) -> Path | None:
     return None
 
 
+def _resync_precompiled_fw(root: Path, build: Path) -> str:
+    """Keep tt_metal/pre-compiled coherent with the libtt_metal.so that was just relinked.
+
+    THE 2026-09-22 "BOARD WEDGE" WAS THIS FUNCTION'S ABSENCE. The rebuild above names its ninja
+    targets (libtt_metal.so, _ttnn.so), so the `precompile-fw` ALL-target -- which regenerates
+    tt_metal/pre-compiled/<build_key>/ from the current firmware sources -- never re-ran. The
+    runtime prefers a matching pre-compiled dir over a JIT build, so after an upstream sync that
+    changed the Blackhole L1 map (dev_mem_map.h routing-table size) every plain device open loaded
+    old-layout firmware under a new-layout runtime: all Tensix cores timed out in FW init, NOC0
+    hung, the ARC dropped off the bus, and 24 hours went to resets and a host reboot that could
+    not help. Runs on a different build key (profiler on => no pre-compiled dir => JIT) kept
+    working, which is what made it look like flaky hardware.
+
+    So: regenerate the pre-compiled firmware with the same build tree. If that cannot be done,
+    REMOVE the stale directory -- the runtime then JIT-builds firmware that matches the library
+    it loads (slower first open, always coherent). Never leave a stale one in place.
+    Returns "rebuilt", "wiped" or "absent" (nothing to remove).
+    """
+    pre = root / "tt_metal" / "pre-compiled"
+    ok = False
+    try:
+        r = subprocess.run(
+            ["ninja", "-C", str(build), "precompile-fw"],
+            capture_output=True,
+            text=True,
+            timeout=_rebuild_timeout(),
+        )
+        ok = r.returncode == 0
+        if not ok:
+            _log(f"precompile-fw failed (rc={r.returncode}): {(r.stderr or r.stdout or '')[-400:]}")
+    except Exception as exc:  # noqa: BLE001
+        _log(f"precompile-fw invocation failed: {exc}")
+    if ok:
+        _log("pre-compiled firmware regenerated to match the rebuilt libtt_metal.so")
+        return "rebuilt"
+    if pre.is_dir():
+        shutil.rmtree(pre, ignore_errors=True)
+        _log(
+            "could not regenerate pre-compiled firmware -> removed tt_metal/pre-compiled so the "
+            "runtime JIT-builds firmware that matches the rebuilt library"
+        )
+        return "wiped"
+    return "absent"
+
+
 def _rebuild(root: Path, build: Path) -> bool:
     for targets in (["tt_metal/libtt_metal.so", "ttnn/_ttnn.so"], []):
         try:
@@ -230,6 +276,9 @@ def _rebuild(root: Path, build: Path) -> bool:
         except Exception as exc:
             _log(f"could not install {loaded_lib}: {exc}")
             return False
+    # A relinked library with yesterday's pre-compiled firmware is a broken runtime, not a
+    # healed one -- see _resync_precompiled_fw.
+    _resync_precompiled_fw(root, build)
     return True
 
 
