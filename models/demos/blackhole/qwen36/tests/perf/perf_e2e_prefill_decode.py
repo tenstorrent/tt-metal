@@ -9,7 +9,9 @@ instead of being an estimate.
 
   prefill  : sp.prefill_traced() -> true TTFT (device wavefront + on-device-argmax token read)
   handoff  : sp.export_state_host() (device->host) + inject_into_tp_model() (host->device)
-  decode   : 8 x model.decode_tp(), greedy, seeded from prefill's own first token
+  decode   : 8 x TRACED decode -- the demo/text_demo.py pattern (persistent input buffers,
+             one execute_trace per step, on-device argmax folded in). NOT decode_tp, which is
+             eager and measured 116.79 ms/token against 6.99 ms/token of device time.
 
 The decode model is the LAST SP submesh's model: it already holds the weights and the whole
 4096-token KV, so this measures the handoff's real cost (reshard + round-trip) without paying
@@ -26,6 +28,7 @@ import time
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.blackhole.qwen36.tests.test_factory import model_path
 from models.demos.blackhole.qwen36.tests.test_sp_prefill import (
     SP_DIES,
@@ -41,7 +44,8 @@ from models.demos.blackhole.qwen36.tt.sp_handoff import (
     inject_into_tp_model,
     kv_tp_host_to_full,
 )
-from models.demos.blackhole.qwen36.tt.sp_prefill import SPPrefill
+from models.demos.blackhole.qwen36.tt.sp_prefill import BLOCK_SIZE, SPPrefill
+from models.tt_transformers.tt.common import copy_host_to_device
 
 N_DECODE = int(os.environ.get("E2E_DECODE_STEPS", "8"))
 
@@ -71,18 +75,58 @@ def test_e2e_prefill_handoff_decode():
         # are built sequence_parallel=True, and under the replicated residual their norms hold a
         # full-width replicated gamma, while decode_tp feeds hidden-FRACTURED activations ->
         # "Gamma's last padded dim needs to equal tile width". A separate TP model is what
-        # sp_handoff targets by design. Built and warmed OUTSIDE the timed region; only the
-        # state transfer and the decode steps are timed.
+        # sp_handoff targets by design.
         dec = Qwen36Model.from_pretrained(
             sp.subs[-1],
             max_batch_size=1,
-            max_seq_len=T + 128,  # decode runs positions T..T+N-1; must be a multiple of the 128 SDPA chunk
+            max_seq_len=T + 128,  # decode runs positions T..T+N-1; multiple of the 128 SDPA chunk
             layer_indices=_e2e_layer_indices(),
             sequence_parallel=False,
         )
-        dec.reset_tp()
-        dec.decode_tp(1, 0)  # compile the decode programs
-        dec.reset_tp()
+        mesh_d = dec.mesh_device
+        num_blocks = (((T + 128) // BLOCK_SIZE + 31) // 32) * 32
+        dec.allocate_kv_caches(
+            [num_blocks, dec.args.n_local_kv_heads, BLOCK_SIZE, dec.args.head_dim],
+            ttnn.bfloat16,
+            batch_size=1,
+        )
+        page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+
+        # Traced decode, exactly as demo/text_demo.py drives it: persistent input buffers, the
+        # Generator-interface forward, per-shard argmax folded INTO the trace so each step reads
+        # back two tiny tensors instead of the full vocab.
+        dev = dec.prepare_inputs_decode(
+            torch.tensor([[1]], dtype=torch.int32), torch.tensor([T], dtype=torch.int32), page_table=page_table
+        )
+        per_shard = dec.args.vocab_size // mesh_d.get_num_devices()
+        read_comp = ttnn.ConcatMeshToTensor(mesh_d, dim=0)
+
+        def _decode_fwd():
+            return dec.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])[0]
+
+        def _argmax_dev(lg):
+            rm = ttnn.to_layout(lg, ttnn.ROW_MAJOR_LAYOUT)
+            idx = ttnn.argmax(rm, dim=-1, keepdim=False)
+            ttnn.deallocate(rm)
+            return idx
+
+        def _update(token, position):
+            host = dec.prepare_decode_inputs_host(
+                torch.tensor([[token]], dtype=torch.int32),
+                torch.tensor([position], dtype=torch.int32),
+                page_table=None,  # constant; its address is baked into the trace
+            )
+            copy_host_to_device(host[:3], device_tensors=dev[:3])
+
+        # Throwaway eager pass to compile, then capture. The compile pass mutates GDN state, but
+        # the real state is injected AFTER capture, so nothing needs restoring here.
+        _warm = _decode_fwd()
+        ttnn.deallocate(_argmax_dev(_warm))
+        dec_trace = ttnn.begin_trace_capture(mesh_d, cq_id=0)
+        tt_logits = _decode_fwd()
+        tt_idx = _argmax_dev(tt_logits)
+        ttnn.end_trace_capture(mesh_d, dec_trace, cq_id=0)
+        ttnn.synchronize_device(mesh_d)
 
         # ---------------- timed e2e ----------------
         t_start = time.perf_counter()
@@ -126,10 +170,13 @@ def test_e2e_prefill_handoff_decode():
 
         tok, pos, toks, step_ms = first_token, T, [first_token], []
         for _ in range(N_DECODE):
-            s = time.perf_counter()
-            lg = dec.decode_tp(tok, pos)
-            tok = int(torch.argmax(lg))
-            step_ms.append((time.perf_counter() - s) * 1e3)
+            st = time.perf_counter()
+            _update(tok, pos)
+            ttnn.execute_trace(mesh_d, dec_trace, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_d)
+            idxs = ttnn.to_torch(tt_idx, mesh_composer=read_comp).reshape(-1)
+            tok = int(idxs[0].item())  # vocab-shard 0's local argmax; greedy seed for the next step
+            step_ms.append((time.perf_counter() - st) * 1e3)
             toks.append(tok)
             pos += 1
         t_end = time.perf_counter()
@@ -157,7 +204,7 @@ def test_e2e_prefill_handoff_decode():
         logger.info(f"  handoff TOTAL              {export_ms + inject_ms:8.2f} ms")
         logger.info(
             f"  {N_DECODE} decode tokens            {decode_ms:8.2f} ms   "
-            f"({decode_ms / N_DECODE:.2f} ms/token, EAGER -- decode_tp is untraced)"
+            f"({decode_ms / N_DECODE:.2f} ms/token, TRACED)"
         )
         logger.info(f"  {'-' * 44}")
         logger.info(f"  E2E TOTAL                  {total_ms:8.2f} ms")
@@ -170,6 +217,10 @@ def test_e2e_prefill_handoff_decode():
         logger.info(f"  tokens: {toks}")
         assert len(set(toks[1:])) >= 1
     finally:
+        try:
+            ttnn.release_trace(mesh_d, dec_trace)
+        except Exception:
+            pass
         if sp is not None:
             sp.close()
         _close_sp_mesh(parent)

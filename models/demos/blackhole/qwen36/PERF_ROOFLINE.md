@@ -578,42 +578,58 @@ the window / steps gives **7.69 ms**, so quote 6.99 as median with 7.69 as the w
 
 ### MEASURED e2e: prefill + handoff + 8 decode (2026-09-23)
 
-Run `tests/perf/perf_e2e_prefill_decode.py`: one device session, all three phases on one clock.
+`tests/perf/perf_e2e_prefill_decode.py` -- one device session, all three phases on one clock.
 
 | phase | ms | share |
 |---|---|---|
-| prefill, true TTFT | **38.00** | 3% |
-| handoff: export device->host | 193.02 | |
-| handoff: inject host->device | 192.41 | |
-| **handoff total** | **385.43** | **28%** |
-| **8 decode tokens** (116.79 ms/token) | **934.35** | **69%** |
-| **E2E TOTAL** | **1357.78 ms** | |
+| prefill, true TTFT | **38.14** | 10% |
+| handoff: export device->host | 178.42 | |
+| handoff: inject host->device | 96.10 | |
+| **handoff total** | **274.52** | **69%** |
+| **8 decode tokens** (10.54 ms/token, traced) | **84.29** | 21% |
+| **E2E TOTAL** | **396.95 ms** | |
 
-(A further 53.12 ms of full-logits readback happens inside `prefill_traced` for PCC/debug and
-is excluded -- production reads only the on-device-argmax token.)
+(A further ~57 ms of full-logits readback happens inside `prefill_traced` for PCC/debug and is
+excluded; production reads only the on-device-argmax token.)
 
-**The earlier ~130 ms estimate in this document was wrong by 10x.** Both estimated terms were
-far too optimistic, and for reasons that a bytes calculation could not see:
+#### Decode must be TRACED -- 116.79 -> 10.54 ms/token
 
-| | estimated | measured | why |
-|---|---|---|---|
-| handoff | ~35 ms | **385 ms** | not bandwidth-bound. It is a per-layer Python loop of `ttnn.to_torch`, host reshard, `ttnn.from_torch` -- 24 layers x several tensors, each a separate round-trip. |
-| 8 decode tokens | ~56 ms | **934 ms** | `decode_tp` is **eager/untraced**: 116.79 ms/token wall vs **6.99 ms/token of device time**. ~17x is host dispatch of ~24 layers of ops per step. |
+The first e2e run called `model.decode_tp()` in a Python loop and measured **116.79 ms/token**
+against 6.99 ms/token of device time. `decode_tp` is eager: ~24 layers of ops dispatched from
+host every step. That is not how decode is meant to be driven.
 
-So the two dominant costs, 97% of e2e, are **implementation gaps, not hardware limits**:
+The reference is `demo/text_demo.py`, and our model already implements the tt_transformers
+Generator interface for it (`prepare_inputs_decode` / `ttnn_decode_forward` /
+`process_output_decode`). The pattern:
 
-1. **Trace the decode loop.** Prefill is traced and lands within 2% of its device time; decode
-   is not traced at all. At device time, 8 tokens would be ~56-62 ms rather than 934 ms.
-2. **Move the handoff on-device.** `sp_handoff.py` v1 goes through host torch tensors by
-   design. The last SP die already holds the full 4096-token KV and the GDN state -- the data
-   does not need to leave the mesh, only to be resharded.
+1. `prepare_inputs_decode(...)` once -> **persistent** device input buffers (`dev`).
+2. Throwaway eager pass to compile, then `begin_trace_capture` around `ttnn_decode_forward`,
+   with a **per-shard `ttnn.argmax` folded into the same trace**, then `end_trace_capture`.
+3. Per step: `copy_host_to_device` of only tokens/pos/rope into the persistent buffers (the
+   page table is constant and its address is baked into the trace), one `execute_trace`, and a
+   readback of the tiny argmax tensor rather than the full vocab.
 
-With both fixed, e2e is ~38 + small + ~60 = **~105 ms**, against **1358 ms today**.
+That is **11x**: 84.29 ms for 8 tokens instead of 934.35. Per-step is now
+`9.84 9.69 9.84 9.91 9.80 9.81 10.14 15.26` ms. The remaining ~3.5 ms/token over the 6.99 ms
+device figure is the host input update, the sync and the token readback.
 
-A third, smaller gap: the decode model must be built separately because the SP models are
-`sequence_parallel=True` and, under the replicated residual, hold full-width norm gamma while
-`decode_tp` feeds hidden-fractured activations (`Gamma's last padded dim needs to equal tile
-width`). That is why the handoff targets a distinct TP model at all.
+#### The handoff is now 69% of e2e, and it should not exist at all
+
+274.52 ms to move ~70 MB out to host and back. It is not bandwidth-bound: it is a per-layer
+Python loop of `ttnn.to_torch` -> host reshard -> `ttnn.from_torch`, 24 layers x several
+tensors, each its own round-trip. (An earlier estimate of ~35 ms from bytes/bandwidth was
+therefore ~8x too optimistic -- the wrong model of the cost entirely.)
+
+**In `demo/text_demo.py` there is no handoff.** Prefill and decode share one model and one
+paged KV cache, so decode simply continues. Ours needs a handoff only because SP prefill runs
+on four separate submesh models and decode on a fifth. But **the last SP die already holds the
+whole 4096-token KV and the final GDN state** -- the data never needs to leave the mesh.
+
+The blocker is not the data, it is the model config: `sp.models[-1]` is built
+`sequence_parallel=True`, and under the replicated residual its norms hold full-width gamma
+while `decode_tp` feeds hidden-fractured activations (`Gamma's last padded dim needs to equal
+tile width`). Make the last span's model decode-compatible -- or reshard on device instead of
+through host -- and e2e goes to roughly **38 + small + 84 = ~125 ms**.
 
 ## Per-layer cost, prefill and decode (measured 2026-09-23)
 
