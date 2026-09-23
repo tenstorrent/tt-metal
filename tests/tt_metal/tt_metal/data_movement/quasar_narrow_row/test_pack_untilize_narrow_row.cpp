@@ -40,6 +40,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
@@ -231,7 +232,139 @@ struct RunConfig {
     // steady-state rate; 1 removes the per-iteration re-arm, which is what
     // ScatterListDrainProbe needs to tell a drain race apart from an addressing bug.
     std::uint32_t compact_iterations = COMPACT_ITERATIONS;
+    // Rows this run compacts. 0 means all OUT_ROWS. A smaller value is a diagnostic: two rows
+    // is the minimum case for two scatter entries landing on the same destination slot.
+    std::uint32_t compact_rows = 0;
+    // Instead of pass/fail, decode which SOURCE row landed in each destination row and print
+    // the mapping. Turns "scatter-list is broken" into a specific claim. Always returns true.
+    bool mapping_dump = false;
 };
+
+// Decode where every destination row actually came from, and say what that means.
+//
+// This works only because the stimulus makes every datum name its own position: a datum is
+// 0x4000 | (r * pad_w + c), so its low 13 bits invert straight back to a (source row, source
+// column) pair. So instead of "1764 datums wrong" we can report the actual mapping the engine
+// performed, which is the difference between "scatter-list is broken" and a bug report.
+//
+// The three outcomes are diagnostic, and they point at different hardware:
+//   * a PERMUTATION with no repeats  -> entries were assigned to the wrong slots, but the
+//     destination pointer advanced the right number of times.
+//   * DUPLICATES, with the missing slots still holding the 0xA5A5 prefill -> two entries
+//     landed on the same destination and one overwrote the other. That is the shared
+//     auto-increment pointer losing a race, and it is the hypothesis this exists to test.
+//   * identity rows but a nonzero COLUMN offset -> the pointer is fine and the source address
+//     composition (SCATTER_BASE_ADDR + entry) is off.
+void dump_mapping(
+    const std::uint16_t* out, std::uint32_t rows, std::uint32_t matrix_w, std::uint32_t pad_w, const RunConfig& cfg) {
+    constexpr std::uint16_t STIMULUS_TAG = 0x4000;
+    constexpr std::uint16_t STIMULUS_MASK = 0x1FFF;
+    constexpr std::uint16_t PREFILL = 0xA5A5;
+
+    std::vector<int> src_row(rows, -1);  // -1 = never written, -2 = unrecognisable
+    std::vector<int> src_col(rows, 0);
+    std::vector<bool> contiguous(rows, true);
+
+    for (std::uint32_t r = 0; r < rows; r++) {
+        const std::uint16_t v0 = out[r * matrix_w];
+        if (v0 == PREFILL) {
+            continue;  // nothing was ever written here
+        }
+        if ((v0 & ~STIMULUS_MASK) != STIMULUS_TAG) {
+            src_row[r] = -2;
+            continue;
+        }
+        const std::uint32_t idx = v0 & STIMULUS_MASK;
+        src_row[r] = static_cast<int>(idx / pad_w);
+        src_col[r] = static_cast<int>(idx % pad_w);
+        // Did the WHOLE row come from one contiguous run, or is it stitched from pieces?
+        for (std::uint32_t c = 1; c < matrix_w; c++) {
+            const std::uint16_t want = static_cast<std::uint16_t>(STIMULUS_TAG | ((idx + c) & STIMULUS_MASK));
+            if (out[r * matrix_w + c] != want) {
+                contiguous[r] = false;
+                break;
+            }
+        }
+    }
+
+    std::uint32_t identity = 0, unwritten = 0, unrecognised = 0, fragmented = 0;
+    std::vector<int> times_used(rows, 0);
+    std::string detail;
+    for (std::uint32_t r = 0; r < rows; r++) {
+        const int sr = src_row[r];
+        if (sr == -1) {
+            unwritten++;
+        } else if (sr == -2) {
+            unrecognised++;
+        } else {
+            if (sr >= 0 && static_cast<std::uint32_t>(sr) < rows) {
+                times_used[sr]++;
+            }
+            if (sr == static_cast<int>(r) && src_col[r] == 0 && contiguous[r]) {
+                identity++;
+            }
+            if (!contiguous[r]) {
+                fragmented++;
+            }
+        }
+        // Keep the printout readable: the first 12 rows always, then anything unexpected.
+        const bool odd = !(sr == static_cast<int>(r) && src_col[r] == 0 && contiguous[r]);
+        if (r < 12 || odd) {
+            detail += "    dst[" + std::to_string(r) + "] <- ";
+            if (sr == -1) {
+                detail += "UNWRITTEN (still 0xA5A5)";
+            } else if (sr == -2) {
+                detail += "not a stimulus datum (0x" + std::to_string(out[r * matrix_w]) + ")";
+            } else {
+                detail += "src row " + std::to_string(sr) + " col " + std::to_string(src_col[r]);
+                if (!contiguous[r]) {
+                    detail += "  [row is NOT one contiguous run]";
+                }
+            }
+            detail += "\n";
+        }
+    }
+
+    std::uint32_t duplicated = 0, never_used = 0;
+    std::string collisions;
+    for (std::uint32_t r = 0; r < rows; r++) {
+        if (times_used[r] > 1) {
+            duplicated++;
+            collisions += " " + std::to_string(r) + "x" + std::to_string(times_used[r]);
+        } else if (times_used[r] == 0) {
+            never_used++;
+        }
+    }
+
+    const char* conclusion =
+        duplicated > 0     ? "COLLISIONS -- two entries landed on the same destination slot"
+        : unwritten > 0    ? "GAPS -- some destination rows were never written"
+        : fragmented > 0   ? "FRAGMENTED -- a destination row was stitched from more than one source run"
+        : identity == rows ? "IDENTITY -- the mapping is exactly right"
+                           : "PERMUTATION/OFFSET -- every slot written once, but from the wrong place";
+
+    log_info(
+        tt::LogTest,
+        "MAPPING {} rows, engine={} ch={} matrix_w={} pad_w={} iters={}\n"
+        "  verdict: {}\n"
+        "  identity {}, unwritten {}, unrecognised {}, fragmented {}, "
+        "source rows used twice or more: {}{}, source rows never used: {}\n{}",
+        rows,
+        engine_name(cfg.engine_mode),
+        cfg.num_channels,
+        matrix_w,
+        pad_w,
+        cfg.compact_iterations,
+        conclusion,
+        identity,
+        unwritten,
+        unrecognised,
+        fragmented,
+        duplicated,
+        collisions,
+        never_used,
+        detail);
+}
 
 // Builds and runs the two-stage program, then checks the dense output datum for datum.
 // Returns true iff the narrow-row matrix is exactly right.
@@ -246,7 +379,9 @@ bool run_narrow_row(
     const std::uint32_t matrix_w = (ct_dim - 1) * TILE_W + cfg.last_tile_w;  // dense row, datums
     const std::uint32_t pad_row_bytes = pad_w * DATUM_BYTES;
     const std::uint32_t out_row_bytes = matrix_w * DATUM_BYTES;
-    const std::uint32_t out_bytes = OUT_ROWS * out_row_bytes;
+    // Rows this run actually compacts; the DFB handshake always covers the full OUT_ROWS.
+    const std::uint32_t compact_rows = cfg.compact_rows != 0 ? cfg.compact_rows : OUT_ROWS;
+    const std::uint32_t out_bytes = compact_rows * out_row_bytes;
 
     const std::uint32_t src_addr = buffers.src_dram->address();
     const std::uint32_t out_addr = buffers.out_l1->address();
@@ -286,7 +421,7 @@ bool run_narrow_row(
     // host can build the list without knowing where the DFB landed. Entries are 8 B and the
     // engine takes the low 32 bits (resolved empirically; the encoding is not documented).
     std::vector<std::uint32_t> list_words(LIST_SLOT_BYTES / sizeof(std::uint32_t), 0);
-    for (std::uint32_t r = 0; r < OUT_ROWS; r++) {
+    for (std::uint32_t r = 0; r < compact_rows; r++) {
         list_words[r * 2] = r * pad_row_bytes;  // low word of an 8 B entry; high word stays 0
     }
     tt_metal::detail::WriteToDeviceL1(device, CORE, list_addr, list_words);
@@ -347,6 +482,7 @@ bool run_narrow_row(
                      "pad_row_bytes",
                      "out_row_bytes",
                      "num_rows",
+                     "dfb_rows",
                      "engine_mode",
                      "dest_coords",
                      "max_packet_bytes",
@@ -382,7 +518,8 @@ bool run_narrow_row(
                  {"list_addr", list_addr},
                  {"pad_row_bytes", pad_row_bytes},
                  {"out_row_bytes", out_row_bytes},
-                 {"num_rows", OUT_ROWS},
+                 {"num_rows", compact_rows},
+                 {"dfb_rows", OUT_ROWS},
                  {"engine_mode", cfg.engine_mode},
                  {"dest_coords", packed_coords},
                  {"max_packet_bytes", max_packet_bytes},
@@ -407,6 +544,11 @@ bool run_narrow_row(
     std::vector<std::uint32_t> out_words;
     tt_metal::detail::ReadFromDeviceL1(device, CORE, out_addr, read_bytes, out_words);
     const auto* out_datums = reinterpret_cast<const std::uint16_t*>(out_words.data());
+
+    if (cfg.mapping_dump) {
+        dump_mapping(out_datums, compact_rows, matrix_w, pad_w, cfg);
+        return true;  // an instrument, not a verdict
+    }
 
     std::uint32_t bad = 0;
     std::uint32_t first_bad_r = 0, first_bad_c = 0;
@@ -796,6 +938,73 @@ TEST_F(QuasarNarrowRowUntilize, ScatterListDrainProbe) {
         passes,
         total);
     EXPECT_EQ(passes, total) << "single-shot scatter-list is also wrong -- the bug is not the re-arm race";
+}
+
+// WHERE DID EACH ROW ACTUALLY COME FROM? The experiment that settles the scatter-list bug.
+//
+// What is known: scatter-list is wrong at 8 channels every time and at 1 channel about once in
+// four, while the per-row engine -- same concurrency, up to 32 transactions in flight across
+// the same 8 VCs -- is correct in every run. So iDMA moving many rows at once is not the
+// problem. The one structural difference is WHO computes the destination address:
+//
+//   per-row       the RISC computes each destination explicitly, via the address generator
+//   scatter-list  ONE shared pointer that the hardware auto-increments (dest_addr_inc_en)
+//
+// If that shared pointer is advanced on dispatch rather than on completion, or two backend
+// engines read it before either increments, two entries land on the same destination slot and
+// one overwrites the other. That would be genuine write-over-write, and it fits: worse with
+// more concurrency, absent when the RISC supplies the addresses.
+//
+// Against it: the failure is suspiciously deterministic -- exactly half the rows wrong,
+// repeatedly, at the same count. A pure race should vary. The mapping dump separates these:
+// duplicates plus untouched slots means collisions; a clean permutation means misassignment
+// with the pointer advancing correctly; identity rows at a nonzero column offset means the
+// pointer is fine and the source address composition is wrong.
+//
+// Runs with compact_iterations = 1 so exactly one transaction's work is on screen, and leads
+// with the per-row engine as a CONTROL: if that does not print IDENTITY, the instrument is
+// broken and nothing below it means anything.
+TEST_F(QuasarNarrowRowUntilize, ScatterListMapping) {
+    using namespace unit_tests::dm::quasar_narrow_row;
+    if (should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
+
+    auto probe = [&](RunConfig cfg) {
+        cfg.compact_iterations = 1;
+        cfg.mapping_dump = true;
+        run_narrow_row(devices_[0], buffers, cfg);
+    };
+
+    // CONTROL. Known-good engine, same shape. Must report IDENTITY.
+    probe({.ct_dim = 8, .last_tile_w = LAST_W_252, .engine_mode = ENGINE_IDMA_PER_ROW});
+    probe({.ct_dim = 8, .last_tile_w = LAST_W_252, .engine_mode = ENGINE_IDMA_PER_ROW, .num_channels = CHANNELS_ALL});
+
+    // The failing configuration, at both channel counts.
+    probe({.ct_dim = 8, .last_tile_w = LAST_W_252, .engine_mode = ENGINE_IDMA_SCATTER});
+    probe({.ct_dim = 8, .last_tile_w = LAST_W_252, .engine_mode = ENGINE_IDMA_SCATTER, .num_channels = CHANNELS_ALL});
+
+    // Two rows: the minimum case for two entries colliding. If the mapping is wrong here it is
+    // as small as a failure can get, and if it is right, whatever goes wrong needs depth.
+    probe(
+        {.ct_dim = 8,
+         .last_tile_w = LAST_W_252,
+         .engine_mode = ENGINE_IDMA_SCATTER,
+         .num_channels = CHANNELS_ALL,
+         .compact_rows = 2});
+    probe(
+        {.ct_dim = 8,
+         .last_tile_w = LAST_W_252,
+         .engine_mode = ENGINE_IDMA_SCATTER,
+         .num_channels = CHANNELS_ALL,
+         .compact_rows = 4});
+
+    // No compaction at all: out_row_bytes == pad_row_bytes, so the gather is a straight copy
+    // and the destination stride equals the source stride. Separates "the stride mismatch
+    // matters" from "the pointer is broken regardless of what it is stepping by".
+    probe({.ct_dim = 8, .last_tile_w = TILE_W, .engine_mode = ENGINE_IDMA_SCATTER});
+    probe({.ct_dim = 8, .last_tile_w = TILE_W, .engine_mode = ENGINE_IDMA_SCATTER, .num_channels = CHANNELS_ALL});
 }
 
 }  // namespace tt::tt_metal

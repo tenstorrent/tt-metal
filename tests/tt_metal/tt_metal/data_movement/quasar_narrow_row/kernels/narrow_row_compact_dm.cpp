@@ -157,7 +157,11 @@ void kernel_main() {
     const std::uint32_t list_addr = get_arg(args::list_addr);          // scatter list, L1
     const std::uint32_t pad_row_bytes = get_arg(args::pad_row_bytes);  // ct_dim * 32 * datum_bytes
     const std::uint32_t out_row_bytes = get_arg(args::out_row_bytes);  // matrix_w * datum_bytes
-    const std::uint32_t num_rows = get_arg(args::num_rows);            // 32 for a 32-row tile-row
+    const std::uint32_t num_rows = get_arg(args::num_rows);            // rows this run actually compacts
+    // Rows stage 1 pushed, which is always the full 32 -- kept separate from num_rows so a
+    // diagnostic can compact a SUBSET (e.g. 2 rows, the minimum case for two entries landing
+    // on the same destination slot) without desynchronising the DFB handshake.
+    const std::uint32_t dfb_rows = get_arg(args::dfb_rows);
     const std::uint32_t engine_mode = get_arg(args::engine_mode);
     const std::uint32_t num_iterations = get_arg(args::num_iterations);
     const std::uint32_t dest_coords = get_arg(args::dest_coords);  // packed (x << 16) | y
@@ -184,10 +188,11 @@ void kernel_main() {
 
     Noc noc(noc_index);
 
-    // Wait for stage 1's whole 32-row block, then take its base. The DFB was pushed exactly
-    // once and never wraps, so the 32 entries are contiguous from the read pointer.
+    // Wait for stage 1's whole block, then take its base. The DFB was pushed exactly once and
+    // never wraps, so the entries are contiguous from the read pointer. Always the full
+    // dfb_rows, even when this run only compacts a subset of them.
     DataflowBuffer pad(dfb::pad);
-    pad.wait_front(num_rows);
+    pad.wait_front(dfb_rows);
     const std::uint32_t src_base = l1_phys(pad.get_read_ptr());
 
     // ---- setup, outside the timed region ------------------------------------------------
@@ -255,7 +260,7 @@ void kernel_main() {
         init_wr_cmd_buf(noc_local_xy());
     }
 
-    pad.pop_front(num_rows);
+    pad.pop_front(dfb_rows);
 
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Number of transactions", num_iterations);
