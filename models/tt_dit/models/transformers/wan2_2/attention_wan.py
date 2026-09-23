@@ -173,7 +173,7 @@ class WanAttention(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
-        self.sdpa_kwargs = {"compute_kernel_config": self.sdpa_compute_kernel_config}
+        self.sdpa_recipe_kwargs = None
         if sdpa_precision is not None:
             self.use_exp_ring_sdpa = False
             self.sdpa_program_config = ttnn.SDPAProgramConfig(
@@ -182,7 +182,7 @@ class WanAttention(Module):
             self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.sdpa_worker_grid, q_chunk_size=256, k_chunk_size=512
             )
-            self.sdpa_kwargs = {
+            self.sdpa_recipe_kwargs = {
                 "precision": sdpa_precision,
                 "inputs_prepared": sdpa_precision == ttnn.SDPAPrecision.LOW_PRECISION,
             }
@@ -333,6 +333,12 @@ class WanAttention(Module):
                 dtype=dtype,
             )
         return output
+
+    def _self_sdpa_kwargs(self) -> dict:
+        # Read the compute config at call time: apply_quant_config replaces it after construction.
+        if self.sdpa_recipe_kwargs is not None:
+            return self.sdpa_recipe_kwargs
+        return {"compute_kernel_config": self.sdpa_compute_kernel_config}
 
     def forward(
         self,
@@ -500,7 +506,7 @@ class WanAttention(Module):
                         joint_strategy="rear",
                         logical_n=N,
                         program_config=self.ring_sdpa_program_config,
-                        **self.sdpa_kwargs,
+                        **self._self_sdpa_kwargs(),
                         dim=2,
                         multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                             self.parallel_config.sequence_parallel.mesh_axis
@@ -520,7 +526,7 @@ class WanAttention(Module):
                     v_BHNE,
                     is_causal=False,
                     program_config=self.sdpa_program_config,
-                    **self.sdpa_kwargs,
+                    **self._self_sdpa_kwargs(),
                 )
         else:
             # Cross attention
