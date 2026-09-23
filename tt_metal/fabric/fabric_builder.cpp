@@ -15,11 +15,15 @@
 namespace tt::tt_fabric {
 
 FabricBuilder::FabricBuilder(
-    tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context) :
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program,
+    FabricContext& fabric_context,
+    CoreType dispatch_core_type) :
     device_(device),
     program_(program),
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
+    dispatch_core_type_(dispatch_core_type),
     local_node_(fabric_context.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
     // Determine if this device has tunneling dispatch
@@ -101,8 +105,8 @@ void FabricBuilder::create_routers() {
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
 
-            auto router_builder =
-                FabricRouterBuilder::create(fabric_context_, device_, program_, local_node_, location);
+            auto router_builder = FabricRouterBuilder::create(
+                fabric_context_, dispatch_core_type_, device_, program_, local_node_, location);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }
