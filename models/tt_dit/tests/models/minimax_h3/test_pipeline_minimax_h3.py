@@ -145,7 +145,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
         mesh_device=mesh_device,
         weights_dir=weights,
         dit_fsdp=False,
-        vae_output_type="float",  # this gate reads the (1, 3, F, H, W) float contract; yuv420 is the deployment default
+        vae_output_type="float",
     )
 
     output = run_warm_generation(

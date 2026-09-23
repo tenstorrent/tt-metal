@@ -246,9 +246,6 @@ DECODE_STAGE_MODES = {
     "uint8": {"pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD), "readback_uint8": True},
     # Stitch, clamp and colour-convert on device; read one planar canvas at 1.5 bytes/pixel.
     "yuv420": {"pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD), "device_stitch": True},
-    # Same, but the tile cross-fade exchanges halo strips with grid neighbours instead of
-    # all-gathering the wave -- the opt-in path whose perf pass is pending (numerics gated
-    # bit-identical to gather on this mesh).
     "yuv420_neighbor": {
         "pixel_denorm": (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
         "device_stitch": True,
@@ -337,23 +334,10 @@ def test_decode_stage(mesh_device, seconds, mode):
 
 # ---- whole-stage `encode` timing, per conditioning case --------------------------------------
 #
-# `test_decode_stage`'s analog for the conditioning encoders: times the stage the pipeline bills
-# to "vae_encode" -- host prep, upload, device forward, readback, stitch -- through the exact
-# production entry points (`encode_keyframes` for fl2va, `encode_references` for ref2va), and
-# prints the per-phase split the encoder counters in `_run_encoder_units` collect. Measurement
-# driver, not a gate: asserts row counts, never wall time.
-#
-# The four cases map onto the tasks being optimized:
-#   fl2va_1key         one 1344x768 keyframe   -> 28 tile units, one wave       (taps=1)
-#   fl2va_2key         first + last keyframes  -> two sequential encode_clip calls
-#   ref2va_video       124-frame 768P video    -> 8 clips x 28 tiles = 224 units, 7 waves (taps=3)
-#   ref2va_video_audio the same video carrying a 5.17 s soundtrack through the audio encoder
-#
-#   export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3
+# Times the "vae_encode" stage through the production entry points; asserts row counts, not wall time.
 #   pytest models/tt_dit/tests/models/minimax_h3/test_performance_vae_minimax_h3.py -k encode_stage -s
 
-# 16384, not the decode stage's 65536: the taps=3 video encoder (only ref2va reaches it) clashes
-# with L1 above it -- same override the ref2va e2e suite carries.
+# l1_small_size 16384: the taps=3 video encoder clashes with L1 above it.
 ENCODE_STAGE_MESH = [
     pytest.param(
         (4, 8),
@@ -367,8 +351,8 @@ ENCODE_STAGE_MESH = [
 ]
 
 ENCODE_STAGE_WIDTH, ENCODE_STAGE_HEIGHT = 1344, 768
-ENCODE_STAGE_FRAMES = 124  # 5 s at 24 fps; already 17n + 5, so the reference trim keeps all of it
-ENCODE_STAGE_AUDIO_SAMPLES = int(ENCODE_STAGE_FRAMES / 24 * 32000)  # 165333, the docstring's 5.1667 s
+ENCODE_STAGE_FRAMES = 124
+ENCODE_STAGE_AUDIO_SAMPLES = int(ENCODE_STAGE_FRAMES / 24 * 32000)
 
 ENCODE_STAGE_CASES = ("fl2va_1key", "fl2va_2key", "ref2va_video", "ref2va_video_audio")
 
@@ -413,13 +397,11 @@ def _encode_stage_audio_encoder(mesh_device, ccl_manager) -> "MiniMaxH3AudioEnco
         latent_channels=config["latent_channels"],
         num_attention_heads=config["num_attention_heads"],
         mesh_device=mesh_device,
-        split_mode="weight",  # the pipeline's production settings; see _prepare_audio_encoder
+        split_mode="weight",
         stereo_split_axis=0,
         parallel_config=ParallelFactor(factor=tuple(mesh_device.shape)[1], mesh_axis=1),
         ccl_manager=ccl_manager,
     )
-    # The encoder's four prefixes, which is what keeps the load strict (the converted dict
-    # carries both halves' tensors) -- same filter `_prepare_audio_encoder` applies.
     encoder.load_torch_state_dict(
         {k: v for k, v in converted.items() if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))}
     )
@@ -446,11 +428,6 @@ def test_encode_stage(mesh_device, case):
 
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
-    # `profile` stays False: its per-forward sync would serialize the encode wave streaming and
-    # measure a schedule production never runs. The cost is attribution -- `device` times the
-    # enqueue and the wait lands in `readback` -- so flip it on only to chase a split, not a total.
-    # `pixel_norm` and bf16 match the pipeline: conv_in carries the normalize, pixels upload
-    # as uint8, and the encoders compute bf16 (4.2x the fp32 wave at PCC 99.998%).
     vae = MiniMaxH3Vae(
         config,
         task="ref2va",
@@ -467,13 +444,10 @@ def test_encode_stage(mesh_device, case):
     audio_seconds = {"audio_encode": 0.0}
 
     if case.startswith("fl2va"):
-        # Image encoder loads on first encode_clip; the warm `run()` below is that first use.
         image = create_fractal_image(ENCODE_STAGE_WIDTH, ENCODE_STAGE_HEIGHT)
         keyframes = [image]
         if case == "fl2va_2key":
             keyframes.append(Image.fromarray(255 - np.asarray(image)))
-        # One latent frame per keyframe; two keyframes are two sequential encode_clip calls,
-        # exactly `encode_keyframes`' production loop.
         expected_rows = len(keyframes) * rows_per_frame
 
         def run():
@@ -482,7 +456,6 @@ def test_encode_stage(mesh_device, case):
             )
 
     else:
-        # Video encoder loads on first encode; the warm `run()` below is that first use.
         audio_config = load_config(weights_subdir("audio_vae")) if weights_subdir("audio_vae") else None
         if audio_config is None:
             pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
@@ -504,7 +477,6 @@ def test_encode_stage(mesh_device, case):
                 audio_seconds["audio_encode"] += time.perf_counter() - mark
                 return out
 
-        # 124 frames pad to 8 clips of 17; token_drop then leaves the 17n+5 -> 5n+2 count.
         expected_rows = (5 * 8 - config.token_drop) * rows_per_frame
 
         def run():
@@ -521,7 +493,7 @@ def test_encode_stage(mesh_device, case):
                 raw_pixels=True,
             )
 
-    run()  # warm: compiles every program and fills lazy allocations, off the record
+    run()
     vae._profile = vae._empty_profile()
     audio_seconds["audio_encode"] = 0.0
 

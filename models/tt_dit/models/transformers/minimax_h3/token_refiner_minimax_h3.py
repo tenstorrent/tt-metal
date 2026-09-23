@@ -23,9 +23,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
 
     Much simpler than `MiniMaxH3TransformerBlock`: no AdaLN modulation and no rotary embedding.
     The residual updates are unconditional (`x = x + attn(norm1(x))`, `x = x + ff(norm2(x))`).
-    The only masking is the optional `cu_window_seqlens` window boundaries, which fence the true
-    tokens of a fixed-capacity text buffer off from its pad tail; an exactly-sized text stream
-    passes None.
+    The only masking is the optional `cu_window_seqlens`, which fences off a padded text buffer's tail.
 
     The text stream is replicated on the SP axis and only fractured on TP. The refiner runs before the
     packed sequence is assembled and fractured, so every SP device holds the whole text stream and
@@ -103,7 +101,6 @@ class MiniMaxH3TokenRefinerBlock(Module):
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
-        # M (the sequence length) sets the block's per_core_M and is only known at forward time.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -112,8 +109,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
 
     def forward(self, prompt_1BLP: ttnn.Tensor, cu_window_seqlens: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """prompt_1BLP: replicated on SP, fractured hidden_size on TP. Same on the way out.
-        cu_window_seqlens: optional `[0, true_len, L]` window boundaries fencing off the pad tail
-        (1-D integer device tensor, see `MiniMaxH3Attention.forward`); None when unpadded."""
+        cu_window_seqlens: optional `[0, true_len, L]` window boundaries fencing off the pad tail."""
         prompt_1BLP = ttnn.add(prompt_1BLP, self.attn(self.norm1(prompt_1BLP), cu_window_seqlens=cu_window_seqlens))
 
         normed = self.norm2(prompt_1BLP)
@@ -121,7 +117,6 @@ class MiniMaxH3TokenRefinerBlock(Module):
         # row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
             normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
-        # ff1's block depends on per_core_M (hence M = the sequence length), only known here.
         ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
         ff_out = self.ff(
             normed,
@@ -182,8 +177,7 @@ class MiniMaxH3TokenRefiner(Module):
 
     def forward(self, prompt_1BLP: ttnn.Tensor, cu_window_seqlens: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """prompt_1BLP: replicated on SP, fractured hidden_size on TP. Same on the way out.
-        cu_window_seqlens: optional `[0, true_len, L]` window boundaries fencing off the pad tail
-        (1-D integer device tensor, see `MiniMaxH3Attention.forward`); None when unpadded."""
+        cu_window_seqlens: optional `[0, true_len, L]` window boundaries fencing off the pad tail."""
         for block in self.refiner_blocks:
             prompt_1BLP = block(prompt_1BLP, cu_window_seqlens=cu_window_seqlens)
         return self.final_norm(prompt_1BLP)

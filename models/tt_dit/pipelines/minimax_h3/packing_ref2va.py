@@ -21,11 +21,10 @@ audio/video rotary clock. Reordering the same references is a different request.
 Two properties separate this from ``fl2va``:
 
 * **A reference never binds the target geometry.** An image is resized by
-  ``reference_resize_mode`` (default ``match``: area-match the target canvas, upscaling
-  included); a video onto the 768 px canvas of its own aspect ratio. Each keeps its own
-  aspect-normalized spatial grid. A 2048x2048 reference (the Hugging Face
-  ``diffusers`` policy) contributes 4096 vision tokens to the text stream *and* 4096
-  video condition rows, so a ref2va packed sequence runs 1.2x-3.0x t2va's.
+  ``reference_resize_mode``; a video onto the 768 px canvas of its own aspect ratio. Each
+  keeps its own aspect-normalized spatial grid. One 2048x2048 reference contributes 4096
+  vision tokens to the text stream *and* 4096 video condition rows, so a ref2va packed
+  sequence runs 1.2x-3.0x t2va's.
 * **A video reference packs its soundtrack rows immediately before its own video rows**,
   sharing one rotary origin, as the generated audio and video do.
 
@@ -355,9 +354,7 @@ def resolve_reference_image_size(
 ) -> tuple[int, int]:
     """``(height, width)`` a reference image is encoded at, axes rounded to a multiple of 32.
 
-    ``match`` (default) scales so the pixel area matches the target canvas, upscaling
-    included. ``max`` caps the short edge at 2048 without upscaling. ``diffusers``
-    always sets the short edge to 2048, upscaling included -- Hugging Face Diffusers.
+    ``match`` area-matches the target canvas; ``max`` caps the short edge at 2048; ``diffusers`` sets it to 2048.
     """
     if width <= 0 or height <= 0:
         raise ValueError(f"a reference image must have a positive size, got {width}x{height}")

@@ -285,12 +285,7 @@ class MiniMaxH3Attention(Module):
         7.81 ms. Slot efficiency is a good candidate generator but not a predictor -- q=416 at 10s has
         the best slot efficiency of any k=256 point there (97.6%) and measured the worst (28.39 ms).
 
-        `windowed` caps k at 256: windowed SDPA synthesizes its mask on device into a circular
-        buffer of q_chunk x k_chunk tiles, double-buffered, in Float16_b (the streaming compute
-        path cannot decode block-float masks) -- at (256, 512) that is 512 KB on top of a CB budget
-        the maskless chunk sizes were tuned to fill, past the 1.5 MB L1 limit. (256, 256) leaves
-        ~490 KB headroom. Only the token refiner runs windowed, once per request, so the smaller k
-        is not worth sweeping.
+        `windowed` caps k at 256 so the on-device mask CB fits in L1.
         """
         key = (seq_local, ring, windowed)
         if key not in self._sdpa_program_configs:
@@ -356,12 +351,10 @@ class MiniMaxH3Attention(Module):
         re-reads each pass's Q every ring iteration. The op selects the mode itself from this same
         arithmetic; the model only needs it to know which (q, k) shapes are buildable.
 
-        The state FIFO (c_6/c_11/c_7) holds `p + 1` entries: the factory forces its one-chunk spare
-        on the logical_n-tensor path, which H3 always uses. This mirror MUST match the factory's
-        `state_fifo_entries` or the search picks (q, k) whose CBs overflow.
+        The state FIFO holds `p + 1` entries; this MUST match the factory's `state_fifo_entries`.
         """
         dh_t = self.head_dim // ttnn.TILE_SIZE
-        fifo_entries = p + 1  # factory's forced one-chunk spare
+        fifo_entries = p + 1
         tiles = (
             (p if resident_q else 1) * sq_t * dh_t  # c_0 Q: one chunk per pass, or one when streamed
             + 4 * sk_t * dh_t  # c_1/c_14 K and c_2/c_15 V, double buffered
@@ -472,13 +465,8 @@ class MiniMaxH3Attention(Module):
         addcmul_residual/addcmul_gate: when both are given, the gated residual
             `addcmul_residual + to_out(...) * addcmul_gate` is folded into the to_out matmul's
             epilogue instead of running as separate ops. Both must be TP-fractured like the output.
-        cu_window_seqlens: cumulative window boundaries (1-D int32/uint32 ROW_MAJOR device tensor,
-            `[0, ..., N]`) for the plain-SDPA (non-ring) path only: SDPA's windowed mode restricts
-            attention to block-diagonal windows, with the mask synthesized on device from the
-            boundaries. The token refiner runs over a fixed-capacity text buffer and passes
-            `[0, true_len, N]`, so real tokens attend only to real tokens; boundary content is
-            runtime data, so per-request lengths never recompile. The ring paths mask their pad
-            tail via `logical_n` instead and take no windows.
+        cu_window_seqlens: cumulative block-diagonal window boundaries `[0, ..., N]` (1-D int device
+            tensor), plain-SDPA (non-ring) path only.
 
         Returns the attention output with the same distribution as the input.
         """
@@ -517,7 +505,7 @@ class MiniMaxH3Attention(Module):
             default_block_size=agmm_block_size(
                 self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
             ),
-            force_transpose=False,  # let the op pick by M>N; H3 qkv is M<N -> non-transposed
+            force_transpose=False,
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -634,7 +622,7 @@ class MiniMaxH3Attention(Module):
             default_block_size=agmm_block_size(
                 self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
             ),
-            force_transpose=False,  # let the op pick by M>N; to_out is M>N -> transposed
+            force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
         )

@@ -76,10 +76,7 @@ from .packing_ref2va import (
 # divisibility instead -- so the padding happens here, on host.
 MINIMAX_H3_AUDIO_HOP = 800
 
-# The longest soundtrack a request can carry: the 15 s frame budget aligns up to 362 frames
-# (17n + 5), so `prepare_reference_waveform` keeps up to 362/24 = 15.083 s of audio, which is
-# 603.33 hops. Ceil, not `audio_latent_num_frames`'s round -- that is the TARGET grid; the
-# reference encoder emits ceil(samples / hop) latents.
+# Latent count of the longest soundtrack a request can carry (15 s aligned up to 362 frames -> 604 hops).
 MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS = math.ceil(
     align_num_frames(round(MINIMAX_H3_MAX_DURATION * MINIMAX_H3_FPS))
     * MINIMAX_H3_AUDIO_LATENTS_PER_SECOND
@@ -216,24 +213,14 @@ def normalize_reference_pixels(frames: np.ndarray, device: torch.device | str | 
 
 
 def raw_reference_pixels(frames: np.ndarray, device: torch.device | str | None = None) -> torch.Tensor:
-    """``(T, H, W, 3)`` uint8 frames to ``(1, 3, T, H, W)`` raw **uint8** pixels.
-
-    The un-normalized twin of :func:`normalize_reference_pixels`, for a device VAE built with
-    ``pixel_norm``: its conv_in carries the ImageNet affine, so the pixels stay 1 byte each
-    from the media decoder to the PCIe transfer and the host runs no float pass at all.
-    """
+    """``(T, H, W, 3)`` uint8 frames to ``(1, 3, T, H, W)`` raw **uint8** pixels, for a ``pixel_norm`` VAE."""
     return torch.from_numpy(np.ascontiguousarray(frames)).to(device).permute(3, 0, 1, 2)[None]
 
 
 def pad_waveform_to_max_duration(waveform: torch.Tensor) -> torch.Tensor:
     """Right-pad a waveform with zeros to the one fixed encode length, 604 hops.
 
-    Every reference soundtrack encodes at this single shape, so the audio encoder compiles
-    exactly once -- during warmup -- and, when T-sharded, never first-runs a collective at a
-    novel shape under live traces. The encoder is right-pad invariant by construction (the
-    symmetric trunk re-zeroes its pad tail per op, the ``pre_block`` attention is causal), so
-    trimming the pad latents after the encode recovers the unpadded answer;
-    ``test_encode_pad_to_max_then_trim`` gates that contract.
+    The encoder is right-pad invariant, so trimming the pad latents afterwards recovers the unpadded answer.
     """
     samples = waveform.shape[-1]
     target = MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS * MINIMAX_H3_AUDIO_HOP
@@ -288,7 +275,6 @@ def encode_references(
             else:
                 # Snapped DOWN to a 17n + 5 the VAE encodes without padding.
                 frames = reference.frames[: trim_reference_num_frames(reference.frames.shape[0])]
-            # raw_pixels: uint8 straight through, for encoders whose conv_in folds the normalize.
             to_pixels = raw_reference_pixels if raw_pixels else normalize_reference_pixels
             pixels = to_pixels(frames, device=device)
             # A single frame takes the spatial encoder alone; a video takes the temporal

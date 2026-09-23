@@ -354,40 +354,19 @@ def build_rope_tables(
     return freqs.cos(), freqs.sin()
 
 
-# Roles a row can take, in canonical slot order. Each maps to one noise level per step, and a
-# row's role never changes across a request, so the row->slot map is built once. Slot count is
-# fixed -- duplicates included -- because tracing demands a constant shape. When two roles share
-# a value (video == audio at step 0, both `t = 0`), the device embeds both slots rather than
-# merging. `time_embedder` is a batch-sensitive GEMM, so that is a deliberate numerics choice.
+# Roles a row can take, in canonical slot order; slot count stays fixed (no dedup) so the traced shape is constant.
 MINIMAX_H3_ADALN_ROLES = ("video", "audio", "condition_video", "condition_audio")
 
 
 def build_slot_routing(
     layout: MiniMaxH3PackedSequence, roles: tuple[str, ...] | None = None
 ) -> tuple[torch.Tensor, tuple[str, ...]]:
-    """Fixed per-row AdaLN slot assignment.
+    """Fixed per-row AdaLN slot assignment, returned as ``(row_slot, roles)``.
 
-    A row's noise level is fixed by its role -- generated video and text at the video level,
-    generated audio at the audio level, conditioning rows pinned at their augmentation level -- so
-    the row->slot map is constant for the whole request. With ``roles=None``, roles with no rows are
-    dropped and a request carries the minimum fixed slot count: two for ``t2va``, three for
-    ``fl2va`` and four for ``ref2va``. Duplicate levels stay as separate slots; merging would change
-    ``time_embedder``'s batch mid-request and break the trace.
-
-    ``roles`` pins the slot set instead: the returned roles are exactly the given tuple, whether or
-    not each role has rows, so the slot count -- and every downstream shape it drives (the
-    ``timestep`` tensor, ``temb``, the modulation tables) -- is constant across requests and one
-    trace serves them all. A pinned-but-absent role's table rows are computed and never gathered,
-    so numerics are identical (the same argument that keeps duplicate levels as separate slots).
-    A layout with rows for a role outside the pinned set is an error, not a silent mis-slot.
-
-    Returns ``(row_slot, roles)``: ``row_slot[r]`` is row ``r``'s slot index and ``roles`` names
-    each slot in order, so :func:`slot_levels` builds the matching per-step level vector.
+    ``roles=None`` keeps only roles with rows; a given ``roles`` pins the slot set so one trace serves every request.
     """
     num_cond_video = layout.num_condition_video_rows
     num_cond_audio = layout.num_condition_audio_rows
-    # Video and audio always carry generated rows; the two conditioning slots exist only when the
-    # layout has rows to fill them.
     present = {
         "video": True,
         "audio": True,
@@ -403,8 +382,6 @@ def build_slot_routing(
             raise ValueError(msg)
     slot = {role: index for index, role in enumerate(roles)}
 
-    # Default (text + generated video) at the video slot, then override the conditioning and
-    # generated-audio spans.
     row_slot = torch.full((layout.sequence_length,), slot["video"], dtype=torch.long)
     if num_cond_video:
         row_slot[layout.video_indices[:num_cond_video]] = slot["condition_video"]
@@ -422,13 +399,7 @@ def slot_levels(
     condition_video_timestep: float | None = None,
     condition_audio_timestep: float | None = None,
 ) -> torch.Tensor:
-    """The per-step noise level of each slot, ordered to match :func:`build_slot_routing`'s roles.
-
-    Fixed length (``len(roles)``) for the whole request -- no dedup -- so the modulation table the
-    blocks project from has a constant shape and the step is traceable. Two slots may hold equal
-    levels (video and audio both ``t = 0`` at step 0); they stay distinct rather than merged.
-    Conditioning values are required only for roles that are present.
-    """
+    """The per-step noise level of each slot, ordered to match :func:`build_slot_routing`'s roles (no dedup)."""
     values = {
         "video": video_timestep,
         "audio": audio_timestep,

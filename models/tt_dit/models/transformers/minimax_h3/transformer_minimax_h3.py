@@ -144,64 +144,15 @@ class MiniMaxH3Transformer3DModel(Module):
     ----------------------
     The reference builds the packed sequence with `index_copy` at caller-supplied row indices. A
     general scatter across an already-fractured sequence-parallel tensor would need cross-device
-    movement, so the assembly happens *before* fracturing instead -- and, so that every dispatched
-    program has a request-independent shape (the property that lets one ttnn trace serve every
-    request in a padded-length bucket), it is a **row gather over fixed-capacity streams** rather
-    than a per-request concat:
-
-    - Every input stream arrives at a fixed row capacity, a multiple of `TILE_SIZE`, with the true
-      rows leading and a zero (or stale, equally ignored) tail: `prompt_1BLP` at `L_cap`,
-      `condition_video_1BKC` / `condition_audio_1BKC` at their per-modality capacities,
-      `audio_1BAC` at `A_cap`, `video_1BVC` at `V_cap`.
-    - Each stream is projected at full capacity while replicated on SP (fixed-M matmuls; a per-row
-      GEMM is row-independent, so the pad rows cost compute but change nothing), and the projections
-      are concatenated -- fixed extents -- into one source table in the fixed segment order
-      `[text | condition video | condition audio | audio | video]` (a condition segment exists only
-      when its stream is passed, which is fixed per deployment). The text and condition segments are
-      step-invariant, so `prepare_static_sources` refines and projects them **once per request**
-      into a persistent prefix; `forward` projects only the two per-step streams (audio, video) and
-      appends them.
-    - `assembly_indices` ([1, 1, 1, pad_to] integers) then gathers the source rows into packed order
-      `[text | condition blocks in packed order | audio | target video | pad]`. The packed
-      interleave -- ref2va packs a reference's soundtrack rows immediately before its own video
-      rows -- is index *content*, not shape, as is the true length of every stream. Pad indices
-      point at row 0; pad rows are masked from attention by `logical_n` and their output is never
-      selected, so their content is irrelevant.
-    - `ttnn.mesh_partition` fractures the assembled `[1, 1, pad_to, hidden]` sequence across SP.
-
-    The condition segment sits between text and audio in packed order, and that position is not a
-    choice: `packing.build_packed_sequence` and `packing_ref2va.build_ref2va_packed_sequence` both
-    put the conditioning rows there, and the caller's rope/AdaLN metadata is built in that layout's
-    order. Two condition streams rather than one because the two modalities need different
-    projections: audio rows go through `audio_proj_in` (32 wide) and video rows through `proj_in`
-    (96 wide), so they cannot share a buffer at all.
-
-    The load-bearing invariant is **one frame of reference for row indices**. `assembly_indices` is
-    built by walking the condition blocks in packed order, which is the same walk that produced
-    `layout.position_ids`, `token_tags`, `video_indices` and `audio_indices`. There is no second
-    ordering to keep in step.
-
-    Because the sequence is assembled globally, the caller's per-row metadata (`rope_cos`,
-    `rope_sin`, `adaln_indices`, `timestep_indices`) is simply built for the padded global sequence
-    in that same natural order and sharded contiguously on SP -- no device-major permutation to keep
-    in step with the model. Outputs are gathered back on SP and selected per modality by
-    `video_out_indices` / `audio_out_indices` -- again gathers with per-request content and fixed
-    capacity shapes -- so each modality's rows come back in its own order at its stream's capacity,
-    true rows leading.
+    movement, so the assembly happens *before* fracturing instead, as a row gather over fixed-capacity
+    streams so every program has a request-independent (traceable) shape: the projected streams form a
+    source table `[text | condition video | condition audio | audio | video]`, `assembly_indices`
+    gathers it into packed order, and `ttnn.mesh_partition` fractures it across SP.
 
     Padding
     -------
-    Pad rows -- the stream tails beyond each true length, and the packed tail beyond `logical_n` --
-    need no attention mask inside the packed sequence: ring attention's `logical_n` masks the tail
-    beyond the true sequence length internally, and the assembly gather keeps every stream's pad
-    rows *out* of `[0, logical_n)`, so no real row ever attends to one. Interior padding is what is
-    *not* allowed -- a pad row between two modalities would sit inside `logical_n` and every real
-    row would attend to it as a key and value -- and the gather is exactly what keeps the interior
-    dense while the streams stay fixed-capacity. The one place padding is masked is the token
-    refiner: it runs over the text stream *before* assembly, at `L_cap` and once per request
-    (`prepare_static_sources`), using SDPA's windowed mode -- `prompt_windows = [0, true_len,
-    L_cap]` fences the true tokens off from the pad tail, with the mask synthesized on device from
-    the boundaries; the refined pad rows are then dropped by the assembly gather.
+    Pad rows stay outside `[0, logical_n)`, which ring attention masks internally; interior padding is
+    not allowed.
 
     Precision
     ---------
@@ -249,14 +200,7 @@ class MiniMaxH3Transformer3DModel(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self._temb_state = StateTensor()
-        # Rung-shaped ([1, pad_to / sp_factor]) unlike `_temb_state`, so it is keyed per `pad_to`
-        # exactly like the block-stack traces (`_tracers_keyed`): each rung binds its own persistent
-        # buffer during its untraced warmup and only same-shape-copies thereafter, so serving one
-        # rung never rebinds (and frees) a buffer another rung's capture baked. See `forward`.
         self._timestep_idx_state: dict[int, StateTensor] = {}
-        # The projected [text | condition] source-table prefix, step-invariant and read by the eager
-        # shell after every trace replay -- same discipline as `_temb_state`: bound once before any
-        # capture, refreshed by same-shape copy. Written by `prepare_static_sources`.
         self._static_source_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
@@ -367,27 +311,7 @@ class MiniMaxH3Transformer3DModel(Module):
     ) -> None:
         """Refine and project the step-invariant streams, once per request.
 
-        The text refinement and the condition projections depend only on the request, not on the
-        denoise step -- running them inside `forward` would repeat them every step, and at the
-        ref2va prompt capacity the refiner's O(L_cap^2) attention would dominate the step. The
-        projected `[text | condition video | condition audio]` source-table prefix is stored in a
-        persistent StateTensor that `forward` reads on every step: it is consumed by the eager
-        shell after every trace replay, so it follows the `_temb_state` discipline -- bound once
-        before any capture, refreshed by same-shape `ttnn.copy` when traced.
-
-        prompt_1BLP: [1, 1, seq_len, text_dim], replicated on SP and TP, true rows leading.
-            seq_len is the encoder's sp_factor*TILE-aligned length. The refiner runs at this size;
-            the output is padded to prompt_cap before the source-table concat.
-        prompt_windows: `[0, true_len, seq_len]` window boundaries for the token refiner's windowed
-            SDPA (1-D integer device tensor, replicated), fencing the true tokens off from the
-            causal-tail pad; None when true_len == seq_len. Consumed here only, so it may be
-            transient.
-        prompt_cap: capacity of the text slot in _static_source_state (= caps.prompt).
-        condition_video_1BKC / condition_audio_1BKC: the conditioning rows of each modality, packed
-            contiguously in packed-walk order at their own capacity; None when the deployment has no
-            such stream (t2va/fl2va has no condition audio). Presence is fixed per deployment -- it
-            sets the prefix shape -- so a request without conditioning passes a zero-filled buffer,
-            not None.
+        Stores the `[text | condition video | condition audio]` source-table prefix that `forward` reads.
         """
         tile = ttnn.TILE_SIZE
         streams = {
@@ -396,14 +320,9 @@ class MiniMaxH3Transformer3DModel(Module):
             "condition_audio_1BKC": condition_audio_1BKC,
         }
         for name, stream in streams.items():
-            # The prefix joins a TILE-layout concat, which cuts on tile boundaries only.
             if stream is not None and stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
 
-        # Conditioning rows use the same weights as the target rows of their modality: a conditioning
-        # row is a row of its own modality that happens to be pinned, and a per-row GEMM against a
-        # shared weight is row-independent, so projecting them from a separate buffer is bit-identical
-        # to projecting them in place.
         refined = self.token_refiner(self.context_embedder(prompt_1BLP), cu_window_seqlens=prompt_windows)
         if refined.shape[2] < prompt_cap:
             refined = pad_single(refined, dim=2, back=prompt_cap - refined.shape[2])
@@ -433,40 +352,22 @@ class MiniMaxH3Transformer3DModel(Module):
         traced: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
-        Every stream is a fixed-capacity buffer, its true rows leading (see the class docstring).
-        The step-invariant text and conditioning segments are not passed here: `prepare_static_sources`
-        projects them once per request and this reads the stored prefix.
+        Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
 
-        video_1BVC: [1, 1, V_cap, in_channels * prod(patch_size)], replicated on SP and TP. The
-            *target* rows only --- conditioning rows go through `prepare_static_sources`, not here.
-        audio_1BAC: [1, 1, A_cap, audio_in_channels], replicated on SP and TP. Again target rows only.
-        assembly_indices: [1, 1, 1, pad_to] integers, replicated -- source-table row of each packed
-            row, in packed order `[text | condition blocks | audio | video | pad]`; pad rows point
-            at row 0. Built against the segment order in the class docstring.
-        video_out_indices / audio_out_indices: [1, 1, 1, V_cap] / [1, 1, 1, A_cap] integers,
-            replicated -- padded-global-sequence row of each target row, entries past the true
-            count pointing at any real row of that modality.
+        video_1BVC: [1, 1, V_cap, in_channels * prod(patch_size)], replicated on SP and TP. Target rows only.
+        audio_1BAC: [1, 1, A_cap, audio_in_channels], replicated on SP and TP. Target rows only.
+        assembly_indices: [1, 1, 1, pad_to] integers, the source-table row of each packed row.
+        video_out_indices / audio_out_indices: [1, 1, 1, V_cap] / [1, 1, 1, A_cap] integers, the
+            packed row of each target row.
         timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1].
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
             for the padded global sequence and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
-        pad_to: the padded packed length. Every per-device shape in the block stack is a function of
-            it (and of num_slots), so it keys the trace: one capture per `pad_to`, selected via
-            `tracer_trace_key`, replayed for any request whose true lengths -- all carried by the
-            index tensors and `logical_n` -- fit inside it.
+        pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
 
-        Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .],
-        replicated, true target rows leading, in that modality's row order.
-
-        Both hold the **target rows only** and not the conditioning rows the reference's
-        `video_indices` / `audio_indices` would also cover. The caller discards conditioning-row
-        velocity, because the loop re-imposes the anchors by only ever writing target rows. No
-        detection power is lost: attention is full, so every target row attends to every conditioning
-        row as a key and value, and a wrong conditioning rope, AdaLN tag or input projection shows up
-        in this output. Entries past the true counts duplicate a real row's velocity; the caller's
-        in-place Euler step advances the buffer tails with them, and nothing reads those tails back.
+        Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
         tile = ttnn.TILE_SIZE
         alignment = self.sp_factor * tile
@@ -479,44 +380,31 @@ class MiniMaxH3Transformer3DModel(Module):
         if audio_out_indices.shape[-1] != audio_1BAC.shape[2]:
             raise ValueError("audio_out_indices must match the audio stream's capacity")
         for name, stream in (("audio_1BAC", audio_1BAC), ("video_1BVC", video_1BVC)):
-            # The source table is assembled with a TILE-layout concat, which cuts on tile boundaries
-            # only -- and fixed capacities have no reason to be unaligned.
             if stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
         static_prefix = self._static_source_state.value
         if static_prefix is None:
             raise RuntimeError("prepare_static_sources must run before forward: the source-table prefix is unbound")
 
-        # Integer index tensors for the gathers. ttnn.embedding wants [batch, seq] uint32.
         def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
             t = ttnn.reshape(t, (1, t.shape[-1]))
             return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
-        # 1. Project the two per-step streams at full capacity, still replicated on SP, and append
-        # them to the request's static prefix -- the source table in the fixed segment order.
         source = ttnn.concat([static_prefix, self.audio_proj_in(audio_1BAC), self.proj_in(video_1BVC)], dim=2)
         source = ttnn.reshape(source, (source.shape[2], source.shape[3]))
 
-        # 2. Gather the source rows into packed order -- the layout is index content, so the shapes
-        # here depend only on the capacities and pad_to -- then fracture across SP.
         hidden = ttnn.embedding(as_indices(assembly_indices), source, layout=ttnn.TILE_LAYOUT)
         hidden = ttnn.unsqueeze(hidden, 0)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        # 3. One timestep embedding per slot, shared by every AdaLN projection. Stabilized because it
-        # is read again by `norm_out` after the trace replay -- see `_temb_state` in `__init__`.
         self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)
-        # Only `norm_out`, after the replay, reads `timestep_idx` -- same hazard as `temb`. Its row
-        # count is `pad_to / sp_factor`, so it is rung-shaped: one persistent buffer per `pad_to`,
-        # bound during that rung's untraced warmup and same-shape-copied when serving traced.
         ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
         ts_state.update(as_indices(timestep_indices), traced=traced)
         timestep_idx = ts_state.value
 
-        # 4. The traced block stack -- `pad_to` keys the capture, see its parameter doc above.
         hidden = self.run_blocks(
             hidden,
             logical_n,
@@ -528,9 +416,6 @@ class MiniMaxH3Transformer3DModel(Module):
             tracer_trace_key=pad_to,
         )
 
-        # 5. Output norm, then the two heads. Both heads are narrow (96 and 32), so projecting while
-        # still SP-fractured and gathering afterwards moves far less data than gathering the 5376-wide
-        # packed sequence would.
         hidden = self.norm_out(
             hidden,
             temb,
@@ -549,9 +434,6 @@ class MiniMaxH3Transformer3DModel(Module):
                 audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False
             )
 
-        # 6. Select each modality's target rows out of the reassembled global sequence -- gathers
-        # with per-request index content and capacity-fixed shapes, mirroring the assembly. The
-        # reference runs both heads over every row and selects afterwards, which is what this does.
         def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
             return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
@@ -580,11 +462,7 @@ class MiniMaxH3Transformer3DModel(Module):
         return hidden
 
     def release_traces(self) -> None:
-        """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets.
-
-        The Tracers themselves stay: a released tracer re-captures on its next traced call, so this
-        costs each bucket one capture run, not a re-warm.
-        """
+        """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
         run_blocks = type(self).run_blocks
         tracers = [run_blocks._tracers.get(self), *run_blocks._tracers_keyed.get(self, {}).values()]
         for tracer in tracers:

@@ -274,18 +274,7 @@ def pad_patches_for_sp(
 ) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, ...], int]:
     """Pad a patch batch so its SP shards are tile-aligned, isolating the pad in a phantom window.
 
-    SP requires `total % (sp_factor * 32) == 0` (see `Qwen3VlVisionAttention`), which production grids
-    do not always satisfy -- e.g. two_refs' 38,144 patches divide sp=4/8's alignment but not sp=32's
-    1024. Unlike the decoder, the tower cannot pad blindly: attention is non-causal block-diagonal
-    (tail pad would join the last image's window) and the merger folds consecutive 4-row groups. So
-    the pad rows are appended as their OWN attention window -- one extra `cu_seqlens` boundary -- and
-    flow through as isolated garbage that `Qwen3VlVisionModel.forward(logical_patches=...)` trims
-    after the SP gather, before any consumer sees the tokens.
-
-    Zero patches and pos_embeds, identity rope rows (cos=1, sin=0). The pad count is a multiple of
-    `sp_factor * 32`, hence of the merge group, so the garbage folds into whole tail tokens. Returns
-    `(patches, pos_embeds, rope, cu_seqlens, logical_patches)`; a no-op (inputs returned as-is) when
-    the count is already aligned.
+    The pad is trimmed after the SP gather via `Qwen3VlVisionModel.forward(logical_patches=...)`.
     """
     total = patches.shape[0]
     mult = sp_factor * _TILE
@@ -319,15 +308,8 @@ def vision_rope_tensors(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """`(cos, sin)` of shape `(total_patches, padded_head_dim)` for the tower's rotary embedding.
 
-    The two position axes each contribute `head_dim // 4` frequencies, giving `head_dim // 2` distinct
-    values. These are laid out **interleaved** -- channels `(2j, 2j+1)` share frequency `j` -- to feed
-    `ttnn.experimental.rotary_embedding_llama`, whose tile transformation matrix rotates adjacent pairs.
-    This matches the SPLIT->INTERLEAVED permute applied to the q/k projection at load
-    (`_rope_permute_qk`); the halves layout the reference uses would need the unpermuted weights.
-
-    Padded from `head_dim` to `padded_head_dim` with an **identity tail** (cos=1, sin=0), so the zero
-    channels `_pad_head_dim` appended to each head pass through the rotation untouched. Built on the
-    host and uploaded, as elsewhere in this port.
+    Frequencies are **interleaved** for `rotary_embedding_llama` (matching `_rope_permute_qk`) and padded
+    with an identity tail (cos=1, sin=0). Built on the host and uploaded, as elsewhere in this port.
     """
     padded_head_dim = padded_head_dim or math.ceil(head_dim / _TILE) * _TILE
     position_ids = vision_rope_position_ids(grid_thw, spatial_merge_size=spatial_merge_size)
@@ -363,11 +345,7 @@ def _pad_head_dim(weight: torch.Tensor, *, num_heads: int, head_dim: int, padded
 def _rope_permute_qk(t: torch.Tensor, *, num_heads: int, head_dim: int) -> torch.Tensor:
     """Reorder each head's output channels SPLIT-rotation -> INTERLEAVED for `rotary_embedding_llama`.
 
-    Moves the SPLIT pair `(i, i + head_dim // 2)` to adjacent interleaved slots `(2i, 2i + 1)`, so the
-    op's tile transformation matrix (which rotates neighbours) reproduces the reference's `rotate_half`.
-    Applied to the q and k projections (weight rows on `axis=0`, or bias) BEFORE `_pad_head_dim`, so the
-    appended zeros stay the identity tail; v is left untouched. Mirrors the gemma connector's
-    `_permute_qk` -- omitting it makes interleaved RoPE score against the wrong channels (PCC ~0.09).
+    Applied to q/k only, before `_pad_head_dim`.
     """
     half = head_dim // 2
     perm = torch.empty(head_dim, dtype=torch.long)
@@ -395,10 +373,7 @@ def _drop_batch_axis(x: ttnn.Tensor, added: bool) -> ttnn.Tensor:
 
 
 def _trim_tokens(x: ttnn.Tensor, real_tokens: int | None) -> ttnn.Tensor:
-    """Drop the SP-alignment pad's merged garbage tokens from a gathered `(tokens, hidden)` tensor.
-
-    Only valid AFTER the SP gather: the pad occupies the trailing rows of the trailing shard, so on
-    the full sequence it is exactly the tail. A no-op when nothing was padded."""
+    """Drop the SP-alignment pad's merged garbage tokens from a gathered `(tokens, hidden)` tensor."""
     if real_tokens is None or x.shape[-2] <= real_tokens:
         return x
     return x[:real_tokens, :]
@@ -416,9 +391,7 @@ def _gather_hidden(x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
 def _row_parallel_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
     """Run a row-parallel linear on a 2-D activation and gather its fractured result to full width.
 
-    The reduce-scatter (inside `linear.forward`) splits on the HIDDEN dim, which pad-dances when
-    `hidden/tp` is not a whole number of tiles. The block's `proj`/`fc2` use `_row_parallel_seq_forward`
-    to avoid that; this hidden-dim path remains for the merger, whose output width is tile-aligned.
+    Reduce-scatters on the hidden dim; used by the merger (see `_row_parallel_seq_forward`).
     """
     if not p.tp:
         return linear.forward(x)
@@ -430,28 +403,15 @@ def _row_parallel_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Ten
 def _row_parallel_seq_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
     """Row-parallel linear whose all-reduce is split on the SEQUENCE dim, not the hidden dim.
 
-    `reduce_scatter + all_gather` is an all-reduce on any axis, so this returns the identical
-    full-width, full-sequence result as `_row_parallel_forward` -- but both collectives run on the
-    tile-aligned sequence dim, dodging the `hidden/tp = 144` pad dance.
-
-    The reduce-scatter needs `rows / tp_factor` to be a whole number of tiles. When the row count does
-    not divide that way, the rows are zero-padded up to `tp_factor * TILE` here, purely for the
-    collective, and the pad is sliced back off after the gather. An all-reduce is row-independent and
-    the pad rows are zero, so real rows are untouched -- and the padding lives entirely inside this op,
-    so attention never sees it (no sequence padding, no mask changes, no tower plumbing). Grids whose
-    shard is already aligned add no pad rows and pay nothing.
+    Same result as `_row_parallel_forward`; rows are zero-padded internally for the collective only.
     """
     if not p.tp:
         return linear.forward(x)
-    x, added = _with_batch_axis(x)  # (rows, width) -> (1, rows, width); sequence is dim 1
+    x, added = _with_batch_axis(x)
     rows = x.shape[1]
     npad = (-rows) % (p.tp_factor * _TILE)
     if npad:
         x = ttnn.pad(x, [(0, 0), (0, npad), (0, 0)], value=0.0)
-    # `reduce_scatter_dim=-2` targets the sequence axis of the `(1, rows, width)` activation (the
-    # linear is rank-preserving; negative dims are rank-agnostic), leaving a `(1, rows/tp, width)`
-    # shard. Gather it back on the same sequence axis (dim 1 here) to reconstruct the full reduced
-    # sequence, then drop the pad rows.
     out = linear.forward(x, reduce_scatter_dim=-2)
     out = p.ccl_manager.all_gather(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
     if npad:
@@ -519,7 +479,6 @@ class Qwen3VlVisionMLP(Module):
         x = ttnn.gelu(x) if self._act.startswith("gelu") else ttnn.silu(x)
         # `RowParallelLinear` reduce-scatters, so its result is fractured on columns; the residual add
         # and the next LayerNorm both need the full width back (cf. `Qwen3VlMlp` in model_qwen3vl.py).
-        # The sequence-dim all-reduce (aligned) replaces the hidden-dim one (the 144 pad dance).
         return _row_parallel_seq_forward(self.linear_fc2, x, self._p)
 
 
@@ -583,9 +542,6 @@ class Qwen3VlVisionAttention(Module):
             self.qkv = Linear(hidden_size, 3 * self.inner, bias=True, **kw)
             self.proj = Linear(self.inner, hidden_size, bias=True, **kw)
 
-        # Tile transformation matrix for the fused interleaved RoPE (`rotary_embedding_llama`). A shared
-        # constant, replicated across the mesh; the q/k weights were permuted SPLIT->INTERLEAVED at load
-        # (`_rope_permute_qk`) so this neighbour-rotation matches the reference's `rotate_half`.
         self._rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
         # Match the decoder attention's SDPA precision (`model_qwen3vl.py::Qwen3VlAttention`):
@@ -616,36 +572,15 @@ class Qwen3VlVisionAttention(Module):
     def _windowed_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
         """Flash tiling for windowed (block-diagonal) attention.
 
-        Windows shorter than the chunk are fine, and so are windows that are not tile-aligned: the
-        mask generator searches `cu_window_seqlens` per Q chunk, so one chunk may straddle several
-        windows (`tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py` covers 33-row windows
-        at chunk 64). Uses the full compute grid -- unlike the ring, nothing here reserves cores for
-        CCL workers.
-
-        K chunk 512 (vs the q chunk's 128) is a FIDELITY choice, not just a perf one: the flash
-        streaming softmax pays one running-max/output rescale per K chunk, and the per-block one-step
-        error scales with the rescale count -- measured 3.10 / 2.34 / 1.15 / 0.67 % at k_chunk
-        64/128/256/512 on the tower's worst block (real weights, 21K-key windows), the dominant term
-        of the tower's end-to-end error. Purely k-sided: q256/k256 measured identical to q128/k256,
-        and q256/k512 exceeds L1, so q stays at 128.
-
-        (64, 960) is the accuracy-optimal point that fits the PIPELINE's L1 tenancy: the scores CB
-        scales with q*k (~65K elements is the bare frontier) and the K/V chunk CBs with k alone
-        (k1536 fails even at q64), so large k requires q64. (64, 1024) fits standalone but clashes
-        with the pipeline's resident L1 buffers by ~13 KB (CCL persistent state etc. -- caught by
-        test_pipeline_encode_vision_smoke), so k steps down one tile-multiple. Chosen deliberately
-        over (128, 512)'s 6.5 % / 270 ms: ~0.6 RMSE points for ~10 % tower time (q64 doubles Q-loop
-        iterations). q chunk size has no accuracy effect (measured); only the K-chunk count does. The fitted sweep puts the
-        non-chunking error floor at ~0.27 %/step -- the bf16 CPU reference's own level -- so a
-        kernel carrying the rescale path in higher precision would reach reference parity at any
-        chunk size and reclaim both the L1 and the q64 latency.
+        Large K chunk is a fidelity choice (fewer streaming-softmax rescales); (64, 960) is the largest
+        that fits the pipeline's L1.
         """
         tiles = -(-seq_len // _TILE) * _TILE
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=min(tiles, 64),
             k_chunk_size=min(tiles, 960),
-            exp_approx_mode=False,  # False is the more accurate softmax
+            exp_approx_mode=False,
         )
 
     def _rope_interleave_qk(self, parts: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
@@ -658,8 +593,7 @@ class Qwen3VlVisionAttention(Module):
         kw = dict(num_heads=self.num_heads, head_dim=self.head_dim, padded=self.padded_head_dim)
         tp = self._p.tp_factor
         if (w := state.get("qkv.weight")) is not None:
-            # the reference packs [q|k|v] on the output axis; permute q/k to interleaved for the fused
-            # RoPE, then pad each third's heads independently. v carries no position and is untouched.
+            # the reference packs [q|k|v] on the output axis; pad each third's heads independently
             parts = self._rope_interleave_qk(w.chunk(3, dim=0))
             padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in parts])
             state["qkv.weight"] = _interleave_for_col_parallel(padded, parts=3, tp_factor=tp)
@@ -684,14 +618,6 @@ class Qwen3VlVisionAttention(Module):
         seq_len = hidden_states.shape[-2]
         qkv = self.qkv.forward(hidden_states)
 
-        # `nlp_create_qkv_heads` does the head split in a single op, replacing the
-        # 3x(slice + reshape + permute) this used to take: it emits q/k/v as
-        # `(1, num_local_heads, seq_len, padded_head_dim)` directly. Crucially it builds its output from
-        # the tensor's *logical* shape, so a patch count that is not a multiple of 32 (784 for a 28x28
-        # grid) survives -- unlike `ttnn.split`, which reported the tile-padded count and forced the old
-        # slice-based path. The local qkv is `[q_d | k_d | v_d]` of width `3 * local_inner` (see
-        # `_interleave_for_col_parallel`), which is the packed layout the op expects; MHA means the q and
-        # kv head counts are equal, and head_dim is inferred from the width as the padded 96.
         qkv = ttnn.reshape(qkv, (1, 1, seq_len, 3 * self.local_inner))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
@@ -701,11 +627,6 @@ class Qwen3VlVisionAttention(Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Fused interleaved RoPE: one `rotary_embedding_llama` kernel per tensor replaces the
-        # rotate_half slice/neg/concat/mul chain. cos/sin arrive as `(seq, padded_head_dim)`; the op
-        # wants `[1, 1, seq, padded_head_dim]` (head-broadcast), and adding unit leading dims is a
-        # metadata view, not a copy. The padded tail of cos/sin is identity, so channels 72..95 (the
-        # `_pad_head_dim` zeros) pass through untouched.
         cos, sin = pos_embeds
         cos = ttnn.reshape(cos, (1, 1, cos.shape[-2], cos.shape[-1]))
         sin = ttnn.reshape(sin, (1, 1, sin.shape[-2], sin.shape[-1]))
@@ -728,11 +649,9 @@ class Qwen3VlVisionAttention(Module):
 
         single_block = cu_seqlens is None or len(cu_seqlens) <= 2
         if self._p.sp:
-            # `seq_len` here is the LOCAL shard; the logical sequence spans the whole SP axis.
             # Ring SDPA rejects a non-tile-aligned shard deep in the device op ("Per-device Q seq
-            # length must be divisible by TILE_HEIGHT"), and the windowed path offsets whole tiles;
-            # check it here so the constraint is legible. This is stricter than, and therefore
-            # subsumes, the merger's merge-group alignment.
+            # length must be divisible by TILE_HEIGHT"); check it here so the constraint is legible.
+            # This is stricter than, and therefore subsumes, the merger's merge-group alignment.
             if seq_len % _TILE != 0:
                 msg = (
                     f"sequence-parallel shard has {seq_len} rows, which is not a multiple of {_TILE}; "
@@ -750,10 +669,6 @@ class Qwen3VlVisionAttention(Module):
                 v,
                 is_causal=False,
                 scale=self.scale,
-                # Same flash tiling as the windowed path (nothing about it is windowed-specific).
-                # Without it the op defaults to chunk 32, and the streaming softmax's per-chunk
-                # rescale error scales with the chunk count -- at fl2va sizes (16K-65K keys, one
-                # block) that is the worst configuration of all; see _windowed_program_config.
                 program_config=self._windowed_program_config(seq_len),
                 compute_kernel_config=self._sdpa_compute_kernel_config,
             )
@@ -761,10 +676,6 @@ class Qwen3VlVisionAttention(Module):
             if cu_seqlens[0] != 0 or cu_seqlens[-1] != seq_len:
                 msg = f"cu_seqlens must span [0, {seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
                 raise ValueError(msg)
-            # One windowed call rather than one SDPA per block: the device synthesizes the
-            # block-diagonal mask from `cu_window_seqlens`, so the boundaries never become host-side
-            # slices. `uint32` / ROW_MAJOR / 1-D and 2..1024 entries are what the op validates; 18
-            # blocks (`max_load`) is the most this model can present, well inside that.
             cu_window = ttnn.from_torch(
                 torch.tensor(cu_seqlens, dtype=torch.int32),
                 device=self.mesh_device,
@@ -781,17 +692,8 @@ class Qwen3VlVisionAttention(Module):
                 compute_kernel_config=self._sdpa_compute_kernel_config,
                 cu_window_seqlens=cu_window,
             )
-        # `nlp_concat_heads` fuses the head-axis transpose + merge that this used to do as a separate
-        # `permute((0,2,1,3)) + reshape`: it takes `(1, num_local_heads, seq_len, padded_head_dim)` and
-        # emits `(1, 1, seq_len, num_local_heads * padded_head_dim)` = `(1, 1, seq_len, local_inner)`.
-        # The trailing reshape just drops the leading unit dims to the `(seq_len, local_inner)` that
-        # row-parallel `proj` expects; the padded head_dim (96) is concatenated as-is, matching the
-        # packed width `_interleave_for_col_parallel` produced on the way in.
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (seq_len, self.local_inner))
-        # Row-parallel `proj` reduce-scatters then gathers back to full width. Split that all-reduce on
-        # the tile-aligned sequence dim (dodging the hidden-dim `144` pad dance); the helper pads the
-        # shard internally when needed, so every grid takes this path.
         return _row_parallel_seq_forward(self.proj, attn, self._p)
 
     def _ring_attention(self, q, k, v, local_seq_len: int) -> ttnn.Tensor:
@@ -835,22 +737,13 @@ class Qwen3VlVisionAttention(Module):
     def _windowed_sp_attention(self, q, k, v, local_seq_len: int, cu_seqlens: Sequence[int]) -> ttnn.Tensor:
         """Windowed (block-diagonal) attention over a sequence sharded on the SP axis.
 
-        Q stays the local shard -- the linear ops keep their full SP benefit and the output needs no
-        combine -- while K/V are all-gathered to the full sequence once. `cu_window_seqlens` is global,
-        so the op needs each shard's global origin to resolve its rows' windows: a 1-element-per-device
-        tensor sharded on the SP axis carries it. A scalar offset could not -- it is baked into the
-        program, and every device runs the SAME program; the tensor keeps the divergence in data.
-
-        A shard straddling a window boundary costs nothing here: each row's window is decided by the
-        on-device mask against the full gathered K, never by where the shard was cut.
+        Q stays local, K/V are all-gathered; each shard's global row offset is passed as a sharded tensor.
         """
         sp_axis, ccl = self._p.sp_axis, self._p.ccl_manager
         global_seq_len = local_seq_len * self._p.sp_factor
         if cu_seqlens[0] != 0 or cu_seqlens[-1] != global_seq_len:
             msg = f"cu_seqlens must span [0, {global_seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
             raise ValueError(msg)
-        # Consecutive same-shape gathers land in the two halves of the ping-pong buffer pair, so the
-        # v gather does not clobber k.
         k = ccl.all_gather(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         v = ccl.all_gather(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         cu_window = ttnn.from_torch(
@@ -1038,9 +931,6 @@ class Qwen3VlVisionModel(Module):
     ) -> None:
         super().__init__()
         self._p = resolve_vision_parallel(mesh_device, parallel_config, ccl_manager)
-        # HiFi4 for every tower linear, mirroring the decoder's `high_fidelity_linears`: the tt_dit-wide
-        # default is HiFi2, and the tower's ~10% RMS output error at real weights (vs the fp32
-        # reference) is what the fused conditioner amplifies. Off by default; MiniMax-H3 opts in.
         linear_compute_kernel_config = None
         if high_fidelity_linears:
             linear_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -1128,15 +1018,10 @@ class Qwen3VlVisionModel(Module):
         Omitting it treats the whole input as one block, which is correct for a single image and wrong
         for several -- pass it whenever `grid_thw` has more than one row or a `t` above 1.
 
-        `logical_patches` is the REAL patch count when the input was padded for SP alignment by
-        [`pad_patches_for_sp`]: the pad's merged garbage tokens are trimmed off the merged output and
-        every deepstack feature after the SP gather (the pad lives on the trailing shard, so only the
-        gathered, full-sequence tokens can be tail-sliced). None means nothing was padded.
+        `logical_patches` is the real patch count if the input was padded by [`pad_patches_for_sp`].
         """
         hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
 
-        # Instrumentation: report the parallel placement and the attention path the blocks will take,
-        # so a caller can confirm the sharded windowed/ring path is actually engaged (vs replicated).
         _single_block = cu_seqlens is None or len(cu_seqlens) <= 2
         _path = (
             ("ring" if _single_block else "windowed_sp") if self._p.sp else ("full" if _single_block else "windowed")
@@ -1162,8 +1047,7 @@ class Qwen3VlVisionModel(Module):
 
         The decoder consumes these through `_scatter_rows`, which walks `vision_runs` over the whole
         token sequence, so the tower must hand back every token on every device -- SP ends here. Safe as
-        a plain concatenation because SP shards rows contiguously (device `d` holds rows
-        `[d * S/sp, (d+1) * S/sp)`), so device order equals token order for any number of blocks.
+        a plain concatenation because SP shards rows contiguously, so device order equals token order.
 
         The `ttnn.clone` is load-bearing. Every CCL gather here writes into a persistent buffer that
         `CCLManager` caches by `(shape, dim, mesh_axis)`, and all four mergers emit the SAME

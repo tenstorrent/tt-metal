@@ -4,11 +4,7 @@
 
 """t2va pipeline wall-clock at the published working points, via `BenchmarkProfiler`.
 
-Six aspect ratios (21:9 .. 9:16) x three durations (5 / 10 / 15 s), 50 steps. The canvas comes from
-`resolve_canvas_size` and the frame count from `align_num_frames`. Stage durations log on the host
-rank only, and only for the warm generation. Rank 0 writes the muxed mp4; quality gates live in
-`test_pipeline_minimax_h3.py`. `ENABLE_USER_INPUT=1` opens a prompt / aspect / duration
-loop after the measured generation.
+`ENABLE_USER_INPUT=1` opens a prompt / aspect / duration loop after the measured generation.
 """
 
 from __future__ import annotations
@@ -49,10 +45,7 @@ from .common_av import (
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
-# The published working points: short edge 768 from 16:9 through 9:16, and ~1 MPix for anything
-# wider. `resolve_canvas_size` already implements exactly that (768 short edge, area capped at
-# 768*1344, both axes snapped to 32), so the canvas is derived rather than tabulated here --
-# 21:9 lands on 672x1536, which is the documented example.
+# The published working points; `resolve_canvas_size` derives each canvas (e.g. 21:9 -> 672x1536).
 ASPECT_RATIOS = [(21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16)]
 DURATIONS_S = [5, 10, 15]
 
@@ -140,21 +133,16 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
 
 # --------------------------------------------------------------------- ref2va perf
 
-# The single working point the ref2va perf run measures. Unlike t2va it does not sweep: ref2va
-# padded lengths run 1.2-3.0x t2va's, so one point per process keeps the memory envelope in check.
+# Single ref2va working point; no sweep, since ref2va padded lengths run 1.2-3.0x t2va's.
 REF2VA_ASPECT_RATIO = (16, 9)
 REF2VA_DURATION_S = 5
 
-# The reference set the ref2va run conditions on -- EDIT these to point at your own media. The image
-# defaults to a synthetic fractal so the test runs with nothing on disk; the video and audio are
-# placeholders that only join the set once a file exists at their path. ref2va needs at least one
-# reference, so keep the image (or supply a video/audio) enabled.
+# The ref2va reference set -- EDIT these to point at your own media (at least one is required).
 REF2VA_USE_IMAGE = True
 REF2VA_VIDEO_FILE = "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1344x768_5s.mp4"
 REF2VA_AUDIO_FILE = "/data/DC-deploy/vision-models/h3_t2va_artifacts/t2va_16x9_1344x768_5s.wav"
 
-# ref2va reaches the video VAE's taps=3 encoder, which clashes with the default L1 pool above it, so
-# it runs a smaller L1_SMALL than the other gates and reports it in the measurement line.
+# ref2va's taps=3 video encoder clashes with the default L1 pool, so it runs a smaller L1_SMALL.
 _REF2VA_L1_SMALL = 16384
 REF2VA_MESHES = [
     pytest.param(shape, {**params, "l1_small_size": _REF2VA_L1_SMALL}, id=param.id)
@@ -179,10 +167,9 @@ def ref2va_references() -> list[MiniMaxH3Reference]:
 
 
 def read_user_input() -> tuple[str, list[MiniMaxH3Reference], tuple[int, int], float, int] | None:
-    """A `(prompt, references, aspect_ratio, duration_s, num_steps)` request from interactively-entered text and media paths.
+    """An interactively entered `(prompt, references, aspect_ratio, duration_s, num_steps)` request.
 
     None when ENABLE_USER_INPUT is unset or the entry is aborted, which stops the REPL loop.
-    References are packed images-first, then audio, then videos.
     """
     spec = read_user_reference_spec(REF2VA_ASPECT_RATIO, REF2VA_DURATION_S, NUM_INFERENCE_STEPS)
     if not spec:
@@ -227,8 +214,6 @@ def test_ref2va_performance(mesh_device, reset_seeds):
             "from the total either way, but the run will take far longer than the reported compute."
         )
 
-    # `transformer_ref` (~62 GB) is SP-replicated without FSDP, which fills each 32 GB Blackhole chip
-    # and OOMs the forward-pass activations. Shard the DiT over the 32-way SP axis to free per-chip DRAM.
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights,

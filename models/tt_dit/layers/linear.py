@@ -611,12 +611,7 @@ class RowParallelLinear(Module):
         x may be a 2-element list [prefix, suffix] for fused concat over K (concat-free).
         Return output fractured on columns.
 
-        `reduce_scatter_dim` selects which axis the partial-sum reduce-scatter splits on, indexed on
-        the matmul output's own rank (negative dims count from the end -- reduce_scatter normalizes
-        them). The default -1 is the hidden dim -- the historical behaviour. Passing -2 splits on the
-        sequence dim instead, which callers
-        use to keep the collective tile-aligned when `hidden/tp` is not a whole number of tiles (the
-        caller is then responsible for the matching sequence-dim all-gather).
+        `reduce_scatter_dim` selects the reduce-scatter axis (default -1, hidden); -2 splits on the sequence dim.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)

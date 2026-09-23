@@ -45,11 +45,7 @@ class DeviceTileStitcher:
         self._ramps: dict[tuple, ttnn.Tensor] = {}
 
     def _ramp(self, plane: tuple[int, int], rank: int, dim: int) -> ttnn.Tensor:
-        """`weight_a = 1 - i/extent` along `dim`, over the trailing `plane = (H, W)`.
-
-        Leading dims are 1: the row-major binary_ng reader strides them at zero, so one plane serves
-        every channel and frame of the tile and the cache stays a few KB per key.
-        """
+        """`weight_a = 1 - i/extent` along `dim`, over the trailing `plane = (H, W)`; leading dims broadcast."""
         key = (plane, dim)
         if key not in self._ramps:
             extent = plane[dim - (rank - 2)]
@@ -64,10 +60,7 @@ class DeviceTileStitcher:
         return self._ramps[key]
 
     def bind_ramps(self, extents, tile: int) -> None:
-        """Every ramp up front, on both axes. The stitcher is first used inside warmup, before any trace
-        is captured, so a ramp built here keeps its address for good. One built later, mid-request,
-        lands where a replay writes and its seam band comes back as garbage on every later decode.
-        """
+        """Build every ramp up front (before trace capture); one allocated mid-request gets clobbered by replays."""
         for extent in extents:
             self._ramp((extent, tile), 5, 3)
             self._ramp((tile, extent), 5, 4)
@@ -130,33 +123,10 @@ class DeviceTileStitcher:
 
 
 class NeighborTileBlender:
-    """The gather-free stitch: each tile cross-fades from its two neighbour halos in place.
+    """Gather-free stitch: each tile cross-fades in place from its raw up/left neighbour halos.
 
-    `DeviceTileStitcher` needs every tile on every device, so the wave all-gathers `wave_size`
-    tiles to each chip -- ~1.4 GB/device/wave on a 4x32 quad, of which a tile actually reads two
-    overlap strips. This class exchanges exactly those strips: a `neighbor_pad_async` per mesh
-    axis hands each device the trailing rows of the tile above and the trailing columns of the
-    tile to its left, both from the **raw** neighbours -- which is precisely what the reference
-    blend consumes (`stitch`'s "original tiles, not previously blended ones" asymmetry).
-
-    The blend itself is two matmuls against per-device constant weights, built from each
-    device's grid position:
-
-        V^T = [up_halo; T]^T @ Mv          # vertical cross-fade into the top band
-        out = [left_halo | V] @ Nh         # horizontal cross-fade into the left band
-
-    ``Mv`` folds the ramp, the halo alignment (a boundary's true overlap inside the uniform
-    ``hpad``-row halo) and the identity passthrough into one ``(hpad+H, H)`` matrix; ``Nh`` is the
-    ``(wpad+W, W)`` analog. Row-0 tiles, column-0 tiles (including each packed chunk's first
-    column, whose axis-neighbour belongs to a different chunk) and pad slots get pure identity
-    weights, so the garbage their halos carry is multiplied by zero rather than special-cased --
-    every device runs the same program, and the per-position variation lives in the constants.
-
-    Requires the wave to be **grid-aligned**: tile ``(chunk k, r, c)`` on device
-    ``(r, k * grid_cols + c)``, so grid neighbours are mesh-axis neighbours. Output per device is
-    the blended, untrimmed tile in fp32 ROW_MAJOR (the blend runs fp32 for the same reason the
-    gather stitch does); the reference's trims and the canvas placement move to the host, which
-    only slices and concatenates -- every cross-fade already happened here.
+    Halos come from a per-axis neighbour exchange; the blend is two matmuls against per-device constant
+    weights. Requires a grid-aligned wave (tile ``(chunk k, r, c)`` on device ``(r, k * grid_cols + c)``).
     """
 
     def __init__(self, mesh_device: ttnn.MeshDevice, ccl_manager) -> None:
@@ -170,9 +140,7 @@ class NeighborTileBlender:
 
     @staticmethod
     def _band_matrix(pad: int, extent: int, overlap: int) -> torch.Tensor:
-        """``(pad+extent, extent)`` mixing matrix: identity, with the first ``overlap`` outputs
-        cross-faded from the halo's last ``overlap`` positions -- `_ramp`'s weights as matrix
-        entries. ``overlap == 0`` is the pure identity (edge tiles, pad slots)."""
+        """``(pad+extent, extent)`` identity with the first ``overlap`` outputs cross-faded from the halo."""
         m = torch.zeros(pad + extent, extent, dtype=torch.float32)
         for k in range(extent):
             if k < overlap:
@@ -282,8 +250,6 @@ class NeighborTileBlender:
         x = ttnn.reshape(pixels, (channels * frames, tile_h, tile_w))
 
         if hpad:
-            # Vertical, in W-major space so the weight sits on the matmul's right:
-            # V^T = permute([up_halo; T]) @ Mv.
             stacked = self._exchange(x, pad=hpad, axis=0)
             v_t = ttnn.matmul(tiled_f32(ttnn.permute(stacked, (0, 2, 1))), mv, compute_kernel_config=self._compute)
             v = ttnn.permute(ttnn.to_layout(v_t, ttnn.ROW_MAJOR_LAYOUT), (0, 2, 1))
@@ -294,9 +260,6 @@ class NeighborTileBlender:
         if not wpad:
             return ttnn.reshape(v, (1, channels, frames, tile_h, tile_w))
 
-        # Horizontal: the left halo comes from the *raw* tile (the reference blends against the
-        # original left neighbour, not its blended form), exchanged in W-major space where W is a
-        # middle dim, then stacked against V in H-major space for the activation-left matmul.
         halo_t = self._exchange(ttnn.permute(x, (0, 2, 1)), pad=wpad, axis=1)
         halo_t = ttnn.slice(halo_t, [0, 0, 0], [channels * frames, wpad, tile_h])
         halo = ttnn.permute(halo_t, (0, 2, 1))

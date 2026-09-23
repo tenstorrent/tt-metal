@@ -36,10 +36,7 @@ replicates ~9.8 GB of fp32 weights per device for its data-parallel fan-out. The
 registered as ``Module`` coresident exclusions: loading one stage evicts the others. The text
 encoder is the cheap one --- FSDP over the non-TP axis puts it at ~1.6 GB/device --- but its 50 GB
 disk read is not, which is why it is kept co-resident by default: every request pays the encode
-itself (~2.8 s), never the reload. Co-residency measurements on a 4x8 Blackhole: prompt-encode
-row 23.9 s → 2.8 s (the 50 GB reload disappears); DiT+VAE decode row 6.0 s vs 17.6 s, warm
-total 69.1 s vs 81.1 s. `coresident=False` evicts each stage for a mesh where they do not fit.
-Tracing is disabled when `coresident=False`: a reload moves weight addresses a capture baked.
+itself (~2.8 s), never the reload. `coresident=False` evicts each stage and disables tracing.
 """
 
 from __future__ import annotations
@@ -185,20 +182,11 @@ def _resolve_audio_t_shard(
 # the parallel config, the mesh shape, the dtype and the FSDP flag.
 MODEL_NAME = "minimax-h3"
 
-# The ladder of padded packed lengths served by resident denoise traces, ascending. One capture per
-# rung; a request pads to the smallest rung that fits. Multiples of 1024 so every rung satisfies the
-# `sp_factor * TILE_SIZE` alignment on both supported meshes (256 at SP=8, 1024 at SP=32). The values
-# span the t2va/fl2va envelope: 5 s at 1:1 (~21.8k packed rows) up to 15 s at the 1044 rows/frame
-# canvas ceiling with two keyframes and a full 3008-token prompt (~120.2k). The top rung is the
-# admission cap: a longer request raises, it is not served untraced. A property of the sequence-length
-# envelope rather than of the mesh, hence a module default and a constructor knob, not a preset.
+# Padded packed lengths served by resident denoise traces (one capture per rung), multiples of 1024
+# for SP alignment. The top rung is the admission cap: a longer request raises.
 MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 
-# ref2va shares the machinery but not the envelope: reference rows (up to 9 images and 3 video clips)
-# push the packed length far past t2va's. The ladder runs from the smallest measured case (~46k, one
-# image) up to the top rung, which must admit everything the arena caps do -- the full 12-reference
-# envelope packs to 322336 rows (Sigma of the ref2va caps), rounded up to the 1024 SP alignment.
-# Requests above it raise, as t2va's do above its top rung. Its optimal spacing is follow-on tuning.
+# ref2va ladder; the top rung must admit everything the ref2va arena caps do (322336 rows, aligned).
 MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 322560)
 
 
@@ -235,34 +223,18 @@ class SeqLen(NamedTuple):
 
 @dataclass(frozen=True)
 class MiniMaxH3ArenaCaps:
-    """Fixed row capacities of the device arenas -- one set per deployment, not per request.
+    """Fixed per-deployment row capacities of the device arenas; a request exceeding one raises."""
 
-    The caps are the per-stream admission limits: a request exceeding one raises. Allocated before
-    any capture and never rebound -- see the arena block in `MiniMaxH3Pipeline.__init__`. All
-    multiples of TILE_SIZE so the transformer's fixed-extent source concat stays on the TILE path.
-    `for_task` gives the t2va/fl2va and ref2va defaults.
-    """
-
-    prompt: int = 5120  # 2112 for two keyframe vision blocks (2 x 1044, x32-aligned) + 3008 text
-    video_rows: int = 111712  # 15 s at the 1044 rows/frame canvas ceiling, x32-aligned
-    audio_rows: int = 1216  # 1206 audio rows at 15 s, x32-aligned
-    condition_video_rows: int = 2112  # two keyframe anchors at 1044 rows/frame, x32-aligned
-    condition_audio_rows: int = 1216  # ref2va soundtracks, <= 15 s total, x32-aligned
+    prompt: int = 5120
+    video_rows: int = 111712
+    audio_rows: int = 1216
+    condition_video_rows: int = 2112
+    condition_audio_rows: int = 1216
 
     @classmethod
     def for_task(cls, task: str) -> "MiniMaxH3ArenaCaps":
-        """Defaults sized to the task's envelope. t2va/fl2va use the field defaults; ref2va needs a
-        larger prompt (vision tokens: ~36.9k for nine image references) and much larger conditioning
-        (nine 2048px images at 4096 rows each). Sizes trace the audit's card-compliant class table."""
+        """Defaults sized to the task's envelope; ref2va needs much larger prompt and conditioning caps."""
         if task == "ref2va":
-            # Sized to what the reference-count caps admit (9 images, 3 videos totaling <= 15 s,
-            # 3 audios totaling <= 15 s, 12 references), not to any single request class:
-            # - condition_video: 9 x 4096 image rows + ~108 latent frames of video at the 1044
-            #   rows/frame canvas ceiling (15 s combined incl. the 3-clip 17n+5 trim bonuses).
-            #   The predecessor value (40960) was derived from the all-image class alone and
-            #   rejected every multi-video / long-video request the counts admit.
-            # - prompt: 9 x ~4.1k image tokens + 15 s of video vision blocks + 2k of user prompt.
-            # - condition_audio: 15 s of standalone audio plus 15 s of video soundtracks.
             return cls(prompt=57344, condition_video_rows=149632, condition_audio_rows=2432)
         return cls()
 
@@ -275,18 +247,14 @@ class MiniMaxH3ArenaCaps:
 
 @dataclass
 class _BucketState:
-    """Per-rung device state: everything whose shape is a function of the padded length.
+    """Per-rung device state whose shape depends on the padded length; bound once, never rebound."""
 
-    Bound exactly once, during the rung's untraced pass, and never rebound after -- see the arena
-    block in `MiniMaxH3Pipeline.__init__`.
-    """
-
-    rope_cos: StateTensor = field(default_factory=StateTensor)  # [1, 1, rung, rotary_dim] fp32, SP-sharded
-    rope_sin: StateTensor = field(default_factory=StateTensor)  # same
-    adaln: StateTensor = field(default_factory=StateTensor)  # [1, 1, 1, rung] int32, SP-sharded
-    tsi: StateTensor = field(default_factory=StateTensor)  # same
-    assembly_idx: StateTensor = field(default_factory=StateTensor)  # [1, 1, 1, rung] int32, replicated
-    warm: bool = False  # this rung has had its untraced pass; its next traced call may capture
+    rope_cos: StateTensor = field(default_factory=StateTensor)
+    rope_sin: StateTensor = field(default_factory=StateTensor)
+    adaln: StateTensor = field(default_factory=StateTensor)
+    tsi: StateTensor = field(default_factory=StateTensor)
+    assembly_idx: StateTensor = field(default_factory=StateTensor)
+    warm: bool = False
 
 
 # Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. An unlisted
@@ -313,10 +281,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         # (the padded-sequence zero rows), and rebuilding those inside a trace capture is a fatal write.
         "coresident": True,
         "trace_denoise": True,
-        # 32*factor=1024 T-align, so 5-15 s audio shares one compile. 4x8's 256-align would not.
         "audio_t_shard": True,
-        # Shard the audio decode over the 32-wide inter-host axis: at 32 every clip <= 15 s pads to
-        # the same 1024, so the decode compiles once. Overridable by kwarg or MINIMAX_H3_AUDIO_T_FACTOR.
         "audio_t_factor": 32,
     },
 }
@@ -387,15 +352,9 @@ def draw_request_latents(
 
 @dataclass
 class MiniMaxH3Output:
-    """One generation. `audio` is `(1, 2, samples)`; `video` depends on `video_format`:
+    """One generation. `audio` is `(1, 2, samples)`; `video` is `(1, 3, F, H, W)` float for `"rgb_float"`
+    or a planar `(F, H * 3 // 2, W)` uint8 numpy array for `"yuv420"`."""
 
-    - `"rgb_float"`: `(1, 3, F, H, W)` float in [0, 1] -- the reference contract.
-    - `"yuv420"`: planar `(F, H * 3 // 2, W)` uint8 as a **numpy array** (straight off the
-      device-stitch readback, never a torch tensor), ready for `utils.video.export_video_audio_yuv`
-      (or an ffmpeg rawvideo pipe at `-pix_fmt yuv420p`) with no host conversion. Consumers must
-      branch on `video_format` rather than assume the float layout -- `num_frames` is correct for
-      both.
-    """
 
     video: torch.Tensor
     audio: torch.Tensor
@@ -460,41 +419,25 @@ class MiniMaxH3Pipeline:
         num_links = preset["num_links"] if num_links is None else num_links
         topology = preset["topology"] if topology is None else topology
         coresident = preset.get("coresident", True) if coresident is None else coresident
-        # Preset default (quad-only), overridable so the traced resident path is testable on a
-        # single 4x8 Galaxy too rather than only where the preset turns it on.
         self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
         self.audio_t_shard = (
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
         )
-        # Tracing requires co-residency: a reload moves weight addresses a capture baked, and
-        # recapture would swamp replay anyway. Co-residency measurements live in the class docstring.
         self.coresident = coresident
         self.trace_denoise = self.trace_denoise and self.coresident
-        # To be used for JIT compile bucketing without tracing
         self.bucket_denoise = self.trace_denoise or bool(bucket_denoise)
-        # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
-        # measured-call report, not the compile pass. Construction logs still go through `_host_log`.
         self._log_generation = True
-        # Per-rung device state -- one `_BucketState` per bucket-ladder rung the pipeline has served,
-        # keyed by the rung when bucketing (or by 0 otherwise, where rebinding is harmless and one
-        # slot avoids holding a set of tensors per distinct shape). See `_BucketState` and `_denoise`.
         self._buckets: dict[int, _BucketState] = {}
-        # Forces `_select_bucket` onto one rung regardless of the request's natural rung; `warmup`
-        # uses it to walk the ladder with a single representative request.
         self._force_bucket: int | None = None
-        # Forces the ref2va encoder pad onto one presentation rung; warmup walks the encoder ladder
-        # the same way `_force_bucket` walks the denoise ladder.
         self._force_prompt_pad: int | None = None
-        self._tt_video = StateTensor()  # target video latents, [1, 1, video_rows cap, 96]
-        self._tt_audio = StateTensor()  # target audio latents, [1, 1, audio_rows cap, 32]
-        self._tt_cond_video = StateTensor()  # video conditioning rows in packed-walk order
-        self._tt_cond_audio = StateTensor()  # audio conditioning rows (ref2va deployments only)
-        self._tt_video_out_idx = StateTensor()  # output row selection, [1, 1, 1, video_rows cap]
-        self._tt_audio_out_idx = StateTensor()  # output row selection, [1, 1, 1, audio_rows cap]
-        self._tt_timestep = StateTensor()  # per-slot noise levels, [1, 1, num_slots, 1]; per step
-        # The true packed length, a [1, 1, 1, 1] uint32 for ring attention. Per-request-constant, so a
-        # resident trace input alongside the index tensors.
+        self._tt_video = StateTensor()
+        self._tt_audio = StateTensor()
+        self._tt_cond_video = StateTensor()
+        self._tt_cond_audio = StateTensor()
+        self._tt_video_out_idx = StateTensor()
+        self._tt_audio_out_idx = StateTensor()
+        self._tt_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
@@ -519,8 +462,6 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > preset (32 on the
-        # quad, else 8), then the 8->4->1 fallback; logged before decode.
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
         )
@@ -528,16 +469,10 @@ class MiniMaxH3Pipeline:
             audio_t_factor, shape, self.tp_axis, self.sp_axis
         )
 
-        # The trace-bucket ladder and the arena capacities: both are admission limits (a request
-        # beyond the top rung or any cap raises), both default to the task's envelope, both validated
-        # now that the SP alignment is known.
         self.bucket_ladder = tuple(bucket_ladder if bucket_ladder is not None else default_bucket_ladder(task))
         validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
         self.arena_caps = arena_caps or MiniMaxH3ArenaCaps.for_task(task)
         self.arena_caps.validate()
-        # The two admission checks must agree: a request that passes every cap must also fit the top
-        # rung, or it would clear cap admission and then fail bucket selection at serving time. The
-        # default cap/ladder pairs satisfy this; a custom pairing that does not is a config error.
         if self.bucket_denoise:
             caps = self.arena_caps
             admissible = caps.prompt + caps.condition_video_rows + caps.audio_rows + caps.video_rows
@@ -548,11 +483,6 @@ class MiniMaxH3Pipeline:
                     f"the arena caps admit a packed length up to {admissible}, beyond the top trace "
                     f"bucket {self.bucket_ladder[-1]}; raise the ladder or lower the caps"
                 )
-        # The AdaLN slot roles, pinned per deployment so `num_slots` -- and every shape it drives
-        # (`timestep`, `temb`, the modulation tables) -- is constant across requests and tasks: one
-        # trace per rung serves t2va and fl2va alike. A pinned-but-absent role's table rows are
-        # computed and never gathered, so numerics are identical; see `build_slot_routing`.
-        # `condition_audio` exists only in ref2va, which is its own deployment (separate weights).
         if adaln_slot_roles is None:
             adaln_slot_roles = MINIMAX_H3_ADALN_ROLES if task == "ref2va" else ("video", "audio", "condition_video")
         unknown = tuple(role for role in adaln_slot_roles if role not in MINIMAX_H3_ADALN_ROLES)
@@ -587,48 +517,24 @@ class MiniMaxH3Pipeline:
         self.rope_freq_dim = self.transformer_config["rope_freq_dim"]
         self.rope_theta = self.transformer_config["rope_theta"]
 
-        # Tokenizer, host debug twins, vision tower, and the audio encoder stay lazy -- they
-        # are not part of the residency scheme (the encoder is ref2va-only). The audio
-        # decoder is primed with the other always-on stages below.
         self._tokenizer = None
-        # The released Qwen3-VL conditioner on the host, for `encode_prompt_host` -- a debug twin of
-        # the device encode, lazily loaded because it is a large read only wanted when comparing.
         self._host_text_encoder = None
-        # The released video VAE on the host, for `_encode_keyframes_host` / `_decode_video_host` --
-        # debug twins of the device keyframe encode and video decode. Lazily built and loaded per half
-        # (encoder / decoder) because it is a large read only wanted when comparing against the device.
         self._host_vae = None
         self._host_vae_encoder_loaded = False
         self._host_vae_decoder_loaded = False
         self._image_processor = None
-        # `"yuv420"` builds the VAE for the device-stitched path: the canvas is blended, clamped and
-        # colour-converted on device, and the output carries planar `(T, H*3//2, W)` uint8 for
-        # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor. The DEFAULT since
-        # 2026-09-04: measured 6.93 s vs float's 10.76 s for the 768p/15s decode stage on a 4x8
-        # (float pays ~3.4 s of host stitch/unpatchify plus a 6.8 GB readback that never scales).
-        # It changes `MiniMaxH3Output.video`'s layout -- consumers branch on `output.video_format`
-        # -- so the pixel-comparing quality gates pin `vae_output_type="float"` explicitly.
         if vae_output_type not in ("float", "uint8", "yuv420"):
             raise ValueError(f"vae_output_type must be 'float', 'uint8' or 'yuv420', got {vae_output_type!r}")
         self.vae_output_type = vae_output_type
-        # Decode tiles per device per wave (batch dim). >1 cuts wave count at the cost of activation
-        # memory. 1 is the original one-tile-per-device schedule.
         self.vae_waves_per_device = 2
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
         self._audio_decoder = None
         self._audio_encoder = None
-        # `dit_fsdp=True` shards the DiT's SP-replicated weights over the SP axis (all-gathered per
-        # use) to relieve memory pressure.
         self.dit_fsdp = dit_fsdp
-        # The last call's packed length (bucket/alignment pad and the real unpadded length). Exposed
-        # so a perf test can assert that `warmup` and the measured call agree on the pad -- every
-        # program in the 50-block stack is keyed on it, so a mismatch means the "warm" number was
-        # cold and nothing else would say so.
         self.last_seq_len: SeqLen | None = None
 
-        # Construct host-side (device-free Parameters); weights load below / on first VAE use.
         self._host_log("building the Qwen3-VL text encoder")
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
@@ -649,18 +555,9 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             weight_loader=self._cache_submodel,
             ccl_manager=self.encoder_ccl_manager,
-            # Encoder compute dtype (the ViT decoder ignores it). bf16 runs the taps=3 wave
-            # 4.2x faster than fp32 (427 vs 1800 ms) and measures PCC 99.998% against the
-            # reference on the real checkpoint -- within 0.0003% of the fp32 encoder --
-            # before the rows are noise-augmented to t = 0.999 anyway.
             dtype=ttnn.bfloat16,
             device_stitch=yuv,
-            # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
-            # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
             pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
-            # The encode mirror: the normalize folds into each encoder's conv_in, so the
-            # keyframe/reference pixels cross PCIe as raw uint8 (`raw_pixels=True` at both
-            # encode call sites, which is a contract -- `_run_encoder_units` asserts it).
             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
@@ -670,14 +567,9 @@ class MiniMaxH3Pipeline:
         if not self.coresident:
             self._text_encoder.register_coresident_exclusions(self._transformer, *self._vae.modules)
             self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
-            # VAE sub-models exclude the other stages but not each other: one ref2va
-            # request uses the image encoder, the video encoder, and the decoder.
             for module in self._vae.modules:
                 module.register_coresident_exclusions(self._text_encoder, self._transformer)
 
-        # Prime in reverse order of use. Under coresident=False the text-encoder load would
-        # immediately evict the DiT, so skip that upload; it loads on first denoise. VAE
-        # sub-models load on first use, so warmup decides what uploads.
         if self.coresident:
             self._prepare_transformer()
         self._prepare_text_encoder()
@@ -716,15 +608,8 @@ class MiniMaxH3Pipeline:
         The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
-        `dit_fsdp=True` shards the DiT over the SP axis. `trace_denoise` defaults to the mesh preset
-        (on for the quad only); pass `True` to trace the denoise step on other shapes, e.g. to
-        exercise the traced resident path on one 4x8 Galaxy. Audio-encoder T-shard follows the same
-        preset (on for the quad); `MINIMAX_H3_AUDIO_T_SHARD` overrides. `bucket_denoise` pads to the
-        ladder without tracing (tracing always implies it); default off. The three deployment knobs
-        default to the task's envelope: `bucket_ladder` is the padded lengths and the admission cap
-        (`default_bucket_ladder`; consulted when bucketing or tracing is on), `arena_caps` the per-stream
-        admission limits (`MiniMaxH3ArenaCaps.for_task`), and `adaln_slot_roles` the pinned AdaLN
-        slot set (3 slots for t2va/fl2va, all 4 for ref2va).
+        `trace_denoise` defaults to the mesh preset; `bucket_ladder`, `arena_caps` and `adaln_slot_roles`
+        default to the task's envelope.
         """
         weights_dir = weights_dir or os.environ.get("MINIMAX_H3_MODEL_PATH")
         if not weights_dir:
@@ -856,8 +741,6 @@ class MiniMaxH3Pipeline:
         prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
         if not prompt_ids:
             raise ValueError("prompt tokenized to zero tokens")
-        # The token budget bounds the warmed encoder envelope; enforcing it here keeps every served
-        # presentation inside the prompt arena cap.
         if len(prompt_ids) > MINIMAX_H3_MAX_TEXT_TOKENS:
             raise ValueError(f"prompt is {len(prompt_ids)} tokens, over the {MINIMAX_H3_MAX_TEXT_TOKENS}-token budget")
         token_ids += prompt_ids
@@ -1006,10 +889,6 @@ class MiniMaxH3Pipeline:
 
     def _prepare_vision_tower(self):
         if self._vision_tower is None:
-            # Sharded on the pipeline's own axes (TP on tp_axis, SP on sp_axis), the tp4_sp8
-            # configuration the conditioner tests validate: TP fractures heads, SP shards the patch
-            # rows, and the tower gathers its merged tokens back to full replication, so the
-            # decoder handoff is unchanged. Falls back to replicated when the mesh has no SP axis.
             if self.sp_factor > 1:
                 self._host_log(f"building the Qwen3-VL vision tower (tp{self.tp_factor}_sp{self.sp_factor})")
                 self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
@@ -1075,15 +954,6 @@ class MiniMaxH3Pipeline:
             detail = f" ({int(type_ids.sum())} of them vision, {len(keyframes)} keyframe(s))"
         self._log(f"encoding {seq_len} presentation tokens on device" + detail)
 
-        # SP decoder alignment, done on HOST: the model pads the sequence to sp * 32 internally,
-        # but its device-side pad of the row-major [1, L] input_ids is single-core and blows L1 at
-        # ref2va presentation lengths (a 24k-token row is one ~100 KB page; the pad kernel's static
-        # buffers exceed the 1.5 MB L1). Padding the ids, type_ids and rope tables here makes the
-        # model's internal pad a no-op; the pad rows ride the causal tail (real rows never attend
-        # forward into them) and are sliced off the returned embeds below. Token 0 is an ordinary
-        # vocab entry, so the pad cannot extend a vision run.
-        # ref2va pads to the next presentation rung instead of the next sp*TILE multiple, so the
-        # encoder compiles a handful of lengths rather than every aligned size up to caps.prompt.
         true_seq_len = seq_len
         sp_alignment = self.sp_factor * ttnn.TILE_SIZE
         if self.task == "ref2va" and self.sp_factor > 1:
@@ -1114,15 +984,6 @@ class MiniMaxH3Pipeline:
         if has_vision:
             tower = self._prepare_vision_tower()
             vis_cos, vis_sin = tower.prepare_rope(grid_thw)
-            # One attention block per image and one per FRAME of a video, so `fl2va`'s single
-            # image reduces to full attention. Block form rather than a dense mask: an `s x s`
-            # mask is 17 GiB for a nine-image request.
-            #
-            # Under the SP tower, pad_patches_for_sp aligns the patch count to sp * 32 (a no-op
-            # when already aligned): the pad rides its own phantom attention window and the
-            # tower trims its merged garbage after the SP gather via `logical_patches`, so the
-            # decoder handoff below always carries exactly the real tokens. Inputs shard on the
-            # SP axis; replicated meshes shard nothing and pad nothing (sp_factor 1).
             p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
                 pixel_values.float(),
                 tower.prepare_pos_embeds(grid_thw),
@@ -1208,12 +1069,7 @@ class MiniMaxH3Pipeline:
         return taps[0], tags
 
     def _prepare_host_text_encoder(self):
-        """The released Qwen3-VL conditioner on the host (CPU), loaded once, for `encode_prompt_host`.
-
-        The full 64-layer checkpoint in its native bf16 -- not the TAP-truncated device build -- so
-        `hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER]` is exactly the reference tensor. Large read, so
-        it is lazy: only a comparison against the device encode wants it.
-        """
+        """The released Qwen3-VL conditioner on the host (CPU), loaded once, for `encode_prompt_host`."""
         if self._host_text_encoder is None:
             from transformers import Qwen3VLForConditionalGeneration
 
@@ -1221,22 +1077,12 @@ class MiniMaxH3Pipeline:
             hf = Qwen3VLForConditionalGeneration.from_pretrained(
                 str(self.weights_dir / "text_encoder"), dtype=torch.bfloat16
             )
-            # `.model` is the conditioner without the language-model head: MiniMax-H3 reads
-            # `hidden_states[50]` and never uses the vocabulary projection, exactly as the reference does.
             self._host_text_encoder = hf.model.eval()
         return self._host_text_encoder
 
     def _split_host_vision_inputs(self, pixel_values, grid_thw, vision_kinds, dtype):
         """Split the presentation's concatenated vision patches into the conditioner's per-modality
-        inputs -- `pixel_values`/`image_grid_thw` and `pixel_values_videos`/`video_grid_thw`.
-
-        The device path concatenates every reference's patches in presentation order for one fused
-        tower call (see `_build_ref2va_presentation`), but the HF conditioner takes each modality as
-        its own batch, each ordered as its runs appear -- exactly `encoders.py::_gather_vision_features`.
-        Splitting the *shared* patches here rather than re-running the processors keeps the pixels the
-        host sees bit-identical to the ones the device saw, so only the encoder differs. Pixels are
-        cast to the conditioner's dtype; grids stay integer.
-        """
+        image/video inputs, reusing the device's pixels so only the encoder differs."""
         if grid_thw is None:
             return {}
         counts = [int(grid.prod()) for grid in grid_thw]
@@ -1274,33 +1120,19 @@ class MiniMaxH3Pipeline:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Host/reference twin of `encode_prompt`, for isolating device-encode issues.
 
-        A drop-in swap: it builds the **identical** presentation `encode_prompt` builds -- same
-        tokenizer, same image / video processors, so `input_ids`, the per-row `tags` and Qwen's
-        `mm_token_type_ids` all match -- then runs the released Qwen3-VL conditioner on the host (CPU)
-        and reads `hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER]`. That is exactly the tensor the
-        reference `encoders.py::get_qwen3vl_prompt_embeds` returns and the same tap the device build
-        targets, so any PCC gap against `encode_prompt` is the on-device encode alone.
-
-        Returns the same `(prompt_embeds [1, L, 5120], text_token_tags [L])` as `encode_prompt`.
-
-        This is a debugging aid, not a served path: it loads the full 64-layer conditioner onto the
-        host and runs a CPU forward, which is slow and memory-hungry. `keyframes` (fl2va) and
-        `references` (ref2va) are mutually exclusive, as in `encode_prompt`.
+        Builds the identical presentation, then runs the released conditioner on the CPU (slow).
         """
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
         if keyframes and references:
             raise ValueError("keyframes (fl2va) and references (ref2va) are different tasks; pass one or neither")
 
-        # The exact presentation the device path builds -- the whole point of the twin is that only the
-        # encoder differs, so the tokens, tags and mm-type-ids are shared, not rebuilt differently.
         if references:
             input_ids, tags, type_ids, pixel_values, grid_thw, vision_kinds = self._build_ref2va_presentation(
                 prompt, references
             )
         else:
             input_ids, tags, type_ids, pixel_values, grid_thw = self._build_presentation(prompt, keyframes)
-            # An fl2va keyframe is an image, and t2va has no vision entries at all.
             vision_kinds = ["image"] * (0 if grid_thw is None else len(grid_thw))
 
         seq_len = input_ids.shape[1]
@@ -1309,9 +1141,6 @@ class MiniMaxH3Pipeline:
         encoder = self._prepare_host_text_encoder()
         vision_kwargs = self._split_host_vision_inputs(pixel_values, grid_thw, vision_kinds, encoder.dtype)
 
-        # `mm_token_type_ids` is Qwen's own per-row modality (0 text, 1 image, 2 video), which the
-        # presentation builders already produce as `type_ids`; it drives the conditioner's per-modality
-        # rotary grid. No chat template and no special tokens, so the attention mask is all ones.
         with torch.no_grad():
             outputs = encoder(
                 input_ids=input_ids,
@@ -1327,9 +1156,6 @@ class MiniMaxH3Pipeline:
     # ------------------------------------------------------------------ denoiser
 
     def _dit_weight_mode(self) -> str:
-        # AdaLN projections stay resident and `temb` is projected on device each step.
-        # `dit_fsdp=True` additionally shards the DiT over SP. The cache key keeps the historical
-        # `resident_adaln` token so existing weight-cache entries still hit.
         return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -1349,16 +1175,9 @@ class MiniMaxH3Pipeline:
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
-        # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of
-        # safetensors plus every `_prepare_torch_state` fixup. With TT_DIT_CACHE_DIR unset it
-        # falls through to the direct load and logs that it did. The load underneath is
-        # strict, so a single unmapped key is a real bug. ``cache.load_model`` no-ops if
-        # already resident.
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
-            # The partition term keeps the two partitions -- which share a repository and a
-            # config -- from hashing to one entry; FSDP vs full replication is a distinct layout.
             subfolder=f"{self.transformer_subfolder}_{self._dit_weight_mode()}",
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
@@ -1411,8 +1230,7 @@ class MiniMaxH3Pipeline:
         )
 
     def _logical_length(self, value: int) -> ttnn.Tensor:
-        """The logical packed length as a [1, 1, 1, 1] uint32 tensor, replicated (not SP-sharded) --
-        like `_row_indices` without the shard."""
+        """The logical packed length as a replicated [1, 1, 1, 1] uint32 tensor."""
         return from_torch(
             torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
             device=self.mesh_device,
@@ -1422,11 +1240,7 @@ class MiniMaxH3Pipeline:
         )
 
     def _replicated_indices(self, values: torch.Tensor) -> ttnn.Tensor:
-        """An integer index tensor, ROW_MAJOR and replicated -- `_row_indices` without the shard.
-
-        For the assembly and output-selection gathers, which run on SP-replicated tensors (before
-        `mesh_partition` and after the SP output gathers respectively).
-        """
+        """An integer index tensor, ROW_MAJOR and replicated -- `_row_indices` without the shard."""
         return from_torch(
             values.to(torch.int32).reshape(1, 1, 1, -1),
             device=self.mesh_device,
@@ -1454,12 +1268,7 @@ class MiniMaxH3Pipeline:
         return torch.cat([rows, torch.zeros(capacity - rows.shape[0], rows.shape[-1], dtype=rows.dtype)])
 
     def _assembly_source_offsets(self, caps: MiniMaxH3ArenaCaps) -> dict[str, int]:
-        """Row offset of each stream segment in the transformer's concatenated source table.
-
-        Must mirror the segment order `forward` concatenates: `[text | condition video |
-        condition audio | audio | video]`, a condition segment present only when its arena is passed
-        (condition audio exists only in ref2va deployments).
-        """
+        """Row offset of each stream segment in the transformer's source table; must mirror `forward`."""
         offsets = {"text": 0, "condition_video": caps.prompt}
         cursor = caps.prompt + caps.condition_video_rows
         if self.task == "ref2va":
@@ -1480,10 +1289,7 @@ class MiniMaxH3Pipeline:
     ) -> ttnn.Tensor:
         """Source-table row of each packed row: `[text | condition blocks | audio | video | pad]`.
 
-        The walk over `condition_spec` is the same packed-order walk that built the layout, with a
-        cursor per modality into that modality's contiguously-packed condition arena. Pad rows point
-        at source row 0 -- a real text row, so the gathered content is finite; ring attention masks
-        them via `logical_n` and nothing selects their output.
+        Pad rows point at source row 0 so the gathered content is finite.
         """
         src = self._assembly_source_offsets(caps)
         indices = torch.zeros(rung, dtype=torch.int32)
@@ -1501,27 +1307,14 @@ class MiniMaxH3Pipeline:
         return self._replicated_indices(indices)
 
     def _output_indices(self, start: int, count: int, capacity: int) -> ttnn.Tensor:
-        """Padded-global-sequence row of each target row of one modality, at the arena capacity.
-
-        Entries past `count` duplicate the first target row: the tail of the gathered velocity is
-        then finite real data, added onto arena tail rows nothing reads back.
-        """
+        """Padded-global-sequence row of each target row of one modality, at the arena capacity."""
         indices = torch.full((capacity,), start, dtype=torch.int32)
         indices[:count] = torch.arange(start, start + count)
         return self._replicated_indices(indices)
 
     def _prompt_windows(self, l_len: int, cap: int) -> ttnn.Tensor | None:
-        """Window boundaries `[0, l_len, cap]` for the token refiner's windowed SDPA: the true
-        tokens and the prompt arena's pad tail become separate attention windows, so no real token
-        attends to a pad row. Pad *rows* attend only among themselves and produce garbage the
-        assembly gather then drops.
-
-        Three integers cross PCIe; SDPA synthesizes the actual mask on device from them, per chunk
-        -- no O(L_cap^2) mask tensor exists anywhere, on host or device (at the ref2va prompt
-        capacity a dense mask would be GiB-scale). The boundary *content* is runtime data to the
-        op, so per-request prompt lengths replay the same compiled program. Consumed once per
-        request by `prepare_static_sources`, so it is a transient, not an arena. None when the
-        prompt fills the capacity exactly (a single full window is just unmasked attention).
+        """Window boundaries `[0, l_len, cap]` for the token refiner's windowed SDPA, so no real token
+        attends to a pad row. None when the prompt fills the capacity exactly.
         """
         if l_len >= cap:
             return None
@@ -1570,12 +1363,6 @@ class MiniMaxH3Pipeline:
         """
         if self._audio_encoder is None:
             config = self.audio_config
-            # T-shard the DAC trunk across mesh axis 1 (mesh_partition splits a whole axis, so the
-            # factor is the axis length: 8 on a 4x8, 32 on the quad). Each conv halo-exchanges with
-            # its neighbour shard and the trunk output gathers to full T for the causal pre_block,
-            # over the shared Linear audio manager -- the axis-1 ring the encoder CCL manager wires
-            # would wrap shard 0 <-> shard 31 and deadlock the halo exchange. `audio_t_shard`
-            # resolves like the decoder's factor: MINIMAX_H3_AUDIO_T_SHARD wins, else the preset.
             t_factor = tuple(self.mesh_device.shape)[1] if self.audio_t_shard else 1
             audio_parallel = ParallelFactor(factor=t_factor, mesh_axis=1) if t_factor > 1 else None
             self._host_log(f"building the audio encoder (ref2va reference soundtracks, t_factor={t_factor})")
@@ -1586,20 +1373,9 @@ class MiniMaxH3Pipeline:
                 latent_channels=config["latent_channels"],
                 num_attention_heads=config["num_attention_heads"],
                 mesh_device=self.mesh_device,
-                # Stereo L/R as batch data-parallelism across mesh axis 0: CCL-free (no halo, no
-                # gather) and numerically the unsharded computation on different devices. The
-                # encoder no-ops this on multi-host meshes, where its per-row readback cannot
-                # reach remote shards yet. Composes with the T-shard (batch axis 0, T axis 1).
                 stereo_split_axis=0,
                 parallel_config=audio_parallel,
                 ccl_manager=self.audio_ccl_manager if audio_parallel is not None else None,
-                # One step off the accurate default, measured at the production 5.17 s shape:
-                # full/tap 796 ms @ mean PCC 99.9989% -> weight/tap 565 ms @ 99.9785% -- 20x
-                # inside the encode gate (0.99 / rel RMSE 0.12). Not further: audio condition
-                # rows run clean at t = 1.0 with no fp16 round trip, so encoder error feeds the
-                # DiT directly, and the cheaper settings (off/tap 438 ms @ 99.92%) stay unproven
-                # until the ref2va e2e audio bars can run. The device-weight cache key carries
-                # `weights_variant(split_mode, ...)`, so this cannot cross-load with "full" bytes.
                 split_mode="weight",
             )
 
@@ -1638,21 +1414,12 @@ class MiniMaxH3Pipeline:
             self.vae_config.latents_mean,
             self.vae_config.latents_std,
             self.patch_size,
-            raw_pixels=True,  # the device VAE is built with pixel_norm; conv_in normalizes
+            raw_pixels=True,
         )
 
     def _prepare_host_vae(self, *, want_encoder: bool = False, want_decoder: bool = False):
         """The released MiniMax-H3 video VAE on the host (CPU), built once and loaded per half on
-        demand, for `_encode_keyframes_host` / `_decode_video_host`.
-
-        The reference diffusers `AutoencoderKLMiniMaxH3` in its native fp32. Its two halves load
-        separately -- `encoder.*`/`quant_conv.*` for the keyframe encode, `decoder.*`/
-        `post_quant_conv.*` for the video decode -- so a run that only encodes (or only
-        decodes) on the host never pays for the other half's weights. Its default tiling is
-        the geometry the device build matches (gated by `test_encode_clip_tiled` /
-        `test_decode_clip_tiled`), so nothing about the tiling is configured here. Large read, so it
-        is lazy: only a comparison against the device VAE wants it.
-        """
+        demand, for `_encode_keyframes_host` / `_decode_video_host`."""
         if self._host_vae is None:
             from diffusers.models.autoencoders.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
 
@@ -1670,13 +1437,8 @@ class MiniMaxH3Pipeline:
         return self._host_vae
 
     def _load_host_vae_half(self, state: dict[str, torch.Tensor], prefixes: tuple[str, ...]) -> None:
-        """Copy one half of the checkpoint into the host VAE. `load_state_dict` only writes the keys
-        it is handed, so the two halves accumulate across calls rather than clobbering each other.
-
-        The other half's tensors are deliberately absent, so `missing` is expected and unchecked;
-        `unexpected` is not -- a renamed key would land there and must fail rather than leave part of
-        the module at its random init.
-        """
+        """Copy one half of the checkpoint into the host VAE; `unexpected` keys fail, `missing` ones are
+        expected."""
         half = {k: v for k, v in state.items() if k.startswith(prefixes)}
         _, unexpected = self._host_vae.load_state_dict(half, strict=False)
         assert not unexpected, f"unexpected {prefixes[0]} keys loading the host VAE: {sorted(unexpected)[:5]}"
@@ -1684,19 +1446,7 @@ class MiniMaxH3Pipeline:
     def _encode_keyframes_host(self, vae: MiniMaxH3Vae, keyframes: Sequence[Image.Image]) -> torch.Tensor:
         """Host/reference twin of `_encode_keyframes`, for isolating device keyframe-encode issues.
 
-        A drop-in swap at the fl2va call site: it runs the **identical** conditioning math
-        `_encode_keyframes` runs -- `encode_keyframes` normalizes with the same ImageNet statistics,
-        samples the posterior under the same seed-42 generator, does the same fp16 round trip and the
-        same patchify -- but feeds the released VAE's `_encode_clip` on the host instead of the
-        device encoder. The moments contract is identical (`[mean, logvar]`, `2 * latent_channels`),
-        so the only thing that differs is where the keyframe is encoded, and any change in the anchor
-        frames against `_encode_keyframes` is the on-device keyframe encode alone.
-
-        Returns the same packed conditioning rows as `_encode_keyframes`. `vae` (the device encoder)
-        is accepted for signature parity so the swap is a one-word change, and is otherwise unused.
-
-        This is a debugging aid, not a served path: it loads the full VAE encoder onto the host and
-        runs a CPU forward, which is slow and memory-hungry.
+        Same conditioning math, encoded on the CPU; `vae` is unused (signature parity).
         """
         reference = self._prepare_host_vae(want_encoder=True)
         self._log(f"encoding {len(keyframes)} keyframe(s) on HOST (reference VAE encoder)")
@@ -1806,19 +1556,13 @@ class MiniMaxH3Pipeline:
     ) -> MiniMaxH3Output:
         """`image` and/or `last_image` select `fl2va`; `references` selects `ref2va`; neither `t2va`.
 
-        `reference_resize_mode` applies to ref2va image references only. The served mode is
-        `match` (area-match the target canvas, upscaling included); `max` and `diffusers` stay
-        for REPL/tests and the served request path rejects them.
+        `reference_resize_mode` applies to ref2va image references; only `match` is served.
 
         Note that `fl2va` at a given seed does **not** reproduce `t2va` at that seed, even with a
         keyframe that contributes nothing: the conditioning noise is the first draw off the request
         generator and shifts the video and audio streams behind it. That is the reference's draw
         order.
         """
-        # Stages fire `SectionStart` / `SectionEnd` for the caller to time, matching Wan.
-        # Text encoder and DiT are primed at init; VAE sub-models load on first use (normally
-        # during warmup). Under `coresident=False` a reload lands inside the timed row that
-        # triggered it.
         on_event = on_event if on_event is not None else null_callback
 
         if references is not None:
@@ -1911,13 +1655,8 @@ class MiniMaxH3Pipeline:
             # Every keyframe tile is exactly `tile_size` square: `split_tiles` returns `[tile_size] * n`
             # lengths unless one tile already covers the axis, and at 1344x768 neither does. So one
             # `(1, 256, 256)` encoder serves all 28 tiles, which is one wave on a 32-device mesh.
-            # The image encoder loads on first use inside the timed row (honest for exclusive-memory
-            # deployments; warmup is what uploads it for a served path).
             with event_section(on_event, "vae_encode"):
                 condition_rows = self._encode_keyframes(self._vae, keyframes)
-                # `scheduler.scale_noise`, never a local copy: a reimplementation computing `1 - t` in
-                # Python double instead of the sample dtype drifts 2.4e-7 (see `conditioning.py`), and a
-                # test asserts no second implementation exists.
                 condition_rows = scheduler.scale_noise(condition_rows, MINIMAX_H3_KEYFRAME_NOISE_AUG, condition_noise)
 
         # 4. Layout. One conditioning block of `rows_per_frame` rows per anchor, between text and audio.
@@ -2023,8 +1762,7 @@ class MiniMaxH3Pipeline:
         scheduler.set_timesteps(num_inference_steps)
         audio_scheduler.set_timesteps(num_inference_steps)
 
-        # 3. Reference VAE encode. Before the layout, because it is what resolves the geometry the
-        # layout is built from. Sub-models load on first use inside the timed row.
+        # 3. Reference VAE encode.
         has_visual = any(reference.kind != "audio" for reference in prepared)
         has_video = any(reference.kind == "video" for reference in prepared)
         has_audio = any(reference.has_audio for reference in prepared)
@@ -2036,7 +1774,6 @@ class MiniMaxH3Pipeline:
                 prepared,
                 encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
                 encode_video=(lambda pixels: vae.encode(pixels)) if has_video else None,
-                # The device encoder returns `(mean, logs)`; ref2va consumes the mean alone.
                 encode_audio=(lambda waveform: audio_encoder(waveform)[0]) if has_audio else None,
                 latents_mean=self.vae_config.latents_mean,
                 latents_std=self.vae_config.latents_std,
@@ -2044,7 +1781,7 @@ class MiniMaxH3Pipeline:
                 audio_latents_std=self.audio_config["latents_std"],
                 patch_size=self.patch_size,
                 audio_latent_channels=self.audio_config["latent_channels"],
-                raw_pixels=True,  # the device VAE is built with pixel_norm; conv_in normalizes
+                raw_pixels=True,
             )
 
         # 4. All the noise for the request, off one generator, in the reference's draw order:
@@ -2133,8 +1870,6 @@ class MiniMaxH3Pipeline:
     ) -> MiniMaxH3Output:
         """The half every task shares: denoise the packed sequence, then decode both modalities.
 
-        Extracted rather than duplicated because it is where the section events fire -- every
-        `_prepare_*` outside a section, one section per stage -- and two copies of that would drift.
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
         transformer = self._prepare_transformer()
@@ -2151,8 +1886,6 @@ class MiniMaxH3Pipeline:
                 on_event=on_event,
             )
 
-        # VAE sub-models load on first use inside the section (warmup is what uploads them
-        # for a served path; under coresident=False the reload is honest accounting).
         with event_section(on_event, "vae"):
             video = self._decode_video(
                 self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
@@ -2163,8 +1896,6 @@ class MiniMaxH3Pipeline:
                 self._audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows
             )
 
-        # Planar yuv420 is (F, H*3//2, W); the float/uint8 contract is (1, 3, F, H, W). The frame
-        # count lives on a different axis in each, and shape[2] on the planar layout is the WIDTH.
         yuv = self.vae_output_type == "yuv420"
         return MiniMaxH3Output(
             video=video,
@@ -2184,9 +1915,6 @@ class MiniMaxH3Pipeline:
         return torch.zeros(MINIMAX_H3_AUDIO_CHANNELS, int(seconds * rate), dtype=torch.float32), rate
 
     def _warmup_video(self, num_frames: int, size: int = 256) -> np.ndarray:
-        # Sampled at 2 fps and merged in pairs, a video's block count -- the tower's grid_t -- scales
-        # with its frame count, so a served-length clip warms a representative windowed encode where a
-        # handful of frames would compile only a grid_t=1 toy.
         return np.zeros((num_frames, size, size, 3), dtype=np.uint8)
 
     def _warmup_on_init(self) -> None:
@@ -2195,7 +1923,6 @@ class MiniMaxH3Pipeline:
         height, width = resolve_canvas_size(16, 9)
         num_frames = align_num_frames(round(5 * MINIMAX_H3_FPS))
         if self.task != "ref2va":
-            # A lone keyframe takes the tower's ring path; first+last takes the windowed path.
             rung_requests = {
                 max(self.bucket_ladder): dict(
                     image=self._warmup_image(),
@@ -2215,10 +1942,6 @@ class MiniMaxH3Pipeline:
             )
             return
 
-        # Spread the encoder paths across the ladder binds, which all precede trace capture: the lone
-        # image below takes the tower's RING path, and the per-rung sets take its WINDOWED path while
-        # first-running the video and audio encoders. Forced onto a rung above its own packed length,
-        # each set pads up, so the assignment only has to keep the heaviest set off the smallest rung.
         full_frames = align_num_frames(round(MINIMAX_H3_MAX_DURATION * MINIMAX_H3_FPS))
         mid_frames = align_num_frames(round(10 * MINIMAX_H3_FPS))
         waveform, sample_rate = self._warmup_audio(MINIMAX_H3_MAX_DURATION)
@@ -2300,12 +2023,6 @@ class MiniMaxH3Pipeline:
                 self._warm_prompt_encoder_envelope()
 
             overrides = dict(rung_requests or {})
-            # Bind every rung untraced, largest-first, then (when tracing) capture each: shapes, not
-            # step counts, key every program, so one short generation per rung compiles the whole
-            # stack, and the traced pass captures at step 0 and replays from step 1. All binds precede
-            # all captures, so every capture bakes the final arena and pool addresses. A bind mid-walk
-            # releases live captures (the safety rule in `_denoise`), which is why the capture loop
-            # re-checks every rung rather than only the ones this walk bound.
             fitted: dict[int, dict] = {}
             shrunk = generation_kwargs
             host = _is_host_rank()
@@ -2322,9 +2039,6 @@ class MiniMaxH3Pipeline:
                 bucket = self._buckets.get(rung)
                 shrink = rung < natural and rung not in overrides
                 request = overrides.get(rung, shrunk if shrink else generation_kwargs)
-                # A rung the natural first run already warmed is skipped here, so an override mapped
-                # onto it never first-runs during the binds -- it would compile under the live traces
-                # of the capture loop. Keep coverage overrides on rungs above the natural packed length.
                 if bucket is None or not bucket.warm:
                     request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
                     if request is None:
@@ -2359,11 +2073,8 @@ class MiniMaxH3Pipeline:
             self._force_bucket = None
 
     def _run_forced_fit(self, rung: int, prompt: str, generation_kwargs: dict, *, shrink: bool) -> dict | None:
-        """`_run_forced`; with `shrink`, halve `num_frames` until the request fits `rung` -- how
-        warmup reaches rungs below the caller's natural packed length. The forced-rung admission
-        error is the fit oracle, so none of the packing arithmetic is duplicated here; a missed
-        probe costs one text encode. Returns the kwargs that ran, or None when even the shortest
-        video does not fit (the rung stays cold).
+        """`_run_forced`; with `shrink`, halve `num_frames` until the request fits `rung`. Returns the
+        kwargs that ran, or None when even the shortest video does not fit.
         """
         kwargs = dict(generation_kwargs)
         while True:
@@ -2385,14 +2096,7 @@ class MiniMaxH3Pipeline:
 
     def _warm_prompt_encoder_envelope(self) -> None:
         """Compile every prompt-encoding program a served t2va/fl2va request can reach, strictly
-        before trace capture -- a program that first compiles under live traces can own a buffer a
-        replay will stomp, wedging the mesh on its next cache-hit run.
-
-        Encoder programs are keyed by the padded presentation length (multiples of `sp_factor *
-        TILE`) and, with keyframes, by the vision-run layout that (canvas, keyframe count) fixes.
-        The walk lands one encode on every reachable bucket for t2va and for one/two keyframes per
-        served canvas, with the bucket set derived from the arena cap and text budget. Replicated
-        meshes do not bucket the presentation, so there is no envelope to warm there.
+        before trace capture (a program first compiled under live traces can corrupt a replay).
         """
         if self.sp_factor <= 1:
             return
@@ -2415,7 +2119,6 @@ class MiniMaxH3Pipeline:
                 keyframes = [
                     prepare_keyframe_image(warm_image, height, width, stretch=(i == 0)) for i in range(n_keyframes)
                 ]
-                # The vision block is everything in the presentation ahead of the prompt.
                 probe = self._filler_prompt(1)
                 probe_ids, *_ = self._build_presentation(probe, keyframes)
                 probe_tokens = len(self.tokenizer(probe, add_special_tokens=False)["input_ids"])
@@ -2438,9 +2141,7 @@ class MiniMaxH3Pipeline:
 
     def _warm_ref2va_prompt_encoder_envelope(self) -> None:
         """Compile every prompt-encoding program a served ref2va request can reach, strictly before
-        trace capture. Encoder programs are keyed by padded presentation length, tower patch total
-        and per-run slice shape; the walk covers each distinct key once. Replicated meshes do not
-        bucket the presentation, so there is no envelope to warm there.
+        trace capture.
         """
         if self.sp_factor <= 1:
             return
@@ -2481,9 +2182,6 @@ class MiniMaxH3Pipeline:
             [image_ref(max_canvas) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)],
         )
 
-        # A reference video resolves to the canvas of its own aspect, so it reaches per-run slice
-        # shapes no image geometry can; the frame count only moves the presentation length (a rung),
-        # so a minimal clip compiles the shape.
         short_clip = align_num_frames(1)
         for size in served_reference_video_canvases():
             add(f"1 video at {size[1]}x{size[0]}", [video_ref(short_clip, size)])
@@ -2580,8 +2278,6 @@ class MiniMaxH3Pipeline:
         anchor_rows = video_rows[:num_cond].clone() if num_cond else None
         anchor_audio_rows = audio_rows[:num_cond_audio].clone() if num_cond_audio else None
 
-        # Admission control: a request exceeding an arena cap is rejected before anything is
-        # uploaded. `condition_audio` exists only in ref2va deployments.
         caps = self.arena_caps
         l_len = layout.text_indices.shape[0]
         v_target = video_rows.shape[0] - num_cond
@@ -2600,7 +2296,6 @@ class MiniMaxH3Pipeline:
         if over:
             raise ValueError(f"request exceeds the arena caps: {', '.join(over)} (see MiniMaxH3ArenaCaps)")
 
-        # The padded length: the ladder rung when bucketing, natural SP alignment otherwise.
         alignment = self.sp_factor * ttnn.TILE_SIZE
         if self.bucket_denoise:
             rung = self._select_bucket(layout.sequence_length)
@@ -2615,49 +2310,21 @@ class MiniMaxH3Pipeline:
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
 
-        # The index tensors this routing implies are built once below, after `traced` is known, so
-        # they land in the persistent buffers the trace bakes rather than a fresh per-call
-        # allocation.
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
-        # Trace the block stack where the preset asks for it, as Wan does on the quad only. At SP=32 a
-        # step is dominated by dispatching 50 blocks from host across four MPI ranks rather than by the
-        # matmuls, and `transformer.run_blocks` replaces that dispatch with one replay.
-        #
-        # One capture per ladder rung, keyed by `tracer_trace_key=pad_to` inside the transformer.
-        # Within a rung every request-varying quantity is data (index-tensor content, `logical_n`,
-        # uploaded values), so a warm rung replays for any request that fits it -- nothing to compare.
-        #
-        # The safety rule: replay rewrites every address its capture touched and the allocator does
-        # not track trace-touched space, so any pass that allocates something long-lived -- the first
-        # pass at a rung binds that rung's `_BucketState` (and, first time ever, the arenas), and any
-        # untraced pass may compile programs whose cache entries hold device buffers -- must not run
-        # under live captures. Release them all first; `warm` rungs keep their bindings and their
-        # next traced call re-captures automatically (~one forward each), never a re-warm.
         state = self._buckets.setdefault(rung if self.bucket_denoise else 0, _BucketState())
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             self.release_traces()
 
-        # Per-request-constant device state, updated once now that the trace decision is made: the
-        # rung-shaped tensors in this rung's `_BucketState`, the capacity-shaped arenas and index
-        # tensors as pipeline globals. `update` binds the buffer on the untraced pass (all captures
-        # released above) and `ttnn.copy`s into it when traced -- never rebound, see `__init__`.
         t_rope = time.time()
         rope_cos, rope_sin = self._device_metadata(layout, rung)
         state.rope_cos.update(rope_cos, traced=traced)
         state.rope_sin.update(rope_sin, traced=traced)
         t_rope = time.time() - t_rope
 
-        # Replicated on SP+TP from the encoder; the refiner runs at seq_len and pads to caps.prompt
-        # inside prepare_static_sources.
         prompt_device = ttnn.reshape(prompt_embeds, (1, 1, prompt_embeds.shape[1], prompt_embeds.shape[2]))
 
-        # Conditioning rows are invariant -- the loop writes only target rows, and the anchor check
-        # below raises if one moved. One arena per modality, in packed-walk order (which is exactly
-        # the order the host rows already have); the per-block interleave is assembly-index content.
-        # The video arena exists in every deployment (zero-filled for t2va); the audio one only in
-        # ref2va, whose soundtracks are the only source of audio conditioning rows.
         self._tt_cond_video.update(
             self._pad_host_rows(video_rows[:num_cond], caps.condition_video_rows).reshape(
                 1, 1, caps.condition_video_rows, -1
@@ -2676,10 +2343,6 @@ class MiniMaxH3Pipeline:
                 device=self.mesh_device,
             )
 
-        # The step-invariant streams -- refined text and the condition projections -- run once per
-        # request rather than on every step: at the ref2va prompt capacity the refiner's O(L_cap^2)
-        # attention would otherwise dominate every step. The window boundaries are consumed inside
-        # this call only, so they live as a transient, never as an arena.
         transformer.prepare_static_sources(
             prompt_1BLP=prompt_device,
             prompt_windows=self._prompt_windows(l_len, prompt_embeds.shape[1]),
@@ -2689,8 +2352,6 @@ class MiniMaxH3Pipeline:
             traced=traced,
         )
 
-        # Index tensors are constant across the request, so uploaded once here. `logical_n` joins
-        # them: the true (unpadded) packed length as a device tensor.
         state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
         state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
@@ -2702,12 +2363,6 @@ class MiniMaxH3Pipeline:
         self._tt_video_out_idx.update(self._output_indices(video_start, v_target, caps.video_rows), traced=traced)
         self._tt_audio_out_idx.update(self._output_indices(audio_start, a_target, caps.audio_rows), traced=traced)
 
-        # Target latents: uploaded once at arena capacity and advanced in place on device by the
-        # Euler step below, so they stay resident across the loop -- no per-step re-upload, no host
-        # round-trip. Under tracing `update` copies the fresh initial noise into the same buffer the
-        # capture read, which both resets it for each replay and keeps the trace's input address
-        # valid. The zero tails accumulate duplicated real velocities (see `_output_indices`);
-        # nothing reads them back.
         self._tt_video.update(
             self._pad_host_rows(video_rows[num_cond:], caps.video_rows).reshape(1, 1, caps.video_rows, -1),
             traced=traced,
@@ -2735,10 +2390,6 @@ class MiniMaxH3Pipeline:
             )
         ):
             t_step = time.time()
-            # Every trace input is a persistent buffer hoisted above the loop; only the per-slot
-            # noise levels change. Each block projects `temb` for these levels on device (row
-            # `slot * MODALITY_NUM + tag`), so a row indexes its slot directly -- nothing rebuilt
-            # from the host per step.
             level_kwargs = {
                 "video_timestep": float(t),
                 "audio_timestep": float(audio_timesteps[i]),
@@ -2748,15 +2399,10 @@ class MiniMaxH3Pipeline:
             if "condition_audio" in slot_roles:
                 level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
             levels = slot_levels(slot_roles, **level_kwargs)
-            # Replicated, fp32 so the sinusoid is computed in fp32, and shaped [1, 1, num_slots, 1]
-            # so it broadcasts against the frequency factor. `num_slots` is fixed for the request,
-            # so the buffer's shape never changes and the trace can bake its address; only the
-            # values are refreshed in place.
             self._tt_timestep.update(
                 levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
 
-            # `forward` traces the block stack internally when `traced`; everything else runs eagerly.
             video_velocity, audio_velocity = transformer(
                 video_1BVC=self._tt_video.value,
                 audio_1BAC=self._tt_audio.value,
@@ -2773,7 +2419,6 @@ class MiniMaxH3Pipeline:
                 traced=traced,
             )
 
-            # On-device Euler
             ttnn.synchronize_device(self.mesh_device)
             if ttnn.using_distributed_env():
                 ttnn.distributed_context_barrier()
@@ -2788,8 +2433,6 @@ class MiniMaxH3Pipeline:
                 t_steady += t_step
             on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
 
-        # This rung is now warm: any later request that pads to it may trace. Set only after the loop
-        # completes, so an exception mid-loop leaves the rung cold rather than falsely warm.
         state.warm = True
         steady_steps = max(len(timesteps) - 1, 1)
         self._log(
@@ -2798,9 +2441,6 @@ class MiniMaxH3Pipeline:
             f"({t_steady / steady_steps * 1000:.0f} ms/step)"
         )
 
-        # condition rows live in their own arenas, so `[:num_cond]` stays pristine -- the return
-        # contract (cond | target, cond first) and the decoders are unchanged, and the anchor check
-        # below.
         ttnn.synchronize_device(self.mesh_device)
         if ttnn.using_distributed_env():
             ttnn.distributed_context_barrier()
@@ -2879,21 +2519,9 @@ class MiniMaxH3Pipeline:
     ) -> torch.Tensor:
         """Host/reference twin of `_decode_video`, for isolating device-decode issues.
 
-        A drop-in swap at the decode call site: it does the **identical** host-side unpatchify and
-        latent de-normalization `_decode_video` does -- same `latents_mean`/`latents_std`, same
-        dropping of the leading condition rows -- then runs the released VAE's `decode` on the host
-        (CPU) and applies the same ImageNet pixel de-normalization and `[0, 1]` clamp the `"float"`
-        device path applies. So the only thing that differs is where the latents are decoded, and any
-        change in the frames against `_decode_video` is the on-device decode alone.
-
-        Returns `(1, 3, F, H, W)` float in `[0, 1]`, matching the `vae_output_type="float"` device
-        path -- and always that, regardless of `vae_output_type`: the reference decoder has no
-        on-device colour fold, so the `"yuv420"`/`"uint8"` variants have no host counterpart; compare
-        in float space. `vae` (the device decoder) is accepted for signature parity and is unused.
-
-        This is a debugging aid, not a served path: it loads the full 36-layer ViT decoder onto the
-        host and runs a CPU forward, which is slow and memory-hungry.
+        Decodes on the CPU and always returns `(1, 3, F, H, W)` float in `[0, 1]`; `vae` is unused.
         """
+
         latents = unpatchify_video_tokens(
             rows[num_condition_video_rows:],
             num_latent_frames,

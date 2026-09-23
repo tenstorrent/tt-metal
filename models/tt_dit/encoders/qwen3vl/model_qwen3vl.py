@@ -43,18 +43,8 @@ class Qwen3VlContext:
     # kernel config instead of the tt_dit-wide default from `linear_compute_config`. See
     # `Qwen3VlTextEncoder`'s `high_fidelity_linears`.
     linear_compute_kernel_config: object | None = None
-    # Sequence parallelism: shard the sequence on this axis and attend across shards with causal ring
-    # attention. Only the causal path is supported. Composes with FSDP on the same axis: FSDP shards
-    # WEIGHTS (all-gathered to full immediately before use, so every device on the axis applies
-    # identical weights) while SP shards ACTIVATION rows -- the two never interact, the classical
-    # FSDP-over-the-data-axis arrangement. They do share the axis's link bandwidth, so their
-    # collectives serialize; that is a perf tradeoff, not a correctness constraint.
-    # Default None keeps every existing caller on the TP-only path, byte-for-byte.
-    #
-    # The ring uses contiguous shards (`is_balanced=False`). The zigzag-balanced layout was measured
-    # (test_ring_causal_sdpa.py::balanced) and gave ~0% at the block level and ~2.5% on attention
-    # alone -- the block is matmul-bound and those shards shrink /sp either way -- so it is not wired
-    # in; it would only cost a stricter alignment (2*sp*32) and a caller-side reorder for no gain.
+    # Sequence-parallel axis: shards the sequence and uses causal ring attention (causal path only).
+    # Composes with FSDP on the same axis (FSDP shards weights, SP shards activation rows).
     sp_axis: int | None = None
 
     def __post_init__(self) -> None:
@@ -179,9 +169,6 @@ class Qwen3VlTextEncoder(Module):
                 raise ValueError(msg)
             head_dim = hidden_size // num_attention_heads
 
-        # Sequence parallelism: shard the sequence on the SP axis (the non-TP axis) and ring the
-        # causal attention over it. Composes with FSDP on the same axis (weights vs activation rows;
-        # see Qwen3VlContext).
         sp_axis = None
         if parallel_config is not None and parallel_config.sequence_parallel is not None:
             sp_axis = parallel_config.sequence_parallel.mesh_axis
@@ -285,9 +272,6 @@ class Qwen3VlTextEncoder(Module):
             msg = "deepstack_embeds needs vision_runs to know which rows to add to"
             raise ValueError(msg)
         if self._sp_axis is not None and attention_mask is not None:
-            # SP routes attention through the causal ring (`is_causal=True`), which admits no explicit
-            # bias. The MiniMax-H3 conditioner passes a single un-padded presentation with no mask, so
-            # this only fires if a future caller wants masked SP.
             msg = "sequence-parallel decoder supports only the causal (no-mask) path"
             raise ValueError(msg)
         batch_size, seq_len = input_ids.shape
@@ -307,9 +291,6 @@ class Qwen3VlTextEncoder(Module):
             attention_mask = ttnn.pad(attention_mask, [(0, padded_seq_len - seq_len)], value=0)
             attention_bias = prepare_attention_bias(attention_mask)
         elif self._sp_axis is not None:
-            # SP needs each shard tile-aligned: pad the sequence to a multiple of sp*32. The tail pad
-            # rows are harmless under causal attention (real rows never attend forward into them) and
-            # are sliced off after the final gather. Same pad idiom as the masked path above.
             padded_seq_len = -(-seq_len // (self._sp_factor * 32)) * (self._sp_factor * 32)
             if padded_seq_len != seq_len:
                 input_ids = ttnn.pad(input_ids, [(0, padded_seq_len - seq_len)], value=0)
@@ -336,11 +317,6 @@ class Qwen3VlTextEncoder(Module):
         if vision_embeds is not None:
             input_embeds = _scatter_rows(input_embeds, vision_embeds, vision_runs, add=False)
 
-        # Sequence parallelism: everything above ran on the full (replicated) sequence -- including the
-        # vision scatter -- so no per-shard offset logic is needed. Now SP-shard the stream (and the
-        # rotary tables) on the sequence, and pre-build the deepstack adds the same way: scatter each
-        # feature into a zero base on the full sequence, then shard it, so the mid-stack deepstack step
-        # becomes a plain sharded add rather than a shard-aware scatter.
         deepstack_sharded: list[ttnn.Tensor] | None = None
         if self._sp_axis is not None:
             if deepstack_embeds:
@@ -364,8 +340,7 @@ class Qwen3VlTextEncoder(Module):
                 pos_embeds=pos_embeds,
             )
             # Vision also enters here, not only at the embeddings: the tower's intermediate features are
-            # added to the vision rows of the first few layers. Under SP the add is a plain sharded add
-            # against the pre-sharded deepstack tensor (built above); otherwise a row-range scatter-add.
+            # added to the vision rows of the first few layers.
             if deepstack_embeds and layer_idx < len(deepstack_embeds):
                 if self._sp_axis is not None:
                     hidden_states = ttnn.add(hidden_states, deepstack_sharded[layer_idx])
@@ -379,7 +354,6 @@ class Qwen3VlTextEncoder(Module):
             captured = [self.norm.forward(hidden_states)]
 
         if self._sp_axis is not None:
-            # Gather the sequence back so the return matches the TP-only contract (full, replicated).
             captured = [
                 self._ccl_manager.all_gather(x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True) for x in captured
             ]
@@ -614,8 +588,6 @@ class Qwen3VlAttention(Module):
         k = _apply_rope(k, cos, sin)
 
         if self._sp_axis is not None:
-            # Sequence sharded on the SP axis: attend across shards with causal ring attention. Only
-            # the causal path is supported here -- an explicit bias would need per-shard slicing.
             assert attention_bias is None, "SP decoder attention supports only the causal path (attention_bias=None)"
             x = self._ring_attention(q, k, v)
         else:
@@ -650,39 +622,25 @@ class Qwen3VlAttention(Module):
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=chunk_size,
-            # k 512: fewer streaming-softmax rescales (each rounds bf16; see the tower's
-            # _windowed_program_config for the sweep). Fidelity-neutral here -- the causal decoder's
-            # attention error was already sub-noise -- but ~2-5 % faster (fewer K iterations).
             k_chunk_size=min(seq_len, 512),
             exp_approx_mode=False,
         )
 
     def _ring_program_config(self, local_seq_len: int) -> tuple[ttnn.SDPAProgramConfig, tuple[int, int]]:
-        """Flash tiling for the ring, sized from the LOCAL shard, reserving the last core column for the
-        CCL workers (mirrors `vision_qwen3vl.py::_ring_program_config`). Returns the config and the
-        worker grid so the caller can point `ccl_core_grid_offset` at the reserved column."""
+        """Ring SDPA config sized from the local shard; reserves the last core column for CCL workers."""
         full_grid = self._device.compute_with_storage_grid_size()
         worker_grid = (full_grid.x - 1, full_grid.y)
         chunk = min(-(-local_seq_len // 32) * 32, SEQ_BUCKET_SIZE)
         cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=worker_grid,
             q_chunk_size=chunk,
-            # k 512 within each ring shard (self-capping when the shard is shorter, e.g. any
-            # sp32 config or short prompts): same rationale and measurement as the causal path.
             k_chunk_size=min(-(-local_seq_len // 32) * 32, 512),
             exp_approx_mode=False,
         )
         return cfg, worker_grid
 
     def _ring_attention(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
-        """Causal attention over a sequence sharded on the SP axis.
-
-        `ring_joint_scaled_dot_product_attention(is_causal=True)` gathers k/v around the SP ring while
-        streaming the softmax, so no device materializes the full `s x s` score matrix; the joint slots
-        are zero-width to keep it pure self-attention. Contiguous shards (`is_balanced=False`): correct
-        but not load-balanced (the causal-load zigzag is a later perf refinement). Validated at this
-        head geometry by `tests/encoders/qwen3vl/test_ring_causal_sdpa.py`.
-        """
+        """Causal ring attention over a sequence sharded on the SP axis (zero-width joint slots)."""
         sp_axis, ccl = self._sp_axis, self._ccl_manager
         local_seq_len = q.shape[2]
         pc, worker_grid = self._ring_program_config(local_seq_len)

@@ -503,9 +503,6 @@ class MiniMaxH3Encoder3d(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
-        # `pixel_norm` reaches conv_in alone: it folds the pixel normalization into the first
-        # conv (see MiniMaxH3CausalConv3d._prepare_torch_state), so this encoder consumes raw
-        # 0..255 pixels; every later conv sees activations and stays untouched.
         self.conv_in = MiniMaxH3CausalConv3d(
             in_channels, block_out_channels[0], kernel_size=3, spatial_padding=1, pixel_norm=pixel_norm, **conv_kwargs
         )

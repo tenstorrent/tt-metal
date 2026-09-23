@@ -422,7 +422,6 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         try:
             out = run(formulation, slice_config)
         except RuntimeError as exc:
-            # Message only: to prevent desynchronisation of the ranks' allocators on a multi-host mesh.
             reason = str(exc).splitlines()[0][:160] if str(exc) else type(exc).__name__
             last_exc = RuntimeError(f"tap filter: {formulation!r} failed at {shape}: {reason}")
             del exc
@@ -434,9 +433,6 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
                 )
             continue
         cache[shape_key] = (formulation, slice_config)
-        # logger.debug(
-        #     f"tap filter plan: {shape} -> {formulation!r} / {slice_signature(slice_config) or 'auto'} ({source})"
-        # )
         if source == "trial":
             if formulation == "mac":
                 _warn_once(

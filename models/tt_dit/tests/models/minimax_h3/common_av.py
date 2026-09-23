@@ -31,11 +31,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 
-# Off by default: sanity, seam, CLIP, and reminder chatter. Set H3_LOG_QUALITY=1 to see it.
-# Asserts still run either way. Stage durations always log on the host rank.
-# ENABLE_USER_INPUT=1 turns the t2va perf test into a prompt/aspect/duration REPL after the
-# measured generation. Rank 0 is remote under tt-run, so the launch host relays /dev/tty
-# through cwd-relative `.h3_repl/journal` (append-only; NFS must not look up new ready.* names).
+# Truthy values for H3_LOG_QUALITY (quality logs) and ENABLE_USER_INPUT (post-perf prompt REPL).
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
 
 
@@ -250,7 +246,6 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
 
     silent = directory / f"{stem}_silent.mp4"
     if frames.ndim == 3:
-        # Planar yuv420p from vae_output_type="yuv420": (F, H*3//2, W) uint8.
         _, planar_height, width = frames.shape
         height = planar_height * 2 // 3
         pix_fmt = "yuv420p"
@@ -491,17 +486,7 @@ def artifact_dir(name: str) -> Path:
 
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
-    """A quiet compile pass then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it).
-
-    The compile pass runs a short 3-step schedule regardless of the measured step count: every program, conv3d
-    blocking and persistent buffer is keyed on the *padded sequence length*, not the number of steps,
-    so 3 steps compile and allocate exactly what the full run needs at a fraction of the cost, and the
-    denoise trace stays warm across step counts (its signature is shape + slot count) so the measured
-    full-step call still replays it.
-
-    `profiler`, when given, is a `BenchmarkProfiler`: only the measured call is wrapped in `"run"` and
-    receives `on_event`. The quiet compile pass is unprofiled.
-    """
+    """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
     # warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
 
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
@@ -775,7 +760,7 @@ def _prompt_line(message: str, timeout: float | None = None) -> str:
 
 def pretest_user_repl(*, timeout: float = 1800, rounds: int = 3) -> None:
     """`rounds` TTY round-trips before pipeline init. Fails fast if the launch-host relay is not working."""
-    return  # skip this for now
+    return
     if not user_input_enabled():
         return
     flag = 0
@@ -806,7 +791,7 @@ def _read_optional_image_path(label: str) -> str | None:
 def _read_user_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
 ) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
-    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect, duration, steps, seed and optional fl2va keyframes."""
+    """Host stdin: prompt (`q` quits), aspect, duration, steps, seed and optional fl2va keyframes."""
     while True:
         try:
             prompt = _prompt_line("User prompt (q to quit): ").strip()
@@ -918,11 +903,7 @@ def _parse_reference_counts(text: str) -> tuple[int, int, int]:
 def _read_reference_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
 ) -> dict | None:
-    """Host stdin: a prompt, aspect, duration and steps (defaulting to the working point), a counts triple, then paths.
-
-    `q` at the prompt or counts step, or EOF anywhere, aborts (returns None). Paths are re-prompted
-    until the entered count matches and every path is an existing file, so a typo never reaches pipeline init.
-    """
+    """Host stdin: prompt, aspect, duration, steps, a counts triple, then paths; None on `q` or EOF."""
     while True:
         try:
             prompt = _prompt_line("User prompt (q to quit): ").strip()
@@ -1024,11 +1005,9 @@ def _broadcast_reference_spec(spec: dict | None) -> dict | None:
 def read_user_reference_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
 ) -> dict | None:
-    """Collect a ref2va prompt, aspect/duration/steps and reference paths from the launch TTY and broadcast to every rank.
+    """Collect a ref2va prompt, settings and reference paths from the launch TTY and broadcast to every rank.
 
-    Returns `{"prompt": str, "aspect": [w, h], "duration_s": float, "num_steps": int, "image": [...],
-    "audio": [...], "video": [...]}` in packed order, or None when input is disabled or aborted. Media
-    itself is loaded per rank from the (shared) paths, not carried here.
+    Returns a spec dict, or None when input is disabled or aborted.
     """
     if not user_input_enabled():
         return None
@@ -1046,11 +1025,7 @@ def run_user_generations(
     label: str = "t2va",
     artifact_name: str = "h3_t2va_artifacts",
 ) -> None:
-    """Prompt/aspect/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set.
-
-    Each entry is a fresh `BenchmarkProfiler` fed by `on_event` (no `run` wrap). Artifacts use the
-    perf-test stem plus a 0-based index. Admission errors log and the loop continues.
-    """
+    """Prompt/aspect/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
     if not user_input_enabled():
         return
     from PIL import Image
@@ -1124,10 +1099,7 @@ def run_user_ref_generations(
 ) -> None:
     """ref2va prompt+reference REPL after the warm measured run. No-op unless ENABLE_USER_INPUT is set.
 
-    `request_provider()` returns one `(prompt, references, aspect_ratio, duration_s, num_steps)` per
-    iteration (None to stop), already broadcast to every rank. Each entry is a fresh `BenchmarkProfiler`
-    fed by `on_event`, and its artifacts are stemmed by the reference modalities plus a 0-based index.
-    Admission errors log and the loop continues.
+    `request_provider()` returns `(prompt, references, aspect_ratio, duration_s, num_steps)`, or None to stop.
     """
     if not user_input_enabled():
         return

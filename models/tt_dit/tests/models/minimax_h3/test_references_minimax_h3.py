@@ -205,8 +205,7 @@ def test_pad_waveform_to_max_duration_is_one_fixed_shape(seconds):
 
 
 def test_max_reference_audio_latents_covers_the_longest_soundtrack():
-    """604 hops: 15 s of frames aligns up to 362 (15.083 s), and the encoder count is a CEIL --
-    a flat 15 s (600 hops) would leave the top-end request longer than the pad target."""
+    """604 hops: 15 s of frames aligns up to 362 (15.083 s), and the encoder count is a ceil."""
     assert R.MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS == 604
     longest = R.align_num_frames(round(R.MINIMAX_H3_MAX_DURATION * R.MINIMAX_H3_FPS)) / R.MINIMAX_H3_FPS
     assert int(np.ceil(longest * AUDIO_RATE / R.MINIMAX_H3_AUDIO_HOP)) == 604
@@ -714,7 +713,7 @@ def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
         mesh_device=mesh_device,
         weights_dir=weights,
         task="ref2va",
-        vae_output_type="float",  # this gate reads the (1, 3, F, H, W) float contract; yuv420 is the deployment default
+        vae_output_type="float",
     )
     needs_video = any(reference.kind == "video" for reference in ours)
     vae = pipeline.vae

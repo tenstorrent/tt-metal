@@ -246,20 +246,11 @@ def build_minimax_h3_vision_tower(
     parallel_config=None,
     ccl_manager=None,
     load_weights: bool = True,
-    # HiFi4 tower linears by default, mirroring the decoder: HiFi2 measurably drops bf16 operand
-    # precision (~0.3-0.5 % RMS per linear; MLP one-step 0.77 -> 0.29 % at HiFi4, reaching the bf16
-    # CPU reference's level), while costing ~1 % tower time (the linears are not the bottleneck).
-    # Tower end-to-end RMSE vs the reference: 7.4 -> 6.5 % on two_refs at real weights.
     high_fidelity_linears: bool = True,
 ) -> tuple[Qwen3VlVisionModel, dict]:
     """Build the released vision tower and load its weights. Returns `(tower, vision_config)`.
 
-    `parallel_config`/`ccl_manager` are forwarded to `Qwen3VlVisionModel`. Passing an
-    `EncoderParallelConfig` with both `tensor_parallel` and `sequence_parallel` set (plus a
-    `ccl_manager`) turns on the sharded path -- TP head fracturing, ring / windowed-SP attention, and
-    the sequence-dim all-reduce. Leaving them `None` keeps the tower **replicated**: at ~1.2 GB bf16
-    against the conditioner's ~50 GB it is cheap enough to replicate, and it runs once per request
-    outside the denoise loop, so replication is a valid (and historically the default) choice.
+    TP+SP `parallel_config` with a `ccl_manager` enables the sharded path; `None` keeps the tower replicated.
 
     Every config value is read from the checkpoint rather than defaulted, because two of them are
     load-bearing and easy to get wrong silently -- `head_dim` is `1152 // 16 = 72`, which is not tile

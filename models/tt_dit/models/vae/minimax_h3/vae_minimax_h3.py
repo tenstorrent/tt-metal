@@ -50,9 +50,7 @@ from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
 DEFAULT_TILE_SIZE = 256
 DEFAULT_TILE_OVERLAP = 64
-# Every overlap `split_tiles` derives at the default tile size and overlap, for any multiple-of-32 edge.
-# The device stitcher binds one ramp per entry up front; pinned against `split_tiles` in
-# test_stitch_device_minimax_h3.py.
+# Every overlap `split_tiles` derives at the default tile size/overlap; the device stitcher binds one ramp each.
 TILE_BLEND_EXTENTS = (64, 80, 96, 112, 128, 144, 160, 192, 224)
 
 
@@ -197,17 +195,7 @@ def blend_clip_frames(a, b, extent: int):
 def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
     """Temporal assembly into one preallocated buffer: seam math on overlap frames, memcpy for the rest.
 
-    ``parts`` is ``[(segment, previous_overlap_or_None), ...]`` in output order, where a non-None
-    ``previous_overlap`` means the segment's first ``frame_overlap`` frames cross-fade from that
-    overlap's trailing frames -- exactly :func:`blend_clip_frames`, whose head this reuses verbatim
-    so the seam math (weights, uint8 re-rounding) cannot drift.
-
-    The append-and-concat form this replaces copied every segment once inside the blend's tail
-    concat and the whole video again in ``concat_clip_frames`` -- 1.32 s + 0.26 s of numpy at
-    768P/15s, nearly all memcpy. Here each segment writes its own disjoint slab of the output, so
-    the copies happen once, and in parallel: every write touches only its own slab, its own
-    segment, and the previous segment's trailing frames, all read-only, so the pool needs no
-    ordering. uint8/torch copies release the GIL, which is what makes the threads worth having.
+    ``parts`` is ``[(segment, previous_overlap_or_None), ...]`` in output order; each fills its own slab.
     """
     total = sum(clip_num_frames(segment) for segment, _ in parts)
     first = parts[0][0]
@@ -270,11 +258,7 @@ def stitch_tiles(
 
 
 def prepare_encoder_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Encoder ``state_dict`` with ``quant_conv`` folded into ``conv_out``.
-
-    The two are adjacent with no nonlinearity between them, so one 1024->48 k3 conv
-    does both and the awkward 48-channel 1x1x1 conv disappears entirely.
-    """
+    """Encoder ``state_dict`` with ``quant_conv`` folded into ``conv_out`` (adjacent, no nonlinearity between)."""
     encoder_state = {k[len("encoder.") :]: v for k, v in state.items() if k.startswith("encoder.")}
     if not encoder_state:
         encoder_state = dict(state)
@@ -353,11 +337,7 @@ def prepare_decoder_state(
 class MiniMaxH3Vae:
     """Orchestrator for the H3 visual VAE: tiling, waves, stitch; owns the leaf modules.
 
-    Constructs a fixed set of sub-models from config + task (decoder, image encoder,
-    and a video encoder on ref2va). Each is a named ``Module`` loaded on first use.
-    Production shapes are the tile: decoder ``(chunk+overlap, tile/ratio, tile/ratio)``,
-    image encoder ``(1, tile, tile)`` taps=1, video encoder ``(clip_length, tile, tile)``
-    taps=3.
+    Builds the decoder, image encoder and (on ref2va) video encoder at tile shape; each loads on first use.
     """
 
     def __init__(
@@ -393,31 +373,18 @@ class MiniMaxH3Vae:
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
-        # Hook for a caller that wants weights loaded through `utils.cache` rather than straight off
-        # the host state dict. Called as `weight_loader(module, subfolder, state)` once per sub-model.
-        # Defaults to a plain strict load, which is what every existing test does.
         self._weight_loader = weight_loader
         self._stitcher = None
         self._blender = None
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
-        # How a device-stitched wave shares tiles. "gather" all-gathers every wave slot to every
-        # device and blends the whole canvas redundantly -- simple, but the traffic scales with
-        # mesh size (wave_size tiles per device). "neighbor" exchanges only the two overlap strips
-        # each tile actually reads and blends in place, so traffic scales with the ~80 px overlap
-        # instead; the trims and canvas placement move to a host that only slices and concatenates
-        # (float reads fp32 tiles, yuv420 converts per tile and crops the planar atlas on host).
         self.stitch_exchange = stitch_exchange
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
         # which is what the numerics tests compare against.
         self.pixel_denorm = pixel_denorm
-        # The encode-side mirror: set it and `(x/255 - mean)/std` folds into each encoder's conv_in,
-        # so `encode` / `encode_clip` take the decoder's raw **uint8** pixels (1 byte across PCIe
-        # instead of 4) and the host never runs a normalize pass. Left unset they take
-        # reference-space normalized fp32, which the numerics tests feed directly.
         self.pixel_norm = pixel_norm
         # Cast decoded tiles to uint8 before the DMA, halving what crosses PCIe. Applies to the
         # host path only: `device_stitch` reads back a canvas and never calls `_read_wave_units`,
@@ -426,12 +393,8 @@ class MiniMaxH3Vae:
         # Synchronize after each decode forward so `device` and `readback` are separable in the
         # profile -- which also serializes them, so it is opt-in.
         self.profile = profile
-        # Decode tiles per device per wave: each device runs a `waves_per_device`-sized batch, so a
-        # full wave covers `num_devices * waves_per_device` tiles. >1 trades activation memory for
-        # bigger matmuls and fewer waves; 1 is the original one-tile-per-device schedule.
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
-        # Pipeline warmup turns this off so the compile-pass decode does not dump a profile.
         self.log_profile = True
         self._encoder_state: dict[str, torch.Tensor] | None = None
         self._decoder_state: dict[str, torch.Tensor] | None = None
@@ -441,7 +404,6 @@ class MiniMaxH3Vae:
         self._profile = self._empty_profile()
         self.last_decode_profile: dict[str, float] = {}
 
-        # Geometry pinned to config; leaf ctors keep explicit shape args for tests.
         self.decoder = self._make_decoder()
         self.image_encoder = self._make_encoder(num_frames=1, temporal_taps=1)
         self.video_encoder = (
@@ -501,9 +463,6 @@ class MiniMaxH3Vae:
 
     def _encoder_subfolder(self, encoder: MiniMaxH3Encoder3d) -> str:
         num_frames, height, width = encoder.input_shape
-        # `_pxnorm` keys the cache: the fold rewrites conv_in's weight and bias, so cached
-        # bytes from a fold-less build must never load into a folded encoder or vice versa.
-        # The dtype tag does the same for the prepared-weight bytes, which are dtype-specific.
         variant = "_pxnorm" if self.pixel_norm is not None else ""
         if self.dtype != ttnn.float32:
             variant += f"_{str(self.dtype).rsplit('.', 1)[-1].lower()}"
@@ -662,14 +621,9 @@ class MiniMaxH3Vae:
         in_channels = encoder.conv_in.in_channels
         moments = 2 * self.config.latent_channels
         wave_size = self.mesh_device.get_num_devices()
-        # Same counters `_stream_decoder_units` keeps, and same caveat: without the opt-in
-        # `profile` sync, `device` times the enqueue and the wait lands in `readback`.
         profile = self._profile
 
         def prepare(unit: torch.Tensor) -> torch.Tensor:
-            # Channel-last only -- the pad to `in_channels` happens on device, below. Padding here
-            # would inflate the upload >10x (3 -> 32 channels of fp32) and the host_prep with it;
-            # the device pad is bit-exact against the host pad and nearly free next to the DMA.
             return unit.permute(0, 2, 3, 4, 1).contiguous()
 
         def read_wave(encoded: ttnn.Tensor, count: int) -> list[torch.Tensor]:
@@ -692,10 +646,6 @@ class MiniMaxH3Vae:
             profile["unpatchify"] += time.perf_counter() - mark
             return tiles
 
-        # Same schedule as `_stream_decoder_units`: wave k's readback is deferred until wave
-        # k + 1 is prepared, uploaded and enqueued, so the host work and the k - 1 transfer run
-        # under wave k's compute instead of after it. Two waves' outputs are live at once, which
-        # is one extra latent tile per device.
         results: list[torch.Tensor] = []
         pending: tuple[ttnn.Tensor, int] | None = None
         for start in range(0, len(units), wave_size):
@@ -724,15 +674,10 @@ class MiniMaxH3Vae:
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
             if raw:
-                # ttnn.pad refuses uint8, so the cast comes first; the fp32 intermediate is
-                # device-side and cheap next to the 4x it removes from the transfer.
                 cast = ttnn.typecast(x_device, self.dtype)
                 ttnn.deallocate(x_device)
                 x_device = cast
             if batch.shape[-1] < in_channels:
-                # Zero-pad the channel axis to conv_in's tile alignment on device (the padded
-                # weight channels are zeros, so any fill works; zero matches the host pad
-                # bit-for-bit). Same move as pipeline_wan_i2v's conditioning upload.
                 padded_device = ttnn.pad(
                     x_device, [(0, 0), (0, 0), (0, 0), (0, 0), (0, in_channels - batch.shape[-1])], value=0.0
                 )
@@ -744,8 +689,6 @@ class MiniMaxH3Vae:
             mark = time.perf_counter()
             encoded = encoder(x_device)
             ttnn.deallocate(x_device)
-            # Opt-in sync, as in decode: it makes `device` and `readback` separable in the
-            # profile but serializes the streaming, so leave it off to go fast.
             if self.profile:
                 ttnn.synchronize_device(self.mesh_device)
             elapsed = time.perf_counter() - mark
@@ -877,7 +820,6 @@ class MiniMaxH3Vae:
             height,
             width,
         ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
-        # A wave spans every device, each running a `waves_per_device`-sized batch (dim-0 shard).
         wave_size = self.mesh_device.get_num_devices() * self.waves_per_device
 
         profile = self._profile
@@ -972,19 +914,12 @@ class MiniMaxH3Vae:
         less, and the two-axis all-gather that co-locates the neighbours costs little against the
         readback it removes, so the collective is nearly free.
 
-        Chunks pack `wave_size // tiles_per_chunk` to a wave because the gather's cost does not care
-        what the slots hold: it moves `wave_size` tiles to every device whether they are real tiles
-        or the pad repeats. One chunk per wave on a mesh wider than the grid -- a 4x7 grid on a 4x32
-        quad -- would decode 100 pad tiles per wave and run the same wave count as a 4x8; packing
-        turns those slots into the next chunks' tiles at zero extra gather cost. Only one chunk's
-        canvas is live at a time, and the temporal cross-fade in `_decode` stays ordered on host.
+        Chunks pack `wave_size // tiles_per_chunk` to a wave, filling slots that would be pad repeats.
 
         The tile -> gathered-position map comes from `gathered_tile_order`'s inverse and is **not**
         row-major: the two-axis gather transposes dim 0, so position
         `c * rows + r` holds shard `r * cols + c`. Assuming row-major here puts tiles in the wrong
         place, which the seam gate catches loudly -- but only because something finally reads them.
-        That map is pure mesh arithmetic -- a shard's gathered position never depends on the tile
-        grid -- which is what makes packing safe without the grid matching the mesh shape.
         """
         from .decoder_minimax_h3 import unpatchify  # noqa: F401  (host fallback parity)
         from .stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
@@ -1031,8 +966,6 @@ class MiniMaxH3Vae:
 
             mark = time.perf_counter()
             wave = [unit.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1) for unit in units]
-            # Pad to the mesh with repeats of the last tile, as the host path does. The padding lands on
-            # devices whose gathered positions map outside every chunk's grid and is never indexed.
             batch = torch.cat(wave + [wave[-1]] * (wave_size - len(wave)), dim=0)
             profile["host_prep"] += time.perf_counter() - mark
 
@@ -1063,8 +996,6 @@ class MiniMaxH3Vae:
                 patch_size=self.config.spatial_compression_ratio,
                 patch_size_t=self.config.temporal_compression_ratio,
             )
-            # Co-locate every tile on every device. Two gathers, one per mesh axis, in the decoder's
-            # bf16: the gathered pile is `wave_size` tiles per device, so its bytes set the peak.
             gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
             ttnn.deallocate(pixels)
             gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
@@ -1076,16 +1007,12 @@ class MiniMaxH3Vae:
             # `ttnn.Shape` does not support slicing, so materialize it as a list once.
             gathered_shape = list(gathered.shape)
 
-            # The ROW_MAJOR blend in `DeviceTileStitcher` mis-executes on bf16 tiles against its fp32
-            # ramps (garbage-scale output; the seam gate covers fp32 tiles only), so each tile is cast
-            # as it leaves the pile. Typecast has a native row-major program, so no relayout here.
+            # The ROW_MAJOR blend mis-executes on bf16 tiles against its fp32 ramps, so cast each tile.
             def tile_at(offset: int, row: int, col: int) -> ttnn.Tensor:
                 index = position[offset + row * grid_cols + col]
                 tile = ttnn.slice(gathered, [index, 0, 0, 0, 0], [index + 1, *gathered_shape[1:]])
                 return ttnn.typecast(tile, ttnn.float32)
 
-            # Stitch-then-read one chunk at a time: the gathered pile plus a single fp32 canvas
-            # bounds device memory, where stitching the whole group first would hold every canvas.
             for chunk_index in range(len(group)):
                 mark = time.perf_counter()
                 offset = chunk_index * tiles_per_chunk
@@ -1118,24 +1045,8 @@ class MiniMaxH3Vae:
     def _decode_clips_neighbor_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
         """The gather-free device stitch: halo strips instead of an all-gather, blend in place.
 
-        Same wave packing as the gather form, but tiles are placed **grid-aligned** -- tile
-        ``(chunk k, r, c)`` on device ``(r, k * grid_cols + c)`` -- so each tile's up and left
-        neighbours are its mesh-axis neighbours and `NeighborTileBlender` can hand it exactly the
-        two overlap strips the reference blend reads. No device ever holds more than its own tile
-        plus ~96 rows and ~80 columns of halo, against the gather form's ``wave_size`` tiles, and
-        every cross-fade happens on device; the host only applies the reference trims and
-        concatenates, so its per-chunk cost is slicing, not blending.
-
-        Packing density is ``mesh_cols // grid_cols`` chunks per wave (columns must stay aligned),
-        against the gather form's ``wave_size // tiles_per_chunk`` -- identical at the shapes that
-        matter (4 on a 4x32 quad, 1 on a 4x8, for the 4x7 grid).
-
-        ``yuv420`` reads back per tile rather than per canvas: the grid-aligned wave *is* the
-        ``(mesh_rows*tile) x (mesh_cols*tile)`` atlas `fast_device_to_host_yuv` reassembles from
-        per-device shards, so the blended tiles convert to planar uint8 on device and the host
-        crops the trims out of the atlas planes -- uint8 slicing, no blend, no fp32 canvas. That
-        cuts this path's readback from fp32 tiles to 1.5 bytes/pixel, at ~1.78x the canvas area
-        (the overlap regions ride along untrimmed).
+        Tiles are placed grid-aligned -- ``(chunk k, r, c)`` on device ``(r, k * grid_cols + c)`` -- so a
+        tile's up/left neighbours are its mesh-axis neighbours; the host only applies the reference trims.
         """
         from .stitch_device_minimax_h3 import NeighborTileBlender, unpatchify_device
 
@@ -1176,8 +1087,6 @@ class MiniMaxH3Vae:
             ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
 
             mark = time.perf_counter()
-            # Grid-aligned slots; the leftovers (idle columns, idle rows) carry a filler tile whose
-            # blended output is never read and whose halo contributions meet zero weights.
             slots: list[torch.Tensor | None] = [None] * wave_size
             for k, units in enumerate(units_by_chunk):
                 assert len(units) == tiles_per_chunk
@@ -1233,8 +1142,6 @@ class MiniMaxH3Vae:
             if output_type == "yuv420":
                 _, _, _, tile_ph, tile_pw = (int(d) for d in blended.shape)
                 mark = time.perf_counter()
-                # Same clamp-cast as `_read_canvas_yuv`, on the blended tiles instead of a canvas;
-                # the wave's per-device shards are exactly the atlas layout the YUV d2h reassembles.
                 tiles = ttnn.clamp(blended, min=-1.0, max=1.0)
                 tiles = ttnn.typecast(tiles, ttnn.bfloat16)
                 tiles = ttnn.to_layout(tiles, ttnn.ROW_MAJOR_LAYOUT)
@@ -1278,8 +1185,6 @@ class MiniMaxH3Vae:
             ttnn.deallocate(blended)
 
             mark = time.perf_counter()
-            # Every cross-fade already happened on device; this is the reference's trims and
-            # concats only, so the host cost is memory movement, not blend math.
             for k in range(len(group)):
                 rows = []
                 for i in range(grid_rows):
@@ -1313,15 +1218,7 @@ class MiniMaxH3Vae:
         tile_ph: int,
         tile_pw: int,
     ) -> list[np.ndarray]:
-        """Crop each chunk's planar canvas out of the tile atlas the YUV d2h returns.
-
-        ``planar`` is ``(T, atlas_h*atlas_w * 3/2)`` uint8 with the wave's tiles at their mesh
-        positions: tile ``(chunk k, i, j)`` at atlas ``(i*tile_ph, (k*grid_cols + j)*tile_pw)``.
-        Every cross-fade happened on device, so this applies only the reference trims (drop the
-        last ``overlap`` rows/columns of every non-edge tile) and places the survivors at their
-        ``y_starts``/``x_starts`` -- pure uint8 slicing, in luma and half-res chroma alike. All
-        starts and overlaps are even, so the 4:2:0 chroma crops stay integral.
-        """
+        """Crop each chunk's planar canvas out of the tile atlas the YUV d2h returns (reference trims only)."""
         frames = planar.shape[0]
         atlas_h, atlas_w = mesh_rows * tile_ph, mesh_cols * tile_pw
         luma_len, chroma_len = atlas_h * atlas_w, (atlas_h // 2) * (atlas_w // 2)
@@ -1501,11 +1398,6 @@ class MiniMaxH3Vae:
             for i in range(num_chunks)
         ]
         if self.device_stitch and chunk_latents:
-            # Each chunk's tile grid is decoded, unpatchified, all-gathered and blended on device,
-            # and only the assembled canvas is read back. Chunks pack `wave_size // tiles_per_chunk`
-            # to a wave, so a mesh wider than one grid (a 4x32 quad against a 4x7 grid) fills its
-            # waves with real tiles instead of pad repeats. Waves stay serial: the stage is
-            # device-bound, and holding two gathered piles live only adds allocation.
             clips = self._decode_clips_device_stitched(chunk_latents, output_type)
         elif chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
@@ -1533,9 +1425,6 @@ class MiniMaxH3Vae:
             clips = []
 
         assemble_mark = time.perf_counter()
-        # Lay out the segments first (views only), then write them into one preallocated buffer:
-        # `assemble_clip_parts` keeps the blend math in `blend_clip_frames` and turns the rest of
-        # what used to bill to blend+concat into parallel disjoint memcpy.
         parts, overlap = [], None
         for i in range(num_chunks):
             clip = clips[i]
