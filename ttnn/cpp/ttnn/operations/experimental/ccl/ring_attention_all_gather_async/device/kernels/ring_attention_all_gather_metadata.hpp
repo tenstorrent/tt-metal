@@ -138,7 +138,7 @@ inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compu
     kv_actual_isl = trace_metadata::bounded_kv_actual_isl(kv_actual_isl, group_rows, cache_local_tile_rows * ring_size);
     const uint32_t end = trace_metadata::logical_tile_rows_clamped_to_cache(
         kv_actual_isl, group_rows, cache_local_tile_rows * ring_size);
-    const auto mapping = sliding::build_sliding_q_mapping(
+    const auto mapping = sliding::build_chunked_q_mapping(
         kv_actual_isl / 32, end, q_local_tile_rows, ring_size, (source_device + 1) % ring_size);
     return sliding::sliding_halo_sources(mapping, q_local_tile_rows, ring_size, halo_tile_rows);
 }

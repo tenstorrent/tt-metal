@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 
 namespace {
@@ -21,6 +22,54 @@ using namespace ttnn::operations::transformer::sdpa::ring_joint;
 
 constexpr uint32_t kTileHeight = 32;
 constexpr uint32_t kWindowTokens = 128;
+
+TEST(ChunkedQMapping, MatchesPackedAbsoluteTiles) {
+    for (uint32_t ring : {1u, 2u, 4u, 8u}) {
+        for (uint32_t local : {2u, 8u, 32u}) {
+            const uint32_t group = ring * local;
+            for (uint32_t start = 0; start < 2 * group; ++start) {
+                for (uint32_t length : {1u, local - 1, local, group - 1, group}) {
+                    for (uint32_t device = 0; device < ring; ++device) {
+                        SCOPED_TRACE(
+                            ::testing::Message() << "ring=" << ring << " local=" << local << " start=" << start
+                                                 << " length=" << length << " device=" << device);
+                        std::vector<uint32_t> positions;
+                        uint32_t pre_wrap_count = 0;
+                        for (uint32_t tile = start; tile < start + length; ++tile) {
+                            if (tile / local % ring == device) {
+                                positions.push_back(tile);
+                                pre_wrap_count += tile / group == start / group;
+                            }
+                        }
+                        const auto mapping = build_chunked_q_mapping(start, start + length, local, ring, device);
+                        ASSERT_EQ(mapping.q_valid_tile_count, positions.size());
+                        EXPECT_LE(mapping.q_valid_tile_count, local);
+                        EXPECT_EQ(mapping.q_pre_wrap_tile_count, pre_wrap_count);
+                        EXPECT_EQ(mapping.q_pre_wrap_start_tile, pre_wrap_count ? positions.front() : 0u);
+                        EXPECT_EQ(
+                            mapping.q_post_wrap_start_tile,
+                            pre_wrap_count < positions.size() ? positions[pre_wrap_count] : 0u);
+                        for (uint32_t row = 0; row < positions.size(); ++row) {
+                            const uint32_t absolute =
+                                row < mapping.q_pre_wrap_tile_count
+                                    ? mapping.q_pre_wrap_start_tile + row
+                                    : mapping.q_post_wrap_start_tile + row - mapping.q_pre_wrap_tile_count;
+                            EXPECT_EQ(absolute, positions[row]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ChunkedQMapping, Offset1504SplitsOneDeviceSlab) {
+    constexpr auto mapping = build_chunked_q_mapping(67040 / 32, 75232 / 32, 1024 / 32, 8, 1);
+    static_assert(mapping.q_pre_wrap_start_tile == 67040 / 32);
+    static_assert(mapping.q_pre_wrap_tile_count == 544 / 32);
+    static_assert(mapping.q_post_wrap_start_tile == 74752 / 32);
+    static_assert(mapping.q_valid_tile_count == 1024 / 32);
+}
 
 struct Geometry {
     uint32_t ring_size;
@@ -164,7 +213,7 @@ TEST(SlidingWindowWorkPlan, RemoteRangesStartInsideTheHalo) {
                     EXPECT_EQ(rc.first_compact_k_chunk, 0u) << where;
                     continue;
                 }
-                const auto mapping = build_sliding_q_mapping(
+                const auto mapping = build_chunked_q_mapping(
                     logical_k - g.ring_size * g.q_local_tile_rows, logical_k, g.q_local_tile_rows, g.ring_size, device);
                 const uint32_t halo_start =
                     sliding_halo_sources(mapping, g.q_local_tile_rows, g.ring_size, halo, g.slabs).first_start_tile;
@@ -237,7 +286,7 @@ TEST(SlidingWindowWorkPlan, RotatedQueriesCoverExactlyTheirCausalWindows) {
                                     positions.push_back(token);
                                 }
                             }
-                            const auto mapping = build_sliding_q_mapping(start, end, local, ring, device);
+                            const auto mapping = build_chunked_q_mapping(start, end, local, ring, device);
                             const auto sources = sliding_halo_sources(mapping, local, ring, halo);
                             ASSERT_EQ(mapping.q_valid_tile_count, positions.size());
                             EXPECT_EQ(

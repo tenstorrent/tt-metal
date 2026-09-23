@@ -9,7 +9,7 @@ namespace ttnn::operations::transformer::sdpa::ring_joint {
 bool ChunkedSlidingHaloLayout::uses_neighbor_halo() const { return ring_size > 1 && halo_tile_rows > 0; }
 
 SlidingHaloSources ChunkedSlidingHaloLayout::send_sources(uint32_t source_device) const {
-    const auto q = build_sliding_q_mapping(
+    const auto q = build_chunked_q_mapping(
         q_start_tile, logical_k_tile_rows, q_local_tile_rows, ring_size, (source_device + 1) % ring_size);
     return sliding_halo_sources(q, q_local_tile_rows, ring_size, halo_tile_rows, circular_kv_slab_count);
 }

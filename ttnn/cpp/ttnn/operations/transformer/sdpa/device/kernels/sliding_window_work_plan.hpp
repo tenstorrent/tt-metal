@@ -7,35 +7,9 @@
 #include <array>
 #include <cstdint>
 
+#include "chunked_q_mapping.hpp"
+
 namespace ttnn::operations::transformer::sdpa::ring_joint {
-
-// Absolute positions of the two contiguous segments packed into one device's Q slab.
-struct SlidingQMapping {
-    uint32_t q_pre_wrap_start_tile = 0;
-    uint32_t q_pre_wrap_tile_count = 0;
-    uint32_t q_post_wrap_start_tile = 0;
-    uint32_t q_valid_tile_count = 0;
-};
-
-constexpr SlidingQMapping build_sliding_q_mapping(
-    uint32_t start, uint32_t end, uint32_t local, uint32_t ring_size, uint32_t device) {
-    SlidingQMapping mapping;
-    const uint32_t group = start / (local * ring_size);
-    for (uint32_t part = 0; part < 2; ++part) {
-        const uint32_t slab_start = (group + part) * local * ring_size + device * local;
-        const uint32_t begin = start > slab_start ? start : slab_start;
-        const uint32_t finish = end < slab_start + local ? end : slab_start + local;
-        const uint32_t count = finish > begin ? finish - begin : 0;
-        if (part == 0) {
-            mapping.q_pre_wrap_start_tile = count ? begin : 0;
-            mapping.q_pre_wrap_tile_count = count;
-        } else {
-            mapping.q_post_wrap_start_tile = count ? begin : 0;
-        }
-        mapping.q_valid_tile_count += count;
-    }
-    return mapping;
-}
 
 struct SlidingHaloSources {
     uint32_t first_start_tile = 0;
@@ -80,7 +54,7 @@ constexpr uint32_t chunked_sliding_halo_tile_rows(
 
 // The receiver's Q mapping determines which predecessor slabs must be sent.
 constexpr SlidingHaloSources sliding_halo_sources(
-    const SlidingQMapping& mapping, uint32_t local, uint32_t ring_size, uint32_t halo, uint32_t circular_slabs = 0) {
+    const ChunkedQMapping& mapping, uint32_t local, uint32_t ring_size, uint32_t halo, uint32_t circular_slabs = 0) {
     SlidingHaloSources sources;
     const auto origin = [=](uint32_t query_start) {
         const uint32_t query_slab = query_start / local;
@@ -157,7 +131,7 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
     uint32_t k_chunk_tile_rows,
     uint32_t logical_k_tile_rows,
     uint32_t circular_kv_slab_count = 0,
-    const SlidingQMapping* rotated_q = nullptr) {
+    const ChunkedQMapping* rotated_q = nullptr) {
     SlidingQWorkPlan plan;
     if (q_chunk_tile_rows == 0 || q_local_tile_rows == 0 || ring_size == 0 || sliding_window_tokens == 0 ||
         tile_height == 0 || k_chunk_tile_rows == 0 || q_local_tile_rows % k_chunk_tile_rows != 0 ||
@@ -172,9 +146,9 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
     if (halo > q_local_tile_rows) {
         return plan;
     }
-    const SlidingQMapping mapping = rotated_q
+    const ChunkedQMapping mapping = rotated_q
                                         ? *rotated_q
-                                        : SlidingQMapping{
+                                        : ChunkedQMapping{
                                               logical_k_tile_rows - group_rows + q_device_index * q_local_tile_rows,
                                               q_local_tile_rows,
                                               0,

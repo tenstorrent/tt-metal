@@ -2524,7 +2524,7 @@ void sdpa_ring_v2(
         ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan sliding_q_plan;
         constexpr bool circular_kv_cache = circular_kv_slab_count > 1;
         if constexpr (has_sliding_window) {
-            const ttnn::operations::transformer::sdpa::ring_joint::SlidingQMapping q_mapping{
+            const ttnn::operations::transformer::sdpa::ring_joint::ChunkedQMapping q_mapping{
                 chunked.kv_pad_rotation.q_pre_wrap_start_tile,
                 chunked.kv_pad_rotation.q_pre_wrap_tile_count,
                 chunked.kv_pad_rotation.q_post_wrap_start_tile,

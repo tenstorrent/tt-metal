@@ -405,7 +405,7 @@ void kernel_main() {
 
     uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
-    ring_joint::SlidingQMapping qmap{
+    ring_joint::ChunkedQMapping qmap{
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++),
@@ -530,7 +530,7 @@ void kernel_main() {
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
-            qmap = ring_joint::build_sliding_q_mapping(
+            qmap = ring_joint::build_chunked_q_mapping(
                 kv_actual_tile_count, logical_nt, q_local_padded_Nt, ring_size, tensor_rank);
             // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.
             const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>({
