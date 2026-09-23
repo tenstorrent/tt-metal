@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/program/sub_device_setup_batch.hpp"
 
 #include <mesh_workload.hpp>
 #include <cstddef>
@@ -3695,7 +3696,8 @@ void reset_worker_dispatch_state_on_device(
     uint8_t cq_id,
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    bool reset_launch_msg_state) {
+    bool reset_launch_msg_state,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
     auto num_sub_devices = mesh_device->num_sub_devices();
 
     MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
@@ -3715,7 +3717,11 @@ void reset_worker_dispatch_state_on_device(
         calculator.add_dispatch_wait();
     }
 
-    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+    const uint32_t reset_size = calculator.write_offset_bytes();
+    const uint32_t first_setup_size = setup_commands.empty() ? 0 : setup_commands.front().size() * sizeof(uint32_t);
+    const bool combine_setup = setup_batch::can_combine_setup(
+        reset_size, first_setup_size, metal_ctx.dispatch_mem_map().max_prefetch_command_size());
+    const uint32_t cmd_sequence_sizeB = reset_size + (combine_setup ? first_setup_size : 0);
 
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
@@ -3773,16 +3779,27 @@ void reset_worker_dispatch_state_on_device(
             expected_num_workers,
             cq_id);
     }
+    TT_ASSERT(command_sequence.write_offset_bytes() == reset_size);
+    if (combine_setup && first_setup_size != 0) {
+        manager.cq_write(
+            setup_commands.front().data(), first_setup_size, manager.get_issue_queue_write_ptr(cq_id) + reset_size);
+    }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    for (size_t i = combine_setup && !setup_commands.empty() ? 1 : 0; i < setup_commands.size(); ++i) {
+        const auto& batch = setup_commands[i];
+        const uint32_t size = batch.size() * sizeof(uint32_t);
+        manager.issue_queue_reserve(size, cq_id);
+        manager.cq_write(batch.data(), size, manager.get_issue_queue_write_ptr(cq_id));
+        manager.issue_queue_push_back(size, cq_id);
+        manager.fetch_queue_reserve_back(cq_id);
+        manager.fetch_queue_write(size, cq_id);
+    }
 }
 
-void set_num_worker_sems_on_dispatch(
-    SystemMemoryManager& manager,
-    uint8_t cq_id,
-    uint32_t num_worker_sems,
-    ttsl::Span<const uint32_t> workers_per_sub_device) {
+static HostMemDeviceCommand build_set_num_worker_sems_on_dispatch(
+    SystemMemoryManager& manager, uint32_t num_worker_sems, ttsl::Span<const uint32_t> workers_per_sub_device) {
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
     MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
@@ -3792,8 +3809,7 @@ void set_num_worker_sems_on_dispatch(
     }
     calculator.add_dispatch_set_sub_device_worker_counts(num_worker_sems);
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
     if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
         command_sequence.add_dispatch_set_sub_device_worker_counts(
@@ -3802,26 +3818,46 @@ void set_num_worker_sems_on_dispatch(
         command_sequence.add_dispatch_set_sub_device_worker_counts(
             workers_per_sub_device, DispatcherSelect::DISPATCH_MASTER);
     }
-    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-    manager.fetch_queue_reserve_back(cq_id);
-    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    TT_ASSERT(command_sequence.write_offset_bytes() == command_sequence.size_bytes());
+    return command_sequence;
 }
 
-void set_go_signal_noc_data_on_dispatch(
-    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
+static HostMemDeviceCommand build_set_go_signal_noc_data_on_dispatch(
+    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager) {
     MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()
                                                     ? DispatcherSelect::DISPATCH_SUBORDINATE
                                                     : DispatcherSelect::DISPATCH_MASTER;
     command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
-    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
+    TT_ASSERT(command_sequence.write_offset_bytes() == command_sequence.size_bytes());
+    return command_sequence;
+}
+
+static void submit_setup_commands(SystemMemoryManager& manager, uint8_t cq_id, const void* data, uint32_t size) {
+    manager.issue_queue_reserve(size, cq_id);
+    manager.cq_write(data, size, manager.get_issue_queue_write_ptr(cq_id));
+    manager.issue_queue_push_back(size, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
-    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    manager.fetch_queue_write(size, cq_id);
+}
+
+void set_num_worker_sems_on_dispatch(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint32_t num_worker_sems,
+    ttsl::Span<const uint32_t> workers_per_sub_device) {
+    auto commands = build_set_num_worker_sems_on_dispatch(manager, num_worker_sems, workers_per_sub_device);
+    submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
+}
+
+void set_go_signal_noc_data_on_dispatch(
+    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
+    auto commands = build_set_go_signal_noc_data_on_dispatch(go_signal_noc_data, manager);
+    submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
 }
 
 // Wait for number of workers to complete and then reset the counter on the device
@@ -3882,11 +3918,8 @@ static_assert(
     DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 == dev_msgs::go_message_num_entries,
     "Max number of dispatch message entries + 1 must be equal to the number of go message entries");
 
-void set_core_go_message_mapping_on_device(
-    Device* device,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
-    SystemMemoryManager& manager,
-    uint8_t cq_id) {
+static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
+    Device* device, const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping, uint8_t cq_id) {
     MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     uint32_t go_msg_size = metal_ctx.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
@@ -3926,8 +3959,7 @@ void set_core_go_message_mapping_on_device(
     calculator.add_dispatch_wait();
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
 
     const auto& compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -3981,9 +4013,33 @@ void set_core_go_message_mapping_on_device(
     // Ensure go message index is received before writing out data for the next program.
     command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);
     TT_ASSERT(command_sequence.size_bytes() == command_sequence.write_offset_bytes());
-    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-    manager.fetch_queue_reserve_back(cq_id);
-    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    return command_sequence;
+}
+
+std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
+    Device* device,
+    uint8_t cq_id,
+    ttsl::Span<const uint32_t> workers_per_sub_device,
+    const vector_aligned<uint32_t>& go_signal_noc_data,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+    bool reset_launch_msg_state) {
+    auto& manager = device->sysmem_manager();
+    const auto max_size =
+        MetalContext::instance(device->get_context_id()).dispatch_mem_map().max_prefetch_command_size();
+    std::vector<vector_aligned<uint32_t>> batches;
+    auto append = [&](const HostMemDeviceCommand& commands) {
+        setup_batch::append_setup_commands(
+            batches,
+            ttsl::Span<const uint32_t>(
+                static_cast<const uint32_t*>(commands.data()), commands.size_bytes() / sizeof(uint32_t)),
+            max_size);
+    };
+    append(build_set_num_worker_sems_on_dispatch(manager, workers_per_sub_device.size(), workers_per_sub_device));
+    append(build_set_go_signal_noc_data_on_dispatch(go_signal_noc_data, manager));
+    if (reset_launch_msg_state) {
+        append(build_set_core_go_message_mapping_on_device(device, core_go_message_mapping, cq_id));
+    }
+    return batches;
 }
 
 }  // namespace program_dispatch
