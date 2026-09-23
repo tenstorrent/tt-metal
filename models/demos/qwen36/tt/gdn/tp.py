@@ -230,7 +230,10 @@ class TPGatedDeltaNet:
         # DRAM width/height slicing), and the 35B-A3B GDN qkv_dim_tp overflows a single call on BH.
         # 27B runs a single chunk (unchanged); see model_config.gdn_conv_channel_chunks.
         self._conv_chunks = getattr(args, "gdn_conv_channel_chunks", 1)
-        self._conv1d_wprep = None  # prepared depthwise weight (populated on first prefill call)
+        # Prepared depthwise weights, keyed by Lin = (K-1)+T: prepare_conv_weights bakes
+        # input_width in, so a bucket of a different length needs its own entry (a single
+        # cached slot silently reused weights prepared for another Lin -> wrong conv output).
+        self._conv1d_wprep = {}  # {Lin: [prepared weight per channel chunk]}
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
@@ -307,18 +310,38 @@ class TPGatedDeltaNet:
             decode_out_memory_config=out_memory_config,
         )
 
-    def _conv1d_prefill(self, qkv, T, conv_state):
+    def _conv1d_prefill(self, qkv, T, conv_state, valid_len=None):
         """Depthwise causal conv1d + SiLU via ttnn.conv1d. Returns (out [1,T,C], new_state [1,K-1,C]) DRAM TILE.
 
-        Prepends K-1 carry rows with padding=0 so one program serves every chunk (native pad only zeros,
-        so it can't inject cross-chunk carry into a shared trace).
+        Prepends K-1 carry rows with padding=0 so one program serves every chunk of a given length
+        (native pad only zeros, so it can't inject cross-chunk carry into a shared trace). The
+        prepared weights are cached per Lin, so each distinct bucket length costs one extra program.
+
+        valid_len (masked buckets): qkv is right-padded to the bucket length T but only its first
+        valid_len rows are real. The conv OUTPUT needs no adjustment -- a causal conv's row i depends
+        only on rows <= i, so rows < valid_len are already exact and rows >= valid_len are masked
+        downstream. Only new_state differs: the next chunk's K-1 carry rows must come from the real
+        tail qkv[valid_len-(K-1):valid_len], not the padded tail qkv[T-(K-1):T]. Those rows are
+        picked with a one-hot matmul rather than a static slice so the PROGRAM depends only on
+        shapes and only the one-hot VALUES depend on valid_len -- the same bounded-program trick
+        _causal_conv1d_fir uses. from_torch is a host write, so this arm is eager-only, which is
+        exactly where valid_len is set (trace capture always passes valid_len=None).
         """
         dev, K, C = self.mesh, self.K, self.qkv_dim_tp
         _dram = ttnn.DRAM_MEMORY_CONFIG
         Lin = (K - 1) + T
         # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
-        new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
-        new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
+        if valid_len is None:
+            new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
+            new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
+        else:
+            vl = int(valid_len)
+            sel = torch.zeros(1, K - 1, T, dtype=torch.float32)
+            for j in range(K - 1):
+                sel[0, j, vl - (K - 1) + j] = 1.0
+            sel_tt = ttnn.from_torch(sel, dtype=qkv.dtype, layout=ttnn.TILE_LAYOUT, device=dev)
+            new_state = ttnn.matmul(sel_tt, ttnn.to_layout(qkv, ttnn.TILE_LAYOUT), memory_config=_dram)
+            ttnn.deallocate(sel_tt)
         if conv_state is None:
             pad = ttnn.zeros(
                 [1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=_dram
@@ -344,8 +367,8 @@ class TPGatedDeltaNet:
         n_cc = len(w1d_chunks)
         assert C % n_cc == 0, f"GDN conv channels {C} not divisible by n_cc {n_cc}"
         cw = C // n_cc
-        if self._conv1d_wprep is None:
-            self._conv1d_wprep = [
+        if Lin not in self._conv1d_wprep:
+            self._conv1d_wprep[Lin] = [
                 ttnn.prepare_conv_weights(
                     weight_tensor=w,
                     input_memory_config=_dram,
@@ -370,7 +393,7 @@ class TPGatedDeltaNet:
                 for w in w1d_chunks
             ]
         conv_outs = []
-        for i, wprep in enumerate(self._conv1d_wprep):
+        for i, wprep in enumerate(self._conv1d_wprep[Lin]):
             xin_i = xin if n_cc == 1 else ttnn.slice(xin, (0, 0, 0, i * cw), (1, Lin, 1, (i + 1) * cw))
             out_i = ttnn.conv1d(
                 input_tensor=xin_i,
@@ -528,9 +551,18 @@ class TPGatedDeltaNet:
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
         _cstate = self.conv_carry if carry else None
-        if self._gdn_conv1d and valid_len is None:
-            # Native depthwise ttnn.conv1d (masked buckets keep the MAC FIR: valid_len new_state differs)
-            conv, conv_new_state = self._conv1d_prefill(qkv, T, _cstate)
+        # Native depthwise ttnn.conv1d. Masked buckets (valid_len set) are served here too now: the
+        # conv output is valid_len-independent and _conv1d_prefill takes the carry rows from the real
+        # tail via a one-hot. This keeps the MAC FIR -- hundreds of binary-eltwise dispatches per
+        # prefill -- off the serving path entirely. Falls back to the FIR when _conv1d_prefill's
+        # assumptions do not hold: it is single-sequence ([1,T,C] slices), and valid_len < K-1 would
+        # make the carry window reach back past row 0 into conv_state.
+        _native_conv_ok = self._gdn_conv1d and (
+            valid_len is None
+            or (not isinstance(valid_len, (list, tuple)) and qkv.shape[0] == 1 and self.K - 1 <= int(valid_len) <= T)
+        )
+        if _native_conv_ok:
+            conv, conv_new_state = self._conv1d_prefill(qkv, T, _cstate, valid_len=valid_len)
         else:
             conv, conv_new_state = _causal_conv1d_fir(
                 qkv,
