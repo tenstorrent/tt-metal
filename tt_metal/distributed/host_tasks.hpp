@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/experimental/sockets/host_uva.hpp>
+#include "tt_metal/distributed/host_uva.hpp"
 
 namespace tt::tt_metal::experimental {
 
