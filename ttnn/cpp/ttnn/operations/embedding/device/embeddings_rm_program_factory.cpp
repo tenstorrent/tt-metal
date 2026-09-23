@@ -132,6 +132,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     const DFBSpecName OUTPUT{"output"};
     const DFBSpecName INDEX_SCRATCH{"index_scratch"};
     const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+    // On Quasar the index scratch page is a node-local scratchpad, not a self-loop DFB: Gen2 forbids a
+    // DM kernel binding a DFB as both PRODUCER and CONSUMER (which is how the reader uses it below).
+    const ScratchpadSpecName INDEX_SCRATCH_SP{"index_scratch_sp"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName WEIGHTS_PARAM{"weights"};
@@ -168,12 +171,19 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     spec.dataflow_buffers.push_back(std::move(out_dfb));
 
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = INDEX_SCRATCH,
-        .entry_size = block_height * index_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
-    });
+    const bool index_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
+    Group<ScratchpadSpec> scratchpads;
+    if (index_as_scratchpad) {
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = block_height * index_page_size});
+    } else {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INDEX_SCRATCH,
+            .entry_size = block_height * index_page_size,
+            .num_entries = 1,
+            .data_format_metadata = input_data_format,
+        });
+    }
 
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
@@ -220,16 +230,24 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     }
     // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
     // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::CONSUMER,
-    });
+    // On Quasar that self-loop is illegal, so bind a node-local scratchpad once instead — same "in1"
+    // accessor, so the kernel selects scratch::in1 vs dfb::in1 under #ifdef ARCH_QUASAR.
+    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
+    if (index_as_scratchpad) {
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
+    } else {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_SCRATCH,
+            .accessor_name = "in1",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDEX_SCRATCH,
+            .accessor_name = "in1",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
     if (use_local_cache) {
         // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
         // hand-off to another kernel.
@@ -271,6 +289,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
         .compiler_options = {.defines = embedding_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
@@ -289,6 +308,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     });
+
+    // Empty on non-Quasar; on Quasar carries the reader's index scratchpad.
+    spec.scratchpads = std::move(scratchpads);
 
     // -----------------------------------------------------------------------
     // Writer

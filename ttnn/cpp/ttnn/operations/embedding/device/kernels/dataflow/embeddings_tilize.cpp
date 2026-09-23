@@ -10,6 +10,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common_metal2.hpp"
@@ -59,11 +60,21 @@ void kernel_main() {
     // dfb_in0 stages the weight rows this reader gathers for one chunk; the compute kernel tilizes them
     // out of it.
     DataflowBuffer dfb_in0(dfb::in0);
-    // dfb_in1 is this reader's private scratch page for the block of indices it is working through.
+    // The index scratch is this reader's private page for the block of indices it is working through.
+    // On Quasar it is a node-local scratchpad (Gen2 forbids the self-loop DFB the DFB path uses): the
+    // NoC reads into it via the object (cached L1 view) and the RISC reads back through its base address.
+#ifdef ARCH_QUASAR
+    Scratchpad<uint32_t> index_scratch(scratch::in1);
+    // The reader re-reads a fresh block of indices into this scratch each loop iteration. get_base_address()
+    // is the CACHED L1 view, so a RISC read through it would return stale (block-0) indices on the 2nd+
+    // block. Read through the uncached alias (matching DataflowBuffer::get_write_ptr) so each block is seen;
+    // the NoC write via the scratchpad object still lands in the same SRAM.
+    uint32_t input_l1_addr = index_scratch.get_base_address() + MEM_L1_UNCACHED_BASE;
+#else
     DataflowBuffer dfb_in1(dfb::in1);
-
     dfb_in1.reserve_back(1);
     uint32_t input_l1_addr = dfb_in1.get_write_ptr();
+#endif
 
     volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
 
@@ -76,12 +87,17 @@ void kernel_main() {
     uint32_t curr_row = input_start_id;
     uint32_t offset = input_start_offset;
     for (uint32_t i = 0; i < num_blocks; ++i) {
+#ifdef ARCH_QUASAR
+        // Pass the scratchpad object so the NoC writes through its cached L1 view (read back below).
+        noc.async_read(input, index_scratch, input_block_size_bytes, {.page_id = curr_row, .offset_bytes = offset}, {});
+#else
         noc.async_read<NocOptions::DEFAULT, input_block_size_bytes>(
             input,
             CoreLocalMem<uint32_t>(input_l1_addr),
             input_block_size_bytes,
             {.page_id = curr_row, .offset_bytes = offset},
             {});
+#endif
         noc.async_read_barrier();
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
@@ -110,6 +126,8 @@ void kernel_main() {
         }
     }
     // dfb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
-    // reservation so the buffer is left balanced.
+    // reservation so the buffer is left balanced. The Quasar scratchpad needs no such balancing.
+#ifndef ARCH_QUASAR
     dfb_in1.push_back(1);
+#endif
 }
