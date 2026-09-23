@@ -7,6 +7,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <set>
 
@@ -20,6 +21,12 @@ using std::vector;
 using namespace tt::constants;
 
 namespace unit_tests::compute {
+
+namespace {
+std::uint16_t reduce_pad_value_16(std::uint8_t red_type) {
+    return red_type == 2 ? std::bit_cast<std::uint16_t>(bfloat16(-std::numeric_limits<float>::infinity())) : 0;
+}
+}  // namespace
 
 std::vector<std::uint32_t> gold_standard_untilize(
     const std::vector<std::uint32_t>& src_vec, const GoldenConfig& config) {
@@ -163,17 +170,16 @@ std::vector<std::uint16_t> gold_reduce_h(
     const std::vector<std::uint32_t>& shape,
     float scaler,
     std::uint8_t red_type,
-    bool zeropad) {
+    bool pad) {
     vector<std::uint32_t> shape_dst{shape[0], shape[1], 1, shape[3]};
     TT_FATAL(shape[2] > 0, "Error");
-    if (zeropad) {
+    if (pad) {
         shape_dst[2] = TILE_HEIGHT;
     }
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);
 
-    vector<std::uint16_t> reduced(addr_dst.numel());
-    std::fill(reduced.begin(), reduced.end(), 0);
+    vector<std::uint16_t> reduced(addr_dst.numel(), reduce_pad_value_16(red_type));
     for (int n = 0; n < shape[0]; n++) {
         for (int c = 0; c < shape[1]; c++) {
             for (int w = 0; w < shape[3]; w++) {
@@ -201,16 +207,15 @@ std::vector<std::uint16_t> gold_reduce_w(
     const std::vector<std::uint32_t>& shape,
     float scaler,
     std::uint8_t red_type,
-    bool zeropad) {
+    bool pad) {
     vector<std::uint32_t> shape_dst{shape[0], shape[1], shape[2], 1};
-    if (zeropad) {
+    if (pad) {
         shape_dst[3] = TILE_WIDTH;
     }
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);
 
-    vector<std::uint16_t> reduced(addr_dst.numel());
-    std::fill(reduced.begin(), reduced.end(), 0);
+    vector<std::uint16_t> reduced(addr_dst.numel(), reduce_pad_value_16(red_type));
     for (int n = 0; n < shape[0]; n++) {
         for (int c = 0; c < shape[1]; c++) {
             for (int h = 0; h < shape[2]; h++) {
@@ -237,17 +242,16 @@ std::vector<std::uint16_t> gold_reduce_hw(
     const std::vector<std::uint32_t>& shape,
     float scaler,
     std::uint8_t red_type,
-    bool zeropad) {
+    bool pad) {
     vector<std::uint32_t> shape_dst{shape[0], shape[1], 1, 1};
-    if (zeropad) {
+    if (pad) {
         shape_dst[2] = TILE_HEIGHT;
         shape_dst[3] = TILE_WIDTH;
     }
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);
 
-    vector<std::uint16_t> reduced(addr_dst.numel());
-    std::fill(reduced.begin(), reduced.end(), 0);
+    vector<std::uint16_t> reduced(addr_dst.numel(), reduce_pad_value_16(red_type));
     for (int n = 0; n < shape[0]; n++) {
         for (int c = 0; c < shape[1]; c++) {
             // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
