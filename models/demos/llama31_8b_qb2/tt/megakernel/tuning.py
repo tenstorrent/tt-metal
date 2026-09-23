@@ -64,8 +64,8 @@ class ProjectionTuning:
             raise ValueError("Head prefix must be0/2/3 blocks and fit the head ring")
         if self.head_early_blocks and (self.reader != "pipelined" or self.prefetch_head_workers or self.share_qkv_workers):
             raise ValueError("Head own prefix requires separate QKV and pipelined readers without head helpers")
-        if self.attention_workers not in (8, 16, 32) or self.attention_chunk not in (64, 128, 256):
-            raise ValueError("Attention requires8/16/32 workers and64/128/256-token chunks")
+        if self.attention_workers not in (8, 16, 32) or self.attention_chunk not in (64, 128, 256, 512, 1024):
+            raise ValueError("Attention requires8/16/32 workers and64/128/256/512/1024-token chunks")
         if self.norm_tile_height not in (16, 32):
             raise ValueError("Norm tile height must be sixteen or thirty-two")
         if self.projection_full_dst not in ("off", "mlp", "head", "all"):
@@ -80,8 +80,8 @@ class ProjectionTuning:
             raise ValueError("QKV prefix must fit its independent ring")
         if (self.qkv_buffers or self.qkv_early_blocks >= 0) and (self.reader != "pipelined" or self.share_qkv_workers or self.prefetch_head_workers or self.compact_activations != "off"):
             raise ValueError("Independent QKV buffers require ordinary separate QKV pipelined readers without head staging or compact transport")
-        if self.head_placement not in ("row", "order", "select"):
-            raise ValueError("Head placement must be row/order/select")
+        if self.head_placement not in ("row", "order", "select", "select32"):
+            raise ValueError("Head placement must be row/order/select/select32")
         if self.compact_activations not in ("off", "norm", "all"):
             raise ValueError("Compact activation transport must select off/norm/all")
         if self.compact_activations != "off" and (self.reader != "pipelined" or self.buffer_count != 3 or not self.alias_projection_cbs or self.scratch_init_once != "all" or self.share_qkv_workers or self.prefetch_head_workers or self.prefetch_gu_blocks or self.prefetch_down_blocks):

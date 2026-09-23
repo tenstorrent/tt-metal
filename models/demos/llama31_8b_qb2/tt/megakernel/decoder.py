@@ -274,6 +274,12 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
                 # Keep terminal placement fixed while measuring QKV reuse.
                 # The freed workers still own the original packed tensor.
                 occupied.update((c.x, c.y) for c in body.preparation.packed_cores)
+            if body.tuning.head_placement == "select32":
+                # Hold terminal placement fixed while reducing the attention
+                # pool: reserve all workers used by the 32-worker configuration.
+                full_attention = body.placement.map(
+                    [ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)])
+                occupied.update((c.x, c.y) for c in full_attention)
             grid = model.mesh_device.compute_with_storage_grid_size()
             free = [
                 ttnn.CoreCoord(x, y)
