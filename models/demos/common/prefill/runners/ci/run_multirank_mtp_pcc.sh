@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-# Multi-galaxy GLM-5.2 MTP prefill KV accuracy. Sibling of run_multirank_pcc.sh, which gates the trunk
-# caches only; MTP needs its own manifest, its own golden trace and its own PCC gate.
 set -euo pipefail
 
 MODEL="${1:-glm52}"
@@ -16,16 +14,10 @@ export PYTHONPATH="${TT_METAL_HOME}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
-# One length for both PCC and rate: the MTP golden covers exactly GOLDEN_LEN rows, so a longer run would
-# only add rows nothing can check.
 CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=${GOLDEN_LEN}
-# Only slot 0 has a golden behind it, and the MTP tail costs K more cache layers per user, so extra users
-# buy no coverage. The trunk legs pin the producer to 1 user for the same reason.
 NUM_USERS=1
-# The measured floor for this configuration rather than a target; the MTP levels are layers of the same
-# cache, so their minimum folds into this one gate.
 PCC_THRESHOLD=0.85
 
 case "${MODEL}" in
@@ -48,8 +40,6 @@ MTP_LEVELS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["en
 TRUNK_TRACE=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
 MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k}"
 
-# Fail fast: without its own trace the producer silently skips the MTP KV comparison and the leg passes
-# on plumbing alone. Check every level's golden before spending quad time.
 for k in $(seq 0 $((MTP_LEVELS - 1))); do
   layer=$((NUM_LAYERS + k))
   if [ ! -f "${MTP_TRACE}/kv_cache/layer_${layer}.safetensors" ] \
@@ -78,8 +68,6 @@ TIMING_DIR="${MR_DIR}/timing"
 mkdir -p "${TIMING_DIR}"
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
-# First and last chunk only: 11 chunks is too few to sample, so the pair brackets the run. No warmup
-# either -- the throughput rows are a completion cadence, so chunk 0's cold latency never lands in one.
 PROBE_CHUNKS="0,$((REAL_CHUNKS - 1))"
 
 cleanup() {
@@ -92,13 +80,9 @@ cleanup() {
     [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
     echo "$(basename "$f"): $(cat "$f")"
   done
-  # The per-level numbers are logged, not recorded in rank*.json (_write_pcc_verdict carries per_cache
-  # kvpe/index and the folded "mtp" minimum), so scrape them or a regression is unattributable to a level.
   echo "==================== MTP per-level KV PCC ===================="
   find "${RANKLOGS}" -type f 2>/dev/null -exec grep -h -E "MTP level|MTP KV PCC|MTP: golden|MTP:.*level slots" {} + \
     | tail -40 || echo "no MTP PCC lines in the rank logs"
-  # The push side only, not the prefill rate: `wall` covers the push loop, which returns once the
-  # sockets take the chunks. Read it for the push_ms percentiles; summarize_ci_run.py owns throughput.
   echo "==================== producer push-side rate + backpressure ===================="
   if ! find "${RANKLOGS}" -type f 2>/dev/null -exec grep -h -F "[producer] DONE" {} +; then
     echo "no producer DONE line in the rank logs"
@@ -152,8 +136,6 @@ python3 "${TTRUN_PY}" \
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
 
-# Bounds mesh bringup and weight load, not the chunk loop. Generous because MTP pulls extra modules from
-# a second ttnn cache over NFS; the kill -0 below is the real liveness guard.
 TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-3600}"
 for _ in $(seq 1 $((TABLE_WAIT_SECS / 5))); do
   [ -f "${TABLE_PATH}" ] && break
@@ -202,8 +184,6 @@ if [ "${PROD_RC}" -eq 0 ]; then
   wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
 fi
 
-# Same gate as the trunk legs plus one check: exactly one rank must report an "mtp" entry, since the
-# levels run on the last rank only. Without it, levels placed nowhere would read as a pass.
 EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 PCC_GATE_RC=0
 python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" <<'PY' || PCC_GATE_RC=$?

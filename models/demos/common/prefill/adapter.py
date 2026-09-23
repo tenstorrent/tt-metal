@@ -85,8 +85,6 @@ class PrefillRunParams:
     # Drafter checkpoint the runner resolved (DFLASH_HF_MODEL, else the adapter's own default). Carried
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
-    # Number of GLM-5.2 MTP levels (K) to build KV for after the trunk's last layer; 0 = MTP off.
-    # K > 0 widens the H2D chunk by K tokens and adds K KV-cache slots per user.
     mtp_levels: int = 0
 
     @property
@@ -142,8 +140,6 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
-    # Whether this model ships MTP (multi-token-prediction) modules the prefill runner can run after
-    # the trunk to fill the extra KV-cache levels the decode side speculates from.
     supports_mtp: bool = False
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:

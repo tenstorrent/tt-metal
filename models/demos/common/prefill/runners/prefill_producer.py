@@ -86,8 +86,6 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
-# MTP does NOT widen PrefillMetadata: how many lookahead ids are real is read off the pad sentinel
-# (runner_utils.MTP_PAD_TOKEN_ID), not declared by the producer.
 METADATA_SIZE_BYTES = 12
 CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
@@ -98,8 +96,6 @@ def _load_env_config() -> None:
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-    # MTP: with K levels the producer pushes a second token tensor of num_mtp_tokens(K) lookahead ids
-    # per chip, on the same push. Must match the runner's PREFILL_MTP_LEVELS, which sizes the receiver.
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
@@ -118,33 +114,20 @@ _load_env_config()
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
-    """Pack one chunk's PrefillMetadata: 3 little-endian uint32s. Identical with MTP on or off."""
     return struct.pack("<3I", slot_id, actual_start, actual_end)
 
 
 def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:
-    """One push, carrying the producer's three tensors: chunk tokens, MTP lookahead tokens, metadata.
-
-    `tokens` is the chunk buffer the plain path has always sent, unchanged by MTP. One H2D socket
-    delivers one global tensor per transfer, so the lookahead rides it beside each chip's token row.
-    """
     payload = tokens if mtp_tokens is None else np.concatenate([tokens, mtp_tokens], axis=-1)
     assert payload.nbytes == expect_bytes, f"payload {payload.nbytes}B != service-expected {expect_bytes}B"
     service.forward_to_tensor_bytes(payload, metadata=metadata)
 
 
 def _to_host_array(rows) -> "np.ndarray":
-    """[SP, 1, N] int64 -> the contiguous uint32 buffer an H2D service takes. The connected service
-    resplits it across SP coordinates, so this process needs no MeshDevice."""
     return rows.to(torch.uint32).contiguous().numpy()
 
 
 def _pool_slice(pool, start: int, count: int, actual_isl=None):
-    """`count` ids of `pool` from `start`, with everything past the REQUEST replaced by the pad sentinel.
-
-    The `actual_isl` clamp is what makes the runner's pad scan mean anything: the pool outlives the
-    request, so without it the ids past its end would be real continuation tokens.
-    """
     ids = list(pool[start : start + count])
     ids = ids + [1] * (count - len(ids))
     if actual_isl is not None:
@@ -153,16 +136,10 @@ def _pool_slice(pool, start: int, count: int, actual_isl=None):
 
 
 def _chunk_slice(pool, actual_start: int, actual_isl=None):
-    """This chunk's CHUNK_SIZE tokens out of `pool`, padded past the request and past the pool."""
     return _pool_slice(pool, actual_start, CHUNK_SIZE, actual_isl)
 
 
 def _h2d_rows(tokens):
-    """The chunk tensor: `[SP, 1, L]`, row c holding `tokens[c*L : (c+1)*L]`.
-
-    Block-cyclic / chip-major, matching the runner's prepare_prefill_input_tensor. MTP does not widen
-    it -- the lookahead ids are `_mtp_rows` -- so an MTP run pushes byte-identical trunk ids.
-    """
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
     assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
@@ -170,11 +147,6 @@ def _h2d_rows(tokens):
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None):
-    """The MTP lookahead tensor: `[SP, 1, num_mtp_tokens]`. None when MTP is off.
-
-    Row c holds the MTP_LEVELS ids that follow chip c's shard, then pad filler out to the socket page.
-    The rows overlap, which is what makes level k's window the same local slice on every chip.
-    """
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
@@ -566,8 +538,6 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         chunk_idx = slot.next_chunk
         actual_start = slot.prefix_len + chunk_idx * CHUNK_SIZE
         actual_end = min(actual_start + CHUNK_SIZE, slot.actual_isl)
-        # actual_isl, not a last-chunk bool: the producer pads every id at or past it with
-        # MTP_PAD_TOKEN_ID, and the runner reads how many levels are provided off that padding.
         push_ms.append(push_fn(slot.slot_id, chunk_idx, actual_start, actual_end, slot.actual_isl))
         total_pushes += 1
         slot.next_chunk += 1
@@ -650,11 +620,6 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
 
 
 def _golden_pe_as_device(golden_pe, layout: str):
-    """A golden's rope tail in the device's column order (Meta-interleaved).
-
-    Both goldens in use store the two rotated halves separately and need re-interleaving;
-    `interleaved` is here for a golden that does not.
-    """
     if layout == "interleaved":
         return golden_pe
     if layout != "half_split":
@@ -664,9 +629,6 @@ def _golden_pe_as_device(golden_pe, layout: str):
 
 
 def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int, golden_pe_layout: str = "half_split"):
-    """PCC one layer's KVPE row against its golden, split into the two column groups that fail
-    differently: `nope` (the KV-LoRA latent) and `pe` (the rope tail). Shared by the trunk loop and
-    the MTP levels, which write the same row and so need the same treatment."""
     from tests.ttnn.utils_for_testing import comp_pcc
 
     _, pcc_nope = comp_pcc(golden[:, :kv_lora], device_kv[:, :kv_lora])
@@ -675,11 +637,6 @@ def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int, golden_pe_layout: str =
 
 
 def _mtp_golden_source(trunk_trace_dir):
-    """Where the MTP levels' golden comes from, and which rope conventions it stores.
-
-    The MTP golden lives in its own tail trace, so PREFILL_MTP_TRACE_DIR points at it; unset, the
-    comparison skips itself. The index key's layout is its own, since GLM-5.2 is rope-asymmetric.
-    """
     spec = os.environ.get("PREFILL_MTP_TRACE_DIR", "").strip()
     mtp_dir = resolve_trace_dir(spec) if spec else trunk_trace_dir
     return (
@@ -692,11 +649,6 @@ def _mtp_golden_source(trunk_trace_dir):
 def _check_mtp_kv_slots(
     table, device_map: dict, slot_id: int, real_len: int, read_len: int, head_dim: int, kv_lora: int, trace_dir
 ):
-    """MTP check on config 0's tail: the K levels write the KVPE slots just past the trunk's.
-
-    Always asserts the plumbing -- every level wrote its OWN slot, which nothing else can see -- and
-    PCCs against the tail trace when one is configured. Returns the min PCC, or None if unmeasured.
-    """
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post, kvpe_golden_present
 
     declared = table.config(0).num_layers
@@ -708,7 +660,7 @@ def _check_mtp_kv_slots(
     per_level = []
     for k in range(MTP_LEVELS):
         layer = NUM_LAYERS + k
-        loc0 = table.lookup(layer, 0, slot_id)  # same host-local filter as the trunk loop above
+        loc0 = table.lookup(layer, 0, slot_id)
         try:
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
         except KeyError:
@@ -734,7 +686,7 @@ def _check_mtp_kv_slots(
     )
 
     if not per_level:
-        return None  # no MTP level is resident on this rank (only the last rank runs them)
+        return None
 
     golden_dir, pe_layout, _ = _mtp_golden_source(trace_dir)
     missing = [NUM_LAYERS + k for k, _ in per_level if not kvpe_golden_present(golden_dir, NUM_LAYERS + k)]
@@ -756,8 +708,6 @@ def _check_mtp_kv_slots(
         golden = _load_golden_kv_post(golden_dir, layer, real_len)
         pcc_nope, pcc_pe = _kvpe_pcc_vs_golden(golden, kv, kv_lora, pe_layout)
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
-        # The convention NOT chosen, printed beside the one being gated: the wrong pick reads near zero
-        # against a healthy nope, worth making legible on first contact with a new trace.
         _, pe_rejected = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], rejected), kv[:, kv_lora:])
         logger.info(
             f"[producer] slot {slot_id} MTP level {k} (layer {layer:>2}) KV PCC: "
@@ -1075,8 +1025,6 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     )
 
     mins = {"kvpe": min_pcc}
-    # Absent, not 1.0, when there was no MTP golden to compare against. Present, it is gated at the
-    # same threshold as the trunk: an MTP level is a layer of this same model cache.
     if mtp_min is not None:
         mins["mtp"] = mtp_min
     if _num_model_configs(table) > 1:
@@ -1094,8 +1042,6 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
-        # (layer, golden trace): the MTP row's golden lives in a different trace from the trunk's, so
-        # each side is gated on its own trace rather than one taking the other down with it.
         index_rows = []
         if index_golden_present(trace_dir):
             index_rows = [
@@ -1112,8 +1058,6 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 f"indexer-key golden; the trunk index cache is NOT checked."
             )
         n_trunk_rows = len(index_rows)
-        # The MTP module owns one indexer, shared by every level, in the slot right past the trunk.
-        # Its golden is in the tail trace, so ask that trace rather than the trunk's.
         mtp_index_layer = None
         mtp_index_layout = "interleaved"
         if MTP_LEVELS and full_layers is not None:
@@ -1152,8 +1096,6 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
             dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
 
-            # Only the MTP row is re-based: the trunk goldens come from a trace that already ropes its
-            # index key interleaved, so re-basing them would break them.
             is_mtp_row = layer == mtp_index_layer
             golden_ik = _load_golden_index_k(
                 golden_dir, layer, real_len, rope_layout=mtp_index_layout if is_mtp_row else "interleaved"
@@ -1163,8 +1105,6 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
                 if mtp_index_layout != "interleaved":
-                    # Log the as-stored figure next to it. The re-based one is the device's verdict, but
-                    # alone it would read as the trace agreeing with the device, which it does not.
                     _, pcc_stored = comp_pcc(_load_golden_index_k(golden_dir, layer, real_len), dev_ik)
                     logger.info(
                         f"[producer]   mtp_index golden as-stored ({mtp_index_layout}) {pcc_stored:.6f} -> "
@@ -1175,15 +1115,12 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 checked_index += 1
             logger.info(f"[producer] slot {slot_id} layer {layer:>2} index PCC: {pcc_index:.5f}")
 
-        # Absent, not a fictitious 1.0, when nothing was compared -- same convention as "mtp" above.
         if checked_index:
             logger.info(
                 f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
                 f"{checked_index}/{n_trunk_rows} local layers -> {min_index:.6f}"
             )
             mins["index"] = min_index
-        # Its own number, not folded into "index": the trunk figure stays comparable across runs, and
-        # this is the one that says whether the MTP module's indexer is right. Same gate either way.
         if mtp_index_pcc is not None:
             logger.info(f"[producer] slot {slot_id} MTP layer {mtp_index_layer} index PCC -> {mtp_index_pcc:.6f}")
             mins["mtp_index"] = mtp_index_pcc
@@ -1575,7 +1512,6 @@ def main() -> None:
         nwords = CHUNK_METADATA_SIZE_BYTES // 4
         sentinel = struct.pack(f"<{nwords}i", *([-1] * nwords))
         assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
-        # contents ignored by the runner; size must match. An empty pool pads both tensors.
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
         _push(service, payload_bytes, _h2d_rows(_chunk_slice([], 0)), _mtp_rows([], 0), sentinel)
         service.barrier()
