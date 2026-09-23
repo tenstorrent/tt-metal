@@ -43,8 +43,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    // Two unpack_A calls per loop (A then B). NONE posts SrcA always; SrcB only
-    // for FP32 dest acc (HW WA). MATH_ISOLATE mocks that exact pulse count.
+    // Two unpack_A calls per loop (A then B). NONE posts SrcA plus a SrcB zerosrc
+    // dvalid (WA #1230) every face, including dest_acc=No. MATH_ISOLATE mocks that.
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * INPUT_TILES_PER_LOOP * num_faces;
 
     {
@@ -71,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Real NONE unpack posts SrcA plus a SrcB zerosrc dvalid (WA #1230)
                 // every face, including dest_acc=No. MATH_ISOLATE must match that.
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(src_handshake_iters);
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ src_handshake_iters);
             }
         }
         else
@@ -120,6 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
         _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();
+        _sfpu_binary_bcast_init_<BCAST_DIM>();
         PROFILER_SYNC();
     }
     {
@@ -141,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(src_handshake_iters);
+                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations */ src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -157,7 +158,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 _llk_math_eltwise_sfpu_start_(0);
-                _sfpu_binary_bcast_init_<BCAST_DIM>();
                 _calculate_sfpu_binary_bcast_full_tile_<SFPU_BINARY_OPERATION, BCAST_DIM>(INPUT_TILE_A, INPUT_TILE_B, RESULT_TILE);
                 _llk_math_eltwise_sfpu_done_();
             }
@@ -173,7 +173,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     INPUT_TILE_B, formats.math, formats.math);
 
                 _llk_math_eltwise_sfpu_start_(0);
-                _sfpu_binary_bcast_init_<BCAST_DIM>();
                 _calculate_sfpu_binary_bcast_full_tile_<SFPU_BINARY_OPERATION, BCAST_DIM>(INPUT_TILE_A, INPUT_TILE_B, RESULT_TILE);
                 _llk_math_eltwise_sfpu_done_();
                 _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

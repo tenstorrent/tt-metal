@@ -421,7 +421,13 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
 @pytest.mark.perf
 @parametrize(
     **_func.BCAST_SWEEP,
-    **_PERF_AXES,
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[16],
+    iterations=[32],
+    # Kernel never reads APPROX_MODE; pin No so the schema column stays present
+    # without compiling two identical ELFs.
+    approx_mode=[ApproximationMode.No],
+    is_perf=[True],
 )
 def test_perf_eltwise_binary_sfpu_bcast(
     perf_report,

@@ -17,6 +17,8 @@ namespace ckernel::sfpu {
 template <bool floor>
 sfpi_inline void calculate_div_int32_body(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    sfpi::lreg_pressure _;
+
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
@@ -52,6 +54,9 @@ sfpi_inline void calculate_div_int32_body(
     // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
     // the mantissa so that we extract the top 22 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
+#ifndef LLK_PROFILER
+    sfpi::vInt sign = a_orig ^ b_orig;
+#endif
     sfpi::vMag q_m = sfpi::exman(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
@@ -126,10 +131,12 @@ sfpi_inline void calculate_div_int32_body(
 
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
     // Finally, if we expect a negative result, negate the value (two's complement).
+#ifdef LLK_PROFILER
     // Reload the inputs here instead of keeping their XOR live through the
     // correction path; profiler builds otherwise exceed Blackhole's lreg budget.
     sfpi::vInt sign = sfpi::vInt(sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi]) ^
                       sfpi::vInt(sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi]);
+#endif
     v_if(sign < 0) {
         result = -result;
 

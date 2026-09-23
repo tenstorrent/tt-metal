@@ -34,8 +34,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
 #endif
     // Isolate mocks must match _llk_unpack_A_ dvalids (not halved by even/odd SFPU pairing).
-    // Per tile: NONE = num_faces SrcA (+ SrcB if FP32 dest); ROW = num_faces SrcB;
-    // COL = dummy SrcA + 2 SrcB; SCALAR = dummy SrcA + 1 SrcB.
+    // Per tile: NONE = num_faces SrcA plus a SrcB zerosrc dvalid (WA #1230) every face,
+    // including dest_acc=No; ROW = num_faces SrcB; COL = dummy SrcA + 2 SrcB;
+    // SCALAR = dummy SrcA + 1 SrcB.
     const std::uint32_t tile_iters = LOOP_FACTOR * TILE_CNT;
 
     {
@@ -43,7 +44,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
         _llk_unpack_A_init_<BROADCAST_TYPE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+            0 /* transpose_of_faces */,
+            0 /* within_face_16x16_transpose */,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -60,11 +65,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     // Real NONE unpack posts SrcA plus a SrcB zerosrc dvalid (WA #1230)
                     // every face, including dest_acc=No. MATH_ISOLATE must match that.
-                    _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(tile_iters * num_faces);
+                    _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters * num_faces);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
                 {
-                    _perf_unpack_loop_set_valid</* src A */ false, /* src B */ true>(tile_iters * num_faces);
+                    _perf_unpack_loop_set_valid</* src A */ false, /* src B */ true>(/* iterations */ tile_iters * num_faces);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
                 {
@@ -72,13 +77,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // while math is still waiting for the second SrcB of tile 0.
                     for (std::uint32_t i = 0; i < tile_iters; ++i)
                     {
-                        _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(1);
-                        _perf_unpack_loop_set_valid</* src A */ false, /* src B */ true>(1);
+                        _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ 1);
+                        _perf_unpack_loop_set_valid</* src A */ false, /* src B */ true>(/* iterations */ 1);
                     }
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(tile_iters);
+                    _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters);
                 }
             }
         }
@@ -131,6 +136,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
+            num_faces, formats.math);
+        test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>();
         PROFILER_SYNC();
     }
     {
@@ -142,8 +150,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (unpack_to_dest)
             {
-                _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
-                    num_faces, formats.math);
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                 {
                     for (int block = 0; block < NUM_BLOCKS; ++block)
@@ -155,27 +161,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                     }
                 }
-                _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::NONE)
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(tile_iters * num_faces);
+                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters * num_faces);
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
             {
-                _perf_math_loop_clear_valid</* src A */ false, /* src B */ true>(tile_iters * num_faces);
+                _perf_math_loop_clear_valid</* src A */ false, /* src B */ true>(/* iterations */ tile_iters * num_faces);
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
             {
                 for (std::uint32_t i = 0; i < tile_iters; ++i)
                 {
-                    _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(1);
-                    _perf_math_loop_clear_valid</* src A */ false, /* src B */ true>(1);
+                    _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations */ 1);
+                    _perf_math_loop_clear_valid</* src A */ false, /* src B */ true>(/* iterations */ 1);
                 }
             }
             else
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(tile_iters);
+                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -186,17 +191,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (!unpack_to_dest)
                     {
-                        _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
-                            num_faces, formats.math);
                         for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                         {
                             _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                                 tile, formats.math, formats.math);
                         }
-                        _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
                     }
-
-                    test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>();
 
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; tile += 2)
                     {
@@ -214,16 +214,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                    _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
-                        num_faces, formats.math);
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             tile, formats.math, formats.math);
                     }
-                    _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
-
-                    test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>();
 
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; tile += 2)
                     {
@@ -237,6 +232,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
 }
 
 #endif

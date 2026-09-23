@@ -114,6 +114,14 @@ def _skip_bh_float16_no_dest_acc(formats, dest_acc):
         )
 
 
+def _resolve_perf_args(is_perf, perf_report, run_types):
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+    return run_types
+
+
 def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
     """SfpuLcm dest_acc=Yes is codegen-sensitive on Blackhole and hangs. See tt-metal#52997."""
     if (
@@ -613,11 +621,7 @@ def sfpu_binary(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
 
-    if is_perf and perf_report is None:
-        raise ValueError("perf_report must be provided when is_perf=True")
-
-    if run_types is None:
-        run_types = [PerfRunType.L1_TO_L1]
+    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
 
     test_config_kwargs = {
         "test_name": "sources/sfpu_binary_test.cpp",
@@ -1684,11 +1688,7 @@ def _run_sfpu_add_top_row(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
 
-    if is_perf and perf_report is None:
-        raise ValueError("perf_report must be provided when is_perf=True")
-
-    if run_types is None:
-        run_types = [PerfRunType.L1_TO_L1]
+    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
 
     test_config_kwargs = {
         "test_name": "sources/sfpu_binary_test.cpp",
@@ -1753,6 +1753,15 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs
         pytest.skip(
             "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
         )
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "DestAccumulation.No is not supported for SfpuAddTopRow on Blackhole"
+        )
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
+        pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
 
     _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
 
@@ -1857,11 +1866,7 @@ def _run_sfpu_binary_bcast(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
 
-    if is_perf and perf_report is None:
-        raise ValueError("perf_report must be provided when is_perf=True")
-
-    if run_types is None:
-        run_types = [PerfRunType.L1_TO_L1]
+    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
 
     # Only FP32 inputs with dest_acc=Yes take the unpack-to-dest path; all
     # other float formats go through srcA + MATH datacopy into dest.
@@ -1881,7 +1886,7 @@ def _run_sfpu_binary_bcast(
             SFPU_BCAST_DIM(bcast_dim),
         ],
         "runtimes": [
-            TILE_COUNT(tile_cnt_A),
+            TILE_COUNT(tile_cnt_A + tile_cnt_B),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
