@@ -218,7 +218,10 @@ sigmoid(x) - 0.5, sign retained): (0.24492, 0.00049), (0.21720, 0.01508), (0.173
 `sfpi::lut<LutMode::Fp16x6_HWM4>`. All LUT variants cost the same one instruction per vector; the speed comes from
 replacing ~35-40 instructions of exp and reciprocal, and from fusing the `up` multiply into the same pass. The
 bench's gate pre-activations have standard deviation 0.5, so almost nothing lands above |x| = 2; the error is bounded
-everywhere but the model-level check (CLIP / VBench) still applies before landing.
+everywhere but the model-level check (CLIP / VBench) still applies before landing. **Update 2026-09-21 evening:** the
+fused variant is in the tree behind an inert compile define and was A/B/C-measured against the baseline on the whole
+mesh op (host 16.56 / 15.97 / 14.62 ms; device 15,773 / 15,173 / 13,554 us); the model's path is unchanged. Paused
+before adoption: [ff1_swiglu_lut_handoff.md](ff1_swiglu_lut_handoff.md).
 
 **Change C — overlap the epilogue instead of shrinking it (proposed; needs fp32 dest off).** `silu_tile_pack` / `silu_tile_init_pack`
 (`compute_kernel_api.h:680-689`) run the SFPU from the **pack** thread. Moving the epilogue's SFPU work to the
