@@ -251,7 +251,8 @@ class Perturber:
             variant.filler_word,
         )
         if self.verbose:
-            print(f">> {variant.label()}", flush=True)
+            # xdist points worker stdout at /dev/null. stderr still reaches the terminal.
+            print(f">> {variant.label()}", file=sys.stderr, flush=True)
         # Rewind to the stimuli the baseline drew, so a difference in the output is
         # the delay and not the data.
         if self._rng_state is not None:
@@ -334,7 +335,11 @@ class Perturber:
         if not variants:
             return []
         if self.verbose:
-            print(f"\n>> {item.nodeid}: {len(variants)} variant(s)", flush=True)
+            print(
+                f"\n>> {item.nodeid}: {len(variants)} variant(s)",
+                file=sys.stderr,
+                flush=True,
+            )
 
         self._item = item
         self._kwargs = _test_kwargs(item)
