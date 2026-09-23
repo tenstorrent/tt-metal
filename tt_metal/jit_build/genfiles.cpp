@@ -890,7 +890,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
@@ -900,8 +900,8 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
         std::move(unpack_to_dest_mode),
         /*int_fpu_en=*/false);
 
-    TT_ASSERT(src_formats.size() == max_cbs);
-    TT_ASSERT(dst_formats.size() == max_cbs);
+    TT_ASSERT(src_formats.size() == max_dfbs);
+    TT_ASSERT(dst_formats.size() == max_dfbs);
 
     return std::make_pair(src_formats, dst_formats);
 }
@@ -910,12 +910,12 @@ void emit_unpack_data_formats(
     std::ostream& out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     // DataFormat values fit in a byte (Invalid==255); emit as uint8_t to save 3B/entry of LDM (the
     // .data region shares the TRISC's 2KB local memory with the stack). Matches pack_src/dst_format
     // and the unpack tile-dim arrays, which are already uint8_t. All consumers read+promote to uint32.
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_dfbs, dst_formats_all_cbs);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -924,7 +924,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     const tt::ARCH arch,
-    uint32_t max_cbs) {
+    uint32_t max_dfbs) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
@@ -953,8 +953,8 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
         }
     }
 
-    TT_ASSERT(src_formats.size() == max_cbs);
-    TT_ASSERT(dst_formats.size() == max_cbs);
+    TT_ASSERT(src_formats.size() == max_dfbs);
+    TT_ASSERT(dst_formats.size() == max_dfbs);
 
     return std::make_pair(src_formats, dst_formats);
 }
@@ -963,9 +963,9 @@ void emit_pack_data_formats(
     std::ostream& out,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
-    uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_cbs, dst_formats_all_cbs);
+    uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_dfbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_dfbs, dst_formats_all_cbs);
 }
 
 void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
@@ -1001,7 +1001,7 @@ struct ComputedDataFormats {
     std::vector<DataFormat> unpack_src, unpack_dst, pack_src, pack_dst;
 };
 
-ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARCH arch, uint32_t max_cbs) {
+ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARCH arch, uint32_t max_dfbs) {
     // assuming all cores within a op have the same desc
     const tt_hlk_desc& desc = options.hlk_desc;
 
@@ -1022,10 +1022,10 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_dfbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_dfbs);
 
     // equalize "unpack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
@@ -1106,34 +1106,34 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
     return {r_dims, c_dims};
 }
 
-void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_cbs, desc.buf_partial_face_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_narrow_tile", max_cbs, desc.buf_narrow_tile_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
-    emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
+void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_dfbs, desc.buf_num_faces_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_dfbs, desc.buf_partial_face_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_dfbs, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_narrow_tile", max_dfbs, desc.buf_narrow_tile_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_r_dim", max_dfbs, desc.buf_tile_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_dfbs, desc.buf_tile_c_dim_arr);
+    emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_dfbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
         desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
-    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_dfbs, r_dims);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_dfbs, c_dims);
 }
 
-void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_cbs, desc.buf_partial_face_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_narrow_tile", max_cbs, desc.buf_narrow_tile_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
-    emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
+void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_dfbs) {
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_dfbs, desc.buf_num_faces_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_dfbs, desc.buf_partial_face_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_dfbs, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_narrow_tile", max_dfbs, desc.buf_narrow_tile_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_r_dim", max_dfbs, desc.buf_tile_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_dfbs, desc.buf_tile_c_dim_arr);
+    emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_dfbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
         desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
-    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
-    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
+    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_dfbs, r_dims);
+    emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_dfbs, c_dims);
 }
 
 void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch) {
@@ -1163,7 +1163,7 @@ void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {
 }
 
 void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
-    const uint32_t max_cbs = env.get_max_cbs();
+    const uint32_t max_dfbs = env.get_max_dfbs();
     const tt_hlk_desc& desc = options.hlk_desc;
 
     const string descriptors_path = options.path + "chlkc_descriptors.h";
@@ -1173,7 +1173,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
         throw std::runtime_error("Cannot create file: " + descriptors_path);
     }
 
-    auto fmts = compute_data_formats(options, env.get_arch(), max_cbs);
+    auto fmts = compute_data_formats(options, env.get_arch(), max_dfbs);
 
     out << "#pragma once\n\n"
            "#if defined(UCK_CHLKC_MATH)\n"
@@ -1187,17 +1187,17 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_PACK)\n";
-    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_cbs);
-    emit_unpack_tile_dims(out, desc, max_cbs);
+    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_dfbs);
+    emit_unpack_tile_dims(out, desc, max_dfbs);
     out << "#endif\n\n";
 
     out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
-    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
-    emit_pack_tile_dims(out, desc, max_cbs);
+    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_dfbs);
+    emit_pack_tile_dims(out, desc, max_dfbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_dfbs, fmts.unpack_src);
     out << "#endif\n";    // if pack
     out << "#endif\n\n";  // if not math and not unpack
 

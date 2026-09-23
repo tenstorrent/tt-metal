@@ -35,7 +35,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -93,7 +93,7 @@ protected:
             GTEST_SKIP();
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void CreateDevices(const size_t trace_region_size) { this->create_devices(trace_region_size); }
@@ -113,7 +113,7 @@ protected:
         if (devices_.empty()) {
             GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
         }
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -197,7 +197,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
-        init_max_cbs();
+        init_max_dfbs();
     }
 };
 
@@ -212,7 +212,7 @@ protected:
     inline static std::map<int, std::shared_ptr<distributed::MeshDevice>> shared_reserved_devices_;
     inline static bool devices_valid_ = false;
     inline static bool needs_recovery_ = false;
-    inline static uint32_t shared_max_cbs_ = 0;
+    inline static uint32_t shared_max_dfbs_ = 0;
 
     static void SetUpTestSuite() {
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -238,7 +238,7 @@ protected:
             GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
         }
         devices_ = shared_devices_;
-        max_cbs_ = shared_max_cbs_;
+        max_dfbs_ = shared_max_dfbs_;
     }
 
     void TearDown() override {
@@ -305,7 +305,7 @@ private:
             }
         }
 
-        shared_max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+        shared_max_dfbs_ = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
         devices_valid_ = true;
         needs_recovery_ = false;
     }
@@ -351,7 +351,7 @@ protected:
         for (const auto& [id, device] : reserved_devices) {
             devices_.push_back(device);
         }
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {

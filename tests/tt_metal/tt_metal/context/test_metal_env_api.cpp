@@ -54,7 +54,7 @@ TEST(MetalEnv, EnvQueries) {
     EXPECT_NO_THROW(env.get_l1_size());
     EXPECT_NO_THROW(env.get_dram_alignment());
     EXPECT_NO_THROW(env.get_l1_alignment());
-    EXPECT_NO_THROW(env.get_arch_num_circular_buffers());
+    EXPECT_NO_THROW(env.get_num_dataflow_buffers());
     EXPECT_NO_THROW(env.get_max_worker_l1_unreserved_size());
     EXPECT_NO_THROW(env.get_eps());
     EXPECT_NO_THROW(env.get_nan());
@@ -69,7 +69,7 @@ TEST(MetalEnv, EnvQueriesMock) {
     EXPECT_EQ(env.get_num_pcie_devices(), 2);
     EXPECT_NO_THROW(env.get_dram_alignment());
     EXPECT_NO_THROW(env.get_l1_alignment());
-    EXPECT_NO_THROW(env.get_arch_num_circular_buffers());
+    EXPECT_NO_THROW(env.get_num_dataflow_buffers());
     EXPECT_NO_THROW(env.get_max_worker_l1_unreserved_size());
     EXPECT_NO_THROW(env.get_eps());
     EXPECT_NO_THROW(env.get_nan());
