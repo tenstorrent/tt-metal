@@ -22,7 +22,13 @@ from models.demos.llama_3p1_8b_d_p.tests.utils import metrics as _metrics
 from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt import kv_cache as cache_module
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
-from models.demos.llama_3p1_8b_d_p.tt.kv_cache import LlamaKVCache, allocate_kv_cache, write_kv_chunk
+from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
+    LlamaKVCache,
+    allocate_kv_cache,
+    max_user_slots,
+    slot_bytes_per_chip,
+    write_kv_chunk,
+)
 from models.demos.llama_3p1_8b_d_p.tt.qkv import QKVProjection
 from models.demos.llama_3p1_8b_d_p.tt.rope import apply_indexed_rope, build_indexed_rope, build_transformation_mat
 
@@ -420,6 +426,90 @@ def test_allocate_kv_cache_keeps_extra_user_slots_independent(mesh_device, cache
         tt_k.deallocate(True)
         tt_v.deallocate(True)
         logger.info(f"{slots}-slot cache: per-slot planes independent for K and V on all {SP * TP} chips")
+    finally:
+        cache.k.deallocate(True)
+        cache.v.deallocate(True)
+
+
+# "As many slots as the device allows" is a division, and this pins the numerator and the divisor.
+# The divisor is pure arithmetic, so assert the closed form against the layout it comes from rather
+# than against itself: a slot is 32 layer planes of max_seq_len/4 rows, in both caches, replicated on
+# every chip. A regression in local_cache_sequence or in the block-float element size would silently
+# resize every auto-sized deployment, and nothing else in the suite would notice.
+def test_slot_bytes_per_chip_is_exact_and_linear_in_capacity(expect_error):
+    for max_seq_len in (1024, 2048, 8192, 32768, 131072):
+        planes = NUM_LAYERS * (max_seq_len // SP) * HEAD_DIM
+        assert slot_bytes_per_chip(max_seq_len, ttnn.bfloat16) == 2 * planes * 2
+        assert slot_bytes_per_chip(max_seq_len, ttnn.bfloat8_b) == int(2 * planes * 1.0625)
+        # Both caches, per chip, per token of capacity. Measured on a 4x8 Blackhole galaxy as
+        # exactly 17.0 / 68.0 / 272.0 MiB at 8K / 32K / 128K, which these products reproduce.
+        assert slot_bytes_per_chip(max_seq_len, ttnn.bfloat8_b) == 2176 * max_seq_len
+        assert slot_bytes_per_chip(max_seq_len, ttnn.bfloat16) == 4096 * max_seq_len
+    with expect_error(ValueError, "bfloat16 or bfloat8_b"):
+        slot_bytes_per_chip(2048, ttnn.float32)
+
+
+# The numerator: free DRAM, read at call time. Sizing off a hardware constant would be wrong the
+# moment weights change, so this checks the count tracks what is actually free, shrinks as capacity
+# grows, and that "max" really allocates what it promised. The reserve is inflated to leave room for
+# a chosen handful of slots, which exercises the whole resolution path without filling DRAM -- and
+# makes the assertion exact, since the count is then a number this test computed rather than
+# whatever the device happened to have free.
+@pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
+def test_max_user_slots_tracks_free_dram_and_allocates_what_it_promises(mesh_device, expect_error):
+    mesh_config = MeshConfig(MESH_SHAPE, TP)
+    banks = mesh_device.dram_grid_size().x
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    usable = min(view.total_bytes_free_per_bank, view.largest_contiguous_bytes_free_per_bank) * banks
+
+    # Capacity and slot count trade off exactly: 4x the context, a quarter of the slots.
+    small = max_user_slots(mesh_device, max_seq_len=8192, reserve_bytes=0)
+    large = max_user_slots(mesh_device, max_seq_len=32768, reserve_bytes=0)
+    assert small == usable // slot_bytes_per_chip(8192)
+    assert abs(small - 4 * large) <= 4
+
+    # The reserve is withheld, not ignored, and a reserve past the end is reported instead of
+    # producing a zero-slot cache that would fail later at an unrelated call site.
+    assert max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=usable) == 0
+    with expect_error(RuntimeError, "no KV slot fits"):
+        allocate_kv_cache(mesh_device, mesh_config, num_users="max", reserve_bytes=usable)
+
+    wanted = 3
+    slot_bytes = slot_bytes_per_chip(MAX_SEQ_LEN)
+    reserve = usable - wanted * slot_bytes
+    free_slots = max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=0)
+    assert max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=reserve) == wanted
+    before = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_free_per_bank * banks
+    cache = allocate_kv_cache(mesh_device, mesh_config, num_users="max", reserve_bytes=reserve)
+    try:
+        assert cache.num_users == wanted
+        assert tuple(cache.k.shape) == (wanted * NUM_LAYERS, 1, LOCAL_CACHE_SEQUENCE, HEAD_DIM)
+        taken = before - ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_free_per_bank * banks
+        assert taken == wanted * slot_bytes, f"took {taken} B for {wanted} slots, predicted {wanted * slot_bytes} B"
+
+        # The count is a live reading rather than a constant: with this cache resident the device
+        # has exactly these slots fewer to offer than it did before allocating it. One slot of
+        # tolerance, because a large allocation can also cost a little contiguity.
+        now = max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=0)
+        assert 0 <= (free_slots - wanted) - now <= 1, f"{free_slots} slots free, took {wanted}, now offers {now}"
+
+        # Allocated is not the same as addressable: write the top slot, which carries the largest
+        # batch index the packing produces, and read it back off the device.
+        chunk = torch.full((NUM_KV_HEADS, GLOBAL_CHUNK, HEAD_DIM), 3.0)
+        tt_k, tt_v = _to_chunk(mesh_device, chunk), _to_chunk(mesh_device, -chunk)
+        write_kv_chunk(cache, tt_k, tt_v, slot_idx=wanted - 1, layer_idx=0, actual_start=0, actual_end=GLOBAL_CHUNK)
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+        ttnn.synchronize_device(mesh_device)
+        top_plane = (wanted - 1) * NUM_LAYERS
+        for device_idx, shard in enumerate(ttnn.get_device_tensors(cache.k)):
+            rows = ttnn.to_torch(shard).float()[top_plane, 0, :LOCAL_CHUNK]
+            assert torch.equal(rows, torch.full_like(rows, 3.0)), f"top slot unwritten on chip {device_idx}"
+        logger.info(
+            f"auto-sized cache: {wanted} slots took {taken / 2**20:.1f} MiB/chip, "
+            f"top slot (batch {top_plane}) writable; a full-DRAM ask at max_seq_len={MAX_SEQ_LEN} "
+            f"would have given {max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN)} slots"
+        )
     finally:
         cache.k.deallocate(True)
         cache.v.deallocate(True)
