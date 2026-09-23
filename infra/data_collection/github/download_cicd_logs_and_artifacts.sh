@@ -37,10 +37,11 @@ emit_api_usage() {
     annotations=$(_api_sum annotations)
     attempt_meta=$(_api_sum attempt_meta)
     total=$(( jobs_list + artifact_list + artifact_download + log_archive + per_job_log + annotations + attempt_meta ))
-    # One stable, greppable line per execution. The workflow.json attempt fetch made by the
-    # workflow step is a separate +1 (it doubles as the [rate-limit] sample) and is not counted
-    # here. artifact_list counts one internal listing per `gh run download`; its pagination is
-    # approximated as one page, which is exact for runs with <=100 artifacts.
+    # One stable, greppable line per execution. This counts every REST call the collection
+    # script makes. The workflow-metadata fetch (workflow.json) is a separate request made by
+    # the workflow step -- intentionally outside this counter, since that is where #57432 samples
+    # the rate-limit headers. artifact_list counts one internal listing per `gh run download`;
+    # its pagination is approximated as one page, which is exact for runs with <=100 artifacts.
     # A run name is arbitrary user-controlled text: spaces/brackets (e.g.
     # "Sanity tests (push) SKUs[WH,Sim]") and in principle double quotes, newlines or CRs. Emit
     # it as one quoted field and neutralise the characters that would break that quoting or the
