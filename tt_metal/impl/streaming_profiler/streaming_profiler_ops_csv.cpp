@@ -54,15 +54,18 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
 
 void OpsCsvConsumer::write_csv() {
     FILE* const f = f_;
-    std::fputs(
-        "DEVICE ID,GLOBAL CALL COUNT,EXECUTION,CORE COUNT,DEVICE KERNEL START CYCLE,DEVICE KERNEL END CYCLE,"
-        "DEVICE KERNEL DURATION [ns],DEVICE KERNEL DURATION DM START [ns],"
-        "DEVICE KERNEL DURATION PER CORE MIN [ns],DEVICE KERNEL DURATION PER CORE MAX [ns],"
-        "DEVICE KERNEL DURATION PER CORE AVG [ns],DEVICE KERNEL FIRST TO LAST START [ns],"
-        "DEVICE BRISC KERNEL DURATION [ns],DEVICE NCRISC KERNEL DURATION [ns],"
-        "DEVICE TRISC0 KERNEL DURATION [ns],DEVICE TRISC1 KERNEL DURATION [ns],"
-        "DEVICE TRISC2 KERNEL DURATION [ns]\n",
-        f);
+    if (!header_written_) {
+        header_written_ = true;
+        std::fputs(
+            "DEVICE ID,GLOBAL CALL COUNT,EXECUTION,CORE COUNT,DEVICE KERNEL START CYCLE,DEVICE KERNEL END CYCLE,"
+            "DEVICE KERNEL DURATION [ns],DEVICE KERNEL DURATION DM START [ns],"
+            "DEVICE KERNEL DURATION PER CORE MIN [ns],DEVICE KERNEL DURATION PER CORE MAX [ns],"
+            "DEVICE KERNEL DURATION PER CORE AVG [ns],DEVICE KERNEL FIRST TO LAST START [ns],"
+            "DEVICE BRISC KERNEL DURATION [ns],DEVICE NCRISC KERNEL DURATION [ns],"
+            "DEVICE TRISC0 KERNEL DURATION [ns],DEVICE TRISC1 KERNEL DURATION [ns],"
+            "DEVICE TRISC2 KERNEL DURATION [ns]\n",
+            f);
+    }
     for (const auto& [key, op] : ops_) {
         const auto& [chip, prog, exec] = key;
         auto ns = [](int64_t start, int64_t end) {
@@ -105,7 +108,9 @@ void OpsCsvConsumer::write_csv() {
             ns(op.h_risc_start[3], op.h_risc_end[3]),
             ns(op.h_risc_start[4], op.h_risc_end[4]));
     }
-    std::fclose(f);
+    std::fflush(f);
+    ops_.clear();
+    pair_count_.clear();
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
