@@ -340,6 +340,9 @@ def test_perf(mesh_device, device_params, topology, memory, op, submesh_shape, t
                 + "\n"
             )
     except Exception as e:
+        # The largest sizes are expected not to fit. Anything else is a real failure.
+        if "Out of Memory" not in str(e):
+            raise
         pytest.skip(f"{op} n={n} {target_bytes}B: {str(e)[:200]}")
     finally:
         if capturing:
