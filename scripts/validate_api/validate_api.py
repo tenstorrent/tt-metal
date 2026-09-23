@@ -21,7 +21,6 @@ from common import CPP_EXTENSIONS
 # Legacy include-style exceptions; guards and tier boundaries still apply.
 SKIP_FILES = {
     "fabric_edm_packet_header.hpp",
-    "tt_uva.hpp",  # device-side socket verbs; includes RV32 kernel headers by their kernel-build paths
     "dev_msgs.h",
     "dataflow_buffer.hpp",  # TODO: #37324: remove once dataflow buffer has proper host-dev interface
 }

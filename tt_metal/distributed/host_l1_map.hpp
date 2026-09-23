@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <string>
 
-#include <tt-metalium/experimental/sockets/internal/host_uva_frame.hpp>
+#include <tt-metalium/experimental/sockets/host_uva_frame.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -27,7 +27,7 @@ struct L1MapNew {
     uint32_t stop_addr = 0;       // where a DEVICE_PULL receiver kernel is told to exit
     uint32_t consumed_addr = 0;   // what the far device has pulled, for tt_uva_sync()
     uint32_t dest_word_addr = 0;  // a store's per-message destination, for the pull kernel
-    uint32_t verify_addr = 0;     // [0] corrupt frames, [4] frames landed; written at kernel exit
+    uint32_t verify_addr = 0;     // [0..1] t_begin, [2..3] t_end, [4] iterations, [5..6] t_steady
     uint32_t deliver_addr = 0;    // where the pull kernel lands payload
 
     // Delivery gets its own buffer so a core can hold an outbound and an inbound payload at
