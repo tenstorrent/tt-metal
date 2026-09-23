@@ -12,6 +12,12 @@ KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/pack_reduce_mask.cpp"
 REPEATS = 5
 OUTPUTS_PER_SECTION = 4 + 3 * REPEATS
 TILE_SHAPES = [(32, 32), (32, 16), (16, 32), (16, 16), (8, 32), (4, 16), (2, 32), (1, 32), (1, 16)]
+BFP8_TILE_SHAPES = [(32, 32), (32, 16), (8, 32), (4, 16), (2, 32), (1, 32), (1, 16)]
+CASES = [
+    (tile_shape, dtype, fp32_dest)
+    for tile_shape in TILE_SHAPES
+    for dtype, fp32_dest in [(ttnn.float32, True), (ttnn.bfloat16, False), (ttnn.bfloat16, True)]
+] + [(tile_shape, ttnn.bfloat8_b, False) for tile_shape in BFP8_TILE_SHAPES]
 
 
 def _single_core():
@@ -29,8 +35,7 @@ def _sharded(shape):
     )
 
 
-@pytest.mark.parametrize("tile_shape", TILE_SHAPES)
-@pytest.mark.parametrize("dtype,fp32_dest", [(ttnn.float32, True), (ttnn.bfloat16, False), (ttnn.bfloat16, True)])
+@pytest.mark.parametrize("tile_shape,dtype,fp32_dest", CASES)
 @pytest.mark.parametrize("full_sync", [False, True])
 def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runtime_output=False):
     if device.arch() not in (ttnn.device.Arch.BLACKHOLE, ttnn.device.Arch.WORMHOLE_B0):
@@ -41,6 +46,9 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
     source = (torch.arange(height * 2 * width, dtype=torch.float32) + 1).reshape(1, 1, height, 2 * width)
     if dtype == ttnn.bfloat16:
         source = source.bfloat16().float()
+    elif dtype == ttnn.bfloat8_b:
+        # Every value shares the [64, 128) exponent, so the 7-bit BFP mantissa holds it exactly.
+        source = 64 + source % 64
     inp = ttnn.from_torch(
         source,
         dtype=dtype,
@@ -95,8 +103,7 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("tile_shape", TILE_SHAPES)
-@pytest.mark.parametrize("dtype,fp32_dest", [(ttnn.float32, True), (ttnn.bfloat16, False), (ttnn.bfloat16, True)])
+@pytest.mark.parametrize("tile_shape,dtype,fp32_dest", CASES)
 @pytest.mark.parametrize("full_sync", [False, True])
 def test_pack_reduce_mask_runtime_output(device, tile_shape, dtype, fp32_dest, full_sync):
     test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runtime_output=True)
