@@ -57,7 +57,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // ---------------------------------------------------------------------
     const DFBSpecName SRC_SHARD{"src_shard"};  // legacy src0 buffer c_1: the input shard, borrowed
     const DFBSpecName STAGE{"stage"};          // legacy src1 buffer c_0: row-major staging for tilize
-    const DFBSpecName PAD{"pad"};              // legacy src2 buffer c_2: one row of pad value
+    const ScratchpadSpecName PAD{"pad"};       // legacy src2 buffer c_2: one row of pad value
     const DFBSpecName OUT_SHARD{"out_shard"};  // legacy output buffer c_16: the output shard, borrowed
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -101,12 +101,6 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
             .num_entries = ntiles_per_batch * 2,
             .data_format_metadata = input_dfb_data_format,
         },
-        DataflowBufferSpec{
-            .unique_id = PAD,
-            .entry_size = input_shard_width_bytes,
-            .num_entries = 1,
-            .data_format_metadata = input_dfb_data_format,
-        },
         // Sharded output DFB — built on the output buffer's borrowed memory.
         DataflowBufferSpec{
             .unique_id = OUT_SHARD,
@@ -117,12 +111,20 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
         },
     };
 
+    // PAD is reader-private scratch (one row of the pad value), not a FIFO -- a Scratchpad rather than
+    // a (Gen2-unsupported) DM self-loop DFB.
+    spec.scratchpads.push_back(ScratchpadSpec{
+        .unique_id = PAD,
+        .size_per_node = input_shard_width_bytes,
+    });
+
     /** reader
      */
-    // SRC_SHARD and PAD are each touched by the reader alone — it reserves them and peeks a pointer,
-    // with no second kernel on the other end of the FIFO — so each is self-looped: the reader binds
-    // both the producer and the consumer endpoint. STAGE is a normal 1P+1C FIFO into the compute
-    // kernel.
+    // SRC_SHARD is touched by the reader alone — it reserves it and peeks a pointer, with no second
+    // kernel on the other end of the FIFO — so it is self-looped: the reader binds both endpoints. (It
+    // stays a DFB because it is borrowed from the input shard, which a Scratchpad cannot represent.)
+    // PAD is likewise reader-private and is now a Scratchpad. STAGE is a normal 1P+1C FIFO into the
+    // compute kernel.
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
@@ -142,17 +144,11 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
                  .dfb_spec_name = STAGE,
                  .accessor_name = "in1",
                  .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = PAD,
-                 .accessor_name = "pad",
-                 .endpoint_type = DFBEndpointType::PRODUCER,
-             },
-             DFBBinding{
-                 .dfb_spec_name = PAD,
-                 .accessor_name = "pad",
-                 .endpoint_type = DFBEndpointType::CONSUMER,
              }},
+        .scratchpad_bindings = {ScratchpadBinding{
+            .scratchpad_spec_name = PAD,
+            .accessor_name = "pad",
+        }},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_input_rows",
