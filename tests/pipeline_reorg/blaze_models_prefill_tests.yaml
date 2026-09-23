@@ -955,8 +955,8 @@
   cmd: |
     export MESH_DEVICE=TG
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8/
-    test -f "$GLM52_HF_MODEL/config.json" || { echo "::error title=MTP leg::GLM52_HF_MODEL=$GLM52_HF_MODEL has no config.json"; exit 1; }
     mpirun --bind-to none --pernode --tag-output bash -lc '
+      test -f "$GLM52_HF_MODEL/config.json" || { echo "MTP leg: GLM52_HF_MODEL=$GLM52_HF_MODEL has no config.json on this worker; the pretrained parametrization would skip and leave the leg green on random weights alone"; exit 1; }
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not levels7 and (fused or pretrained)" -vvv --tb=short
     '

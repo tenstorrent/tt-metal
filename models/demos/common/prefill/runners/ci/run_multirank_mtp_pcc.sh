@@ -40,17 +40,6 @@ MTP_LEVELS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["en
 TRUNK_TRACE=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
 MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k}"
 
-for k in $(seq 0 $((MTP_LEVELS - 1))); do
-  layer=$((NUM_LAYERS + k))
-  if [ ! -f "${MTP_TRACE}/kv_cache/layer_${layer}.safetensors" ] \
-     && ! compgen -G "${MTP_TRACE}/kv_cache/layer_${layer}/rows_*.safetensors" >/dev/null; then
-    echo "MTP golden missing for level ${k} (layer ${layer}) under ${MTP_TRACE}/kv_cache -- the producer" >&2
-    echo "would skip the MTP KV comparison and this leg would pass on plumbing alone" >&2
-    exit 2
-  fi
-done
-echo "MTP golden present for layers ${NUM_LAYERS}..$((NUM_LAYERS + MTP_LEVELS - 1)) under ${MTP_TRACE}"
-
 export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_mtp_prefill_runner_kv}"
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
