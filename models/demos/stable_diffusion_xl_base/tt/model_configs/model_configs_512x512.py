@@ -973,11 +973,8 @@ class ModelOptimisations512x512:
             raise ValueError(f"Unknown conv path: {conv_path}")
 
     def get_conv_compute_config(self, module_path):
-        if "conv_in" in module_path:
+        if "conv_in" in module_path or "conv_out" in module_path:
             return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
-        if "conv_out" in module_path:
-            # Preserve output-convolution accuracy across repeated denoising steps.
-            return self.compute_configs["CONV_HIFI4_FP32_COMPUTE_CONFIG"]
         if "resnets" in module_path:
             conv1_no_fp32 = {
                 "down_blocks.2.resnets",
