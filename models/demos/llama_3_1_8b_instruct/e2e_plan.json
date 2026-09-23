@@ -1,0 +1,371 @@
+{
+  "model": "/home/ttuser/benchmark-data/Llama-3.1-8B-Instruct",
+  "generated": "2026-09-09",
+  "sources": {
+    "A_huggingface": {
+      "config": {
+        "architectures": [
+          "LlamaForCausalLM"
+        ],
+        "model_type": "llama",
+        "hidden_size": 4096,
+        "intermediate_size": 14336,
+        "num_hidden_layers": 32,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "vocab_size": 128256,
+        "rms_norm_eps": 1e-05,
+        "rope_theta": 500000.0,
+        "rope_scaling": {
+          "rope_type": "llama3",
+          "factor": 8.0,
+          "low_freq_factor": 1.0,
+          "high_freq_factor": 4.0,
+          "original_max_position_embeddings": 8192
+        },
+        "max_position_embeddings": 131072,
+        "tie_word_embeddings": false,
+        "is_encoder_decoder": false
+      },
+      "generation_config": {
+        "bos_token_id": 128000,
+        "eos_token_id": [
+          128001,
+          128008,
+          128009
+        ],
+        "do_sample": true,
+        "temperature": 0.6,
+        "top_p": 0.9
+      },
+      "processor": "AutoTokenizer (tokenizer.json, chat template in tokenizer_config.json) -> input_ids",
+      "auto_model_registry": {
+        "checkpoint_head": "LlamaForCausalLM",
+        "task_heads_with_trained_weights_in_this_checkpoint": [
+          "text-generation (causal LM)"
+        ],
+        "other_registry_entries_rejected": [
+          "LlamaForSequenceClassification / LlamaForTokenClassification / LlamaForQuestionAnswering: the registry accepts them for model_type=llama, but this checkpoint ships NO weights for those heads (architectures lists only LlamaForCausalLM). A randomly-initialised head has no HF golden to be compared against, so it is NOT a valid task head for this bring-up."
+        ],
+        "n_task_heads": 1
+      },
+      "reference_for_parity": "LlamaForCausalLM.generate() (greedy) on CPU float32 -> golden token ids + per-step logits"
+    },
+    "B_bringup": {
+      "dir": "models/demos/llama_3_1_8b_instruct",
+      "status_file": "bringup_status.json",
+      "captured": "_captured/<name>/{args,kwargs,output}.pt",
+      "pcc_tests": "tests/pcc/"
+    }
+  },
+  "graduated_modules_verification": {
+    "rule": "GRADUATED = a component listed in bringup_status.json that ALSO has _stubs/<name>.py.last_good_native or .last_good_sharded; the LIVE _stubs/<name>.py IS the graduated body and is composed as-is.",
+    "verified_on": "2026-09-09",
+    "verification_method": "for each component in bringup_status.json, checked for _stubs/<name>.py.last_good_{native,sharded} and diffed the LIVE stub against that snapshot",
+    "graduated": [
+      {
+        "name": "decoder_layer",
+        "class": "TtLlamaDecoderLayer",
+        "snapshot": "last_good_sharded",
+        "live_equals_snapshot": true,
+        "bringup_status": "NEW",
+        "scheme": "composite (TP=4)"
+      },
+      {
+        "name": "attention",
+        "class": "TtLlamaAttention",
+        "snapshot": "last_good_sharded",
+        "live_equals_snapshot": true,
+        "bringup_status": "ADAPT",
+        "scheme": "TP column-parallel QKV by head + row-parallel o_proj + all_reduce"
+      },
+      {
+        "name": "m_l_p",
+        "class": "TtLlamaMLP",
+        "snapshot": "last_good_sharded",
+        "live_equals_snapshot": true,
+        "bringup_status": "ADAPT",
+        "scheme": "TP column-parallel gate/up + row-parallel down + all_reduce"
+      },
+      {
+        "name": "r_m_s_norm",
+        "class": "TtLlamaRMSNorm",
+        "snapshot": "last_good_native",
+        "live_equals_snapshot": true,
+        "bringup_status": "ADAPT",
+        "scheme": "replicate-only (no shard dim exists for a per-element scale)"
+      },
+      {
+        "name": "rotary_embedding",
+        "class": "TtLlamaRotaryEmbedding",
+        "snapshot": "last_good_native",
+        "live_equals_snapshot": true,
+        "bringup_status": "ADAPT",
+        "scheme": "replicate-only (per-position table, no weight to split)"
+      }
+    ],
+    "count_graduated": 5,
+    "not_graduated_present_in_stubs_dir": [
+      "nemotron_h_model",
+      "nemotron_h_block",
+      "nemotron_h_mamba2_mixer",
+      "nemotron_h_m_o_e",
+      "nemotron_h_topk_router",
+      "mamba_r_m_s_norm_gated",
+      "re_l_u_squared_activation",
+      "_cpp_kernels",
+      "_ttl_kernels"
+    ],
+    "not_graduated_reason": "leftovers of the ranked SIBLING backend (NemotronH). They are NOT components of this model in bringup_status.json and carry no .last_good_* snapshot, so they are not graduated work products for Llama-3.1-8B and are correctly excluded from the pipeline.",
+    "none_wasted": "all 5 graduated modules are routed into the single task head below; nothing is left out"
+  },
+  "hardware": {
+    "box": "QB2, 4x Blackhole (p300c)",
+    "dram_per_chip_gb": 32,
+    "chips": 4,
+    "aggregate_dram_gb": 128,
+    "usable_per_chip_gb": {
+      "tp1": 29.2,
+      "with_ccl_axis": 28.6,
+      "source": "REGISTERED figures supplied for this box; NOT measured by this run"
+    },
+    "ceiling_used_by_this_plan": {
+      "value_gb": 28.6,
+      "which": "usable per chip once a CCL axis is in play (TP=4 uses all_reduce)",
+      "estimated_resident_per_chip_gb": 5.7,
+      "estimate_breakdown": "bf16 weights: embed_tokens 1.05 GB (replicated) + lm_head 1.05 GB (replicated) + 32 layers x 218M params / TP4 = 3.5 GB (sharded) + norms ~0.001 GB; KV cache at C=512, b=1: 32 layers x 2 x (2 kv-heads x 512 x 128) x 2 B = 0.03 GB. Estimated from parameter counts, not measured.",
+      "headroom": "5.7 GB of 28.6 GB -> the full 32-layer model is resident; no depth cap is required for correctness (a `layers` cap exists only to make profiling cheap)"
+    }
+  },
+  "placement": {
+    "mesh": "ttnn.open_mesh_device(ttnn.MeshShape(1, 4))  # rows=DP=1, cols=TP=4",
+    "fabric": "ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D) BEFORE opening the mesh (required by all_reduce_async)",
+    "tp": 4,
+    "dp": 1,
+    "tp_cluster_axis": 1,
+    "fallback": "if fewer devices are present at runtime, fall back to what is available and print the fallback in the run output"
+  },
+  "scheme_evaluation": {
+    "note": "per-component scheme validated against THIS model's config at TP=4 x DP=1 BEFORE composing",
+    "components": [
+      {
+        "name": "attention",
+        "scheme": "tensor-parallel by HEAD: q/k/v column-parallel (ShardTensorToMesh dim=-1 over a fused [q_d|k_d|v_d] layout), o_proj row-parallel (ShardTensorToMesh dim=0), closed by ttnn.experimental.all_reduce_async(cluster_axis=1, Sum)",
+        "constraints": [
+          "num_attention_heads % TP == 0",
+          "num_key_value_heads % TP == 0",
+          "GQA group must not straddle chips"
+        ],
+        "check": "32 % 4 == 0 OK; 8 % 4 == 0 OK; group = 32/8 = 4, chip d owns q-heads [8d,8d+8) whose kv index [8d,8d+8)//4 == [2d,2d+2) == chip d's kv-heads OK",
+        "verdict": "COMPATIBLE"
+      },
+      {
+        "name": "m_l_p",
+        "scheme": "tensor-parallel on the INTERMEDIATE dim: gate/up column-parallel, down row-parallel, closed by all_reduce_async(cluster_axis=1, Sum)",
+        "constraints": [
+          "intermediate_size % TP == 0"
+        ],
+        "check": "14336 % 4 == 0 -> 3584 per chip OK",
+        "verdict": "COMPATIBLE"
+      },
+      {
+        "name": "decoder_layer",
+        "scheme": "composite: replicated RMSNorms + sharded attention + sharded MLP; inherits attention's TP degree so both halves agree on the split; residual adds happen on replicated tensors after each all_reduce",
+        "constraints": [
+          "both children agree on the same physical mesh axis"
+        ],
+        "check": "both children compute cluster_axis via the same helper -> axis 1 (the cols/TP axis of MeshShape(1,4)) OK",
+        "verdict": "COMPATIBLE"
+      },
+      {
+        "name": "r_m_s_norm",
+        "scheme": "REPLICATE (no shard dim exists: a width-shard would need an all_gather to compute the variance)",
+        "check": "replication is the component's OWN graduated scheme, not a silent downgrade of a shardable one",
+        "verdict": "COMPATIBLE"
+      },
+      {
+        "name": "rotary_embedding",
+        "scheme": "REPLICATE (per-position lookup table; every chip rotates its own heads with the same angles)",
+        "check": "same as above",
+        "verdict": "COMPATIBLE"
+      }
+    ],
+    "holes": [],
+    "final_pipeline_must_contain": [
+      "ttnn.ShardTensorToMesh",
+      "ttnn.experimental.all_reduce_async"
+    ],
+    "irrelevant_finding_ignored": "kernel_findings.json flags `num_key_value_heads must be divisible by TP(32)` as a blocker. That was evaluated at TP=32. This run is TP=4 and 8 % 4 == 0, so it does not apply. (It also cites models/tt_transformers, a restricted source, which this bring-up does not read.)"
+  },
+  "task_heads": [
+    {
+      "call": 1,
+      "id": "text_generation",
+      "task": "text -> text (causal LM, autoregressive)",
+      "hf_head": "LlamaForCausalLM",
+      "input_construction": "AutoTokenizer.apply_chat_template([{role: user, content: PROMPT}], add_generation_prompt=True) -> input_ids  (real HF tokenizer, Source A)",
+      "output": "generated token ids -> tokenizer.decode(...) -> real assistant text",
+      "reference_golden": "LlamaForCausalLM.generate(input_ids, do_sample=False, max_new_tokens=N, return_dict_in_generate=True, output_scores=True) on CPU float32",
+      "pass_definition": {
+        "gate_1": "every routed graduated stub is still real ttnn; the three TP=4 bodies keep ShardTensorToMesh + all_reduce_async (NOT rewritten to replication). Asserted by scanning the live stub sources for a torch-compute fallback and by asserting the run recorded >0 ShardTensorToMesh weights and >0 collectives.",
+        "gate_2": "all 5 graduated modules INVOKED inside the real forward path (recorded by tt/_invocation.py from inside each stub's forward, not by a coverage sweep); each one's output feeds downstream computation on the way to the emitted text.",
+        "gate_3": "e2e PCC vs the HF golden >= 0.95, printed as `e2e PCC=<value>` on its own line immediately before the assert, on pass AND on fail. FINAL_PCC = min(prefill_parity, decode_parity), both injection-free: (a) prefill_parity = PCC of the TT prefill logits at EVERY real prompt position vs the HF forward (whole 32-layer stack, every graduated module, no decode); (b) decode_parity = PCC of the free-running per-step logits over the steps whose generated PREFIX both sides agree on."
+      },
+      "validation_metric": {
+        "primary": "FINAL_PCC = min(prefill_parity, decode_parity) -- see gate_3",
+        "why_not_plain_full-horizon_free-running_PCC": "greedy decoding is chaotic. Once the two sides pick differently at a near-tie the later steps are conditioned on DIFFERENT text, so their logits measure the tie-break, not the pipeline. Measured 2026-09-09 on 'List three interesting facts about the planet Jupiter.': identical for 13 tokens, then TT took 'Jupiter is the Largest...' and HF took 'Largest Planet...' where the GOLDEN's own top-2 logit gap was 0.196 -- a coin-flip. Full-horizon free-running PCC read 0.479 while prefill parity was 0.9986 and decode parity 0.9995. The comparable-step set is chosen by the DATA, never by hand, and the divergence step plus the golden's own top-2 gap there are always printed so a real error cannot hide behind 'it was just a tie'. A vacuous gate is blocked: the run fails if fewer than min(4, N) decode steps are comparable.",
+        "secondary": [
+          "per-step PCC (min / mean)",
+          "full-horizon free-running PCC (diagnostic)",
+          "greedy token-id exact-match rate vs the golden ids",
+          "first divergence step + the golden's top-2 gap there",
+          "decoded text of both sides printed side by side"
+        ],
+        "no_injection": "no reference tensor or reference token is ever fed back into the TT chain; the TT side free-runs on its own output throughout"
+      },
+      "behavioral_proof": "the demo prints the prompt and the assistant text the TT pipeline generated; the test additionally prints the HF golden text so the two can be read side by side. Token-id match rate is reported.",
+      "decode_horizon": {
+        "rule": "STOP-TOKEN (priority 1): decode until the generated id is in generation_config.eos_token_id = [128001, 128008, 128009]; the SAME rule terminates the HF golden (generate() stops on the same ids).",
+        "safety_cap": "a max_new_tokens cap is ALWAYS applied and is passed identically to BOTH sides, so the two sequences are compared over the same, identically-terminated length. The on-device gate uses the small gate horizon GATE_MAX_NEW_TOKENS=40 to keep the device gate fast; the demo default is larger and settable via --max-new-tokens.",
+        "never": "the golden is never forced to a count the TT side invented; both get the same cap and the same eos set."
+      },
+      "stub_routing": [
+        {
+          "stage": "tokenize",
+          "impl": "HF AutoTokenizer (setup, outside the TT forward)"
+        },
+        {
+          "stage": "embed",
+          "impl": "ttnn.embedding over a replicated embed_tokens weight (authored here; no graduated stub exists for it)"
+        },
+        {
+          "stage": "rope tables",
+          "impl": "GRADUATED rotary_embedding -> TtLlamaRotaryEmbedding, called ONCE per forward, produces the (cos, sin) ttnn tensors consumed by every layer"
+        },
+        {
+          "stage": "32x transformer layers",
+          "impl": "GRADUATED decoder_layer -> TtLlamaDecoderLayer x 32, each internally invoking GRADUATED attention (TtLlamaAttention) and GRADUATED m_l_p (TtLlamaMLP)"
+        },
+        {
+          "stage": "final norm",
+          "impl": "GRADUATED r_m_s_norm -> TtLlamaRMSNorm on model.norm, feeding the lm_head"
+        },
+        {
+          "stage": "lm_head",
+          "impl": "ttnn.linear over a replicated lm_head weight (authored here)"
+        },
+        {
+          "stage": "sample",
+          "impl": "ttnn.argmax on device; the id feeds straight back into ttnn.embedding with no host round-trip"
+        }
+      ],
+      "graduated_modules_used": [
+        "decoder_layer",
+        "attention",
+        "m_l_p",
+        "r_m_s_norm",
+        "rotary_embedding"
+      ],
+      "graduated_modules_unused": [],
+      "kv_cache": "resident per-layer K/V of shape [b, n_local_kv=2, C, 128] per chip; prefill writes it with ttnn.fill_cache, decode updates it with ttnn.experimental.paged_update_cache and reads it with ttnn.transformer.scaled_dot_product_attention_decode. Decode NEVER recomputes the prefix.",
+      "adaptation_notes": [
+        "attention._rot_tables currently accepts TORCH cos/sin. To feed it the GRADUATED rotary_embedding stub's ttnn output without a host round-trip, a ttnn branch is added (device-side reshape/repeat over the head axis) and the shape-keyed cache is bypassed for ttnn inputs (the tables change every decode step). The existing torch branch is left intact, so the per-component PCC tests keep passing.",
+        "attention gains an OPTIONAL kv-cache path (prefill fill / decode update+sdpa_decode). Both paths are pure ttnn and keep the same TP=4 sharding + all_reduce; the un-cached full-sequence causal path the component graduated on is unchanged."
+      ]
+    }
+  ],
+  "orchestration": {
+    "calls": 1,
+    "agents": 1,
+    "rationale": "the checkpoint exposes exactly ONE task head with trained weights (LlamaForCausalLM), so there is one Call; it uses all 5 graduated modules, so by the shared-module rule it gets exactly one agent. Fanning out is also physically impossible here: all 4 chips are a single mesh that only one process can hold at a time.",
+    "iteration": "run on device with ./python_env/bin/python -m pytest <test> -s; fix wiring/stub and re-run until Gates 1-3 pass."
+  },
+  "self_validation_plan": [
+    "S1 - graduated inventory: re-derive the graduated set from bringup_status.json x _stubs/*.last_good_* at TEST TIME and assert the pipeline routed exactly that set (catches a stub that graduates later and gets left out).",
+    "S2 - Gate 1 nativeness: assert each routed stub module's source contains no torch-compute fallback in its forward, and that the three TP bodies still reference ShardTensorToMesh and all_reduce_async; assert the built pipeline actually created >0 sharded weights and >0 collectives at TP>1.",
+    "S3 - Gate 2 invocation: reset tt/_invocation.py's registry, run ONE real generation, assert the recorded set == the graduated set. Recording happens INSIDE each stub's forward, so it cannot be satisfied by a coverage sweep.",
+    "S4 - Gate 3 parity: PCC(TT step logits, HF step logits) >= 0.95, printed unconditionally before the assert.",
+    "S5 - no injected reference tensors: every stage consumes the previous TT stage's real output; the only HF tensors that enter are the tokenized input_ids and (for the golden helper) the reference itself.",
+    "S6 - demo/test share ONE pipeline: the test imports the same tt/pipeline.py function the demo calls; assert the demo module resolves to that same object.",
+    "S7 - stage trace contract (Command 3): trace_capture_selftest(device) captures and executes each stage in PIPELINE_STAGES host-op-free and PCC-checks the traced output against the eager reference, releasing each trace before the next.",
+    "S8 - host_op_selftest(): run the forward under scripts.tt_hw_planner.host_op_observer.observe_host_ops with tokenization and weight build OUTSIDE the observed region; assert verdict()['on_device'] is True."
+  ],
+  "pipeline_stages": {
+    "derivation": "architectures=[LlamaForCausalLM], is_encoder_decoder=false, no sub-configs, text output -> stages are [prefill, decode]",
+    "stages": [
+      "prefill",
+      "decode"
+    ],
+    "variable_dim": "sequence axis; bound = max_position_embeddings (131072). Pinned to a fixed trace capacity C (default 512, shrunk and PRINTED if the trace region overflows).",
+    "trace_contract": {
+      "prefill_trace_setup/prefill_trace_step/prefill_trace_inputs/prefill_trace_items": "items = C (prefill retires C token positions per call)",
+      "decode_trace_setup/decode_trace_step/decode_trace_inputs/decode_trace_items": "items = 1 (one token per step)",
+      "decode_prefill/decode_step": "decode_prefill seeds the resident self-attention KV; decode_step reads it and never recomputes the prefix",
+      "build_pipeline(device, model=None, layers=None, prefill_layers=None, decode_layers=None, **kwargs)": "module-level factory that CONSTRUCTS AND RETURNS the resident pipeline object; layers=None means all 32; prefill and decode share the ONE decoder stack, so the per-stage overrides resolve to the same stack and must agree",
+      "stack_discovery": "the 32 TtLlamaDecoderLayer objects are held as a plain Python list of one same-typed element type; the HF reference stays reachable on the object as .hf for ground-truth section structure"
+    }
+  },
+  "package_layout": {
+    "tt/pipeline.py": "the ONE shared chained forward (build_pipeline, PIPELINE_STAGES, run_text_generation, per-stage trace hooks, trace_capture_selftest, host_op_selftest)",
+    "tt/_invocation.py": "process-global registry recording which graduated stubs actually ran (Gate 2)",
+    "demo/demo_text_generation.py": "runnable `python -m ...demo.demo_text_generation` with __main__ + argparse; imports and calls the tt/ pipeline",
+    "tests/e2e/test_e2e_pipeline.py": "Gate 1/2/3 e2e test; imports and calls the SAME tt/ pipeline function",
+    "tests/e2e/test_trace_contract.py": "Command 3: trace_capture_selftest + host_op_selftest",
+    "README.md": "what Call 1 does, how to run it, the PCC numbers"
+  },
+  "results": {
+    "measured_on": "2026-09-09, QB2 4x Blackhole p300c, mesh 1x4, TP=4 x DP=1, full 32 layers",
+    "call_1_text_generation": {
+      "status": "READY",
+      "FINAL_PCC": 0.9986500032063949,
+      "prefill_parity_pcc": 0.99865,
+      "decode_parity_pcc": 0.999752,
+      "per_step_pcc_min": 0.999392,
+      "per_step_pcc_mean": 0.999696,
+      "token_match": "8/8 (100%)",
+      "prompt": "What is the capital of France? Answer in one short sentence.",
+      "tt_text": "The capital of France is Paris.",
+      "hf_text": "The capital of France is Paris.",
+      "stop": "terminated on eos 128009 after 8 tokens (cap 40 on both sides)",
+      "gates": {
+        "gate_1": "PASS",
+        "gate_2": "PASS (all 5 graduated modules invoked)",
+        "gate_3": "PASS"
+      },
+      "second_prompt_check": {
+        "prompt": "List three interesting facts about the planet Jupiter.",
+        "cap": 64,
+        "prefill_parity_pcc": 0.998644,
+        "decode_parity_pcc": 0.999505,
+        "token_match": "13/64 free-running (diverged at step 13 on a 0.196 top-2 gap)",
+        "verdict": "PASS"
+      }
+    },
+    "trace_contract": {
+      "stages": [
+        "prefill",
+        "decode"
+      ],
+      "prefill": {
+        "C": 128,
+        "items": 128,
+        "host_op_free_capture": true,
+        "traced_vs_eager_pcc": 1.0
+      },
+      "decode": {
+        "C": 128,
+        "items": 1,
+        "host_op_free_capture": true,
+        "traced_vs_eager_pcc": 1.0
+      },
+      "verified_at_depths": [
+        2,
+        32
+      ],
+      "host_op_selftest": "on_device=True \u2014 zero host aten ops in the observed forward"
+    },
+    "per_component_pcc_regression": "all 8 tests/pcc tests still pass after the additive stub edits (single-device and TP=4 sharded), min PCC 0.99992",
+    "demo": "84 tokens in 3.3 s (25.6 tok/s) on the 4-chip mesh, coherent text, stop-token terminated"
+  }
+}

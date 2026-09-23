@@ -1,0 +1,6 @@
+{
+  "ttnn_dispatch": 11,
+  "marshalling_torch_ops": 0,
+  "torch_ops": 0,
+  "torch_op_names": []
+}

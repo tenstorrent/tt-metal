@@ -1,0 +1,36 @@
+{
+  "shard_reset_done": true,
+  "shard_attempts": {
+    "attention": 1,
+    "decoder_layer": 2,
+    "m_l_p": 1
+  },
+  "last_failure_class": {
+    "r_m_s_norm": "SHAPE",
+    "rotary_embedding": "SHAPE"
+  },
+  "last_failure_text": {
+    "r_m_s_norm": "  - FAILED  models.demos.llama_3_1_8b_instruct.tests.pcc.test_r_m_s_norm::test_r_m_s_norm[device_params0]\n      ModuleNotFoundError: No module named 'models.tt_transformers'\n### models.demos.llama_3_1_8b_instruct.tests.pcc.test_r_m_s_norm::test_r_m_s_norm[device_params0]\nModuleNotFoundError: No module named 'models.tt_transformers'\ndevice_params = {'l1_small_size': 24576}\ndevice = MeshDevice(1x1 grid, 1 devices)\n\n    @pytest.mark.parametrize(\"device_params\", [{\"l1_small_size\": 24576}], indirect=True)\n    def test_r_m_s_norm(device_params, device):\n        stage_budget_s = int(os.environ.get(\"TT_PLANNER_TEST_STAGE_S\", \"120\"))\n    \n        try:\n            _seed = int(os.environ.get(\"TT_PLANNER_TEST_SEED\", \"0\"))\n        except ValueError:\n            _seed = 0\n        torch.manual_seed(_seed)\n    \n        _module_level = os.environ.get(\"TT_PLANNER_GOLDEN_CACHE\", \"1\") not in (\"\", \"0\", \"false\", \"False\")\n        _golden_cache_file = None\n        _golden_hit = None\n        if _module_level:\n            try:\n                from models.common.golden_cache import golden_cache_path, load_golden_cache\n    \n                _golden_cache_file = golden_cache_path(__file__, COMPONENT_NAME, _seed)\n                _golden_hit = load_golden_cache(_golden_cache_file)\n            except Exception:\n                _golden_hit = None\n        if _golden_hit is not None:\n            torch_module, sample_kwargs, primary, torch_out = _golden_hit\n            print(\"[bringup] stage=golden_cache_hit (skipped full-model load)\", flush=True)\n        else:\n            print(\"[bringup] stage=build_torch_reference\", flush=True)\n            _set_stage_timeout(stage_budget_s)\n            try:\n                torch_module, sample_kwargs, primary = _build_torch_reference()\n            finally:\n                _clear_stage_timeout()\n    \n            try:\n                torch_module = torch_module.float()\n            except Exception:\n                pass\n            for _k in list(sample_kwargs.keys()):\n                _v = sample_kwargs[_k]\n                if isinstance(_v, torch.Tensor) and _v.is_floating_point():\n                    sample_kwargs[_k] = _v.to(torch.float32)\n            _pn, _pt = primary\n            if isinstance(_pt, torch.Tensor) and _pt.is_floating_point():\n                primary = (_pn, _pt.to(torch.float32))\n    \n            print(\"[bringup] stage=torch_forward\", flush=True)\n            _set_stage_timeout(stage_budget_s)\n            try:\n                try:\n                    torch_out, sample_kwargs = _reference_forward(torch_module, sample_kwargs)\n                except Exception as exc:\n                    pytest.skip(\n                        f\"HF reference forward({list(sample_kwargs.keys())}) raised \"\n                        f\"{type(exc).__name__} for {COMPONENT_NAME}: {exc} -- \"\n                        f\"the synthetic inputs from _make_arg_for() are incompatible \"\n                        f\"with this submodule's expected shapes. Either edit the test \"\n                        f\"to provide model-specific kwargs, or skip this Phase-2 PCC \"\n                        f\"and validate via the top-level demo instead.\"",
+    "rotary_embedding": "  - FAILED  models.demos.llama_3_1_8b_instruct.tests.pcc.test_rotary_embedding::test_rotary_embedding[device_params0]\n      AttributeError: module 'models.demos.llama_3_1_8b_instruct._stubs.rotary_embedding' has no attribute 'rotary_embedding'\n### models.demos.llama_3_1_8b_instruct.tests.pcc.test_rotary_embedding::test_rotary_embedding[device_params0]\nAttributeError: module 'models.demos.llama_3_1_8b_instruct._stubs.rotary_embedding' has no attribute 'rotary_embedding'\ndevice_params = {'l1_small_size': 24576}\ndevice = MeshDevice(1x1 grid, 1 devices)\n\n    @pytest.mark.parametrize(\"device_params\", [{\"l1_small_size\": 24576}], indirect=True)\n    def test_rotary_embedding(device_params, device):\n        stage_budget_s = int(os.environ.get(\"TT_PLANNER_TEST_STAGE_S\", \"120\"))\n    \n        try:\n            _seed = int(os.environ.get(\"TT_PLANNER_TEST_SEED\", \"0\"))\n        except ValueError:\n            _seed = 0\n        torch.manual_seed(_seed)\n    \n        _module_level = os.environ.get(\"TT_PLANNER_GOLDEN_CACHE\", \"1\") not in (\"\", \"0\", \"false\", \"False\")\n        _golden_cache_file = None\n        _golden_hit = None\n        if _module_level:\n            try:\n                from models.common.golden_cache import golden_cache_path, load_golden_cache\n    \n                _golden_cache_file = golden_cache_path(__file__, COMPONENT_NAME, _seed)\n                _golden_hit = load_golden_cache(_golden_cache_file)\n            except Exception:\n                _golden_hit = None\n        if _golden_hit is not None:\n            torch_module, sample_kwargs, primary, torch_out = _golden_hit\n            print(\"[bringup] stage=golden_cache_hit (skipped full-model load)\", flush=True)\n        else:\n            print(\"[bringup] stage=build_torch_reference\", flush=True)\n            _set_stage_timeout(stage_budget_s)\n            try:\n                torch_module, sample_kwargs, primary = _build_torch_reference()\n            finally:\n                _clear_stage_timeout()\n    \n            try:\n                torch_module = torch_module.float()\n            except Exception:\n                pass\n            for _k in list(sample_kwargs.keys()):\n                _v = sample_kwargs[_k]\n                if isinstance(_v, torch.Tensor) and _v.is_floating_point():\n                    sample_kwargs[_k] = _v.to(torch.float32)\n            _pn, _pt = primary\n            if isinstance(_pt, torch.Tensor) and _pt.is_floating_point():\n                primary = (_pn, _pt.to(torch.float32))\n    \n            print(\"[bringup] stage=torch_forward\", flush=True)\n            _set_stage_timeout(stage_budget_s)\n            try:\n                try:\n                    torch_out, sample_kwargs = _reference_forward(torch_module, sample_kwargs)\n                except Exception as exc:\n                    pytest.skip(\n                        f\"HF reference forward({list(sample_kwargs.keys())}) raised \"\n                        f\"{type(exc).__name__} for {COMPONENT_NAME}: {exc} -- \"\n                        f\"the synthetic inputs from _make_arg_for() are incompatible \"\n                        f\"with this submodule's expected shapes. Either edit the test \"\n                        f\"to provide model-specific kwargs, or skip this Phase-2 PCC \"\n                        f\"and validate via the top-level demo instead.\""
+  },
+  "attempts": {
+    "r_m_s_norm": 1,
+    "rotary_embedding": 1
+  },
+  "best_pcc": {
+    "r_m_s_norm": 0.9999984612688592,
+    "rotary_embedding": 1.0
+  },
+  "consecutive_same_class": {
+    "r_m_s_norm": 0,
+    "rotary_embedding": 0
+  },
+  "pcc_history": {
+    "r_m_s_norm": [
+      0.9999984612688592
+    ],
+    "rotary_embedding": [
+      1.0
+    ]
+  }
+}

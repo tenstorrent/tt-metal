@@ -1,0 +1,12 @@
+{
+  "ttnn_dispatch": 59,
+  "marshalling_torch_ops": 8,
+  "torch_ops": 20,
+  "torch_op_names": [
+    "contiguous",
+    "detach",
+    "expand",
+    "reshape",
+    "to"
+  ]
+}

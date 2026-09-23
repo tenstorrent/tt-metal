@@ -1,0 +1,119 @@
+{
+  "new_model_id": "/home/ttuser/benchmark-data/Llama-3.1-8B-Instruct",
+  "new_model_type": "llama",
+  "sibling_hf_id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+  "sibling_model_type": null,
+  "backend": {
+    "name": "NemotronH (nemotron_h hybrid Mamba2/MoE)",
+    "demo_path": "models/demos/nvidia_nemotron_3_nano_30b_a3b_bf16"
+  },
+  "counts": {
+    "REUSE": 0,
+    "ADAPT": 4,
+    "NEW": 1
+  },
+  "common_reuse": [
+    {
+      "purpose": "LayerNorm / RMSNorm",
+      "path": "models/common/rmsnorm.py"
+    },
+    {
+      "purpose": "LightweightModule base",
+      "path": "models/common/lightweightmodule.py"
+    },
+    {
+      "purpose": "Tensor helpers",
+      "path": "models/common/tensor_utils.py"
+    },
+    {
+      "purpose": "Generic utility funcs",
+      "path": "models/common/utility_functions.py"
+    }
+  ],
+  "components": [
+    {
+      "name": "decoder_layer",
+      "kind": "LlamaDecoderLayer",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/llama/modeling_llama.py",
+      "notes": "module-tree: occ=32 leaves=320 sample_paths=['layers.0', 'layers.1']",
+      "submodule_path": "layers.0",
+      "class_name": "LlamaDecoderLayer"
+    },
+    {
+      "name": "attention",
+      "kind": "LlamaAttention",
+      "status": "ADAPT",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/modules/attention/attention_1d.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: gqa_attention -> models/common/modules/attention/attention_1d.py::Attention (ADAPT). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. A generic TT attention module is available and requires adaptation. Complete Llama attention implementations are excluded. | module-tree: occ=32 leaves=128 sample_paths=['layers.0.self_attn', 'layers.1.self_attn']",
+      "submodule_path": "layers.0.self_attn",
+      "class_name": "LlamaAttention"
+    },
+    {
+      "name": "m_l_p",
+      "kind": "LlamaMLP",
+      "status": "ADAPT",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/modules/mlp/mlp_1d.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: swiglu_mlp -> models/common/modules/mlp/mlp_1d.py::MLP (ADAPT). derived from compatibility.py BUILDING_BLOCKS 'SwiGLU MLP'. Adapt the generic TT MLP module without consulting a complete Llama implementation. | module-tree: occ=32 leaves=128 sample_paths=['layers.0.mlp', 'layers.1.mlp']",
+      "submodule_path": "layers.0.mlp",
+      "class_name": "LlamaMLP"
+    },
+    {
+      "name": "r_m_s_norm",
+      "kind": "LlamaRMSNorm",
+      "status": "ADAPT",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/rmsnorm.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: rmsnorm_text -> models/common/rmsnorm.py::RMSNorm (ADAPT). derived from compatibility.py BUILDING_BLOCKS 'RMSNorm (text)'. Adapt the generic TT RMSNorm module and add multi-device behavior as needed. | module-tree: occ=65 leaves=65 sample_paths=['layers.0.input_layernorm', 'layers.0.post_attention_layernorm']",
+      "submodule_path": "layers.0.input_layernorm",
+      "class_name": "LlamaRMSNorm"
+    },
+    {
+      "name": "rotary_embedding",
+      "kind": "LlamaRotaryEmbedding",
+      "status": "ADAPT",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/modules/rope/rope_1d.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: llama_3_rope_scaling -> models/common/modules/rope/rope_1d.py::RotaryEmbedding (ADAPT). Generic TT RoPE building block for the restricted Llama experiment. | module-tree: occ=1 leaves=1 sample_paths=['rotary_emb']",
+      "submodule_path": "rotary_emb",
+      "class_name": "LlamaRotaryEmbedding"
+    }
+  ],
+  "notes": [
+    "Sibling config could not be fetched; classification falls back to NEW for components without a clear file match. Set HF_TOKEN or pre-download `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16` and re-run for a sharper diff.",
+    "Top sibling candidates (per-component reuse targets are pulled from whichever sibling provides them, not only the first): NemotronH (nemotron_h hybrid Mamba2/MoE) (score 30: category 'LLM' default); falcon7b_common (auto-upstream) (score 30: category 'LLM' default); gemma4 (auto-upstream) (score 30: category 'LLM' default)"
+  ],
+  "ranked_siblings": [
+    {
+      "rank": 1,
+      "backend": "NemotronH (nemotron_h hybrid Mamba2/MoE)",
+      "score": 30,
+      "reason": "category 'LLM' default"
+    },
+    {
+      "rank": 2,
+      "backend": "falcon7b_common (auto-upstream)",
+      "score": 30,
+      "reason": "category 'LLM' default"
+    },
+    {
+      "rank": 3,
+      "backend": "gemma4 (auto-upstream)",
+      "score": 30,
+      "reason": "category 'LLM' default"
+    }
+  ]
+}
