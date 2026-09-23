@@ -379,7 +379,7 @@ Tensor addcmul(
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         float value_f = std::visit([](auto&& v) { return static_cast<float>(v); }, value);
-        return _addcmul(input_a, input_b, input_c, value_f, memory_config);
+        return _addcmul(input_a, input_b, input_c, value_f, memory_config, output);
     }
 
     // Use LLK implementation - pass value as scalar parameter
@@ -418,7 +418,7 @@ Tensor addcdiv(
     if (is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
         log_debug(tt::LogOp, "Addcdiv Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
-        return _addcdiv(input_a, input_b, input_c, value, memory_config);
+        return _addcdiv(input_a, input_b, input_c, value, memory_config, output);
     }
 
     // Use LLK implementation - pass value as scalar parameter
@@ -441,6 +441,12 @@ Tensor lerp(
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}",
+        input.dtype(),
+        end.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
@@ -472,6 +478,13 @@ Tensor lerp(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32 && weight.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}, weight={}",
+        input.dtype(),
+        end.dtype(),
+        weight.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =

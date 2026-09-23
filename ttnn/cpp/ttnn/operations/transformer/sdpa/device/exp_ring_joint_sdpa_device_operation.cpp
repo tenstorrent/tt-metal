@@ -156,14 +156,28 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.logical_n,
         N_global);
 
+    // Trailing fully-pad shards are supported (the kernels skip them consistently on all devices).
+    // Only shard 0 must be real, so every device has >=1 active iteration and an output-drain point.
     TT_FATAL(
-        (N_global - args.logical_n) < N_local,
-        "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
-        "sequence length. Got delta: {}, local sequence length: {} "
-        "This implies at least one device will have only padded tokens and no real tokens to process. Either "
-        "reduce the ring size or reduce padding by reducing the chunk size.",
-        N_global - args.logical_n,
-        N_local);
+        args.logical_n >= 1,
+        "Logical sequence length must be at least 1 (shard 0 must contain real tokens). Got logical sequence "
+        "length: {}",
+        args.logical_n);
+
+    if (tensor_args.has_logical_n_tensor()) {
+        const auto& t = tensor_args.logical_n_tensor.value();
+        TT_FATAL(
+            t.dtype() == DataType::UINT32 || t.dtype() == DataType::INT32,
+            "logical_n tensor must be UINT32 or INT32 (the kernels read element 0 as a raw 32-bit word). Got {}",
+            t.dtype());
+        TT_FATAL(t.storage_type() == StorageType::DEVICE, "logical_n tensor must be on device");
+        TT_FATAL(t.buffer() != nullptr, "logical_n tensor must be allocated on device");
+        TT_FATAL(
+            t.logical_volume() == 1,
+            "logical_n tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
+            t.logical_volume());
+        // Live-value range is a caller contract, unverifiable on host: live logical_n must be >= 1.
+    }
 
     // Check shapes based on ring
     TT_FATAL(
@@ -462,7 +476,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -508,7 +523,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
-        .gathered_v = persistent_output_buffer_v};
+        .gathered_v = persistent_output_buffer_v,
+        .logical_n_tensor = logical_n_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

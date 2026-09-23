@@ -69,7 +69,9 @@ void kernel_main() {
     bool use_multicast_semaphore_inc = static_cast<bool>(get_arg(args::use_multicast_semaphore_inc));
     std::uint32_t mcast_dst_end_x = get_arg(args::mcast_dst_end_x);
     std::uint32_t mcast_dst_end_y = get_arg(args::mcast_dst_end_y);
-    bool use_write_with_state = static_cast<bool>(get_arg(args::use_write_with_state));
+    // 0: plain async_write; 1: one-packet stateful write (size in AT_LEN); 2: any-length stateful
+    // write (size supplied per call, not held in cmd-buf state).
+    std::uint32_t use_write_with_state = get_arg(args::use_write_with_state);
     bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
     bool use_inline_dw_write_with_state = static_cast<bool>(get_arg(args::use_inline_dw_write_with_state));
     std::uint32_t invalid_txn_id = get_arg(args::invalid_txn_id);
@@ -145,7 +147,7 @@ void kernel_main() {
     if (use_inline_dw_write) {
         noc.inline_dw_write(
             dst_unicast_endpoint, local_buffer[0], {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
-    } else if (use_write_with_state) {
+    } else if (use_write_with_state == 1) {
         // Stateful write: the destination coordinate is programmed into NOC_RET_ADDR by set_async_write_state.
         // Exercises DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE, which must reconstruct the
         // destination from NOC_RET_ADDR (not the sender's own coordinate in NOC_TARG_ADDR). buffer_size is kept
@@ -153,6 +155,20 @@ void kernel_main() {
         noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             dst_unicast_endpoint, buffer_size, {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
         noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            local_buffer,
+            dst_unicast_endpoint,
+            buffer_size,
+            {},
+            {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
+        noc.async_write_barrier();
+    } else if (use_write_with_state == 2) {
+        // Any-length stateful write (default max_page_size): set_state only sticky-programs the target, the
+        // transfer size is passed to async_write_with_state. The sanitizer must use that size rather than
+        // reading AT_LEN back from the command buffer (which is not programmed on this path and reads 0 on
+        // Quasar RoCC), so the reported byte count below must be buffer_size, not 0.
+        noc.set_async_write_state(
+            dst_unicast_endpoint, buffer_size, {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
+        noc.async_write_with_state(
             local_buffer,
             dst_unicast_endpoint,
             buffer_size,

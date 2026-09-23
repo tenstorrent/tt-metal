@@ -406,7 +406,8 @@ template <
     bool STABLE_SORT        = false,
     bool CLAMP_NEGATIVE     = false,
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
-    DataFormat TYPECAST_OUT = DataFormat::Invalid>
+    DataFormat TYPECAST_OUT = DataFormat::Invalid,
+    bool FUSED_SORT         = false>
 void call_unary_sfpu_operation_init()
 {
     // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal this is hoisted into the
@@ -637,8 +638,10 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
     {
-        // Legacy LUT tanh': tanh_derivative_init loads the tanh piecewise-linear
-        // LUT into LReg0/1/2, which _calculate_tanh_derivative_ then consumes.
+        // Legacy LUT tanh': tanh_derivative_init loads a 6-entry piecewise-linear
+        // LUT fitted for sech^2 -- slopes into LReg0/1/2, intercepts into LReg4/5/6 --
+        // which _calculate_tanh_derivative_ then consumes as 1 - lut(x)^2. It is no
+        // longer tanh's own table; the two are fitted separately and free to diverge.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
@@ -675,6 +678,21 @@ void call_unary_sfpu_operation_init()
         // (program ADDR_MOD_6 + reset the dest RWC counter), so one representative init covers
         // the whole group; OPERATION is still forwarded so the per-op init tag stays correct.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::equal_zero_init);
+    }
+    else if constexpr (
+        OPERATION == SfpuType::topk_local_sort || OPERATION == SfpuType::topk_merge || OPERATION == SfpuType::topk_rebuild ||
+        OPERATION == SfpuType::topk_defuse)
+    {
+        // The topk network needs its own init (replay state, dest-index tracking, constants); the
+        // fused engine and the defuse sweep need the fused variant.
+        if constexpr (FUSED_SORT || OPERATION == SfpuType::topk_defuse)
+        {
+            _init_topk_fused_();
+        }
+        else
+        {
+            _init_topk();
+        }
     }
     else
     {
@@ -718,7 +736,8 @@ template <
     bool STABLE_SORT        = false,
     bool CLAMP_NEGATIVE     = false,
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
-    DataFormat TYPECAST_OUT = DataFormat::Invalid>
+    DataFormat TYPECAST_OUT = DataFormat::Invalid,
+    bool FUSED_SORT         = false>
 void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None)
 {
     // Fixed dispatch constants shared with the golden (golden_generators.py:
@@ -1049,7 +1068,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_square,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
@@ -1080,11 +1105,21 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::topk_local_sort)
     {
+        if constexpr (FUSED_SORT)
+        {
+            // A real kernel fuses each freshly loaded pair of tiles right before their local sort,
+            // so the fused local-sort row includes the fuse sweep and the re-record it forces.
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _topk_fuse_tile_, (true /* largest */), dst_index, vector_mode);
+        }
+        if constexpr (STABLE_SORT && is_fp32_dest_acc_en && !TOPK_UINT16_IN_FP32_DEST)
+        {
+            SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, _topk_canonicalize_negzero_value_tiles_, dst_index, vector_mode);
+        }
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_phases_steps,
-            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT),
+            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED_SORT, false /* RANK_STAMPED */, TopkTieOrder::Ascending),
             dst_index,
             vector_mode,
             0 /* idir */,
@@ -1093,13 +1128,29 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             10 /* i_end_step */,
             0 /* i_start_step */);
     }
+    else if constexpr (OPERATION == SfpuType::topk_defuse)
+    {
+        // Runs once per output tile at the end of a fused sort; timed on its own.
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _topk_defuse_tile_,
+            (true /* largest */, 9u /* TOPK_SFPSTORE_MODE_PACK_UINT16 */),
+            dst_index,
+            vector_mode,
+            1 /* num_tiles */);
+    }
     else if constexpr (OPERATION == SfpuType::topk_merge)
     {
+        // _bitonic_topk_merge is <APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT>:
+        // the sort direction (top_min/idir) is the 3rd template parameter, so it must be bound
+        // explicitly (false, matching the idir=0 used by the sibling topk calls here) for
+        // STABLE_SORT to land in the 4th slot instead of silently binding to the direction.
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_merge,
-            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT),
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* top_min (idir) */, STABLE_SORT, FUSED_SORT, false /* RANK_STAMPED */, TopkTieOrder::Ascending),
             dst_index,
             vector_mode,
             5 /* m_iter */,
@@ -1111,7 +1162,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_rebuild,
-            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT),
+            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED_SORT, false /* RANK_STAMPED */, TopkTieOrder::Ascending),
             dst_index,
             vector_mode,
             false /* idir */,
@@ -1858,11 +1909,15 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::RSHFT)
     {
+        // INT32, not INT32_2S_COMP, to match binary_shift.h: native Int32 tiles hold 2's complement
+        // in Dst, so the shift operates on the bits directly. INT32_2S_COMP would ask for a
+        // sign-magnitude conversion that no Blackhole caller wants and that the load/store mode
+        // does not perform there anyway. Drive these ops with twos_complement=True.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_right_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -1874,7 +1929,8 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_left_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            // See the RSHFT branch above for why this is INT32 rather than INT32_2S_COMP.
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -1886,7 +1942,8 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_logical_right_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            // See the RSHFT branch above for why this is INT32 rather than INT32_2S_COMP.
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,

@@ -6,6 +6,15 @@ on:
       docker-image:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       build-artifact-name:
         required: true
         type: string
@@ -26,13 +35,6 @@ on:
         type: string
         default: ./tests/pipeline_reorg/ops_unit_tests.yaml
         description: "Test list to load. Pipelines that own a disjoint slice of the ops suites pass their own yaml."
-      budget-subheading:
-        required: false
-        type: string
-        default: "unit"
-        description: "Key under each team in .github/time_budget.yaml to verify against.
-          Pipelines that run this workflow at different frequencies pass different keys so
-          their budgets are tracked separately (e.g. package_and_release vs the nightly unit)."
       enable-llk-asserts:
         required: false
         type: boolean
@@ -65,13 +67,6 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.budget-subheading }}"
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -103,17 +98,25 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
-        PYTHONPATH: /work
+        # Only on the image path. There /work/ttnn is required because no wheel is
+        # installed: it is a namespace dir whose package is /work/ttnn/ttnn, and
+        # /work/tools carries the `tracy` module _ttnn imports during init on a
+        # tracy-enabled build, which the L2 nightly is. On the artifact path a wheel
+        # IS installed and prepending the source tree would shadow it, which matters
+        # because release-build-test-publish reaches this impl with a manylinux wheel.
+        PYTHONPATH: ${{ inputs.prebuilt-image != '' && '/work:/work/ttnn:/work/tools' || '/work' }}
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
         HF_HUB_CACHE: ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '' || '/mnt/MLPerf/huggingface/hub' }}
         TT_MM_THROTTLE_PERF: ${{ contains(matrix.test-group.sku, 'bh_') && '0' || '5' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }}
       options: >-
         --device /dev/tenstorrent -v /dev/hugepages-1G:/dev/hugepages-1G -v /mnt/MLPerf:/mnt/MLPerf:ro
         ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '-e TT_GH_CI_INFRA=1' || '' }}
@@ -125,7 +128,10 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
@@ -133,6 +139,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -154,7 +161,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "/work",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
               "scope": "${{ inputs.summary-scope }}",

@@ -130,7 +130,7 @@ Three concrete completers ship today:
 ### Qwen3GRPOCompleter
 
 ```python
-from utils.qwen3_completer import Qwen3GRPOCompleter, Qwen3CompletionCtx
+from grpo.utils.qwen3_completer import Qwen3GRPOCompleter, Qwen3CompletionCtx
 ```
 
 Qwen3-specific implementation of `GRPOCompleter`. Drives the pure-Python ttml

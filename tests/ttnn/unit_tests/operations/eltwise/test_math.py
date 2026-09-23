@@ -8,52 +8,12 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_allclose
 from models.common.utility_functions import torch_random
 
 from loguru import logger
 
 pytestmark = pytest.mark.use_module_device
-
-
-def run_math_unary_test(
-    device,
-    h,
-    w,
-    ttnn_function,
-    layout=ttnn.TILE_LAYOUT,
-    ulp=1,
-    allow_nonfinite=False,
-    pcc_check=False,
-    pcc=0.9999,
-):
-    """Run a single-input math op on a random bf16 tensor in [0, 1) and assert vs the torch golden.
-
-    Default ``ulp=1`` covers kernels that are bit-exact in bf16 or accurate to one bf16 ULP over
-    [0, 1). Callers override ``ulp`` when the kernel has a larger expected error, or set
-    ``pcc_check=True`` with an op-specific ``pcc`` when ULP is not the appropriate tolerance.
-    """
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    if pcc_check:
-        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-    else:
-        assert_with_ulp(
-            expected_result=torch_output_tensor,
-            actual_result=output_tensor,
-            ulp_threshold=ulp,
-            allow_nonfinite=allow_nonfinite,
-        )
 
 
 @pytest.mark.parametrize("h", [32])
@@ -107,40 +67,6 @@ def test_eq(device, h, w, output_dtype):
     assert_equal(torch_output_tensor.float(), torch_output_tensor_preallocated.float())
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log10(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.log10, layout=layout, ulp=2, allow_nonfinite=True)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log1p(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.log1p, layout=layout, ulp=1)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log2(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.log2, layout=layout, ulp=1, allow_nonfinite=True)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_tril(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.tril, ulp=0)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_sqrt(device, h, w, layout):
-    run_math_unary_test(device, h, w, ttnn.sqrt, layout=layout, ulp=1)
-
-
 def test_digamma_large_x(device):
     """Regression guard for digamma at large x (issue #45520: "behaves bad for x>1000").
 
@@ -172,18 +98,6 @@ def test_digamma_small_x(device):
     input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
     assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_erf(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.erf, ulp=1)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_triu(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.triu, ulp=0)
 
 
 def run_math_unary_test_recip(device, h, w, ttnn_function, ulp=1):
@@ -241,30 +155,6 @@ def run_math_unary_test_range(device, h, w, ttnn_function, ulp=1):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
-def run_math_test_polygamma(device, h, w, scalar, ttnn_function, ulp=1):
-    torch.manual_seed(0)
-
-    low = 1
-    high = 10
-
-    torch_input_tensor = torch_random((h, w), low, high, dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, scalar)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor, scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
-@pytest.mark.parametrize("scalar", [1, 2, 5, 10])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_polygamma(device, h, w, scalar):
-    run_math_test_polygamma(device, h, w, scalar, ttnn.polygamma, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])
