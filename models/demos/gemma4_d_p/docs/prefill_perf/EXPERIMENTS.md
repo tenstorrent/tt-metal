@@ -35,13 +35,15 @@ modified.
 | `ATTN_MM_CFG` size gate (`rows/device ≥ 1024`) | no-op, ±0.5 ms | Reverted rather than shipped on ambiguous data |
 | chunk 1536 | illegal — `(chunk/CP) % k_chunk ≠ 0` | Corrected the published legality rule to `chunk % 1024 == 0` |
 | variable chunk width PoC | dropped — loses to fixed 8192 mid-range | — |
+| per-head q/k/v RMSNorm tuning | **not worth it** — 17 calls per 6 layers, 114 µs, i.e. ~19 µs/layer (~1.1 ms per chunk at 2048) in the 6-layer traced capture | The LayerNorm share is the 4 hidden-size norms PR2 already block-shards, not the per-head ones |
+| drop the block-sharded norm's reshards | **deferred (decided 2026-09-23)** — the reshards cost 188 + 179 µs per 6 layers (~3.7 ms per chunk at 2048), already netted out of PR2's gain. Keeping the output sharded into the two residual adds would save only ~0.9 ms (~1%); removing them all needs a sharded residual stream | Revisit only alongside a sharded-residual refactor; the SDPA halo and CCL are worth more |
 | whole-model tracy capture | **infeasible at 60 layers** — 1.19e9 zones, OOM-killed while saving. **Feasible at 6 layers, ctx 32k** (~1.5e7 zones, 254 MB CSV, ~20 min host post-processing) | Why per-op numbers are isolated-layer × 50/10; the 6-layer traced capture (2026-09-23) replaced that for attribution |
 
 ## Open
 
 | item | size @2048 | status |
 |---|---|---|
-| sliding SDPA halo | 21.3 ms (26%) | Mechanism understood; fix is **inside** the fused `ring_joint_sdpa` op, not a flag |
+| sliding SDPA halo | 21.3 ms (26%) | **Diagnosed 2026-09-23** (6-layer traced capture): the reader waits for the whole halo before computing; the halo is ~75% of a sliding SDPA call (156-324 us of 277-402 us at chunk 2048) and is link-contention bound: h multi-hop unicasts put 10 slab-crossings on 2 links where a line multicast needs 4. Compute after the halo is a constant ~77 us on 32 of 110 cores. Plan: confirm with an op-level 2-hop vs 4-hop capture, then multicast the halo with a source-keyed compact buffer (est. -7 to -9 ms per chunk at 2048) |
 | ~~residual outside the layer loop~~ | ~~11.4 ms~~ | **Resolved 2026-09-23: it is not outside the loop.** See below |
 | `MLP_MM_CFG` slope at chunk 4096 | +3.07% (39σ) | Real, and **in-layer**: the layer-count fit's slope intercept is ~0 (`slope(L) = 0.0015 + 0.0246·L`). Zero impact when ISL ≤ chunk |
 
