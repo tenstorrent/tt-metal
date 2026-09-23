@@ -47,6 +47,7 @@ struct H2DLeg::Impl {
         uint64_t consumed_bytes = 0;  // unwrapped total: page need not divide 2^32
         uint64_t drained_tot = 0;     // pages derived from it
         uint32_t last_acked = 0;      // the wire counter, which wraps
+        uint32_t data_off = 0;        // the ring's offset inside the arena; 0 for today's layouts
     };
     std::vector<Core> core;
     // AFTER core, so it unmaps before the shm it overlays is destroyed.
@@ -120,6 +121,7 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
         im.core[c].cfg_addr = d.config_buffer_address;
         im.core[c].connector = reinterpret_cast<dist::HDSocketConnectorState*>(b + d.connector_state_offset);
         im.core[c].bytes_acked = reinterpret_cast<const volatile uint32_t*>(b + d.bytes_acked_offset);
+        im.core[c].data_off = d.data_offset;
     }
     return leg;
 }
@@ -176,6 +178,11 @@ uint32_t H2DLeg::drained(uint32_t core) {
     const uint32_t fresh = static_cast<uint32_t>(pages - im.core[core].drained_tot);
     im.core[core].drained_tot = pages;
     return fresh;
+}
+
+uint32_t H2DLeg::data_offset(uint32_t core) const {
+    const Impl& im = *impl_;
+    return core < im.cfg.cores ? im.core[core].data_off : 0;
 }
 
 std::vector<uint32_t> H2DLeg::config_addresses() const {

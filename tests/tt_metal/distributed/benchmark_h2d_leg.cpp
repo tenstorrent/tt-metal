@@ -252,7 +252,7 @@ protected:
     void fill_rings() const {
         for (uint32_t c = 0; c < cores_; ++c) {
             for (uint32_t s = 0; s < ring_pages_; ++s) {
-                uint8_t* const slot = region_base_ + rx_slot_offset(c, s, page_);
+                uint8_t* const slot = region_base_ + rx_slot_offset(c, s, page_, h2d_->data_offset(c));
                 // Whole page, so the payload-to-trailer gap is not left at 0xA5.
                 std::memset(slot, 0, page_);
                 // Word 0 is restamped per frame, in the publish loop.
@@ -343,7 +343,7 @@ BENCHMARK_DEFINE_F(H2DLegFixture, Bandwidth)(benchmark::State& state) {
                     DeliverTask t;
                     t.core = c;
                     t.slot = static_cast<uint32_t>(core[c].published % ring_pages_);
-                    t.page_offset = rx_slot_offset(c, t.slot, page_);
+                    t.page_offset = rx_slot_offset(c, t.slot, page_, h2d_->data_offset(c));
                     t.page_bytes = page_;
                     t.length = payload_bytes_;
                     // publish() only advances bytes_sent; the bytes are already in the ring.
