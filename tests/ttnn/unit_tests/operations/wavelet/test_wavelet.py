@@ -210,6 +210,40 @@ def test_batch_larger_than_worker_count_and_coif17_execution(
     assert torch.isfinite(ttnn.to_torch(reconstructed)).all()
 
 
+def test_very_large_batch_compute_runtime_args_are_bounded(device: ttnn.MeshDevice) -> None:
+    batch, length = 10001, 17
+    positions = torch.arange(length, dtype=torch.float32)
+    signal = (torch.sin(positions * 0.071)[None, :] + torch.arange(batch, dtype=torch.float32)[:, None] * 0.001).reshape(
+        batch, 1, 1, length
+    )
+    approximation, detail = ttnn.dwt(to_device_1d(device, signal), "coif17")
+    reconstructed = ttnn.idwt(approximation, detail, "coif17", length)
+    reconstructed_host = ttnn.to_torch(reconstructed)
+    assert tuple(reconstructed.shape) == stick_shape(length, batch)
+    assert torch.isfinite(reconstructed_host).all()
+
+
+@pytest.mark.parametrize("wavelet", ["db1", "coif17"])
+def test_large_batch_multiple_chunks_forward_inverse(device: ttnn.MeshDevice, wavelet: str) -> None:
+    batch, length = 113, 2049
+    positions = torch.arange(length, dtype=torch.float32)
+    signal = (torch.sin(positions * 0.013)[None, :] + torch.arange(batch, dtype=torch.float32)[:, None] * 0.01).reshape(
+        batch, 1, 1, length
+    )
+    approximation, detail = ttnn.dwt(to_device_1d(device, signal), wavelet)
+    reconstructed = ttnn.idwt(approximation, detail, wavelet, length)
+    for sample in (0, batch - 1):
+        reference = ttnn.dwt(to_device_1d(device, signal[sample, 0, 0]), wavelet)
+        for batched, independent in zip((approximation, detail), reference):
+            assert_fp32_identical_1d(
+                ttnn.to_torch(batched)[sample, 0], ttnn.to_torch(independent), ttnn.dwt_coeff_len(length, wavelet)
+            )
+        reconstructed_reference = ttnn.idwt(*reference, wavelet, length)
+        assert_fp32_identical_1d(
+            ttnn.to_torch(reconstructed)[sample, 0], ttnn.to_torch(reconstructed_reference), length
+        )
+
+
 def test_rank_four_batch_one_preserves_shapes(device: ttnn.MeshDevice) -> None:
     signal_1d = torch.arange(33, dtype=torch.float32).reshape(1, 1, 1, 33)
     coefficients = ttnn.dwt(to_device_1d(device, signal_1d), "db1")

@@ -22,6 +22,7 @@ BOUNDARY_MODES: tuple[str, ...] = (
     "antireflect",
 )
 SCHEMES: tuple[str, ...] = tuple(pywt.wavelist(kind="discrete"))
+KNOWN_FACTORIZATION_ERROR_SCHEMES: frozenset[str] = frozenset({"dmey"})
 YELLOW_PRECISION_WAVELETS: set[str] = {
     "bior4.4",
     "bior5.5",
@@ -89,7 +90,7 @@ def measure_fp32_precision(
     input_shape: tuple[int, ...],
     device_tolerance: float,
 ) -> PrecisionResult | None:
-    if wavelet == "dmey":
+    if wavelet in KNOWN_FACTORIZATION_ERROR_SCHEMES:
         return None
 
     assert reference_fp64.dtype == np.float64
@@ -222,6 +223,7 @@ def test_all_discrete_schemes_forward_inverse_precision_1d(device: ttnn.MeshDevi
         assert torch.isfinite(detail_host).all(), scheme
         assert torch.isfinite(reconstructed_host).all(), scheme
 
+    assert len(precision_results) == (len(SCHEMES) - len(KNOWN_FACTORIZATION_ERROR_SCHEMES)) * 3
     assert_precision_results(precision_results)
 
 
@@ -313,4 +315,5 @@ def test_all_discrete_schemes_forward_inverse_precision_2d(
         assert tuple(reconstructed.shape) == shape
         assert torch.isfinite(reconstructed_host).all(), scheme
 
+    assert len(precision_results) == (len(SCHEMES) - len(KNOWN_FACTORIZATION_ERROR_SCHEMES)) * 5
     assert_precision_results(precision_results)
