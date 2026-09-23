@@ -194,13 +194,17 @@ public:
         }
         base_ = static_cast<uint8_t*>(raw);
         std::string err;
-        if (base_ != nullptr) {
-            std::memset(base_, 0, bytes_);
-            win_ = RdmaWindow::create(base_, bytes_, rank_, ranks_, err);
-        } else {
+        if (base_ == nullptr) {
             err = "could not allocate " + std::to_string(bytes_ >> 20) + " MiB";
         }
-        // One agree for the whole bringup: both ranks leave here with the same verdict.
+        // Agreed BEFORE create(): MPI_Win_create is collective, so a rank that allocated must
+        // not enter it while its peer has already fallen through to the agreement.
+        if (!RdmaWindow::agree(base_ != nullptr, err)) {
+            fail(state, "rank " + std::to_string(rank_) + ": allocation failed: " + err);
+            return;
+        }
+        std::memset(base_, 0, bytes_);
+        win_ = RdmaWindow::create(base_, bytes_, rank_, ranks_, err);
         if (!RdmaWindow::agree(win_ != nullptr, err)) {
             fail(state, "rank " + std::to_string(rank_) + ": window bringup failed: " + err);
             return;

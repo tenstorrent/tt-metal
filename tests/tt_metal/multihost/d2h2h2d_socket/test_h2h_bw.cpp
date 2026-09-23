@@ -216,13 +216,19 @@ int main(int argc, char** argv) {
         raw = nullptr;
     }
     uint8_t* const base = static_cast<uint8_t*>(raw);
+    std::string err;
     if (base == nullptr) {
-        std::cerr << "rank " << rank << ": could not allocate " << (bytes >> 20) << " MiB\n";
+        err = "could not allocate " + std::to_string(bytes >> 20) + " MiB";
+    }
+    // Agreed BEFORE create(): MPI_Win_create is collective, so returning here alone would
+    // strand a peer that allocated fine inside it.
+    if (!RdmaWindow::agree(base != nullptr, err)) {
+        std::cerr << "rank " << rank << ": " << err << "\n";
+        std::free(base);
         return 1;
     }
     std::memset(base, 0, bytes);
 
-    std::string err;
     std::unique_ptr<RdmaWindow> win = RdmaWindow::create(base, bytes, rank, ranks, err);
     if (!RdmaWindow::agree(win != nullptr, err)) {
         std::cerr << "rank " << rank << ": window bringup failed: " << err << "\n";
