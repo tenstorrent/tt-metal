@@ -1,0 +1,41 @@
+# LLK SFPU accuracy — the exhaustive 16-bit ULP sweep, as a gate.
+#
+# Every finite bfloat16 and float16 value against each enrolled op, per format pair,
+# per approximation mode, per dest accumulator. A budget that only held on the few
+# thousand points a functional driver samples fails here.
+#
+# The sweep is marked `accuracy`, which every other LLK pipeline deselects, so this
+# file is the only thing that runs it.
+#
+# Named by path rather than by `-m accuracy`. The marker is shared with four other
+# files that no pipeline schedules today — `accuracy/test_sfpu_accuracy.py` alone is
+# 558 tests — and one of them is Quasar-only, which a Wormhole card cannot run.
+# Enrolling those is a separate decision with its own budget; this job is the
+# exhaustive ULP sweep.
+#
+# --ulp-measure records every comparison; the workflow folds that into a headroom
+# report. Nothing here writes the budget table: --ulp-emit is a deliberate human
+# tool, and a table rewritten by a nightly is a gate that agrees with itself.
+#
+# No -x: this is a report, so it should list every cell that moved rather than stop
+# at the first. For max allowed timeout refer to .github/time_budget.yaml
+# (llk -> accuracy).
+
+- name: llk_sfpu_accuracy_wormhole
+  split_group: 1
+  team: llk
+  budget_type: accuracy
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    pytest -q --override-ini=log_cli=false -n auto \
+      --dist=worksteal \
+      --ulp-measure="$ULP_MEASURE_PATH" \
+      --timeout=900 \
+      --junitxml=pytest-report-wormhole-1.xml \
+      test_unary_sfpu_ulp.py
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+  owner_id: U09UC143684 # Nemanja Divnic

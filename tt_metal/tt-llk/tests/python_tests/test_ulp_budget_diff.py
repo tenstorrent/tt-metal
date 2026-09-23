@@ -174,6 +174,40 @@ def test_several_measurements_of_one_cell_keep_the_worst():
     assert list(cells.values()) == [11]
 
 
+def test_an_exact_cell_at_its_zero_budget_is_not_a_warning():
+    """`0 == 0` is an op exact by construction doing what it claims, and the table
+    enrols it precisely so any drift fails. Calling that "no headroom" buried the real
+    ones under 52 lines of nothing on a 130-cell run."""
+    table = parse_table("Abs:\n  - {in: Float16_b, out: Float16_b, max_ulp: 0}\n")
+    report, over = render_headroom(
+        table,
+        _measured_cells(
+            [_measure(**{"in": "Float16_b", "out": "Float16_b", "max": 0})]
+        ),
+    )
+    assert over == 0
+    assert "no headroom" not in report
+    assert "headroom to spare" in report
+
+
+def test_a_long_report_is_capped_and_says_how_many_it_withheld():
+    """A PR comment has a size limit, and 2,321 gated cells could blow past it."""
+    from helpers.ulp_budget_diff import _MAX_ROWS
+
+    table = "Abs:\n" + "".join(
+        f'  - {{in: Float16_b, out: Float16_b, dest: "{i}", max_ulp: 8}}\n'
+        for i in range(_MAX_ROWS + 5)
+    )
+    rows = [
+        _measure(**{"in": "Float16_b", "out": "Float16_b", "dest": str(i), "max": 99})
+        for i in range(_MAX_ROWS + 5)
+    ]
+    report, over = render_headroom(parse_table(table), _measured_cells(rows))
+    assert over == _MAX_ROWS + 5
+    assert "5 more" in report
+    assert report.count("over budget |") == _MAX_ROWS
+
+
 @pytest.mark.parametrize(
     "measured, expect",
     [(9, "over budget"), (1, "no headroom"), (0, "could tighten")],
@@ -225,6 +259,53 @@ def test_a_measurement_resolves_against_the_most_specific_row():
         ),
     )
     assert over == 1  # 50 is inside the broad 100 but past the specific 1
+
+
+def test_the_tool_runs_with_nothing_but_pyyaml(tmp_path):
+    """The PR check runs on a slim runner: no torch, no ttexalens, no LLK venv.
+
+    Two things have to hold and neither is obvious. The module must not reach into
+    `helpers.ulp` or anything that imports torch — and it must be invoked as a *file*
+    rather than `-m helpers.ulp_budget_diff`, because `helpers/__init__.py` imports
+    ttexalens and a module invocation would drag that in. The workflow calls it by
+    path for exactly this reason.
+    """
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    tool = Path(__file__).parent / "helpers" / "ulp_budget_diff.py"
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        textwrap.dedent(
+            f"""
+            import runpy, sys
+            class Blocker:
+                def find_module(self, name, path=None):
+                    if name.split(".")[0] in ("torch", "ttexalens"):
+                        raise AssertionError("pulled in " + name)
+                    return None
+            sys.meta_path.insert(0, Blocker())
+            sys.argv = ["ulp_budget_diff", "diff",
+                        "--base", {str(tmp_path / 'a.yaml')!r},
+                        "--head", {str(tmp_path / 'a.yaml')!r}]
+            try:
+                runpy.run_path({str(tool)!r}, run_name="__main__")
+            except SystemExit as exc:
+                sys.exit(exc.code or 0)
+            """
+        )
+    )
+    (tmp_path / "a.yaml").write_text(
+        "Abs:\n  - {out: Float32, max_ulp: 1}  # max 0 ULP\n"
+    )
+
+    done = subprocess.run(
+        [sys.executable, str(probe)], capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 0, done.stderr
+    assert "No budget changed" in done.stdout
 
 
 # ─────────────────────────────────────────────────────────────────────────────

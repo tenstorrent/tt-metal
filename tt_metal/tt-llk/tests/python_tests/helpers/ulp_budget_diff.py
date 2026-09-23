@@ -224,13 +224,15 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
             "| cell | change | before | after | re-measured |",
             "| --- | --- | --- | --- | --- |",
         ]
-        for c in regressions:
+        for c in regressions[:_MAX_ROWS]:
             row = c.after or c.before
             mark = "yes" if c.remeasured else "**no**"
             out.append(
                 f"| `{row.describe()}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
                 f"{_budget(c.after)} | {mark} |"
             )
+        if len(regressions) > _MAX_ROWS:
+            out.append(f"| _… {len(regressions) - _MAX_ROWS} more_ | | | | |")
         out += [
             "",
             "If these are genuine re-measurements, say so in the PR body and add the "
@@ -247,12 +249,14 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
             "| cell | change | before | after |",
             "| --- | --- | --- | --- |",
         ]
-        for c in improvements:
+        for c in improvements[:_MAX_ROWS]:
             row = c.after or c.before
             out.append(
                 f"| `{row.describe()}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
                 f"{_budget(c.after)} |"
             )
+        if len(improvements) > _MAX_ROWS:
+            out.append(f"| _… {len(improvements) - _MAX_ROWS} more_ | | | |")
         out += ["", "</details>", ""]
     return "\n".join(out) + "\n"
 
@@ -265,6 +269,10 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
 #: justify. Not a failure -- tightening is a deliberate change with its own
 #: measurement -- but it is the list someone should work through.
 _SLACK_FRACTION = 0.5
+
+#: A report that lists every cell is a report nobody reads, and a PR comment has a
+#: size limit. Each section shows this many and says how many it withheld.
+_MAX_ROWS = 40
 
 
 def _measured_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
@@ -316,7 +324,12 @@ def render_headroom(
         named = f"{cell[0]} {{" + ", ".join(f"{k}: {v}" for k, v in cell[1]) + "}"
         if worst > row.max_ulp:
             over.append(f"| `{named}` | {worst} | {row.max_ulp} | over budget |")
-        elif worst == row.max_ulp:
+        elif worst == row.max_ulp and row.max_ulp > 0:
+            # `0 == 0` is excluded deliberately: a 0-step budget measuring 0 is an op
+            # that is exact by construction doing exactly what it claims, and the table
+            # enrols it precisely so that any drift fails. Reporting those as "no
+            # headroom" buried the real ones under 52 lines of nothing on a 130-cell
+            # run.
             tight.append(f"| `{named}` | {worst} | {row.max_ulp} | no headroom |")
         elif row.max_ulp > 1 and worst < _SLACK_FRACTION * row.max_ulp:
             slack.append(f"| `{named}` | {worst} | {row.max_ulp} | could tighten |")
@@ -340,7 +353,10 @@ def render_headroom(
         else:
             out.append(f"**{title} — {len(lines)}**")
             out.append("")
-        out += ["| cell | measured | budget | |", "| --- | --- | --- | --- |"] + lines
+        shown, withheld = lines[:_MAX_ROWS], max(0, len(lines) - _MAX_ROWS)
+        out += ["| cell | measured | budget | |", "| --- | --- | --- | --- |"] + shown
+        if withheld:
+            out.append(f"| _… {withheld} more_ | | | |")
         out.append("")
         if collapse:
             out += ["</details>", ""]

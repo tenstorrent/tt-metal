@@ -332,6 +332,8 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
+  accuracy:
+    wh_n150_civ2: 45
   ttnop:
     wh_n150_civ2: 21600
     bh_p150b_civ2: 21600

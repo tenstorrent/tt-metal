@@ -1,0 +1,142 @@
+name: "LLK SFPU ULP budget guard"
+
+# A pull request may not quietly loosen an SFPU accuracy gate.
+#
+# The budget table carries its own rule: "A budget may only be *raised* by
+# re-measuring and updating that comment in the same change -- the whole point of
+# the table is that no number here is a guess." This is that rule, enforced.
+#
+# A raised `max_ulp`, a row demoted to `metric: tolerance`, or a gated row deleted
+# all weaken a gate, and all fail here. The report says for each one whether the
+# row's provenance comment changed too, which is what separates a genuine
+# re-measurement from a number edited until a test went green.
+#
+# Needs no hardware and no LLK environment: it reads two revisions of one text
+# file. The hardware half -- what the sweep actually measures -- is
+# llk-sfpu-accuracy.yaml.
+#
+# To land a deliberate raise: re-measure, update the row's comment in the same
+# commit, and add the override label below.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - "tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml"
+      - "tt_metal/tt-llk/tests/python_tests/helpers/ulp_budget_diff.py"
+      - ".github/workflows/llk-sfpu-ulp-budget-guard.yaml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TABLE: tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml
+  # Adding this label to the PR turns the failure into a report. It is deliberately
+  # a label rather than a magic commit phrase: it is visible on the PR, it takes a
+  # second person's judgement to add, and removing it re-runs this check.
+  OVERRIDE_LABEL: "ulp-budget-raise-approved"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ulp-budget-guard:
+    name: "SFPU ULP budgets"
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout the pull request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          # Both sides of the comparison have to exist locally, and the merge base
+          # is what the PR is actually proposing to change.
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Take the base revision of the table
+        env:
+          # The event gives the base commit directly. Resolving it from a branch name
+          # instead depends on that ref having been fetched, which it has not been on
+          # a fork PR.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          echo "Comparing against $BASE_SHA"
+          # A PR that introduces the table has no base version of it; an empty file
+          # makes every row read as new, which is correct and not a regression.
+          if git cat-file -e "$BASE_SHA:$TABLE" 2>/dev/null; then
+            git show "$BASE_SHA:$TABLE" > /tmp/base_budget.yaml
+          else
+            : > /tmp/base_budget.yaml
+          fi
+
+      - name: Compare the budgets
+        id: compare
+        run: |
+          set -uo pipefail
+          ARGS=()
+          if [[ "$OVERRIDDEN" == "true" ]]; then
+            echo "Override label present; loosened gates will be reported, not blocked."
+            ARGS+=(--allow-raises)
+          fi
+          # By path, not `-m helpers.ulp_budget_diff`: the package __init__ imports
+          # ttexalens, which is not on this runner. The tool itself needs only PyYAML,
+          # and `test_the_tool_runs_with_nothing_but_pyyaml` keeps it that way.
+          python3 tt_metal/tt-llk/tests/python_tests/helpers/ulp_budget_diff.py diff \
+            --base /tmp/base_budget.yaml \
+            --head "$TABLE" \
+            --label-hint "$OVERRIDE_LABEL" \
+            --out ulp_budget_report.md \
+            "${ARGS[@]}"
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+        env:
+          OVERRIDDEN: ${{ contains(github.event.pull_request.labels.*.name, 'ulp-budget-raise-approved') }}
+        continue-on-error: true
+
+      - name: Publish the report
+        if: always()
+        run: |
+          if [[ -s ulp_budget_report.md ]]; then
+            cat ulp_budget_report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The comparison produced no report; see the step above." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Comment on the pull request
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        # A fork PR's token is read-only, so the comment is best effort. The job
+        # summary and the check result carry the same verdict either way.
+        continue-on-error: true
+        if: ${{ hashFiles('ulp_budget_report.md') != '' }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- llk-ulp-budget-guard -->';
+            const body = marker + '\n' + fs.readFileSync('ulp_budget_report.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            // One comment, edited in place, so a series of pushes does not bury the
+            // conversation under near-identical reports.
+            const existing = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = existing.find((c) => c.body && c.body.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Fail if a gate was loosened
+        if: steps.compare.outputs.status != '0'
+        run: |
+          echo "::error title=SFPU ULP budget loosened::A budget was raised or a row \
+          lost its step gate. See the job summary and the PR comment. If this is a \
+          genuine re-measurement, update the row's provenance comment in the same \
+          change and add the '$OVERRIDE_LABEL' label."
+          exit 1
