@@ -379,7 +379,7 @@ Tensor addcmul(
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         float value_f = std::visit([](auto&& v) { return static_cast<float>(v); }, value);
-        return _addcmul(input_a, input_b, input_c, value_f, memory_config);
+        return _addcmul(input_a, input_b, input_c, value_f, memory_config, output);
     }
 
     // Use LLK implementation - pass value as scalar parameter
@@ -418,7 +418,7 @@ Tensor addcdiv(
     if (is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
         log_debug(tt::LogOp, "Addcdiv Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
-        return _addcdiv(input_a, input_b, input_c, value, memory_config);
+        return _addcdiv(input_a, input_b, input_c, value, memory_config, output);
     }
 
     // Use LLK implementation - pass value as scalar parameter
