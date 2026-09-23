@@ -268,6 +268,12 @@ def apply_recommended_env(batched_l1: bool) -> None:
     # explicit choice of chip still win.
     os.environ.setdefault("TT_VISIBLE_DEVICES", "0")
     os.environ.setdefault("QWEN_LN_BLOCK_SHARDED", "1")
+    # Fused head-split + per-head Q/K RMSNorm (tt/custom_ops/fused_qkv_heads_norm):
+    # one generic_op with a compute kernel replaces nlp_create_qkv_heads + q_norm +
+    # k_norm, three DRAM-bound passes over the same Q/K/V tensors. Measured e2e
+    # (full-pipeline, ISL=512): bs1 25.2->25.0, bs8 155.6->144.7 (-7.0%),
+    # bs16 288.7->276.8 (-4.1%), bs32 543.5->519.2 (-4.5%); STS-B 0.8125->0.8135.
+    os.environ.setdefault("QWEN_FUSED_HEADS_NORM", "1")
     # The block-sharded LN path aims for an 8x8 grid, which is inherited from
     # BGE-M3 / 0.6B. On 4B that silently disables it: k_tiles = dim/32 = 80, so
     # gx=8 gives block_w=10 and block_h*block_w = 20, over the 16-tile per-core

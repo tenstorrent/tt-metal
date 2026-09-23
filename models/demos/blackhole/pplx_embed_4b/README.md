@@ -546,6 +546,32 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### Fused head-split + Q/K RMSNorm — landed (2026-09-23)
+
+`tt/custom_ops/fused_qkv_heads_norm/`: a model-local `ttnn.generic_op` with a
+compute kernel that splits the fused QKV activation into heads **and** applies
+the per-head RMSNorm to Q and K in the same pass (V copied through). It replaces
+three ops per layer — `nlp_create_qkv_heads` + `q_norm` + `k_norm`, 41 + 24 + 6 ms
+of kernel time per iteration at bs32, each a DRAM-bound pass over the same
+tensors. Constants (row-replicated gamma tiles, a `1/head_dim` reduce scaler, eps)
+are built once per layer from the checkpoint. Per head the kernel does
+x² → row-reduce → +eps → rsqrt → bcast-column scale → gamma, ≤4 DST tiles per
+phase so fp32 accumulation fits. Standalone: PCC 1.00000 (bf16) / 0.99900 (bfp8)
+vs torch; B=8 traced 275.1 → 193.8 µs (−29.6%). Default on
+(`QWEN_FUSED_HEADS_NORM=0` reverts to the separate ops).
+
+| batch | H200 | before | **after** | Δ | × H200 |
+|---|---|---|---|---|---|
+| bs1  | 5.437   | 25.2  | **25.0**  | −0.8% | 4.60× |
+| bs8  | 33.081  | 155.6 | **144.7** | **−7.0%** | 4.37× |
+| bs16 | 67.225  | 288.7 | **276.8** | **−4.1%** | 4.12× |
+| bs32 | 139.150 | 543.5 | **519.2** | **−4.5%** | 3.73× |
+
+STS-B Spearman 0.8125 → **0.8135**. Next steps in the same op: rotary (the
+kernel applies a single 32×32 tile-local rotation, `rotated = x @ T`, then
+`x·cos + rotated·sin`; −2 ops/layer, 27 ms at bs32) and emitting Q in bfp8
+(removes the per-layer Typecast, 15 ms at bs32).
+
 ### Measurement fix: the extended trace is now the timed path (2026-09-23)
 
 The demo looked up the Generator's prefill trace with a stale 3-part key

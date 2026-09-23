@@ -1,0 +1,106 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+//
+// Reader for the fused head-split + RMSNorm op. Loads the resident constants once
+// (row-replicated gamma tiles for Q and K, the 1/head_dim reduce scaler, eps), then
+// streams one work unit (Q | K | V tiles of one (batch, seq_tile, head_group)) per
+// iteration into CB 0 with a single barrier per unit.
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+
+void kernel_main() {
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
+    const uint32_t gq_addr = get_arg_val<uint32_t>(1);
+    const uint32_t gk_addr = get_arg_val<uint32_t>(2);
+    const uint32_t scaler_addr = get_arg_val<uint32_t>(3);
+    const uint32_t eps_addr = get_arg_val<uint32_t>(4);
+    const uint32_t num_work_units = get_arg_val<uint32_t>(5);
+    const uint32_t work_unit_start = get_arg_val<uint32_t>(6);
+
+    constexpr uint32_t q_heads_per_kv = get_compile_time_arg_val(0);
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(1);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_w_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t seq_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t head_groups = get_compile_time_arg_val(5);
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);
+    constexpr auto in0_args = TensorAccessorArgs<7>();
+    constexpr auto gq_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+    constexpr auto gk_args = TensorAccessorArgs<gq_args.next_compile_time_args_offset()>();
+    constexpr auto sc_args = TensorAccessorArgs<gk_args.next_compile_time_args_offset()>();
+    constexpr auto eps_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
+
+    constexpr uint32_t cb_id = 0;  // fused QKV tiles for compute
+    constexpr uint32_t cb_gq = 1, cb_gk = 2, cb_scaler = 3, cb_eps = 4;
+
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+    const auto sgq = TensorAccessor(gq_args, gq_addr);
+    const auto sgk = TensorAccessor(gk_args, gk_addr);
+    const auto ssc = TensorAccessor(sc_args, scaler_addr);
+    const auto seps = TensorAccessor(eps_args, eps_addr);
+    const uint32_t tile_size_bytes = get_tile_size(cb_id);
+    const uint32_t const_tile_bytes = get_tile_size(cb_gq);
+
+    Noc noc;
+    CircularBuffer cb(cb_id);
+
+    constexpr uint32_t group_q_tiles = heads_per_group * q_heads_per_kv * head_dim_tiles;
+    constexpr uint32_t group_kv_tiles = heads_per_group * head_dim_tiles;
+    constexpr uint32_t q_tiles_total = num_kv_heads * q_heads_per_kv * head_dim_tiles;
+    constexpr uint32_t kv_tiles_total = num_kv_heads * head_dim_tiles;
+    constexpr uint32_t unit_tiles = group_q_tiles + 2 * group_kv_tiles;
+
+    // Resident constants (never popped by compute).
+    {
+        CircularBuffer cgq(cb_gq), cgk(cb_gk), csc(cb_scaler), ceps(cb_eps);
+        cgq.reserve_back(head_dim_tiles);
+        for (uint32_t i = 0; i < head_dim_tiles; ++i) {
+            noc.async_read(sgq, cgq, const_tile_bytes, {.page_id = i}, {.offset_bytes = i * const_tile_bytes});
+        }
+        cgk.reserve_back(head_dim_tiles);
+        for (uint32_t i = 0; i < head_dim_tiles; ++i) {
+            noc.async_read(sgk, cgk, const_tile_bytes, {.page_id = i}, {.offset_bytes = i * const_tile_bytes});
+        }
+        csc.reserve_back(1);
+        noc.async_read(ssc, csc, const_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+        ceps.reserve_back(1);
+        noc.async_read(seps, ceps, const_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cgq.push_back(head_dim_tiles);
+        cgk.push_back(head_dim_tiles);
+        csc.push_back(1);
+        ceps.push_back(1);
+    }
+
+    for (uint32_t w = 0; w < num_work_units; ++w) {
+        const uint32_t work_unit = work_unit_start + w;
+        const uint32_t block = work_unit / head_groups;          // (batch, seq_tile) pair
+        const uint32_t group = work_unit - block * head_groups;  // which head group
+        const uint32_t s_tile = block % seq_tiles;
+        const uint32_t batch = block / seq_tiles;
+        const uint32_t block_base = batch * (seq_tiles * in0_w_tiles) + s_tile * in0_w_tiles;
+        const uint32_t q_base_tile = block_base + group * group_q_tiles;
+        const uint32_t k_base_tile = block_base + q_tiles_total + group * group_kv_tiles;
+        const uint32_t v_base_tile = block_base + q_tiles_total + kv_tiles_total + group * group_kv_tiles;
+
+        cb.reserve_back(unit_tiles);
+        uint32_t l1_write_offset = 0;
+        for (uint32_t i = 0; i < group_q_tiles; ++i) {
+            noc.async_read(s0, cb, tile_size_bytes, {.page_id = q_base_tile + i}, {.offset_bytes = l1_write_offset});
+            l1_write_offset += tile_size_bytes;
+        }
+        for (uint32_t i = 0; i < group_kv_tiles; ++i) {
+            noc.async_read(s0, cb, tile_size_bytes, {.page_id = k_base_tile + i}, {.offset_bytes = l1_write_offset});
+            l1_write_offset += tile_size_bytes;
+        }
+        for (uint32_t i = 0; i < group_kv_tiles; ++i) {
+            noc.async_read(s0, cb, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
+            l1_write_offset += tile_size_bytes;
+        }
+        noc.async_read_barrier();
+        cb.push_back(unit_tiles);
+    }
+}
