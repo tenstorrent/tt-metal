@@ -239,7 +239,7 @@ def test_sparse_sdpa_golden_decodes_packed_scaled_fp8_kv():
 
 
 @pytest.mark.parametrize("use_keyword_kv", [False, True], ids=["positional-kv", "keyword-kv"])
-def test_sparse_sdpa_wrapper_pipeline_preserves_packed_fp8_for_global_golden(use_keyword_kv, monkeypatch, tmp_path):
+def test_sparse_sdpa_wrapper_pipeline_preserves_packed_fp8_for_global_golden(use_keyword_kv, monkeypatch):
     # Exercise the wrapper's local-to-global preprocessing path so packed mixed-format KV rows remain raw bytes
     # even though ordinary global FP8 inputs are value-converted.
     class TransportTensor:
@@ -297,7 +297,7 @@ def test_sparse_sdpa_wrapper_pipeline_preserves_packed_fp8_for_global_golden(use
     tensor_ids = [query_transport.tensor_id, kv_transport.tensor_id, indices_transport.tensor_id]
     try:
         local_inputs = _preprocess_sparse_sdpa_golden_inputs(function_args, function_kwargs)
-        with ttnn.manage_config("report_path", str(tmp_path)):
+        with ttnn.manage_config("report_name", "sparse_sdpa_fp8_global_golden"):
             global_inputs = ttnn.decorators.preprocess_global_golden_function_inputs(function_args, function_kwargs)
         global_inputs = ttnn.decorators._merge_local_golden_metadata_into_global_inputs(local_inputs, global_inputs)
         local_args, local_kwargs = local_inputs
@@ -480,11 +480,13 @@ def test_ring_joint_stats_scratch_uses_padded_query_and_joint_lengths():
     assert output.shape[-2] == 3
     assert joint_output.shape[-2] == 5
     assert stats.shape == (1, 2, 128, 1)
+    golden_outputs = (output, joint_output, stats)
     runtime_outputs = (output.clone(), joint_output.clone(), torch.ones(1, 2, 1, 1))
+    ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(golden_outputs), force=True)
     ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(runtime_outputs), force=True)
     records = ttnn.decorators.compare_tensors_using_pcc(
         "ttnn.transformer.ring_joint_scaled_dot_product_attention",
-        (output, joint_output, stats),
+        golden_outputs,
         runtime_outputs,
         desired_pcc=0.99,
         level="locally",
