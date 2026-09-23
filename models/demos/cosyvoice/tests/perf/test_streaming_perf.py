@@ -228,9 +228,12 @@ def test_device_streaming_first_audio_latency(device):
         # First audio *is* the total here: nothing can be handed out earlier.
         return {"llm_s": llm_s, "first_s": total, "total_s": total, "audio_s": n_whole / SAMPLE_RATE}
 
-    def run_streaming(toks):
-        """The same three stages, interleaved -- `synthesize_streaming`'s order."""
-        synth = TtStreamingSynthesizer(device, flow, hift, cfg)
+    def run_streaming(toks, synth):
+        """The same three stages, interleaved -- `synthesize_streaming`'s order.
+
+        `synth` must be built and warmed before the decode trace is captured, so its
+        carry buffers exist before the trace does (`TtStreamingSynthesizer._carry_store`).
+        """
         reset_decoder()
         first_s, chunks, n_samples = None, [], 0
         t0 = time.perf_counter()
@@ -277,7 +280,10 @@ def test_device_streaming_first_audio_latency(device):
     )
     for t in (warm_mel, w_wav, w_src):
         ttnn.deallocate(t)
-    with TtStreamingSynthesizer(device, flow, hift, cfg).session(ctx, rng) as warm_session:
+    # `run_streaming` reuses this synthesizer, so its carry buffers are allocated here,
+    # with no trace live.
+    synth = TtStreamingSynthesizer(device, flow, hift, cfg)
+    with synth.session(ctx, rng) as warm_session:
         for token in tokens:
             for wav, _n in warm_session.push(token):
                 ttnn.deallocate(wav)
@@ -288,8 +294,9 @@ def test_device_streaming_first_audio_latency(device):
     step = TracedDecodeStep(dec, max_len).capture()
 
     batch = run_batch(tokens)
-    stream = run_streaming(tokens)
+    stream = run_streaming(tokens, synth)
     step.release()
+    synth.release_carry()
 
     # ------------------------------------------------------------------ report
     chunk_seconds = cfg.chunk_size() / 50.0

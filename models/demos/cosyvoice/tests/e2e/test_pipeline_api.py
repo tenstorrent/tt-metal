@@ -143,32 +143,19 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
     )
     assert streamed.shape[1] > 0 and torch.isfinite(streamed).all(), "streamed audio is empty or not finite"
 
-    # **A defect band, not an acceptance band — and the defect is understood.**
-    # Interleaved synthesis produces audio peaking around 72 on Blackhole and 8 on
-    # Wormhole against a batch path peaking at 0.001, with identical tokens and a
-    # correct chunk schedule. The cause is established: the state `StreamState` carries
-    # across a chunk seam sits in device buffers while `generate()`'s trace is live and
-    # a later `execute_trace` clobbers it. `generate(use_trace=False)` produces correct
-    # audio, which is what isolates it; per chunk, the first matches a no-trace
-    # reference at PCC 0.99999994 and the second has a bit-identical mel with waveform
-    # PCC 0.011. `docs/VALIDATION.md` carries the full account and the remedy, which is
-    # known and does not yet land -- parking those tensors on the host fixes the audio
-    # and hangs `tests/perf/test_streaming_perf.py` on Blackhole.
-    #
-    # Pinned rather than printed, for the reason `tests/perf/gates.py` pins a missed
-    # threshold: an unasserted number drifts silently. The magnitudes differ by
-    # architecture because corruption has no meaningful magnitude -- it is not a scale
-    # error, and an earlier revision of this comment read it as one.
-    #
-    # **Closing the defect means replacing all of this with `peak < 1.5`**, plus the
-    # batch-relative check below, not widening the band.
-    lo, hi = (4.0, 16.0) if "WORMHOLE" in str(device.arch()).upper() else (40.0, 120.0)
+    # Interleaving must not change the signal's scale. The streamed peak is checked for
+    # clipping and against the batch path's on the same prompt, because the absolute
+    # peak depends on the utterance.
     peak, batch_peak = float(streamed.abs().max()), float(n_batch.abs().max())
-    assert lo < peak < hi, (
-        f"streamed peak {peak:.4f} is outside this architecture's recorded defect band "
-        f"({lo}, {hi}). Near the batch path's {batch_peak:.4f} means the defect is fixed "
-        "-- replace this with `peak < 1.5` and update docs/VALIDATION.md. Elsewhere "
-        "means something new is wrong."
+    assert peak < 1.5, (
+        f"streamed peak {peak:.4f} -- the interleaved path is clipping or corrupted. "
+        f"The batch path on the same prompt peaks at {batch_peak:.4f}. A peak in the "
+        "tens means the carried StreamState is being overwritten by the decode trace "
+        "again; see TtStreamingSynthesizer._carry_store."
+    )
+    assert peak < max(20.0 * batch_peak, 0.05), (
+        f"streamed peak {peak:.4f} is far above the batch path's {batch_peak:.4f} on "
+        "the same prompt -- interleaving changed the signal's scale"
     )
     assert batch_peak < 1.5, (
         f"the *batch* path clips at {batch_peak:.4f} -- that path is gated elsewhere " "and should never do this"
@@ -188,31 +175,13 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
         )
 
 
-# **Blocked by a pre-existing defect, not by batching.** This test synthesises two
-# utterances of different lengths on one open device -- first singly, then batched --
-# and it hangs on the second one, before printing anything, with the device needing a
-# reset afterwards. That is the known L1_SMALL growth across differing vocoder
-# geometries: something in the `conv_transpose2d`/halo path accumulates per-geometry
-# device state that `release_caches()` does not free. It is why `demo/demo.py` opens a
-# fresh device per utterance, and it predates every change here.
-#
-# So what is blocked is *end-to-end* batched synthesis on one device, not batching.
-# The batched decode itself -- which is the whole of the throughput win, since the LLM
-# runs once per token and the other two stages once per utterance -- is verified in
-# `tests/perf/test_batching.py`: batched rows match single-row decode at ragged
-# prefixes (PCC 0.9999998808 on Blackhole), and the batch=1..8 sweep is gated.
-#
-# Skipped rather than deleted, because the moment the L1 growth is root-caused this is
-# the test that says whether `synthesize_batch` was right all along.
-@pytest.mark.skip(
-    reason="hangs on the second utterance: known L1_SMALL growth across vocoder "
-    "geometries on one open device (see docs/VALIDATION.md). Batched *decode* is "
-    "verified in tests/perf/test_batching.py."
-)
+# `l1_small_size` is raised for headroom: the vocoder keeps per-geometry
+# `conv_transpose2d` state in L1_SMALL and never frees it, and the 131072 the rest of
+# this file uses fills after a few distinct mel geometries (`docs/VALIDATION.md`).
 @needs_weights
 @needs_inputs
-@needs_device
-def test_device_batched_synthesis_agrees_with_one_at_a_time(device):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 524288, "trace_region_size": 402653184}], indirect=True)
+def test_device_batched_synthesis_agrees_with_one_at_a_time(device, monkeypatch):
     """Two utterances through one decode loop against the same two run alone.
 
     This is the whole-utterance form of `test_device_batched_decode_matches_single`,
@@ -225,6 +194,14 @@ def test_device_batched_synthesis_agrees_with_one_at_a_time(device):
     """
     import ttnn
     from models.demos.cosyvoice.tt.pipeline import PromptContext
+
+    # `synthesize_batch` needs the CFM estimator's trace cache off for the whole process:
+    # with it on, the estimator trace cached by an earlier utterance is live when
+    # `generate_batch` captures its decode trace, and the device hangs. Releasing the
+    # cached trace, or disabling the cache only around the call, hangs the same way.
+    # `TtConditionalCFM` reads the variable once, in its constructor, so it is set
+    # before `_model` builds the pipeline.
+    monkeypatch.setenv("COSYVOICE_CFM_TRACE_CACHE", "0")
 
     paths = _cases(2)
     ctxs, metas = zip(*(PromptContext.from_npz(p) for p in paths))
