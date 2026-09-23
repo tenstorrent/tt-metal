@@ -134,6 +134,10 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
 inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
 {
+    // Turn on automatic Tensix-TRISC synchronization
+    // RT: This is turned on by default by HW, this should be removed
+    set_ttsync_enables<TRACK_ALL>(TRISC_ID);
+
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
     _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid);
 
