@@ -14,8 +14,8 @@ builds the same scenario dict from the live call (`_scenario_from_call`) and
 runs the very same taggers over it, so the runtime gate and the golden
 harness's xfail decisions share one set of rules.
 
-Regimes: `row_split_interleaved`, `sharded_resident`, `sharded_accessor`
-(op_design.md -> Blocking Model -> Regimes).
+Regimes: `row_split_interleaved`, `sharded_resident`, `sharded_accessor`,
+`retile_l1_facewalk` (op_design.md -> Blocking Model -> Regimes).
 """
 
 from __future__ import annotations
@@ -217,6 +217,10 @@ SUPPORTED = {
     "pad_mode": ["none"],
     "pad_value": ["none"],
     "alignment": ["tile_aligned"],
+    # Tile geometry (Refinement 2): every output tile height on every placement (both CBs carry
+    # TileDescriptor(tile_h, 32); the output is allocated through a TensorSpec carrying the tile),
+    # and every input tile height of a Layout::TILE input, re-tiled in the same dispatch by the
+    # retile_l1_facewalk reader.
     "tile_height": list(LEGAL_TILE_HEIGHTS),
     "in_tile_height": ["none", *LEGAL_TILE_HEIGHTS],
     "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],

@@ -1,8 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""tilize — ProgramDescriptor for the `row_split_interleaved`, `sharded_resident` and
-`sharded_accessor` regimes (op_design.md -> Regimes).
+"""tilize — ProgramDescriptor for the `row_split_interleaved`, `sharded_resident`,
+`sharded_accessor` and `retile_l1_facewalk` regimes (op_design.md -> Regimes).
+
+Retile (a Layout::TILE input, `in_tile_h`): only `load_block` changes. The reader
+stages whole input tiles (or reads a resident input shard in place) and face-walks
+them into cb_input_sticks; compute and writer are the stick path's. The work unit
+along tile_row is `row_align` tile-rows so an input tile-row never straddles cores.
 
 Core assignment (`_core_assignment`, one source for all three regimes):
   * an L1-sharded OUTPUT whose shard is `resident_ok` fixes it (the output shard

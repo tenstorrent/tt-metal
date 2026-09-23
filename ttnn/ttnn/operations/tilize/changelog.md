@@ -72,3 +72,52 @@
   - The translated square_large ND cases ([23,96,160]) and the fp32 / padded variants stay refused until Refinements 4, 5 and 7.
   - `test_tilize_registry.py` refusal assertions for sharded inputs became tag assertions, since sharding is now supported.
 - **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py` (19 regime cases with residency assertions, a same-spec zero-traffic assignment check, rank 2/3/5/6 + L1 interleaved, L1 crossovers).
+
+## Refinement 2 — Tile geometry: tiny output tiles + retile of a TILE input
+- **Date**: 2026-09-23
+- **What was done**:
+  - **Tiny output tiles** (`tile_height` 16 / 8 / 4 / 2 / 1) on every existing placement. The kernels needed no change: both CBs already carried `TileDescriptor(tile_h, 32)`, the tilize helper leaves the fast path on its own, and the reader groups `tile_h` sticks per tile-row.
+    - Host: `tilize._allocate_output` allocates the output through a `ttnn.TensorSpec` carrying `ttnn.Tile([tile_h, 32])`, with one overload per placement (interleaved, legacy 2-D shard, ND shard). `allocate_tensor_on_device` would lay out 32×32 tiles; the 32×32 path still calls it unchanged.
+    - The `QUANTUM_MIN_TILES` floor now counts full 32-row tile equivalents (`× 32 / tile_h`). Otherwise a `tile_h = 1` quantum would be 8 single-stick tiles.
+  - **Retile** (`in_tile_height` 32 / 16 / 8 / 4 / 2 / 1): the `retile_l1_facewalk` regime, a new reader block operation `read_retile` on the shared kernels. Compute and writer are unchanged.
+    - **Unit.** A unit is `row_align` output tile-rows fed by `unit_in_rows = max(1, tile_h / in_tile_h)` input tile-rows of one image.
+    - **Reads.** Input tiles are read whole, one page-sized NoC read each, into the reader-private `cb_retile_staging` ring (CB 3). `RETILE_STAGE_DEPTH - 1` units are prefetched under transaction ids.
+    - **Resident input.** A resident Layout::TILE input shard backs `cb_retile_staging` and is read in place, with no NoC read into L1.
+    - **Row split.** The row split and the walk rotation work in units of `row_align`, so each input tile is read once per Tensix core.
+    - **Fallback.** H-padded TILE inputs and output shards that cut input tile-rows fall back to `row_align = 1`. That stays correct, with `in_tile_h / tile_h` read amplification.
+    - No ROW_MAJOR tensor is materialized. The rejected designs (`retile_compute_untilize`, `retile_dram_facerow_reads`) were not built.
+  - **Face-walk mover** (perf, measured). The RISC-V L1 word copy the design names measured ~8 cycles per word. On [1,1,16384,64] retile 32→16 it cost 93.5 µs, against 23.4 µs with the copy stubbed (ablation).
+    - Face rows (16 elements) are now moved by NoC loopback reads on the same Tensix core (`noc_async_read_one_packet_with_state`), under their own transaction id. That id is drained before every `cb_input_sticks` push and before a staging slot is refilled.
+    - `RETILE_FACEWALK_NOC` defaults on; the RISC-V copy stays a live, tested knob.
+  - Reused: Walker (rotation), the CB slots, compute, writer, `_core_assignment`, `balanced_width` / `rows_per_quantum`. Added: `FaceWalk`, `RowSlotWriter`, `retile_source_of`, `read_retile`, `cb_retile_staging`, the `RETILE_STAGE_DEPTH` / `RETILE_FACEWALK_NOC` knobs, and `_allocate_output`.
+  - Ledger: `cb_retile_staging` rows and the retile data-movement budget. op_design.md: the regime is marked built, with an implementer note.
+- **Accuracy achieved**: bit-exact (`torch.equal`, PCC = 1.0, atol = rtol = 0) at bf16 on every case tested. That covers:
+  - tiny tiles at all 5 heights on [1,1,64,128], [2,3,64,64] and [1,1,4096,64] (64 Tensix cores), plus HEIGHT / WIDTH / BLOCK same-spec shards;
+  - retile on 9 height pairs × 3 shapes, H-padded TILE inputs ([2,1,48,64], [3,2,48,96]), L1-interleaved, same-spec resident shards (3 schemes × 4 pairs), and crossovers (a resident TILE shard in → DRAM out, and DRAM in → 16-row output shards that cut 32-row input tiles);
+  - every retile knob setting.
+- **Golden test progress**:
+  - `test_golden.py` targeted slice: 14 passed / 0 failed / 0 XPASS (117 xfailed are non-bf16 dtype cells, Refinement 7). That covers all 3 `tile_geometry_tiny` cells, all 6 `tile_geometry_retile` cells including `retile_1_to_32` (the required `in_tile_height: 1 × tile_height: 32` cross), and `PROGRAM_CACHE_CASES` `tiny_tile_16`, `retile_32_to_16`, `baseline_dram_dram`, `tall_narrow_grid_scale` and `height_sharded_same_spec`.
+  - Translated tile-geometry tests: 18 passed, 22 xfailed. The xfails are fp32 (Refinement 7) and the [1,1,128,256] tiny-tile cells that tag `square_large` (Refinement 5). `test_tilize_retile` is `skip_for_wormhole_b0` upstream, so the unit file covers those shapes on WH instead.
+- **Perf** (WH B0, device-kernel ns, [1,1,16384,64] bf16, DRAM interleaved, 64 Tensix cores):
+
+  | Path | Before | After |
+  |---|---|---|
+  | Perf-focus 32×32 | 25369 | 25498 (median of 3, no regression) |
+  | Tiny 16 | — | 23980 |
+  | Tiny 8 | — | 24917 |
+  | Tiny 1 | — | 62725 |
+  | Retile 32→32 | 93423 (RISC-V copy) | 37906 (NoC face walk) |
+  | Retile 32→16 | 93523 | 38311 |
+  | Retile 16→32 | 93822 | 35659 |
+  | Retile 1→32 | 116201 | 59457 |
+
+  - Tiny 1 is writer-bound (64-byte output pages).
+  - Remaining retile headroom: the NoC face walk still issues one 32-byte loopback read per face row (1024 per Tensix core here). NCRISC takes 31 µs, against 17 µs for the reads alone. Two ways to cut it further: split the face-walk issue across both data-movement RISC-Vs (that needs a second input CB, as the split reader does), or re-lay face-to-face with runs of `min(face_h_in, face_h_out)` rows. The second would bypass the tilize compute, which is outside this regime.
+  - 1→32 is bound by the 64-byte input tile reads (39 µs even with the face walk stubbed).
+- **Issues encountered**: none blocking.
+  - The RISC-V copy's cost was the only surprise, and ablation (payload stubbed, sync kept) attributed it before the NoC mover replaced it.
+  - The `--profile` wrapper splits a `-k` expression on spaces, so use single-token filters.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py`, 102 cases:
+  - tiny tile DRAM and sharded;
+  - retile DRAM, H-padded, L1, resident shards (with residency assertions), crossovers;
+  - a retile knob matrix, program-cache cases, and a perf-shape case for `--profile`.

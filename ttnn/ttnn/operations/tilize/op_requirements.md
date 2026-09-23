@@ -84,7 +84,7 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 **Done when**: every golden cell whose only unsupported axes are the ones above passes, with zero loud categories. The `sharded_legacy_2d` / `sharded_nd` groups and the translated sharded / L1 / rank tests pass. The sharded LOOSE_CASES report device-ns and core counts, and the same-spec case shows no NoC traffic on the resident sides.
 **Outcome**: landed. Every named axis value is in SUPPORTED. `test_golden.py` has 32 pass / 0 fail / 0 XPASS; 24 of those are new, including every `sharded_legacy_2d` / `sharded_nd` / buffer / rank cell at bf16 → bf16. `short_wide` / `square_large` are admitted only where an L1 shard fixes the core assignment; EXCLUSIONS refuse them on every row-split path until Refinement 5, and that is what lets `short_wide_width_sharded` and the four sharded LOOSE_CASES run now. Translated sharded / ND / L1 / rank tests: 191 pass, 1 fail. The failure, `test_tilize_program_cache_addr_change[sharded_width_l1]`, passes alone; in module order an earlier COL_MAJOR 1×4 WIDTH case already built the byte-identical program, so its `entries == 1` sees a correct cache hit. Sharded LOOSE_CASES, WH device-kernel ns: HEIGHT in → DRAM 16502 on 64 Tensix cores (ref 16852); DRAM → HEIGHT out 12269 on 64 (ref 12142); same spec 1914 on 64 (ref 1891); BLOCK COL_MAJOR 1971 on 16 (ref 1832). The same-spec case moves no NoC bytes: NCRISC 252 ns (page publish only), BRISC waits on compute. What is left: the same-spec / BLOCK cases are compute + launch bound (~1.7 µs for 16 tiles per core); DRAM → HEIGHT out is read-bound (NCRISC ~10.7 µs of 12.3).
 
-### [ ] Refinement 2 — Tile geometry: tiny output tiles + retile of a TILE input
+### [x] Refinement 2 — Tile geometry: tiny output tiles + retile of a TILE input
 
 **Goal**:
 - add `tile_height` 16, 8, 4, 2, 1 to SUPPORTED. Both CBs carry `TileDescriptor(tile_h, 32)`. The output is allocated through a `TensorSpec` carrying `tile` (not `allocate_tensor_on_device`, which defaults to 32×32). The helper leaves the fast path and uses standard `tilize_block`. The reader already groups `tile_h` sticks per tile-row.
@@ -106,6 +106,11 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - **INVALID follow-up.** `fp8_e4m3 × in_tile_height ≠ none` is structurally impossible (fp8 is ROW_MAJOR-only). It is recommended for INVALID (verification_report.md); it is not refinement work.
 
 **Done when**: the `tile_geometry_tiny` and `tile_geometry_retile` cells pass bit-exact at bf16, including `retile_1_to_32` (the `in_tile_height: 1 × tile_height: 32` required cross). `PROGRAM_CACHE_CASES` `tiny_tile_16` and `retile_32_to_16` pass. Zero loud categories.
+**Outcome**: landed. Every named axis value is in SUPPORTED: `tile_height` 32/16/8/4/2/1 on every placement, and `in_tile_height` none/32/16/8/4/2/1.
+- **Golden.** All 3 `tile_geometry_tiny` and all 6 `tile_geometry_retile` cells pass bit-exact at bf16, including `retile_1_to_32`, as do `PROGRAM_CACHE_CASES` `tiny_tile_16` / `retile_32_to_16`. Slice: 14 passed, 0 failed, 0 XPASS.
+- **Tiny tiles.** Host only: a `TensorSpec`-carried output tile, and a quantum floor counted in full-tile equivalents.
+- **Retile.** `read_retile` (`retile_l1_facewalk`) reads whole tiles into a prefetching staging ring, or reads a resident TILE shard in place. It face-walks them into `cb_input_sticks` with NoC loopback reads (`RETILE_FACEWALK_NOC`), which measured 2.4× faster than the RISC-V copy the design named. Retile 32→16 on [1,1,16384,64] (64 Tensix cores, WH) went from 93.5 to 38.3 µs; tiny 16 / 8 take 24.0 / 24.9 µs; the perf-focus path is unchanged at 25.5 µs.
+- **What is left.** Retile is face-walk-issue bound (NCRISC 31 µs vs 17 µs for the reads alone). 1→32 is bound by its 64-byte input page reads; tile_h = 1 is bound by its 64-byte output page writes.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile (block-quantum / depth / NoC co-tune)
 
