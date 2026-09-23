@@ -72,6 +72,9 @@ GUARDS = {
     "low_l1_narrow": ((1, 1, 16384, 64), None, "dram", None, 32, True),
     "narrow32_dram": ((1, 1, 16384, 32), None, "dram", None, 32),
     "wide1024_dram": ((1, 1, 2048, 1024), None, "dram", None, 32),
+    # Refinement 8 co-read (one position per core): tiny DRAM work, and an L1 source past the DRAM gate
+    "tiny_one_position": ((1, 1, 128, 64), None, "dram", None, 32),
+    "l1_one_position": ((1, 1, 2048, 256), None, "l1", "dram", 32),
 }
 
 

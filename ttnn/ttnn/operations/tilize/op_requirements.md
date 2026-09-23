@@ -240,10 +240,21 @@ Also:
 
 **Outcome**: landed on WH B0. Every legal dtype pair is in SUPPORTED. The golden non-bf16 cells give 717 pass, 18 xfail on 6 categorized EXCLUSIONS (packer: block-float at tile 16×32; precision: bfp4 at rank 0 / 1; oracle: negative fill on uint16 / uint8) and 0 fail. `test_regression.py` passes 10/10. bf16 perf focus measured 23644 ns (R6: 23303, noise band); fp32 [1,1,8192,32] measured 14055 ns (reference 15064). fp8_e4m3 is declared but unverified: it needs a Blackhole run.
 
-### [ ] Refinement 8 — Speed up the perf-flagged profile (post-generality re-tune)
+### [x] Refinement 8 — Speed up the perf-flagged profile (post-generality re-tune)
 
 **Type**: perf
 
 **Goal**: the same flagged target, [1,1,16384,64] bf16 → bf16 DRAM interleaved. After all generality refinements have reshaped the kernels (regime selection, the pad-aware reader, the numeric config plumbing), re-measure the flagged shape and the guard set. Recover any regression those refinements introduced on the flagged path, then take the next lever the roofline leaves (`/perf-ceiling-dm`) from `ttnn/ttnn/operations/examples/master.md`. Candidates: revisit the parked split reader once the write path is shorter; the tiny-work grid-participation lamp ([1,1,128,64] on 4 cores is at ~3.1 µs vs a 2.29 µs reference). If the roofline shows no headroom left, close the phase with that measurement. No SUPPORTED change.
 
 **Done when**: measured device-ns on [1,1,16384,64] is at or below the best recorded after Refinement 6 and improves where headroom exists. The golden suite stays green, with no regression across the config-spanning guard set (one representative per kernel path × layout × placement × dtype family).
+**Outcome**: landed.
+- **Flagged shape.** [1,1,16384,64] shows no regression and has no headroom left. In a same-session A/B (5 fresh runs each) this run's R6 commit takes 23642 ns and HEAD 23489 ns on 64 Tensix cores; that beats the 25998 reference and R6's 23303 (noise band ±3 %).
+- **Roofline.** It already beats a native DRAM → DRAM `Layout::TILE` clone of the same bytes (26644 ns) and moves ~180 GB/s against a measured 190.8 GB/s copy peak (ceiling ≈ 22.0 µs). Writes-only (17.8 µs) is the binding stage.
+- **Lever taken: the tiny-work lamp.**
+  - Zones showed one-position walks bound by NCRISC issuing every stick read (~45 cycles each) while BRISC idled.
+  - The new co-read hands half of each tile-row's stick reads to BRISC / NoC1, synchronized by a core-local semaphore and gated by segment bytes and input BufferType.
+  - Results: [1,1,128,64] 3122 → 2307 ns (reference 2294), [1,1,32,2048] 3659 → 3445 (reference 3486), [1,1,2048,32] 4307 → 3413, L1 [1,1,2048,256] 14282 → 10844.
+  - Bit-exact; the other guards are within noise.
+- **Next** (not done):
+  - Stateful per-bank reads (`noc_async_read_one_packet_with_state`, ~22 vs ~45 cycles per read) on the one-position path, to shorten both halves' issue loops. Not done: it needs a bank-major walk inside a tile-row, and the remaining ~0.6 µs issue link is now split across two RISC-Vs.
+  - On the flagged shape: DRAM read/write phase grouping. Not done: the measured ceiling leaves ≤ 5 %.

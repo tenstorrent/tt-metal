@@ -346,3 +346,63 @@
   - The tiny-tile block-float packer mismatch (above).
   - The harness's up-front-collect precompile pass prints fake-device metrics before the real run. Only the second half of a `-s` log is real.
 - **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_numeric_formats.py` (604 cases: `test_tilize_precision_matrix`, `test_tilize_fidelity_is_noop`, `test_tilize_integer_extremes`, `test_tilize_numeric_pad_fill`, `test_tilize_numeric_perf_shape`). Also `precision_matrix_results.md`.
+
+## Refinement 8 — Speed up the perf-flagged profile (post-generality re-tune)
+- **Date**: 2026-09-23
+- **What was done**:
+  - **Re-measured the flagged shape: no regression, and it is at the DRAM roofline.**
+    - [1,1,16384,64] bf16 DRAM interleaved runs on 64 Tensix cores. A same-session A/B of this run's Refinement 6 commit against HEAD, 5 fresh runs each, gives medians of 23642 ns (R6) and 23489 ns (HEAD). The compiled path is the same. R6's recorded 23303 sat at the low end of a ±3 % noise band.
+    - Empirical roofline (new `test_tilize_r8_roofline.py`): a native `ttnn.clone` of the same tensor as `Layout::TILE`, DRAM → DRAM on 64 Tensix cores, moves the same bytes (2 MiB read + 2 MiB written) in 26644 ns (157 GB/s). The same clone as `Layout::ROW_MAJOR` takes 121214 ns.
+    - Tilize is therefore ~12 % faster than the native tile copy. It moves ~180 GB/s, against the 190.8 GB/s the `double_buffer` example measured on a larger copy, so its ceiling is ≈ 22.0 µs (≤ 5 % headroom).
+    - `noc_estimate` is not built in this checkout (it needs `--build-tests`), so this empirical copy is the ceiling used.
+    - Writes remain the binding stage (writes-only 17.8 µs, Refinement 6). The parked split reader would load BRISC with reads on top of those writes, so it was not revisited.
+  - **Took the lever the roofline leaves: the tiny-work lamp.**
+    - Device zones on [1,1,128,64] (8 Tensix cores, one tile-row × one tile each, ~2990 ns; reference 2294) show a serial chain:
+      - NCRISC's issue loop for the 32 stick reads takes 1462 cycles (~45 cycles per `noc_async_read`: five command-buffer register writes plus the ready poll);
+      - the read barrier takes ~300 cycles, tilize ~200, and the write + barrier ~480;
+      - BRISC idles in `cb_wait_front` for ~2000 cycles.
+    - Ablations: the no-transfer floor is 929 ns, writes-only 1440, reads-only 2498.
+    - Cheaper address math doesn't help: `BANK_STRIDE` 1 / 2 measured 3102 / 3075 ns, still 37 cycles per read.
+    - The parked `READ_NOC_SPLIT` doesn't help either: 2 → 4381 ns, 4 → 4543 ns, because DM_DYNAMIC_NOC counters cost ~76 cycles per read.
+  - **The co-read lever (new).**
+    - On a walk of exactly one position per Tensix core, BRISC (NoC1) reads the last `CO_READ_SHARE` (0.5) of the tile-row's sticks straight into `cb_input_sticks`' first slot. It then raises a core-local program semaphore after its read barrier.
+    - NCRISC reads the rest and waits for that flag before its push (`CoReadLanded`, passed as `StickProducer`'s Fill). NCRISC stays the CB's only producer.
+    - Both halves use one new helper, `read_tile_row_sticks`, in the same per-core rotated stick order. `StickProducer::issue_row` now calls it too, and `read_paged_segment` moved to a free function.
+    - Gate: `max_positions == 1`, the plain stick walk (not padded / retile / resident / split reader / bank-stride / NoC split), and stick segments within `CO_READ_SEGMENT_BYTES[input BufferType]`: DRAM ≤ 128 bytes, L1 unbounded. Co-read takes precedence over `bank_coalesced`, which has nothing to overlap its scatter with on one position (4-core row split of [1,1,128,64]: 3.6 µs coalesced vs 3.1 µs plain).
+  - **Why the gate.** BRISC's NoC1 share of DRAM reads loses once reads stop being issue-bound:
+
+    | DRAM stick segment | Co-read vs off (medians of 3) |
+    |---|---|
+    | 192 bytes | +4.6 % |
+    | 256 bytes | +3 to +6 % |
+    | 512 bytes to 2 KiB | +26 to +31 % |
+
+    An L1-interleaved source wins at every width. On [1,1,2048,W], 64 Tensix cores: 128 bytes −14 %, 512 bytes −24 %, 1 KiB −17 %, 2 KiB −28 %.
+  - **Share sweep** on [1,1,128,64], `CO_READ_SHARE` 0.375 / 0.4375 / 0.5 / 0.5625 / 0.625: 2591 / 2402 / 2297 / 2521 / 2447 ns. 0.5 is best on all three probe shapes.
+  - **Knobs** (live): `CO_READ_SHARE` (0.5; 0 = off, byte-identical kernels), `CO_READ_SEGMENT_BYTES`, `CO_READ_SEM`.
+  - **Measurements** (WH B0, device-kernel ns, median of 3 fresh runs; co-read off → on):
+
+    | Shape (bf16, DRAM interleaved unless noted) | Tensix cores | Off | On | Change |
+    |---|---|---|---|---|
+    | [1,1,128,64] | 8 | 3122 | 2307 | −26 % (reference 2294) |
+    | [1,1,2048,32] | 64 | 4307 | 3413 | −21 % |
+    | [1,1,2048,64] | 64 | 6087 | 5552 | −9 % |
+    | [1,1,64,2048] | 64 | 5442 | 4972 | −9 % |
+    | [1,1,32,2048] | 64 | 3659 | 3445 | −6 % (reference 3486) |
+    | [1,1,2048,256], L1 interleaved → DRAM | 64 | 14282 | 10844 | −24 % |
+
+  - **Reused / added.** Reused: `StickProducer` (its Fill hook carries the landed wait), `Walker`, the per-core stick rotation, the writer's input accessor CT args (already there for the split reader), and the r3 perf harness. Added: `read_tile_row_sticks`, `CoReadLanded`, reader CT args 28 / 29, writer CT args 17–19, one program semaphore (only when co-read engages), 3 knobs, and the gate.
+- **Accuracy achieved**: bit-exact (`torch.equal`; PCC = 1.0, rtol = atol = 0) on every co-read shape and share (the knob matrix: 9 shapes × 4 new co-read configs). HEAD and R7 outputs are bit-identical on 60 seeded float32 → bfloat4_b cases (20 seeds × [1,1,50,50] padded, [1,1,128,64], [1,1,32,2048]).
+- **Golden test progress**:
+  - `test_op_loose` + `test_program_cache_reuse`: 20/20 passed.
+  - `test_op -k "single_tile or short_wide or small"`: 681 passed, 18 xfailed (EXCLUSIONS), 2100 skipped, 1 failed.
+  - The failure is `1x1x50x50-pad_auto` float32 → bfloat4_b, pad negative: PCC 0.9789–0.9799 against the 0.98 floor. It fails on ~1 run in 3 because the golden input is unseeded randn. It is pre-existing: that cell is padded, so co-read never engages, and HEAD matches R7 bit for bit on seeded inputs. It is the bfloat4_b truncation near-miss Refinement 7 recorded. Not silenced.
+- **Perf guard set** (`test_r3_guard`, co-read off → on, median of 3): `tiny_one_position` 3045 → 2329, `l1_one_position` 14282 → 10844, `grid_2d_short_wide` 3711 → 3472. The other 10 guards run identical kernels at both settings and sit within ±3 % noise (e.g. narrow_dram 23538 / 23902, wide1024_dram 46702 / 46501).
+- **Issues encountered**:
+  - The first gate was ungated by segment size: [1,1,2048,1024] DRAM went 46186 → 60423 ns. Fixed by the DRAM ≤ 128-byte gate.
+  - A height-sharded L1 input going to an interleaved output is consumed resident, so co-read never runs there. My first "height-sharded" sweep was therefore pure noise (±7 %, now documented as the control).
+  - The probe's `import ttnn.operations.tilize.tilize` resolves to the function, not the module (use `sys.modules`).
+- **Tests added**:
+  - `test_tilize_r8_roofline.py`: `test_dram_copy_roofline` (native clone ceiling) and `test_co_read_l1_source` (the L1 gate sweep, with a height-sharded resident control).
+  - `test_tilize_knobs.py`: 2 one-position shapes and 4 co-read configs (306 cases).
+  - `test_tilize_r3_perf.py`: guards `tiny_one_position` and `l1_one_position`.

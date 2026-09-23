@@ -25,6 +25,8 @@ SHAPES = [
     (1, 1, 1600, 96),  # R=50 uneven row split
     (1, 1, 16384, 64),  # 8 tile-rows per core
     (1, 1, 4320, 160),  # R=135, C=5: 3 or 2 tile-rows per core (partial final quantum), ragged column block
+    (1, 1, 128, 64),  # one position per core (2-D split, 64-byte segments): co-read engages
+    (1, 1, 64, 2048),  # one position per core on 64 cores (128-byte segments): co-read engages
 ]
 
 CONFIGS = {
@@ -88,6 +90,13 @@ CONFIGS = {
     "coalesce_tiny_budget": dict(
         BANK_COALESCE_MAX_STICK_BYTES=1 << 20, CB_BUDGET_BYTES={False: 3 * 8192, True: 3 * 8192}
     ),
+    # Refinement 8 co-read (the default on one-position walks): off keeps NCRISC-only reads covered
+    # there; other shares move the NCRISC / BRISC boundary inside the rotated stick order; the open
+    # gate engages it on every one-position walk (wide segments, ragged column blocks).
+    "co_read_off": dict(CO_READ_SHARE=0),
+    "co_read_quarter": dict(CO_READ_SHARE=0.25),
+    "co_read_seven_eighths": dict(CO_READ_SHARE=0.875),
+    "co_read_open_gate": dict(CO_READ_SEGMENT_BYTES={ttnn.BufferType.DRAM: (0, None), ttnn.BufferType.L1: (0, None)}),
 }
 
 

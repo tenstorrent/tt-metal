@@ -87,6 +87,10 @@ A DRAM-interleaved Layout::ROW_MAJOR input read as whole sticks of at most `BANK
 
 Data movement (`bank_coalesced`): input 1 DRAM crossing of every stick page (the same bytes as the row split), in `≤ 2 * NB` reads per unit of `~rows_per_quantum * tile_h / NB` pages each (64 sticks per unit → 12 reads of 5–6 × 128 bytes on WH at W = 64 bf16) instead of one 128-byte read per stick; plus one core-local L1 → L1 re-lay of every input byte (the loopback scatter, one `C * 32 * in_elem_bytes`-byte move per stick); output 1 DRAM crossing as in the row split. No cross-core traffic.
 
+## Co-read (Refinement 8)
+
+No CB is added, resized or shared. On a one-position walk, BRISC writes the last `co_read` stick segments of the tile-row into `cb_input_sticks`' first slot. It never reserves or pushes: NCRISC stays the single producer, and the slot is the one NCRISC's reserve returns on an empty CB. The only new L1 object is one program semaphore (`CO_READ_SEM`, a 4-byte flag in the kernel-config region; not a CB), created only when co-read engages. Data movement: unchanged bytes, i.e. input 1 DRAM (or L1) crossing and output 1 crossing. The input's stick reads are split between NoC0 (NCRISC) and NoC1 (BRISC).
+
 ## Symbol table
 
 | Symbol | Bound | Predicate / source that establishes it |
