@@ -116,6 +116,7 @@ def parse_args():
     parser.add_argument("--bank-vc", action="store_true")
     parser.add_argument("--wide-subblocks", action="store_true")
     parser.add_argument("--bounded-layer-barrier", action="store_true")
+    parser.add_argument("--cache-layer-table", action="store_true")
     parser.add_argument("--inline-cb-reset", action="store_true")
     parser.add_argument("--multicast-layer-barrier", action="store_true")
     parser.add_argument("--gu-workers", type=int, choices=(8, 16), default=8)
@@ -152,7 +153,7 @@ def run(args):
         custom_gu=args.custom_gu, qkv_custom_mm=args.qkv_custom_mm, qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
         attention_workers=args.attention_workers, attention_chunk=args.attention_chunk,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
-        bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, inline_cb_reset=args.inline_cb_reset, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
+        bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, inline_cb_reset=args.inline_cb_reset, cache_layer_table=args.cache_layer_table, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
@@ -287,7 +288,7 @@ def run(args):
                     # order, independent of the body's role-ordered core list.
                     storage_cores = ttnn.corerange_to_cores(loop.grid, row_wise=True)
                     for device, shard in enumerate(ttnn.get_device_tensors(loop.state)):
-                        tiles = ttnn.to_torch(shard).reshape(len(loop.cores), 32, 32)
+                        tiles = ttnn.to_torch(shard).reshape(len(loop.cores), loop.state_rows, 32)
                         for index, core in enumerate(storage_cores):
                             # Raw tile words480/481 map to face1,row14,col0/1.
                             cycles, count = int(tiles[index, 14, 16]), int(tiles[index, 14, 17])

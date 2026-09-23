@@ -44,6 +44,7 @@ def describe_program(loop, program):
         roles.update(head=loop.head.cores, final_norm=loop.head.norm.cores)
     return {"scope": "Per-chip descriptor geometry, identical program on four TP chips. Static CB bytes count each alias allocation once. Pinned CB views may overlap allocator tensors; do not add them to allocator usage. Firmware, kernel code, config, semaphores and stacks are separate.",
             "layers": loop.count, "layer_workers": len(loop.cores),
+            "state_bytes_per_core": loop.state_rows * 32 * 4,
             "roles": {name: [[c.x, c.y] for c in cores] for name, cores in roles.items()},
             "max_static_cb_bytes_per_core": max(v["static_cb_bytes"] for v in core_records.values()),
             "core_buffers": [{"core": list(c), **v} for c, v in sorted(core_records.items())],

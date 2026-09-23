@@ -28,9 +28,14 @@ void QB2_ENTRY() {
     if (initialize_layer_scratch(1)) { zero_compact_input<6 * 2048>(get_write_ptr(16)); }
 #endif
     const auto table = TensorAccessor(table_args, get_arg_val<uint32_t>(2), 128);
+#if CACHE_LAYER_TABLE && defined(LOOP_RT_OFFSET)
+    const auto* cached = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(LOOP_RT_OFFSET));
+    const uint32_t weight_address = cached[1024 + get_arg_val<uint32_t>(3) * 32 + 3];
+#else
     noc_async_read(table.get_noc_addr(get_arg_val<uint32_t>(3)), get_write_ptr(31), 128);
     noc_async_read_barrier();
     const uint32_t weight_address = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(31))[3];
+#endif
 #if EARLY_WEIGHT_BLOCKS && (EARLY_WEIGHT_PHASES & 1)
     {
         DeviceZoneScopedN("QKV-LOCAL-WEIGHT-PREFETCH");

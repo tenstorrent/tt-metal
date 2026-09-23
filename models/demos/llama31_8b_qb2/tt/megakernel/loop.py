@@ -59,15 +59,16 @@ class DecoderLoop:
         if len({(core.x, core.y) for core in self.cores}) != len(self.cores):
             raise ValueError("Loop workers must be disjoint")
         self.grid = _grid(self.cores)
+        self.state_rows = 64 if body.tuning.cache_layer_table else 32
         self.state = ttnn.zeros(
-            (1, 1, len(self.cores) * 32, 32),
+            (1, 1, len(self.cores) * self.state_rows, 32),
             dtype=ttnn.uint32,
             layout=ttnn.TILE_LAYOUT,
             device=body.mesh,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(self.grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(self.grid, [self.state_rows, 32], ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
         self.barrier_rectangles = []
@@ -261,6 +262,8 @@ class DecoderLoop:
                 *kernel.defines,
                 ("LOOP_SOURCE", '"' + original + '"'),
                 ("LOOP_PATCH", str(patch)),
+                ("CACHE_LAYER_TABLE", str(int(self.body.tuning.cache_layer_table))),
+                ("INLINE_CB_RESET", str(int(self.body.tuning.inline_cb_reset))),
                 ("BOUNDED_LAYER_BARRIER", str(int(self.body.tuning.bounded_barrier))),
                 ("LAYER_BARRIER_MULTICAST", str(int(self.body.tuning.multicast_barrier))),
                 ("LOOP_MCAST_RT_OFFSET", str(offset + 14 + 2 * len(self.cores))),

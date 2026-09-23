@@ -162,7 +162,21 @@ void kernel_main() {
 #if LOOP_PATCH == 5
     const uint32_t initial_residual = get_arg_val<uint32_t>(14);
 #endif
+#if defined(COMPILE_FOR_NCRISC) && CACHE_LAYER_TABLE && (LOOP_PATCH == 1 || LOOP_PATCH == 2 || LOOP_PATCH == 3 || LOOP_PATCH == 4)
+    {
+        DeviceZoneScopedN("LAYER-TABLE-BATCH-PREFETCH");
+        // Interleaved128-byte rows span DRAM banks: issue each row using its
+        // accessor address, then join once. Refill every resident invocation,
+        // including inactive warmup; no residency is assumed across prefill.
+        const auto cached_table = TensorAccessor(loop_table_args, get_arg_val<uint32_t>(LOOP_RT_OFFSET + 4), 128);
+        for (uint32_t row = first; row < first + count; ++row) {
+            noc_async_read(cached_table.get_noc_addr(row), reinterpret_cast<uint32_t>(state + 1024 + row * 32), 128);
+        }
+        noc_async_read_barrier();
+    }
+#endif
     for (uint32_t layer = 0; layer < count; ++layer) {
+        const uint32_t table_row = CACHE_LAYER_TABLE ? 1024 + (first + layer) * 32 : 448;
 #if defined(COMPILE_FOR_NCRISC)
         state[300] = 0;
         state[301] = 0;
@@ -177,7 +191,7 @@ void kernel_main() {
                 if (mask & 1) { noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(semaphore)), 0); }
             }
         }
-#if LOOP_PATCH == 3 || LOOP_PATCH == 4 || defined(PREFETCH_ROLE)
+#if !CACHE_LAYER_TABLE && (LOOP_PATCH == 3 || LOOP_PATCH == 4 || defined(PREFETCH_ROLE))
         // Only KV update and attention readers need shared cache addresses.
         // Projections already fetch their own weight row in the native body;
         // norm, fabric and SFPU workers do not consume any table columns here.
@@ -204,10 +218,10 @@ void kernel_main() {
 #elif LOOP_PATCH == 2
         rt[3] = first + layer;  // QKV weight row
 #elif LOOP_PATCH == 3
-        rt[1] = state[448 + LOOP_CACHE_COLUMN];
+        rt[1] = state[table_row + LOOP_CACHE_COLUMN];
 #elif LOOP_PATCH == 4
-        rt[1] = state[452];
-        rt[2] = state[453];
+        rt[1] = state[table_row + 4];
+        rt[2] = state[table_row + 5];
 #elif LOOP_PATCH == 5
         rt[14] = layer == 0 ? initial_residual : rt[15];
 #ifdef FUSE_EMBEDDING

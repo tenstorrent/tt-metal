@@ -12,6 +12,7 @@ class ProjectionTuning:
     bounded_barrier: bool = False
     multicast_barrier: bool = False
     inline_cb_reset: bool = False
+    cache_layer_table: bool = False
     buffer_count: int = 2
     lookahead: int = 2
     hoist_pack_config: bool = False
@@ -46,6 +47,8 @@ class ProjectionTuning:
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.cache_layer_table and (self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
+            raise ValueError("Layer-table caching currently excludes helper prefetch")
         if self.custom_gu and (self.projection_tile_height != 16 or self.reader != "pipelined" or not self.wide_subblocks or self.projection_full_dst != "off" or self.compact_activations != "off" or self.share_qkv_workers):
             raise ValueError("Custom GU requires tiny16 wide ordinary pipelined projections")
         if self.qkv_custom_mm and (self.projection_tile_height != 16 or self.reader != "pipelined" or self.share_qkv_workers or self.compact_activations != "off" or self.prefetch_head_workers):
@@ -120,6 +123,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("CACHE_LAYER_TABLE", str(int(self.cache_layer_table))),
             ("CUSTOM_GU", str(int(self.custom_gu))),
             ("INLINE_CB_RESET", str(int(self.inline_cb_reset))),
             ("QKV_CUSTOM_MM", str(int(self.qkv_custom_mm))),

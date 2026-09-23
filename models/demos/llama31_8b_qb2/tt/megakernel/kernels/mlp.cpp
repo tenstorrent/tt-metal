@@ -125,9 +125,14 @@ void QB2_ENTRY() {
         zero_compact_input<16 * 2048>(get_write_ptr(17));
     }
 #endif
+#if CACHE_LAYER_TABLE && defined(LOOP_RT_OFFSET)
+    const auto* addresses = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(LOOP_RT_OFFSET))
+                            + 1024 + get_arg_val<uint32_t>(6) * 32;
+#else
     noc_async_read(table.get_noc_addr(get_arg_val<uint32_t>(6)), scratch, 128);
     noc_async_read_barrier();
     const auto* addresses = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+#endif
 #if SHARED_QKV
     shared_qkv_read(bank, addresses[3]);
 #endif
