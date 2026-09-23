@@ -1,516 +1,715 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: Copyright 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gemma4 dFlash on the plugin CONTRACT rail (vllm-tt-plugin#110).
+"""Host tests for Gemma4 dFlash on the plugin's speculative-decoding contract.
 
-The review on tt-metal#56048 asks for a first contract adapter at B=1, greedy,
-synchronous, one K: the runner supplies the candidate block and owns the accept
-walk, ``output_tokens_per_step`` is 1, and the adapter actually executes
-verification rather than falling back to the width-one baseline branch.
-
-These are host-only tests of the CONTRACT SURFACE -- declarations, shapes,
-dtypes, modes, the proposed/verified pairing -- with a stub fused decoder. The
-device behaviour (that the posterior is the right argmax for the block) is not
-something a host test can attest; that needs the paired correctness run.
+The runner supplies the candidate block and owns the accept walk; this class
+answers verify steps from the posterior its own propose replay produced. These
+tests drive ``prefill_forward``, ``decode_forward`` and ``propose_draft_tokens``
+in the runner's order over a recording fused-decoder stub. What a replay
+computes on the device is not something a host test can attest.
 """
+
+import json
 
 import pytest
 import torch
 
-# The gemma4 vLLM generator imports vllm at module scope (through
-# tt_transformers.generator_vllm), so COLLECTING this file fails outright on a
-# runner without vLLM installed -- which is the tt-metal unit-test job. Skip
-# before the import rather than inside the tests: the failure is at import.
-pytest.importorskip("vllm")
-from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM as CT
+from models.demos.gemma4.tests.unit.conftest import build_model, import_adapter
+from models.demos.gemma4.tests.unit.dflash_contract_harness import (
+    DeviceResult,
+    _ordinary,
+    _prefill,
+    _propose,
+    _start_solo,
+    _table,
+    _tensor,
+    _verify,
+    make_expect_error,
+)
 
 
-def _plugin_has_num_valid():
-    """DraftOutput.num_valid arrives with the plugin's contract stack.
-
-    That stack lands separately from this adapter, so a checkout can have the
-    adapter and not the field. The adapter feature-detects it; these
-    assertions cannot, so they skip rather than fail against a plugin that
-    predates it.
-    """
-    from vllm_tt_plugin.spec_decode import DraftOutput
-
-    return "num_valid" in getattr(DraftOutput, "__dataclass_fields__", {})
+@pytest.fixture
+def expect_error():
+    return make_expect_error()
 
 
-needs_num_valid = pytest.mark.skipif(not _plugin_has_num_valid(), reason="plugin DraftOutput has no num_valid yet")
+def _names(model, kind):
+    return [event for event in model.events if event[0] == kind]
 
 
-class _Dec:
-    """Fused decoder stub: one replay yields (drafts, posterior)."""
-
-    def __init__(self, script):
-        self.script = list(script)
-        self.commits = []
-        self.replays = 0
-
-    def contract_replay(self, first=False):
-        self.replays += 1
-        return self.script.pop(0)
-
-    def contract_commit(self, produced, anchor):
-        self.commits.append((int(produced), int(anchor)))
-        return 0
+def _logits(rows, hit):
+    """Host-sampling logits: row r's argmax is ``hit + r``."""
+    logits = torch.full((1, 1, rows, 600), -1.0)
+    for r in range(rows):
+        logits[0, 0, r, hit + r] = 1.0
+    return logits
 
 
-def _model(script, active=True):
-    m = CT.__new__(CT)
-    m._SPEC_CONTRACT_K = 5
-    m._spec_decoder = _Dec(script) if active else None
-    m._spec_active = active
-    m._spec_first_step = False
-    m._spec_pending = None  # prefill already armed and bootstrapped
-    m._spec_width_set = False  # per-test: the width-selection test turns it on
-    m._ct_posterior = None
-    m._ct_drafts = None
-    return m
+# -- declarations and admission ------------------------------------------------
 
 
-def _bootstrap_step(m):
-    """The contract's FIRST step: a verify with no drafts, which commits exactly
-    one token, followed by the first proposal."""
-    out = m.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[100]], dtype=torch.int32),
-        spec_mode="argmax_ids",
-        num_valid_drafts=torch.tensor([0], dtype=torch.int32),
-        accepted_counts=torch.tensor([1], dtype=torch.int32),
-    )
-    return out
-
-
-def _counts(n):
-    return torch.tensor([n], dtype=torch.int32)
-
-
-def _positions(rows, live=1, start=100):
-    """Committed positions as the runner builds them: padded rows carry -1."""
-    p = torch.full((rows, 6), -1, dtype=torch.int32)
-    for r in range(live):
-        p[r] = torch.arange(start, start + 6, dtype=torch.int32)
-    return p
-
-
-# ── declarations ────────────────────────────────────────────────────────────
-
-
-def test_declares_the_contract_rail_not_the_block_rail():
-    caps = CT.model_capabilities
+def test_declares_the_contract_rail(adapter):
+    caps = adapter.Gemma4DFlashContractForCausalLM.model_capabilities
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_spec_decode"] is True
     assert "tt_adaptive_block_output" not in caps
-    assert set(caps["spec_requirements"]) == {"device_propose", "hidden_feed"}
+    assert caps["spec_requirements"] == ("device_propose",)
     assert caps["spec_hidden_handoff"] == ("on_device",)
-    # A batched draft-less step decodes plain baseline and must answer with
-    # ids, so the device sampler has to be available; declaring it False makes
-    # the platform refuse sample_on_device_mode at config validation, and the
-    # step then argmaxes [B, vocab] logits on host every time.
     assert caps["supports_sample_on_device"] is True
-    # Synchronous by default, per the scope the review set for a first adapter.
+    assert caps["supports_chunked_prefill"] is True
     assert caps["supports_async_decode"] is False
+    assert caps["supports_async_spec_decode"] is False
 
 
-def test_the_plugin_admits_this_declaration():
-    """Run the PLUGIN's own admission over our capabilities, so the test fails
-    if either side of the contract moves."""
-    spec_admission = pytest.importorskip("vllm_tt_plugin.spec_admission")
-    from types import SimpleNamespace
+@pytest.mark.parametrize("value", ["1", "true"])
+def test_async_gate_parses_like_the_other_gates(value):
+    with pytest.MonkeyPatch.context() as patch:
+        module = import_adapter(patch, {"GEMMA4_CONTRACT_ASYNC": value})
+        caps = module.Gemma4DFlashContractForCausalLM.model_capabilities
+        assert caps["supports_async_decode"] is True
+        assert caps["supports_async_spec_decode"] is True
 
-    spec_cfg = SimpleNamespace(
-        method="custom_class",
-        model="vllm_tt_plugin.model_owned_drafter",
-        num_speculative_tokens=5,
-    )
-    plan = spec_admission.resolve_speculative_plan(
-        SimpleNamespace(speculative_config=spec_cfg),
-        CT,
-        CT.model_capabilities,
-        1,
-    )
+
+def test_verify_count_pins_the_inherited_width_arithmetic(adapter):
+    cls = adapter.Gemma4DFlashContractForCausalLM
+    assert cls._SPEC_CONTRACT_K == 5
+    assert cls._SPEC_V == 5 and cls._SPEC_N == 6
+    assert cls._SPEC_BLOCK >= 2
+
+
+@pytest.fixture
+def drafter_snapshot(tmp_path, monkeypatch):
+    cfg = {
+        "num_hidden_layers": 5,
+        "hidden_size": 5376,
+        "head_dim": 128,
+        "num_key_value_heads": 8,
+        "block_size": 16,
+    }
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    monkeypatch.setenv("GEMMA4_DFLASH_DRAFTER", str(tmp_path))
+    monkeypatch.setenv("MESH_DEVICE", "P150x8")
+    return tmp_path
+
+
+def test_spec_plan_admits_concurrency_and_declares_narrow_decode(adapter, drafter_snapshot):
+    from vllm_tt_plugin.spec_decode import SpecPlan
+
+    plan = adapter.Gemma4DFlashContractForCausalLM.spec_plan(None, 32, 5)
+    assert isinstance(plan, SpecPlan)
     assert plan.effective_k == 5
-    assert "argmax_ids" in plan.accept_modes
-    assert plan.lanes_per_request == 1
-    # the per-session byte accounting is inherited, not re-derived here
-    assert plan.extra_bytes_per_seq > 0
+    assert plan.supports_narrow_decode is True
+    assert plan.accept_modes == ("argmax_ids",)
 
 
-def test_a_wrong_sentinel_is_refused_by_the_plugin(expect_error):
-    spec_admission = pytest.importorskip("vllm_tt_plugin.spec_admission")
-    from types import SimpleNamespace
+@pytest.mark.parametrize(
+    "env, needle",
+    [
+        ({"GEMMA4_DFLASH_PACKED": "0"}, "packed"),
+        ({"GEMMA4_DFLASH_WIDTH_SET": "0"}, "GEMMA4_DFLASH_WIDTH_SET"),
+        ({"GEMMA4_DFLASH_WARMUP_DECODE": "0"}, "GEMMA4_DFLASH_WARMUP_DECODE"),
+    ],
+)
+def test_spec_plan_rejects_configurations_that_capture_during_serving(
+    adapter, drafter_snapshot, monkeypatch, env, needle
+):
+    from vllm_tt_plugin.spec_decode import SpecReject
 
-    spec_cfg = SimpleNamespace(method="custom_class", model="some.other:Proposer", num_speculative_tokens=5)
-    with expect_error(ValueError, "model_owned_drafter"):
-        spec_admission.resolve_speculative_plan(
-            SimpleNamespace(speculative_config=spec_cfg), CT, CT.model_capabilities, 1
-        )
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    out = adapter.Gemma4DFlashContractForCausalLM.spec_plan(None, 1, 5)
+    assert isinstance(out, SpecReject)
+    assert needle in out.reason
 
 
-# ── propose ─────────────────────────────────────────────────────────────────
+def test_spec_plan_rejects_a_verify_count_outside_the_drafter_block(adapter, drafter_snapshot, monkeypatch):
+    from vllm_tt_plugin.spec_decode import SpecReject
+
+    monkeypatch.setenv("GEMMA4_DFLASH_BLOCK", "4")  # block_size 4 admits verify counts 1..3
+    out = adapter.Gemma4DFlashContractForCausalLM.spec_plan(None, 1, 5)
+    assert isinstance(out, SpecReject)
+    assert "outside [1, 3]" in out.reason
 
 
-def test_propose_returns_int32_drafts_of_width_k():
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    out = m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
+# -- 3.1 the first solo ordinary step -------------------------------------------
+
+
+def test_solo_prefill_then_ordinary_step_bootstraps_and_answers_from_the_replay(model):
+    _prefill(model, prompt_len=2, key=10)
+    assert model._spec_pending is not None
+    assert model._spec_pending[1] == 2
+    assert model.model[0].keep_last == 12
+    out = _ordinary(model, [3], [2], [10])
+    assert out.dtype == torch.int32 and out.tolist() == [150]
+    assert len(_names(model, "bootstrap")) == 1
+    assert _names(model, "replay") == [("replay", True, 2)]
+    assert _names(model, "decode") == []  # the plain decode never ran
+    assert model._dflash_retained is None
+    assert model._dflash_owner_tables[0].tolist() == _table([10]).tolist()
+    assert model._slots_prefilled_since_decode == {0}
+    assert model._spec_owner_slot == 0
+
+
+def test_padded_solo_ordinary_step_answers_at_the_live_row(model):
+    _prefill(model, prompt_len=2, key=10)
+    out = _ordinary(model, [3, 0, 0, 0], [2, -1, -1, -1], [10, 0, 0, 0])
+    assert out.tolist() == [150, 0, 0, 0]
+
+
+def test_host_sampled_ordinary_step_runs_the_plain_decode_and_drops_the_taps(model):
+    _prefill(model, prompt_len=2, key=10)
+    taps = list(model._spec_pending[0])
+    out = _ordinary(model, [3], [2], [10], result="device", sampling=False)
+    assert out == "device"
+    assert model._spec_pending is None
+    assert all(tap.releases == 1 for tap in taps)
+    assert _names(model, "bootstrap") == []
+
+
+def test_two_live_rows_on_the_first_step_run_the_plain_decode_and_release(model):
+    _prefill(model, prompt_len=2, key=10)
+    out = _ordinary(model, [3, 4], [2, 5], [10, 20], result="device")
+    assert out == "device"
+    assert model._spec_pending is None and not model._spec_active
+    # The next solo step for the same request has nothing to start from.
+    out = _ordinary(model, [3], [3], [10], result="device")
+    assert out == "device"
+    assert _names(model, "bootstrap") == []
+
+
+def test_a_request_prefilled_with_another_never_proposes(model):
+    _prefill(model, prompt_len=2, key=10, rows=2)
+    assert model._spec_pending is None
+    assert model.model[0].tap_layers is None
+    _ordinary(model, [3], [2], [10], result="device")
+    proposal = _propose(model, [[7, -1, -1, -1, -1, -1]], [[3, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+    assert model._spec_decoder.replays == 0
+
+
+def test_a_request_at_a_row_other_than_zero_is_not_bootstrapped(model):
+    _prefill(model, prompt_len=2, key=10, slot=1)
+    out = _ordinary(model, [0, 3], [-1, 2], [0, 10], result="device")
+    assert out == "device"
+    assert model._spec_pending is None and _names(model, "bootstrap") == []
+
+
+def test_bootstrap_refuses_a_position_no_captured_width_covers(model):
+    _prefill(model, prompt_len=2, key=10)
+    model._spec_decoder._pv_widths[1024]["trace"] = None  # prepared, never captured
+    out = _ordinary(model, [3], [2], [10], result="device")
+    assert out == "device"
+    assert model._spec_pending is None and _names(model, "bootstrap") == []
+
+
+# -- 3.2 propose: commit, refresh, declines --------------------------------------
+
+
+def test_propose_commits_the_runners_count_and_anchor_before_the_replay(model):
+    _start_solo(model)
+    commits = _names(model, "commit")
+    replays = _names(model, "replay")
+    assert commits == [("commit", 1, 150)]
+    assert model.events.index(commits[0]) < model.events.index(replays[1])
+    retained = model._dflash_retained
+    assert retained.anchor_token == 150 and retained.anchor_position == 3
+    assert retained.drafts == [201, 202, 203, 204, 205]
+    assert retained.posterior == [250, 251, 252, 253, 254, 255]
+    assert retained.consumed is False
+
+
+def test_propose_refreshes_the_verify_page_tables_when_the_block_table_changes(model):
+    _start_solo(model)
+    assert len(_names(model, "refresh")) == 1  # the bootstrap's own refresh
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    # The runner allocated a block: the owner's table grew.
+    model._dflash_owner_tables = (_tensor([[10, 11, 12, 0]]), None, model.kv_cache)
+    _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    refreshes = _names(model, "refresh")
+    assert refreshes[-1] == ("refresh", [10, 11, 12, 0])
+    assert model.events.index(refreshes[-1]) < model.events.index(_names(model, "replay")[-1])
+    assert _names(model, "commit")[-1] == ("commit", 3, 251)
+
+
+def test_propose_without_a_table_change_does_not_refresh(model):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    assert len(_names(model, "refresh")) == 1
+
+
+def test_propose_installs_per_layer_tables_under_bounded_sliding(adapter, monkeypatch):
+    model = build_model(adapter, monkeypatch, ring=2048)  # headroom: ring > window + P_v
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    model._dflash_owner_tables = (_tensor([[10, 11, 12, 0]]), None, model.kv_cache)
+    _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    installed = model.model[0]._active_page_tables_per_layer
+    assert [t.tolist() for t in installed] == [[[10, 11, 12, 0]], [[10, 11, 12, 0]]]
+
+
+def test_propose_declines_past_the_widest_captured_width(model):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    last_covered = 1024 - 6 - 64
+    model._spec_decoder.start = last_covered  # committing one token moves past it
+    proposal = _propose(model, [[201, 0, 0, -1, -1, -1]], [[last_covered + 1, 0, 0, -1, -1, -1]], counts=[1])
+    assert proposal.num_valid.tolist() == [0]
+    assert not model._spec_active
+    assert model.events[-1] == ("release_decoder", False)
+
+
+def test_propose_declines_when_the_verify_rows_exceed_max_seq_len(model):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    model.model_args[0].max_seq_len = 11  # rows 6..11 need 12 positions
+    proposal = _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    assert proposal.num_valid.tolist() == [0]
+    assert not model._spec_active
+
+
+def test_propose_declines_before_wrapping_an_exact_window_ring(adapter, monkeypatch):
+    model = build_model(adapter, monkeypatch, ring=1024, widths=(4096,))  # ring == window
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    model._spec_decoder.start = 1024 - 6 - 1
+    proposal = _propose(model, [[201, 0, 0, -1, -1, -1]], [[1024 - 6, 0, 0, -1, -1, -1]], counts=[1])
+    assert proposal.num_valid.tolist() == [5]  # rows 1018..1023 fit
+    _verify(model, [[201, 301, 302, 303, 304, 305]], [list(range(1024 - 6, 1024))], [5], keys=[10])
+    proposal = _propose(model, [[301, 0, 0, -1, -1, -1]], [[1024 - 5, 0, 0, -1, -1, -1]], counts=[1])
+    assert proposal.num_valid.tolist() == [0]  # rows 1019..1024 wrap
+    assert not model._spec_active
+
+
+def test_a_ring_with_headroom_does_not_decline(adapter, monkeypatch):
+    model = build_model(adapter, monkeypatch, ring=2048, widths=(4096,))
+    model.model_args[0].max_seq_len = 8192
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    model._spec_decoder.start = 2048 - 6
+    proposal = _propose(model, [[201, 0, 0, -1, -1, -1]], [[2048 - 5, 0, 0, -1, -1, -1]], counts=[1])
+    assert proposal.num_valid.tolist() == [5]
+
+
+def test_after_a_decline_the_next_ordinary_step_is_plain(model):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    model.model_args[0].max_seq_len = 11
+    _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    out = _ordinary(model, [251], [6], [10], result="device")
+    assert out == "device"
+    proposal = _propose(model, [[9, -1, -1, -1, -1, -1]], [[7, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+
+
+def test_propose_declines_when_the_runners_anchor_position_disagrees_with_the_decoder(model):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    proposal = _propose(model, [[201, 202, 251, -1, -1, -1]], [[40, 41, 42, -1, -1, -1]], counts=[3])
+    assert proposal.num_valid.tolist() == [0]
+    assert not model._spec_active
+
+
+def test_propose_shape_follows_the_block_rows_and_declines_padding_rows(model):
+    _prefill(model, prompt_len=2, key=10)
+    _ordinary(model, [3, 0, 0, 0], [2, -1, -1, -1], [10, 0, 0, 0])
+    committed = torch.zeros((4, 6), dtype=torch.int32)
+    committed[0, 0] = 150
+    positions = torch.full((4, 6), -1, dtype=torch.int32)
+    positions[0] = torch.arange(3, 9)
+    out = model.propose_draft_tokens(5, committed, positions, torch.ones(4, dtype=torch.int32))
+    assert tuple(out.draft_token_ids.shape) == (4, 5)
     assert out.draft_token_ids.dtype == torch.int32
-    assert tuple(out.draft_token_ids.shape) == (1, 5)
-    assert out.draft_token_ids[0].tolist() == [21, 22, 23, 24, 25]
+    assert out.draft_token_ids[0].tolist() == [201, 202, 203, 204, 205]
+    assert out.num_valid.tolist() == [5, 0, 0, 0]
     assert out.draft_scores is None
 
 
-@needs_num_valid
-def test_propose_without_a_session_proposes_nothing():
-    """A declined row says so with num_valid, not with its ids.
-
-    The contract's ids are always [rows, K] and every column has to be a real
-    in-vocabulary id, so the shape cannot carry "nothing this step"; a count of
-    0 is what makes the runner record nothing, and the next verify then sends
-    no drafts for that row.
-    """
-    m = _model([], active=False)
-    out = m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
-    assert tuple(out.draft_token_ids.shape) == (1, 5)
-    assert out.num_valid.tolist() == [0]
+def test_a_batched_proposal_declines_every_row_and_ends_the_session(model):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    committed = torch.zeros((2, 6), dtype=torch.int32)
+    positions = torch.tensor([[4, 5, 6, -1, -1, -1], [9, -1, -1, -1, -1, -1]], dtype=torch.int32)
+    out = model.propose_draft_tokens(5, committed, positions, torch.tensor([3, 1], dtype=torch.int32))
+    assert out.num_valid.tolist() == [0, 0]
+    assert not model._spec_active
+    assert model._spec_decoder.replays == 2
 
 
-def test_the_runners_accepted_count_drives_the_commit():
-    """The model must commit what the RUNNER accepted, not its own walk: the
-    count and the anchor both come from the accept walk just performed."""
-    m = _model(
-        [
-            ([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36]),
-            ([41, 42, 43, 44, 45], [51, 52, 53, 54, 55, 56]),
-        ]
-    )
-    committed = torch.tensor([[21, 22, 23, 99, 0, 0]], dtype=torch.int32)
-    m.propose_draft_tokens(5, committed, None, _counts(3))
-    assert m._spec_decoder.commits == [(3, 23)]  # 3 rows, anchor = 3rd token
+# -- 3.3 verify -------------------------------------------------------------------
 
 
-# ── verify ──────────────────────────────────────────────────────────────────
-
-
-def _verify(m, block, valid=None):
-    return m.decode_forward(
-        tokens=torch.tensor([block], dtype=torch.int32),
-        start_pos=torch.tensor([list(range(len(block)))], dtype=torch.int32),
-        spec_mode="argmax_ids",
-        num_valid_drafts=torch.tensor([valid if valid is not None else len(block) - 1], dtype=torch.int32),
-        accepted_counts=_counts(1),
-    )
-
-
-def test_verify_returns_the_posterior_for_the_block_it_was_sent():
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
-    out = _verify(m, [11, 21, 22, 23, 24, 25])
+def test_verify_answers_from_the_retained_posterior_without_the_device(model):
+    _start_solo(model)
+    replays = model._spec_decoder.replays
+    out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     assert out.spec_mode == "argmax_ids"
     assert out.argmax_ids.dtype == torch.int32
-    assert tuple(out.argmax_ids.shape) == (1, 6)
-    assert out.argmax_ids[0].tolist() == [31, 32, 33, 34, 35, 36]
-    assert out.hidden is None  # on-device handoff
+    assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
+    assert out.hidden is None
+    assert model._spec_decoder.replays == replays
+    assert _names(model, "decode") == []
+    assert model._dflash_retained.consumed is True
 
 
-def test_verify_refuses_a_block_carrying_drafts_we_did_not_propose(expect_error):
-    """Answering would report a device posterior for tokens the device never
-    evaluated -- silently wrong tokens, so it raises."""
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
+def test_verify_tolerates_a_block_truncated_to_num_valid_drafts(model):
+    _start_solo(model)
+    out = _verify(model, [[150, 201, 202, -1, -1, -1]], [list(range(3, 9))], [2], keys=[10])
+    assert out.argmax_ids[0].tolist()[:3] == [250, 251, 252]
+
+
+def test_verify_refuses_draft_ids_this_model_did_not_propose(model, expect_error):
+    _start_solo(model)
     with expect_error(ValueError, "did not propose"):
-        _verify(m, [11, 21, 77, 23, 24, 25])
+        _verify(model, [[150, 201, 777, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
 
 
-def test_verify_tolerates_a_row_truncated_to_num_valid_drafts():
-    """Grammar truncation is legitimate: fewer real drafts, same answer."""
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
-    out = _verify(m, [11, 21, 22, -1, -1, -1], valid=2)
-    assert out.argmax_ids[0].tolist()[:3] == [31, 32, 33]
+def test_verify_refuses_a_block_that_does_not_continue_the_proposal(model, expect_error):
+    _start_solo(model)
+    with expect_error(RuntimeError, "does not continue"):
+        _verify(model, [[151, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
 
 
-def test_a_block_carrying_drafts_with_no_proposal_behind_it_raises(expect_error):
-    """The runner sent drafts, but this model holds no posterior for them, so
-    the two have diverged. Answering would invent a verify result."""
-    m = _model([])
-    with expect_error(RuntimeError, "holds no device"):
-        _verify(m, [11, 21, 22, 23, 24, 25])
+def test_verify_with_drafts_and_no_retained_proposal_raises(model, expect_error):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    with expect_error(RuntimeError, "no proposal is retained"):
+        _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
 
 
-def test_a_non_speculative_step_is_not_a_verify():
-    """Without spec_mode the runner is not asking for verification, so the
-    adapter must not answer with a VerifyOutput."""
-    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
-
-    m = _model([])
-    called = {}
-    orig = Gemma4ForCausalLM.decode_forward
-    Gemma4ForCausalLM.decode_forward = lambda self, *a, **k: called.setdefault("plain", True)
-    try:
-        m.decode_forward(tokens=torch.tensor([[11]], dtype=torch.int32))
-    finally:
-        Gemma4ForCausalLM.decode_forward = orig
-    assert called == {"plain": True}
+def test_verify_with_drafts_for_a_row_without_a_session_raises(model, expect_error):
+    with expect_error(RuntimeError, "owns no drafter session"):
+        _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
 
 
-# ── row dimension: the contract is [rows, ...], padding rows included ───────
-
-
-def test_propose_returns_one_row_per_verified_row():
-    """The runner checks ``draft_token_ids.shape == (rows, K)`` where rows is
-    the VERIFIED row count, padding included -- it drops padding rows only
-    after its accept walk. B=1 fills row 0; the shape follows the block."""
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    committed = torch.zeros((4, 6), dtype=torch.int32)  # wire padded to 4 rows
-    committed[0, 0] = 11
-    out = m.propose_draft_tokens(5, committed, _positions(4, live=1), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
-    assert tuple(out.draft_token_ids.shape) == (4, 5)
-    assert out.draft_token_ids[0].tolist() == [21, 22, 23, 24, 25]
-    assert int(out.draft_token_ids[1:].sum()) == 0  # padding rows carry no draft
-
-
-def test_verify_returns_one_row_per_block_row():
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+def test_verify_for_a_padded_solo_block_answers_at_the_live_row(model):
+    _prefill(model, prompt_len=2, key=10)
+    _ordinary(model, [3, 0, 0, 0], [2, -1, -1, -1], [10, 0, 0, 0])
     committed = torch.zeros((4, 6), dtype=torch.int32)
-    committed[0, 0] = 11
-    m.propose_draft_tokens(5, committed, _positions(4, live=1), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
-    block = torch.zeros((4, 6), dtype=torch.int32)
-    block[0] = torch.tensor([11, 21, 22, 23, 24, 25], dtype=torch.int32)
-    out = m.decode_forward(
-        tokens=block,
-        # One live row and three of the runner's padding rows: the block's row
-        # dimension is the wire bucket, not the number of requests.
-        start_pos=_positions(4, live=1),
-        spec_mode="argmax_ids",
-        num_valid_drafts=torch.tensor([5, 0, 0, 0], dtype=torch.int32),
-        accepted_counts=torch.tensor([1, 1, 1, 1], dtype=torch.int32),
-    )
+    committed[0, 0] = 150
+    positions = torch.full((4, 6), -1, dtype=torch.int32)
+    positions[0] = torch.arange(3, 9)
+    model.propose_draft_tokens(5, committed, positions, torch.ones(4, dtype=torch.int32))
+    blocks = torch.zeros((4, 6), dtype=torch.int32)
+    blocks[0] = torch.tensor([150, 201, 202, 203, 204, 205])
+    out = _verify(model, blocks.tolist(), positions.tolist(), [5, 0, 0, 0], keys=[10, 0, 0, 0])
     assert tuple(out.argmax_ids.shape) == (4, 6)
-    assert out.argmax_ids[0].tolist() == [31, 32, 33, 34, 35, 36]
+    assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]
+    assert bool(out.argmax_ids[1:].eq(-1).all())
 
 
-def test_propose_selects_the_width_for_the_new_position():
-    """The block loop calls select_width every iteration because the position
-    moves; the contract rail must too, or a session stays on the width its
-    PROMPT selected and eventually replays a trace whose mask and page table
-    stop short of the live top."""
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    m._spec_width_set = True
-    seen = []
-    m._spec_decoder.select_width = lambda pos: (seen.append(pos), 4096)[1]
-    m._spec_decoder.start = 777
-    m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
-    assert seen == [777]
-
-
-# ── adaptive on the contract rail: solo speculates, batched does not ────────
-
-
-@needs_num_valid
-def test_a_batched_step_proposes_nothing_and_drops_the_session():
-    """The fused verify packs its candidate positions into ONE batch row, so it
-    cannot speculate for several requests. Declining every row is how this rail
-    gives up speculation for the step, with no scheduler reservation involved
-    -- and the session goes too, because its taps belong to one request's
-    prompt."""
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    released = {}
-    m._spec_release_decoder = lambda *a, **k: released.setdefault("yes", True)
-    committed = torch.zeros((4, 6), dtype=torch.int32)
-    out = m.propose_draft_tokens(5, committed, _positions(4, live=3), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
-    assert tuple(out.draft_token_ids.shape) == (4, 5)
-    assert out.num_valid.tolist() == [0, 0, 0, 0]  # every row declined
-    assert released == {"yes": True}
-    assert m._spec_decoder.replays == 0  # nothing drafted
-
-
-def test_a_padded_solo_step_still_speculates():
-    """The runner pads a decode batch to a wire bucket; counting rows instead
-    of live requests would hand the drafter's own request a plain decode and
-    give up speculation entirely."""
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    committed = torch.zeros((8, 6), dtype=torch.int32)
-    committed[0, 0] = 11
-    out = m.propose_draft_tokens(5, committed, _positions(8, live=1), torch.tensor([1] * 8, dtype=torch.int32))
-    assert tuple(out.draft_token_ids.shape) == (8, 5)
-    assert out.draft_token_ids[0].tolist() == [21, 22, 23, 24, 25]
-    assert m._spec_decoder.replays == 1
-
-
-def test_live_row_counting_uses_the_padding_sentinel():
-    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM as C
-
-    assert C._contract_live_rows(_positions(8, live=1), 8) == 1
-    assert C._contract_live_rows(_positions(8, live=5), 8) == 5
-    assert C._contract_live_rows(_positions(4, live=4), 4) == 4
-    # unknown positions: assume batched rather than speculate wrongly
-    assert C._contract_live_rows(None, 4) == 4
-
-
-# ── batched steps: the block is not the batch ───────────────────────────────
-
-
-def _stub_plain_decode(monkeypatch, seen):
-    """Stand in for the baseline decode, recording what it was handed.
-
-    The real one reads its batch as ``tokens.reshape(-1).shape[0]`` and refuses
-    a batch wider than the token feedback width, so what this records IS the
-    thing that broke on device: a 32-row contract block arriving as 192 rows.
-    """
-    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
-
-    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
-        tokens = kwargs.get("tokens", args[0] if args else None)
-        pos = kwargs.get("start_pos", args[1] if len(args) > 1 else None)
-        seen["tokens"] = tokens
-        seen["start_pos"] = pos
-        seen["batch"] = int(tokens.reshape(-1).shape[0])
-        return "tt_out"
-
-    def read_decode_output(self, tt_out, async_read=False, *_, **__):
-        return ["host_tensors_per_dp_group"]
-
-    def process_decode_output_host(self, host, is_tokens=False):
-        # Logits, as a launch that samples on host produces them: [B, S, vocab]
-        # concatenated across data-parallel ranks, argmax row r -> 500+r.
-        b = seen["batch"]
-        logits = torch.full((b, 1, 600), -1.0)
-        for r in range(b):
-            logits[r, 0, 500 + r] = 1.0
-        return logits, None
-
-    monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", decode_forward)
-    monkeypatch.setattr(Gemma4ForCausalLM, "read_decode_output", read_decode_output)
-    monkeypatch.setattr(Gemma4ForCausalLM, "process_decode_output_host", process_decode_output_host)
-
-
-def test_a_batched_step_decodes_the_committed_column_not_the_whole_block(monkeypatch):
-    seen = {}
-    _stub_plain_decode(monkeypatch, seen)
-    m = _model([], active=False)
-    rows = 32
-    block = torch.arange(rows * 6, dtype=torch.int32).reshape(rows, 6)
-    out = m.decode_forward(
-        tokens=block,
-        start_pos=_positions(rows, live=rows),
-        spec_mode="argmax_ids",
-        num_valid_drafts=torch.zeros(rows, dtype=torch.int32),
-        accepted_counts=torch.ones(rows, dtype=torch.int32),
+def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model):
+    """A peer joined after the proposal. The drafted row is answered from the
+    device's own evaluation of its drafts; the peer takes the plain decode,
+    which runs with the drafted row at position -1; speculation ends."""
+    _start_solo(model)
+    out = _verify(
+        model,
+        [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
+        [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
+        [5, 0],
+        keys=[10, 20],
+        result=DeviceResult(_tensor([0, 600])),
     )
-    # One row per request, NOT one per candidate column.
-    assert seen["batch"] == rows
-    assert seen["tokens"].reshape(-1).tolist() == block[:, 0].tolist()
-    assert seen["start_pos"].reshape(-1).tolist() == [100] * rows
-    # Column 0 carries each row's argmax; the draft columns stay unanswered.
-    assert tuple(out.argmax_ids.shape) == (rows, 6)
-    assert out.argmax_ids[:, 0].tolist() == list(range(500, 500 + rows))
-
-
-def test_a_batched_step_keeps_the_padding_sentinel_on_padded_rows(monkeypatch):
-    seen = {}
-    _stub_plain_decode(monkeypatch, seen)
-    m = _model([], active=False)
-    block = torch.arange(4 * 6, dtype=torch.int32).reshape(4, 6)
-    m.decode_forward(
-        tokens=block,
-        start_pos=_positions(4, live=2),
-        spec_mode="argmax_ids",
-        num_valid_drafts=torch.zeros(4, dtype=torch.int32),
-        accepted_counts=torch.ones(4, dtype=torch.int32),
+    assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]
+    assert int(out.argmax_ids[1, 0]) == 600
+    assert _names(model, "decode") == [("decode", [150, 40], [-1, 9])]
+    assert not model._spec_active and model._dflash_retained is None
+    assert model._slots_prefilled_since_decode == {0}
+    proposal = _propose(
+        model,
+        [[201, 202, 251, -1, -1, -1], [600, -1, -1, -1, -1, -1]],
+        [[4, 5, 6, -1, -1, -1], [10, -1, -1, -1, -1, -1]],
+        counts=[3, 1],
     )
-    # The baseline decode gets exactly what it gets on any other padded step.
-    assert seen["start_pos"].reshape(-1).tolist() == [100, 100, -1, -1]
+    assert proposal.num_valid.tolist() == [0, 0]
 
 
-def test_a_straddle_step_reports_the_posterior_for_the_drafts_it_proposed(monkeypatch):
-    """A peer joined between our proposal and its verify.
-
-    The device has already evaluated THOSE drafts, so the kept posterior is the
-    honest answer for row 0. Answering column 0 alone would let the walk accept
-    draft 0 -- it may well be right -- and then read its bonus out of a column
-    nothing answered.
-    """
-    seen = {}
-    _stub_plain_decode(monkeypatch, seen)
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    committed = torch.zeros((1, 6), dtype=torch.int32)
-    committed[0, 0] = 11
-    m.propose_draft_tokens(5, committed, _positions(1, live=1), _counts(1))
-    block = torch.zeros((2, 6), dtype=torch.int32)
-    block[0] = torch.tensor([11, 21, 22, 23, 24, 25], dtype=torch.int32)
-    out = m.decode_forward(
-        tokens=block,
-        start_pos=_positions(2, live=2),
-        spec_mode="argmax_ids",
-        num_valid_drafts=torch.tensor([5, 0], dtype=torch.int32),
-        accepted_counts=torch.tensor([1, 1], dtype=torch.int32),
+def test_straddle_verify_converts_host_logits_at_the_steps_row_count(model):
+    _start_solo(model)
+    out = _verify(
+        model,
+        [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
+        [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
+        [5, 0],
+        keys=[10, 20],
+        result=DeviceResult(_logits(2, 500)),
+        sampling=False,
     )
-    assert out.argmax_ids[0].tolist() == [31, 32, 33, 34, 35, 36]
     assert int(out.argmax_ids[1, 0]) == 501
-    # The next proposal is the batched one that drops the session, so nothing
-    # here may leave a posterior behind for it to answer with.
-    assert m._ct_posterior is None and m._ct_drafts is None
+    assert model.model[0].convert_calls == [(2, False)]
 
 
-def test_a_straddle_step_ignores_a_posterior_for_other_drafts(monkeypatch):
-    seen = {}
-    _stub_plain_decode(monkeypatch, seen)
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    committed = torch.zeros((1, 6), dtype=torch.int32)
-    committed[0, 0] = 11
-    m.propose_draft_tokens(5, committed, _positions(1, live=1), _counts(1))
-    block = torch.zeros((2, 6), dtype=torch.int32)
-    block[0] = torch.tensor([11, 99, 98, 97, 96, 95], dtype=torch.int32)  # not ours
-    out = m.decode_forward(
-        tokens=block,
-        start_pos=_positions(2, live=2),
-        spec_mode="argmax_ids",
-        num_valid_drafts=torch.tensor([5, 0], dtype=torch.int32),
-        accepted_counts=torch.tensor([1, 1], dtype=torch.int32),
+def test_batched_draftless_verify_decodes_column_zero_only(model):
+    rows = 3
+    blocks = torch.arange(rows * 6, dtype=torch.int32).reshape(rows, 6)
+    positions = torch.tensor([[100 + 6 * r + c for c in range(6)] for r in range(rows)], dtype=torch.int32)
+    out = _verify(
+        model,
+        blocks.tolist(),
+        positions.tolist(),
+        [0] * rows,
+        keys=[10, 20, 30],
+        result=DeviceResult(_tensor([7, 8, 9])),
     )
-    # Column 0 from the plain decode, and no posterior for tokens the device
-    # never evaluated.
-    assert int(out.argmax_ids[0, 0]) == 500
-    assert out.argmax_ids[0, 1:].tolist() != [32, 33, 34, 35, 36]
+    assert _names(model, "decode") == [("decode", [0, 6, 12], [100, 106, 112])]
+    assert out.argmax_ids[:, 0].tolist() == [7, 8, 9]
+    assert bool(out.argmax_ids[:, 1:].eq(-1).all())
 
 
-def test_column_zero_narrowing_leaves_an_already_narrow_step_alone():
-    args, kwargs = CT._contract_col0((), {"tokens": torch.tensor([7, 8]), "start_pos": torch.tensor([1, 2])}, 2)
-    assert kwargs["tokens"].tolist() == [7, 8]
-    assert kwargs["start_pos"].tolist() == [1, 2]
-
-
-@needs_num_valid
-def test_a_solo_proposal_declines_every_other_row():
-    """The block's rows are the wire bucket, and only row 0 has a drafter.
-
-    Without the per-row count the runner would record row 0's ids for the
-    padding rows' requests too, and the next verify would be sent drafts this
-    drafter cannot speak for.
-    """
-    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
-    committed = torch.zeros((4, 6), dtype=torch.int32)
-    committed[0, 0] = 11
-    out = m.propose_draft_tokens(5, committed, _positions(4, live=1), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
-    assert out.num_valid.tolist() == [5, 0, 0, 0]
-    assert out.draft_token_ids[0].tolist() == [21, 22, 23, 24, 25]
-
-
-def test_the_rail_declares_the_narrow_decode_it_serves():
-    """A batched step IS the plain decode's shape, so the runner may keep it
-    narrow rather than widening every host tensor to 1+K."""
-    from types import SimpleNamespace
-
-    from vllm_tt_plugin.spec_decode import SpecPlan
-
-    spec_cfg = SimpleNamespace(
-        method="custom_class",
-        model="vllm_tt_plugin.model_owned_drafter",
-        num_speculative_tokens=5,
+def test_padded_rows_keep_the_sentinel_in_the_plain_decode(model):
+    blocks = torch.zeros((4, 6), dtype=torch.int32)
+    positions = torch.full((4, 6), -1, dtype=torch.int32)
+    positions[0] = torch.arange(100, 106)
+    positions[1] = torch.arange(200, 206)
+    _verify(
+        model,
+        blocks.tolist(),
+        positions.tolist(),
+        [0, 0, 0, 0],
+        keys=[10, 20, 0, 0],
+        result=DeviceResult(_tensor([1, 2, 0, 0])),
     )
-    plan = CT.spec_plan(SimpleNamespace(speculative_config=spec_cfg), 32, 5)
-    assert isinstance(plan, SpecPlan)
-    assert plan.supports_narrow_decode is True
+    assert _names(model, "decode")[0][2] == [100, 200, -1, -1]
+
+
+def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its_first_id(model):
+    """The scheduler dropped the drafts (it does near max_model_len). The
+    retained posterior's first id is still the target's choice after the
+    anchor, and the next propose commits one token."""
+    _start_solo(model)
+    out = _ordinary(model, [150], [3], [10])
+    assert out.tolist() == [250]
+    assert model._dflash_retained.consumed
+    proposal = _propose(model, [[250, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [5]
+    assert _names(model, "commit")[-1] == ("commit", 1, 250)
+
+
+def test_a_peer_joining_on_an_ordinary_step_ends_speculation_for_good(model):
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    out = _ordinary(model, [251, 40], [6, 9], [10, 20], result="device")
+    assert out == "device" and not model._spec_active
+    _ordinary(model, [7], [7], [10], result="device")
+    proposal = _propose(model, [[8, -1, -1, -1, -1, -1]], [[8, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+
+
+# -- identity and release --------------------------------------------------------
+
+
+def test_release_of_the_owner_clears_the_retained_proposal(model):
+    _start_solo(model)
+    model.release_request(0)
+    assert model._dflash_retained is None and not model._spec_active
+    assert model._dflash_live_owner is None and model._spec_owner_slot is None
+
+
+def test_release_of_another_slot_keeps_the_session(model):
+    _start_solo(model)
+    model.release_request(3)
+    assert model._spec_active and model._dflash_retained is not None
+
+
+def test_release_of_the_pending_owner_frees_its_taps(model):
+    _prefill(model, prompt_len=2, key=10, slot=2)
+    taps = list(model._spec_pending[0])
+    model.release_request(1)
+    assert model._spec_pending is not None
+    model.release_request(2)
+    assert model._spec_pending is None and all(tap.releases == 1 for tap in taps)
+
+
+def test_a_reused_slot_does_not_match_a_stale_owner(model):
+    _prefill(model, prompt_len=2, key=10)
+    model.release_request(0)  # the owner finished before decoding
+    _prefill(model, prompt_len=2, key=20, rows=2)  # slots 0 and 1, never speculable
+    out = _ordinary(model, [3], [2], [20], result="device")
+    assert out == "device" and _names(model, "bootstrap") == []
+
+
+def test_slot_moves_follow_the_owner(model):
+    _start_solo(model)
+    model.note_state_slots_moved({0: 3, 3: 0})
+    assert model._dflash_live_owner[0] == 3 and model._spec_owner_slot == 3
+    model.release_request(0)
+    assert model._spec_active
+    model.release_request(3)
+    assert not model._spec_active
+
+
+def test_release_persistent_capture_clears_the_rail_and_reaches_the_base(model):
+    _start_solo(model)
+    model.release_persistent_capture()
+    assert model._dflash_retained is None and model._spec_pending is None
+    assert ("release_decoder", True) in model.events
+    assert model.base_releases == [1]
+
+
+# -- 3.6 scheduler-chunked prefill ------------------------------------------------
+
+
+def test_chunked_prefill_accumulates_taps_across_scheduler_chunks(adapter, monkeypatch):
+    model = build_model(adapter, monkeypatch, widths=(4096,))
+    model.model_args[0].max_seq_len = 8192
+    _prefill(model, prompt_len=1024, key=10)
+    _prefill(model, prompt_len=2048, key=10, start=1024)
+    _prefill(model, prompt_len=2100, key=10, start=2048)
+    taps, n = model._spec_pending
+    assert n == 2100
+    assert [tap.tag for tap in taps] == [(1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)]
+    _ordinary(model, [3], [2100], [10])
+    assert _names(model, "ingest")[0][1] == 2100
+
+
+def test_chunk_groups_below_the_context_window_are_freed(model):
+    model._spec_decoder.cap = 1024
+    _prefill(model, prompt_len=1024, key=10)
+    first = list(model._spec_pending[0])
+    _prefill(model, prompt_len=2048, key=10, start=1024)
+    _prefill(model, prompt_len=2100, key=10, start=2048)
+    taps, _ = model._spec_pending
+    assert all(tap.releases == 1 for tap in first)
+    assert [tap.tag for tap in taps] == [(2, 0), (2, 1), (3, 0), (3, 1)]
+
+
+def test_a_solo_prefill_of_another_request_replaces_the_pending_taps(model):
+    _prefill(model, prompt_len=1024, key=10, slot=0)
+    first = list(model._spec_pending[0])
+    _prefill(model, prompt_len=64, key=20, slot=1)
+    assert all(tap.releases == 1 for tap in first)
+    assert model._spec_pending[1] == 64 and model._dflash_pending_owner[0] == 1
+    # The first request's next chunk starts over from its own rows.
+    _prefill(model, prompt_len=2048, key=10, slot=0, start=1024)
+    assert model._dflash_pending_owner[0] == 0
+    assert [tap.tag for tap in model._spec_pending[0]] == [(3, 0), (3, 1)]
+
+
+def test_an_unaligned_chunk_start_stores_nothing(model):
+    _prefill(model, prompt_len=1000, key=10)
+    _prefill(model, prompt_len=2000, key=10, start=1000)  # 1000 is not a multiple of 128
+    assert model._spec_pending is None
+
+
+def test_a_prompt_over_the_spec_ceiling_stores_nothing(model, monkeypatch):
+    monkeypatch.setenv("GEMMA4_DFLASH_MAX_SPEC_ISL", "100")
+    _prefill(model, prompt_len=200, key=10)
+    assert model._spec_pending is None and model.model[0].tap_layers is None
+
+
+def test_warmup_prefill_leaves_the_pending_taps_alone(model):
+    _prefill(model, prompt_len=2, key=10)
+    model.prefill_forward(
+        tokens=torch.zeros((1, 128), dtype=torch.int32),
+        prompt_lens=[128],
+        page_table=_table([0]),
+        kv_cache=model.kv_cache,
+        warmup_prefill=True,
+    )
+    assert model._spec_pending is not None
+
+
+def test_every_prefill_on_this_rail_is_eager(model):
+    _prefill(model, prompt_len=2, key=10)
+    _prefill(model, prompt_len=2, key=20, rows=2)
+    assert all(event[3] is False for event in _names(model, "prefill"))
+
+
+def test_a_solo_prefill_keeps_a_live_session_for_its_straddle_verify(model):
+    _start_solo(model)
+    _prefill(model, prompt_len=2, key=20, slot=1)
+    assert model._spec_active and model._dflash_retained is not None
+    out = _verify(
+        model,
+        [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
+        [list(range(3, 9)), [2, 3, 4, 5, 6, 7]],
+        [5, 0],
+        keys=[10, 20],
+        result=DeviceResult(_tensor([0, 600])),
+    )
+    assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]
+    assert model._spec_pending is None and not model._spec_active
+
+
+# -- 3.7 block-table hygiene ---------------------------------------------------------
+
+
+def test_prefill_zeroes_block_table_columns_past_the_prompt(model):
+    stale = _tensor([[10, 11, 99, 98]])
+    model.prefill_forward(
+        tokens=torch.full((1, 70), 7, dtype=torch.int32),
+        prompt_lens=[70],
+        empty_slots=[0],
+        page_table=stale,
+        kv_cache=model.kv_cache,
+        page_tables_per_layer=[stale, stale],
+        warmup_prefill=False,
+    )
+    page_table, per_layer = model.last_prefill_tables
+    assert page_table.tolist() == [[10, 11, 0, 0]]
+    assert [t.tolist() for t in per_layer] == [[[10, 11, 0, 0]], [[10, 11, 0, 0]]]
+    assert stale.tolist() == [[10, 11, 99, 98]]  # the runner's tensor is untouched
+
+
+def test_prefill_masks_per_row_and_leaves_ring_layers_alone(adapter, monkeypatch):
+    model = build_model(adapter, monkeypatch, ring=2048)
+    tables = _tensor([[10, 11, 99, 98], [20, 21, 22, 97]])
+    model.prefill_forward(
+        tokens=torch.full((2, 130), 7, dtype=torch.int32),
+        prompt_lens=[70, 130],
+        empty_slots=[0, 1],
+        page_table=tables,
+        kv_cache=model.kv_cache,
+        page_tables_per_layer=[tables, tables],
+        warmup_prefill=False,
+    )
+    page_table, per_layer = model.last_prefill_tables
+    assert page_table.tolist() == [[10, 11, 0, 0], [20, 21, 22, 0]]
+    assert per_layer[0] is tables  # layer 0 is the bounded sliding layer
+    assert per_layer[1].tolist() == [[10, 11, 0, 0], [20, 21, 22, 0]]
+
+
+# -- helpers --------------------------------------------------------------------------
+
+
+def test_live_row_detection_uses_the_padding_sentinel(adapter):
+    cls = adapter.Gemma4DFlashContractForCausalLM
+    positions = torch.full((4, 6), -1, dtype=torch.int32)
+    positions[1] = torch.arange(6)
+    assert cls._dflash_live_rows(positions, 4) == [1]
+    assert cls._dflash_live_rows(torch.tensor([5, -1, 7]), 3) == [0, 2]
+    assert cls._dflash_live_rows(None, 2) == [0, 1]
+
+
+def test_column_zero_narrowing_shapes_match_the_plain_decode(adapter):
+    cls = adapter.Gemma4DFlashContractForCausalLM
+    block = torch.arange(12, dtype=torch.int32).reshape(2, 6)
+    positions = torch.tensor([[3, 4, 5, 6, 7, 8], [9, 10, 11, 12, 13, 14]], dtype=torch.int32)
+    args, kwargs = cls._dflash_column_zero((), {"tokens": block, "start_pos": positions}, 2, exclude_row=1)
+    assert kwargs["tokens"].tolist() == [[0], [6]]
+    assert kwargs["start_pos"].tolist() == [3, -1]
+    args, kwargs = cls._dflash_column_zero(
+        (), {"tokens": torch.tensor([[7], [8]]), "start_pos": torch.tensor([1, 2])}, 2
+    )
+    assert kwargs["tokens"].tolist() == [[7], [8]] and kwargs["start_pos"].tolist() == [1, 2]
+
+
+def test_ring_advice_names_the_setting_and_the_resolved_numbers(adapter, monkeypatch):
+    model = build_model(adapter, monkeypatch, ring=1024)
+    messages = []
+    monkeypatch.setattr(adapter.logger, "warning", lambda message, *a, **k: messages.append(message))
+    model._dflash_ring_advice()
+    assert len(messages) == 1
+    assert "GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16" in messages[0]
+    assert "ring 2048" in messages[0] and "P_v=6" in messages[0]
+    model = build_model(adapter, monkeypatch, ring=2048)
+    model._dflash_ring_advice()
+    assert len(messages) == 1
+
+
+def test_retained_proposal_is_a_plain_record(adapter):
+    proposal = adapter.RetainedProposal(anchor_token=1, anchor_position=2, drafts=[3], posterior=[4, 5])
+    assert proposal.consumed is False
+    assert (proposal.anchor_token, proposal.anchor_position, proposal.drafts, proposal.posterior) == (1, 2, [3], [4, 5])
