@@ -297,6 +297,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
         }
 
+        // Gen2 (Quasar) config: a KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1
+        // config on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on Quasar; WH/BH keep Gen1.
+        ComputeHardwareConfig compute_hw = compute_cfg;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            ComputeGen2Config compute_cfg_gen2;
+            compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+            compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from Gen1
+            compute_hw = compute_cfg_gen2;
+        }
+
         const bool is_cliff_row_set = (&set == &cliffrow_set);
         spec.kernels.push_back(KernelSpec{
             .unique_id = id,
@@ -319,7 +329,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                     {"block_size_row", block_size_row},
                     {"third_dim", third_dim},
                 },
-            .hw_config = std::move(compute_cfg),
+            .hw_config = std::move(compute_hw),
         });
         spec.work_units.push_back(WorkUnitSpec{
             .name = work_unit_name,
