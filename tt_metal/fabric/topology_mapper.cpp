@@ -490,7 +490,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // If using an MGD, try and match with PGD to consume preferred pinnings from the PGD for better mapping
         if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
             auto pgd = ::tt::tt_fabric::try_find_and_load_physical_grouping_descriptor(
-                /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
+                cluster, /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
             if (pgd.has_value()) {
                 adjacency_map_physical_multi_mesh =
                     ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(

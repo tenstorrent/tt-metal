@@ -24,7 +24,6 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 
@@ -337,7 +336,7 @@ std::optional<PhysicalGroupingDescriptor> load_pgd_if_regular_file(const std::fi
 }
 
 std::vector<std::filesystem::path> build_physical_grouping_descriptor_search_paths(
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
+    const tt::Cluster& cluster, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
     const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
     const std::string cluster_name = cluster_name_env != nullptr ? cluster_name_env : "";
     const char* tt_metal_home_env = std::getenv("TT_METAL_HOME");
@@ -355,8 +354,6 @@ std::vector<std::filesystem::path> build_physical_grouping_descriptor_search_pat
     }
 
     std::string arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
-    auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = context.get_cluster();
     const tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
     const tt::ARCH arch = cluster.arch();
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
@@ -382,6 +379,7 @@ std::vector<std::filesystem::path> build_physical_grouping_descriptor_search_pat
 }  // namespace
 
 PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
+    const tt::Cluster& cluster,
     const std::optional<std::filesystem::path>& pgd_path,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
     if (pgd_path.has_value() && !pgd_path->empty()) {
@@ -401,7 +399,7 @@ PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
             "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: {}", explicit_path.string());
     }
 
-    const auto search_paths = build_physical_grouping_descriptor_search_paths(physical_system_descriptor);
+    const auto search_paths = build_physical_grouping_descriptor_search_paths(cluster, physical_system_descriptor);
     for (const auto& path : search_paths) {
         if (auto loaded = load_pgd_if_regular_file(path)) {
             return *loaded;
@@ -422,10 +420,11 @@ PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
 }
 
 std::optional<PhysicalGroupingDescriptor> try_find_and_load_physical_grouping_descriptor(
+    const tt::Cluster& cluster,
     const std::optional<std::filesystem::path>& pgd_path,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
     try {
-        return find_and_load_physical_grouping_descriptor(pgd_path, physical_system_descriptor);
+        return find_and_load_physical_grouping_descriptor(cluster, pgd_path, physical_system_descriptor);
     } catch (const std::exception& e) {
         log_debug(tt::LogFabric, "Physical Grouping Descriptor not loaded (soft-skip): {}", e.what());
         return std::nullopt;

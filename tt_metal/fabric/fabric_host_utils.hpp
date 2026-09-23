@@ -108,8 +108,10 @@ void serialize_asic_to_fabric_node_mapping_to_file(
  *
  * Throws if an explicit path/env is set but missing, or if no descriptor is found in the search paths.
  * When psd is provided, Blackhole Galaxy revision selects rev_ab vs rev_c PGD.
+ * cluster selects the arch/cluster-type default.
  */
 PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
+    const tt::Cluster& cluster,
     const std::optional<std::filesystem::path>& pgd_path = std::nullopt,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr);
 
@@ -120,6 +122,7 @@ PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
  * (ControlPlane / TopologyMapper soft-skip).
  */
 std::optional<PhysicalGroupingDescriptor> try_find_and_load_physical_grouping_descriptor(
+    const tt::Cluster& cluster,
     const std::optional<std::filesystem::path>& pgd_path = std::nullopt,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr);
 // Serialize the resolved inter-mesh port assignment to a YAML file (golden-comparable, debug-logged).
