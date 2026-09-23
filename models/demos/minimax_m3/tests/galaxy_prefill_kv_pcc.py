@@ -36,6 +36,11 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
                         iters=N            PREFILL_TPS_ITERS for this run                [default: env]
                         skip_pcc=0|1       PREFILL_SKIP_PCC for this run                 [default: env]
                         expected_tps=X perf_margin=F pcc_threshold=F                    [default: env]
+                        isl=N              run N tokens: the trace's REAL tokens tiled cyclically to N
+                                           (truncated if N < trace). Tiling keeps MoE routing / MSA block
+                                           selection realistic; zero-padding would collapse both. KV PCC
+                                           still checks the first min(N, trace) tokens (causal: the tail
+                                           cannot touch them).                       [default: trace length]
                         capacity=N         KV-cache capacity for this run (tokens; rounded up to a chunk
                                            multiple)                          [default: PREFILL_MAX_SEQ_LEN or fit]
                         label=<str>        tag for the log lines / summary
@@ -44,6 +49,12 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
                       capacity=; when unset each run FITS the cache to its trace (padded length), as a
                       standalone run would. [default: unset -> fit]
   PREFILL_RESULTS_JSONL  append one JSON line per run (perf + min PCC + status)         [default: unset]
+  PREFILL_ISL         default isl= for every run (single-run mode too)                   [default: trace length]
+  PREFILL_WARMUP_ITERS untimed whole-sequence passes before the timed iterations of each run. The JIT
+                      compiles per new sequence length, so iteration 0 is cold; drop it here      [default 0]
+  PREFILL_COMPILE     "0" -> skip runtime.compile()'s per-bucket warm-up sweep (one chunk prefill per chunk
+                      of capacity: 196 at 1M). It does not pre-empt the per-ISL JIT anyway; use
+                      PREFILL_WARMUP_ITERS instead                                                [default 1]
   The chunk size (PREFILL_CHUNK_SIZE) is FIXED for the process: it is baked into the MoE dispatch
   buffers at build time. Multi-run mode is therefore chunked-only (PREFILL_CHUNKED=0 is rejected); a
   one-shot run is just a trace whose padded length equals the chunk size. The cache capacity is NOT
@@ -208,6 +219,7 @@ class RunSpec:
     perf_margin: float = 0.05
     pcc_threshold: float | None = None  # None -> PREFILL_STANDALONE_CHUNKED_PCC (0.88)
     capacity: int | None = None  # KV-cache tokens for this run; None -> PREFILL_MAX_SEQ_LEN, else fit the trace
+    isl: int | None = None  # tokens to prefill (trace tiled cyclically / truncated); None -> the trace length
     label: str = ""
 
     @classmethod
@@ -222,6 +234,7 @@ class RunSpec:
             perf_margin=float(os.environ.get("PREFILL_PERF_MARGIN", "0.05")),
             pcc_threshold=float(thr) if thr is not None else None,
             capacity=int(cap) if (cap := os.environ.get("PREFILL_MAX_SEQ_LEN")) else None,
+            isl=int(isl) if (isl := os.environ.get("PREFILL_ISL")) else None,
         )
 
     @classmethod
@@ -255,6 +268,8 @@ class RunSpec:
                 spec.pcc_threshold = float(v)
             elif k == "capacity":
                 spec.capacity = int(v)
+            elif k == "isl":
+                spec.isl = int(v)
             elif k == "label":
                 spec.label = v
             else:
@@ -263,11 +278,22 @@ class RunSpec:
 
     @property
     def name(self) -> str:
-        return self.label or os.path.basename(os.path.normpath(self.trace_dir))
+        base = self.label or os.path.basename(os.path.normpath(self.trace_dir))
+        return base if self.label or self.isl is None else f"{base}@{self.isl}"
 
 
 def load_trace_tokens(trace_dir: str) -> list:
     return list(json.load(open(Path(trace_dir) / "metadata.json"))["token_ids"])
+
+
+def tile_tokens(token_ids: list, isl: int) -> list:
+    """The trace's real tokens repeated cyclically to exactly ``isl`` tokens (truncated when isl < len).
+    Real text keeps the MoE router's expert distribution and the MSA top-k block selection realistic;
+    a run of identical pad tokens would route every token to the same experts (EP collapse) and pick
+    the same blocks, measuring a pathological load instead of long-context prefill."""
+    assert token_ids, "empty trace"
+    reps = math.ceil(isl / len(token_ids))
+    return (token_ids * reps)[:isl]
 
 
 def iter_run_specs(source: str, golden_root: str | None):
@@ -322,8 +348,11 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     from models.demos.minimax_m3.tt.attention import allocate_kv_caches
 
     chunk = runtime.config.chunk_size
-    token_ids = load_trace_tokens(spec.trace_dir)
-    n_tokens = len(token_ids)
+    trace_ids = load_trace_tokens(spec.trace_dir)
+    n_trace = len(trace_ids)
+    n_tokens = spec.isl or n_trace  # tokens actually prefilled (the "isl")
+    token_ids = tile_tokens(trace_ids, n_tokens) if n_tokens != n_trace else trace_ids
+    n_pcc = min(n_tokens, n_trace)  # golden covers the trace only; causality keeps the tiled tail off it
     n_chunks = max(1, math.ceil(n_tokens / chunk))
     total = n_chunks * chunk
     capacity = math.ceil((spec.capacity or total) / chunk) * chunk
@@ -332,14 +361,16 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         f"is {capacity} (capacity= / PREFILL_MAX_SEQ_LEN); drop it or raise it"
     )
     tps_iters = spec.tps_iters
+    warmup_iters = int(os.getenv("PREFILL_WARMUP_ITERS", "0"))
     print(
-        f"[prefill-pcc] === run '{spec.name}': golden={spec.trace_dir} n_tokens={n_tokens} "
-        f"chunk={chunk} n_chunks={n_chunks} total={total} capacity={capacity} tps_iters={tps_iters} "
-        f"skip_pcc={spec.skip_pcc}",
+        f"[prefill-pcc] === run '{spec.name}': golden={spec.trace_dir} isl={n_tokens} (trace {n_trace}"
+        f"{', TILED cyclically' if n_tokens > n_trace else (', truncated' if n_tokens < n_trace else '')}) "
+        f"chunk={chunk} n_chunks={n_chunks} total={total} capacity={capacity} "
+        f"warmup_iters={warmup_iters} tps_iters={tps_iters} skip_pcc={spec.skip_pcc}",
         flush=True,
     )
     recompile_s = 0.0
-    if capacity != runtime.config.max_seq_len or not runtime.compiled:
+    if capacity != runtime.config.max_seq_len:
         t0 = time.perf_counter()
         print(
             f"[prefill-pcc] capacity {runtime.config.max_seq_len} -> {capacity}: re-allocating the KV cache, "
@@ -351,7 +382,8 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         state["kv_cache"] = allocate_kv_caches(
             mesh, num_layers=num_layers, max_seq_len=capacity, num_users=1, head_dim=hf_config.head_dim
         )
-        runtime.compile(state["kv_cache"])
+        if os.getenv("PREFILL_COMPILE", "1") != "0":
+            runtime.compile(state["kv_cache"])
         recompile_s = time.perf_counter() - t0
         print(f"[prefill-pcc] re-targeted at capacity {capacity} in {recompile_s:.1f} s", flush=True)
     kv_cache = state["kv_cache"]
@@ -391,6 +423,11 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         ttnn.synchronize_device(mesh)
         return time.perf_counter() - t0
 
+    for i in range(warmup_iters):  # untimed: absorbs the per-ISL JIT (see PREFILL_WARMUP_ITERS)
+        t0 = time.perf_counter()
+        run_whole()
+        print(f"[prefill-pcc] warmup {i}: whole {(time.perf_counter() - t0) * 1000:.1f} ms (not counted)", flush=True)
+
     whole_times, last_times = [], []
     for i in range(tps_iters):
         t0 = time.perf_counter()
@@ -422,6 +459,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         "label": spec.name,
         "trace": spec.trace_dir,
         "n_tokens": n_tokens,
+        "trace_tokens": n_trace,
         "chunk": chunk,
         "n_chunks": n_chunks,
         "capacity": capacity,
@@ -453,7 +491,9 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     if spec.skip_pcc:
         print("[prefill-pcc] skip_pcc -> skipping per-layer KV PCC", flush=True)
     else:
-        mins = check_kv_pcc(runtime, kv_cache, spec.trace_dir, n_tokens, num_layers, hf_config, spec.pcc_threshold)
+        if n_pcc != n_tokens:
+            print(f"[prefill-pcc] isl={n_tokens} != trace {n_trace}: KV PCC over the first {n_pcc} tokens", flush=True)
+        mins = check_kv_pcc(runtime, kv_cache, spec.trace_dir, n_pcc, num_layers, hf_config, spec.pcc_threshold)
         result["min_pcc"] = min(mins.values())
     return result
 
@@ -508,7 +548,7 @@ def main():
         if not golden_dir:
             print("ERROR: set PREFILL_TRACE_DIR to a golden trace dir (or PREFILL_RUNS for multi-run)", file=sys.stderr)
             return 1
-        n_tokens = len(load_trace_tokens(golden_dir))
+        n_tokens = int(os.environ.get("PREFILL_ISL") or len(load_trace_tokens(golden_dir)))
         n_chunks, chunk, capacity = plan(n_tokens, chunk_size, chunked)
         print(
             f"[prefill-pcc] golden={golden_dir} n_tokens={n_tokens} "
@@ -543,7 +583,8 @@ def main():
         chunk = chunk_size
         known_totals = []
         if golden_dir:
-            known_totals.append(plan(len(load_trace_tokens(golden_dir)), chunk, True)[2])
+            n0 = int(os.environ.get("PREFILL_ISL") or len(load_trace_tokens(golden_dir)))
+            known_totals.append(plan(n0, chunk, True)[2])
         if runs_source != "-" and not runs_source.startswith("fifo:"):
             batch_specs = []
             for line, item in iter_run_specs(runs_source, golden_root):
@@ -553,7 +594,7 @@ def main():
                     print(f"ERROR: PREFILL_RUNS line {line!r}: {item}", file=sys.stderr)
                     return 1
                 batch_specs.append(item)
-                known_totals.append(plan(len(load_trace_tokens(item.trace_dir)), chunk, True)[2])
+                known_totals.append(plan(item.isl or len(load_trace_tokens(item.trace_dir)), chunk, True)[2])
             if not batch_specs:
                 print(f"ERROR: no run specs in {runs_source}", file=sys.stderr)
                 return 1
@@ -673,8 +714,11 @@ def main():
             )
         }
 
-        print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32, capacity {capacity}) ...", flush=True)
-        runtime.compile(state["kv_cache"])
+        if os.getenv("PREFILL_COMPILE", "1") != "0":
+            print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32, capacity {capacity}) ...", flush=True)
+            runtime.compile(state["kv_cache"])
+        else:
+            print("[prefill-pcc] PREFILL_COMPILE=0 -> skipping the per-bucket warm-up sweep", flush=True)
 
         results_jsonl = os.environ.get("PREFILL_RESULTS_JSONL")
 
