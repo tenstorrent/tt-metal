@@ -11,7 +11,6 @@ All HF reference configs and layers are created from the real checkpoint.
 import json
 import os
 from functools import lru_cache
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -329,10 +328,11 @@ def resolve_assistant_model_path(*, allow_download=None):
 
 
 def configure_spec_decode_smoke_env():
-    """CI hook: real target + assistant for the dedicated spec-decode smoke pytest.
+    """CI hook for the dedicated 31B spec-decode pytest only.
 
-    Remaps the current config stub to that variant's hub id (not a hardcoded
-    31B path) and truncates to the first full-attention layer.
+    Points the config stub at real 31B weights and keeps at least one
+    full_attention layer (index 5, so GEMMA4_NUM_LAYERS=6). Callers must not
+    invoke this from the shared unit suite: it rewrites HF_MODEL.
     """
     if os.environ.get("GEMMA4_SPEC_DECODE_ENV_READY") == "1":
         return os.environ.get("GEMMA4_ASSISTANT_MODEL")
@@ -341,20 +341,10 @@ def configure_spec_decode_smoke_env():
         os.environ.setdefault("HF_HOME", "/mnt/MLPerf/huggingface")
         os.environ.setdefault("HF_HUB_CACHE", os.path.join(os.environ["HF_HOME"], "hub"))
         if uses_ci_config_only_checkpoint():
-            stub = os.path.abspath(_get_model_path())
-            basename = os.path.basename(stub.rstrip("/"))
-            cfg_path = os.path.join(stub, "config.json")
-            if os.path.isfile(cfg_path) and "GEMMA4_NUM_LAYERS" not in os.environ:
-                with open(cfg_path) as f:
-                    raw = json.load(f)
-                tc = raw.get("text_config", raw)
-                lts = tc.get("layer_types") or []
-                if lts:
-                    os.environ["GEMMA4_NUM_LAYERS"] = str(
-                        num_layers_for_full_attention_group(SimpleNamespace(layer_types=lts))
-                    )
-            os.environ["HF_MODEL"] = f"google/{basename}"
-            os.environ.setdefault("TT_CACHE_PATH", f"/mnt/MLPerf/huggingface/tt_cache/google--{basename}")
+            os.environ["HF_MODEL"] = "google/gemma-4-31B-it"
+        os.environ.setdefault("TT_CACHE_PATH", "/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it")
+        # Drafter's last layer is full_attention and cross-attends that KV.
+        # Truncating 31B below layer index 5 drops it (KeyError).
         os.environ.setdefault("GEMMA4_NUM_LAYERS", "6")
 
     path = resolve_assistant_model_path()

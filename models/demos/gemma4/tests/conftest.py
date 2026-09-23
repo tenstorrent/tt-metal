@@ -50,8 +50,9 @@ def pytest_sessionstart(session):
     if os.environ.get("CI") != "true":
         return
     args = getattr(session.config, "args", None) or []
+    # Positional args only. A `-k 'not test_spec_decode_'` deselect must not match.
     arg_str = " ".join(str(a) for a in args)
-    if "test_spec_decode" not in arg_str:
+    if "test_spec_decode.py" not in arg_str:
         return
     configure_spec_decode_smoke_env()
 
@@ -64,8 +65,9 @@ def _item_base_name(item):
 def pytest_runtest_setup(item):
     """Skip PR integration tests when CI uses config-only HF_MODEL (no weights/tokenizer)."""
     if _item_base_name(item) in _SPEC_DECODE_SMOKE_TESTS:
-        # Resolve assistant only. configure_spec_decode_smoke_env() rewrites
-        # HF_MODEL and is sessionstart-only (dedicated spec-decode pytest).
+        # Do not call configure_spec_decode_smoke_env() here: it rewrites HF_MODEL
+        # for every later test in the process. The dedicated smoke pytest sets
+        # that env in sessionstart; everyone else only resolves an existing dir.
         if os.environ.get("GEMMA4_SPEC_DECODE_ENV_READY") != "1":
             if not resolve_assistant_model_path(allow_download=False):
                 pytest.skip("assistant weights not available (set GEMMA4_ASSISTANT_MODEL locally)")

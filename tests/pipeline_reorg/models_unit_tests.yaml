@@ -594,9 +594,7 @@
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_ and not test_spec_decode_ and not test_verify_batchsize_invariance and not test_assistant_" \
       models/demos/gemma4/tests/unit/
-    # Spec-decode smokes: pytest resolves real target + assistant weights in CI
-    # (see configure_spec_decode_smoke_env in models/demos/gemma4/tests/conftest.py).
-    pytest --timeout 900 \
+    pytest --timeout 1200 \
       models/demos/gemma4/tests/unit/test_spec_decode.py::test_assistant_config_loads \
       models/demos/gemma4/tests/unit/test_spec_decode.py::test_spec_decode_matches_greedy \
       models/demos/gemma4/tests/unit/test_spec_decode.py::test_verify_batchsize_invariance
@@ -604,7 +602,7 @@
   model_family: Gemma
   skus:
     wh_llmbox:
-      timeout: 32
+      timeout: 40
       tier: 2
     bh_quietbox_2:
       timeout: 15

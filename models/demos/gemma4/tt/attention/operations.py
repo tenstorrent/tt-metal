@@ -581,15 +581,15 @@ def concat_heads(
         grid_x = _decode_concat_grid_x(batch, factor_x, grid_y)
         work, work_batch = tensor, batch
         if grid_x is None:
+            # Pad to a tile (32). 32 factors on an 8-wide grid; the transpose
+            # fallback does not (mesh-replicated activation, BH hang / bad grid).
             work_batch = int(ttnn.TILE_SIZE)
             grid_x = _decode_concat_grid_x(work_batch, min(8, physical_grid_x), grid_y)
             if grid_x is None:
-                transposed = ttnn.transpose(tensor, 1, 2)  # [1, heads, batch, head_dim]
-                out = ttnn.experimental.nlp_concat_heads(
-                    transposed, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG
+                raise RuntimeError(
+                    f"decode concat_heads: batch {batch} does not factor on "
+                    f"{physical_grid_x}x{grid_y}, and neither does {work_batch}"
                 )
-                transposed.deallocate(True)
-                return out
             work = ttnn.pad(tensor, [(0, 0), (0, work_batch - batch), (0, 0), (0, 0)], value=0.0)
         core_grid = ttnn.CoreRangeSet({num_to_corerange(work_batch, grid_x=grid_x, grid_y=grid_y)})
         shard_cfg = ttnn.create_sharded_memory_config(
