@@ -4,8 +4,8 @@
 
 #pragma once
 
-#define TTI_INSN(ENCODING)    __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING)))
-#define TT_INSN(ENCODING)     (::ckernel::instrn_buffer[0] = (ENCODING))
+#define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
+#define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 
 #define TT_OP_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \

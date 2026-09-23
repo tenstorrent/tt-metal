@@ -99,7 +99,8 @@ void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
     const std::shared_ptr<const multihost::DistributedContext>& context,
-    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table,
+    const tt::tt_fabric::ControlPlane& control_plane);
 
 SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const SocketPeerDescriptor& desc,
@@ -110,7 +111,8 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
     const std::shared_ptr<const multihost::DistributedContext>& context,
-    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table,
+    const tt::tt_fabric::ControlPlane& control_plane);
 
 // Map each connection's endpoint coords to fabric node ids.
 //
@@ -121,13 +123,16 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
 // begins at that rank's host slice.
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
+    const tt::tt_fabric::ControlPlane& control_plane,
     const std::shared_ptr<MeshDevice>& sender_device = nullptr,
     const std::shared_ptr<MeshDevice>& receiver_device = nullptr,
     const std::vector<uint32_t>& peer_sender_chip_ids = {},
     const std::vector<uint32_t>& peer_receiver_chip_ids = {});
 
 std::vector<multihost::Rank> get_ranks_for_mesh_id(
-    tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
+    const tt::tt_fabric::ControlPlane& control_plane,
+    tt_fabric::MeshId mesh_id,
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 template <typename OperationType, typename... Args>
 void execute_with_timeout(OperationType&& operation, Args&&... args) {
@@ -151,7 +156,8 @@ void execute_with_timeout(OperationType&& operation, Args&&... args) {
                 stderr,
                 "[EMULE] ignoring TT_EMULE_SOCKET_CONNECT_TIMEOUT_S=\"%s\": expected a positive finite "
                 "number of seconds; using %.0fs.\n",
-                v, static_cast<double>(kDefault));
+                v,
+                static_cast<double>(kDefault));
             return kDefault;
         }
         return parsed;

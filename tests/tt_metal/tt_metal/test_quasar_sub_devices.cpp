@@ -124,7 +124,7 @@ SyncWorkloads create_sync_workloads(
     const auto all_nodes = CoreRangeSet(CoreRange(waiter_node, waiter_node))
                                .merge(incrementer_nodes)
                                .merge(CoreRangeSet(CoreRange(syncer_node, syncer_node)));
-    auto semaphore = CreateGlobalSemaphore(mesh_device.get(), all_nodes, 0);
+    auto semaphore = CreateGlobalSemaphore(*mesh_device, all_nodes, 0);
 
     const experimental::KernelSpecName waiter_kernel{"quasar_sub_device_waiter"};
     experimental::ProgramSpec waiter_spec{

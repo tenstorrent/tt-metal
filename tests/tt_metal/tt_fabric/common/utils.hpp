@@ -84,9 +84,6 @@ void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 // Rank binding order is not checked here (verify visually vs MGD when adding tests).
 void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control_plane);
 
-// Writes an inline descriptor to a PID-qualified temporary file and returns its path.
-std::string write_temp_descriptor(const std::string& name, const std::string& text_proto);
-
 // Fabric config the active MGD (TT_MESH_GRAPH_DESC_PATH / custom fabric mesh graph desc) declares via its
 // device_topology dim_types: RING on both axes -> FABRIC_2D_TORUS_XY, RING on one -> TORUS_X/Y, else
 // FABRIC_2D. ControlPlaneFixture tests that can share a tt-run process (galaxy layout/corner checks and
