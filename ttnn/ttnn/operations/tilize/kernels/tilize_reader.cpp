@@ -21,6 +21,12 @@
 // Split reader (CT `split_reader`): this RISC-V produces only the EVEN walk
 // positions; the BRISC writer produces the odd ones into its own CB.
 //
+// Padded (CT `padded`, output_padded_shape / pad_value beyond the input): the walk is over
+// the PADDED tile grid; each tile-row's sticks come from the per-image stick map
+// (tilize_stick_reads.hpp PadMap) and everything outside the input is filled with the pad
+// value (PadFill: fill_l1_range stores for short ranges, NoC loopback copies from a
+// pre-filled source for long ones), all before the slot is pushed.
+//
 // Resident input (CT `input_resident`, sharded_resident regime): cb_input_sticks
 // is backed on this Tensix core's own input shard, which already holds the
 // tilize stick layout, so load_block is a publish of the shard's pages: no NoC
@@ -164,7 +170,12 @@ void kernel_main() {
     constexpr uint32_t read_noc_split = get_compile_time_arg_val(17);        // parked: 0, else other-NoC stick period
     constexpr bool eager_publish = get_compile_time_arg_val(18) != 0;        // parked: push landed slots early
     constexpr uint32_t bank_stride = get_compile_time_arg_val(19);  // parked: 0 off, 1 bank-stride, 2 bank-major
-    constexpr auto input_args = TensorAccessorArgs<20>();
+    constexpr bool padded = get_compile_time_arg_val(20) != 0;      // output padded shape > input: fill
+    constexpr uint32_t cb_pad_source = get_compile_time_arg_val(21);  // padded: reader-private fill source
+    constexpr uint32_t pad_source_bytes = get_compile_time_arg_val(22);
+    constexpr uint32_t pad_noc_min_bytes = get_compile_time_arg_val(23);  // shorter fills are CPU stores
+    constexpr uint32_t elem_bytes = get_compile_time_arg_val(24);         // input element size
+    constexpr auto input_args = TensorAccessorArgs<25>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
@@ -229,6 +240,22 @@ void kernel_main() {
     producer.prime(input_accessor, row_start * tile_h, stick_page_bytes);
 
     const uint32_t num_positions = walk.num_positions();
+    if constexpr (padded) {
+        // RT arg 10: the fill value packed per input dtype; 11..: the per-image stick map.
+        static_assert(!split_reader, "the split reader has no pad path");
+        static_assert(depth_in + 1 <= 15, "the fill's transaction id follows the slots' 1..depth_in");
+        const tilize_dataflow::PadMap<tile_h, tile_col_bytes> pad_map(11);
+        tilize_dataflow::PadFill<elem_bytes, pad_source_bytes, pad_noc_min_bytes, depth_in + 1> fill(
+            cb_pad_source, get_arg_val<uint32_t>(10));
+        for (uint32_t seq = 0; seq < num_positions; ++seq, walk.advance()) {
+            const uint32_t first_col = walk.first_col();
+            const uint32_t valid_width = walk.valid_width();
+            producer.issue_row_padded(
+                input_accessor, pad_map.source(walk.row(), first_col, valid_width), first_col, valid_width, fill);
+        }
+        producer.complete_all(fill);
+        return;
+    }
     for (uint32_t seq = 0; seq < num_positions; ++seq, walk.advance()) {
         if (!split_reader || (seq & 1) == 0) {
             producer.issue_row(input_accessor, walk.row(), walk.first_col(), walk.valid_width());

@@ -24,7 +24,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .tilize_program_descriptor import TILE_WIDTH, _tile_grid, create_program_descriptor
+from .tilize_program_descriptor import TILE_WIDTH, PadSpec, _tile_grid, create_program_descriptor
 
 
 def _dominant():
@@ -212,11 +212,16 @@ SUPPORTED = {
     "shard_api": ["none", "legacy_2d", "nd"],
     "out_scheme": ["interleaved", *_LEGACY_SCHEMES, "nd"],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
-    "rank": [2, 3, 4, 5, 6],
+    # Ranks 0 / 1 only reach the op with a padding argument (rule 5): the pad synthesizes the
+    # tile dims ([] -> [32, 32], [W] -> [32, round_up(W, 32)]).
+    "rank": [0, 1, 2, 3, 4, 5, 6],
     "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
-    "pad_mode": ["none"],
-    "pad_value": ["none"],
-    "alignment": ["tile_aligned"],
+    # Padding (Refinement 4): the output is allocated at the padded shape and returned as a
+    # zero-copy view at the input's logical shape; the stick reader walks the padded tile grid
+    # through the per-image stick map and fills everything the input does not cover.
+    "pad_mode": ["none", "auto", "explicit"],
+    "pad_value": ["none", "zero", "positive", "negative"],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"],
     # Tile geometry (Refinement 2): every output tile height on every placement (both CBs carry
     # TileDescriptor(tile_h, 32); the output is allocated through a TensorSpec carrying the tile),
     # and every input tile height of a Layout::TILE input, re-tiled in the same dispatch by the
@@ -251,7 +256,18 @@ def _row_split_wide_exclusions():
     return cells
 
 
-EXCLUSIONS = _row_split_wide_exclusions()
+# Padding x retile (a Layout::TILE input with a padding argument): the pad fill lives in the
+# stick reader; the retile face walk has no fill (it would have to clamp the walk to the input's
+# rows and columns and fill the rest after the walk lands). Refused until that lands.
+def _retile_pad_exclusions():
+    return [
+        {"pad_mode": mode, "in_tile_height": in_tile_h}
+        for mode in ("auto", "explicit")
+        for in_tile_h in LEGAL_TILE_HEIGHTS
+    ]
+
+
+EXCLUSIONS = _row_split_wide_exclusions() + _retile_pad_exclusions()
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +447,70 @@ def _check_well_formed(input_tensor, *, output_padded_shape, pad_value, tile):
             raise ValueError(
                 f"tilize: output_padded_shape {padded} last two dims must be multiples of ({tile_h}, {TILE_WIDTH})"
             )
+        _check_leading_pad_expressible(padded, expanded)
+
+
+def _check_leading_pad_expressible(padded, expanded):
+    """Refuse leading-dim growth that TTNN's padded-shape model cannot express.
+
+    A Layout::TILE tensor's logical view maps logical image k (flat over the LOGICAL leading
+    dims) to physical image k (flat over the PADDED ones). That agrees with F.pad only while
+    every input image keeps its flat index, i.e. each leading dim the input actually indexes
+    (dim > 1) has the same stride on both sides. Growing the outermost indexed dim (or adding
+    new outer dims) keeps them; growing an inner one (e.g. [2, 3, ...] -> [3, 4, ...]) would give
+    a buffer whose padded readback is F.pad but whose logical readback is not the input.
+    """
+    lead_p, lead_x = padded[:-2], expanded[:-2]
+    stride_p = stride_x = 1
+    for d in reversed(range(len(lead_p))):
+        if lead_x[d] > 1 and stride_p != stride_x:
+            raise NotImplementedError(
+                f"tilize: output_padded_shape {padded} grows a leading dim inside input dim {d} of {expanded}; "
+                "a TTNN padded shape can only grow the outermost indexed leading dim and the last two dims"
+            )
+        stride_p *= lead_p[d]
+        stride_x *= lead_x[d]
+
+
+# ---------------------------------------------------------------------------
+# Padding: the padded shape and the fill bits
+# ---------------------------------------------------------------------------
+
+
+def _resolve_padding(shape, *, output_padded_shape, pad_value, tile_h):
+    """(padded_shape, input_shape_expanded) or None when no padding argument was given.
+
+    auto: the last two dims rounded up to (tile_h, 32); ranks 0 / 1 are left-expanded to rank 2
+    first, so the pad synthesizes the tile dims. explicit: `output_padded_shape`, the input
+    left-expanded with 1s to its rank.
+    """
+    shape = [int(d) for d in shape]
+    if output_padded_shape is not None:
+        padded = [int(d) for d in output_padded_shape]
+        return padded, [1] * (len(padded) - len(shape)) + shape
+    if pad_value is None:
+        return None
+    expanded = [1] * max(0, 2 - len(shape)) + shape
+    padded = expanded[:-2] + [-(-expanded[-2] // tile_h) * tile_h, -(-expanded[-1] // TILE_WIDTH) * TILE_WIDTH]
+    return padded, expanded
+
+
+def _fill_bits(pad_value, dtype):
+    """The fill value as the input dtype's element bit pattern (low bits of a uint32)."""
+    import torch
+
+    v = 0 if pad_value is None else pad_value
+    if dtype == ttnn.bfloat16:
+        return int(torch.tensor([float(v)], dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+    if dtype == ttnn.float32:
+        return int(torch.tensor([float(v)], dtype=torch.float32).view(torch.int32).item()) & 0xFFFFFFFF
+    if dtype in (ttnn.uint32, ttnn.int32):
+        return int(v) & 0xFFFFFFFF
+    if dtype == ttnn.uint16:
+        return int(v) & 0xFFFF
+    if dtype == ttnn.uint8:
+        return int(v) & 0xFF
+    raise NotImplementedError(f"tilize: no pad-fill encoding for input dtype {dtype}")
 
 
 # ---------------------------------------------------------------------------
@@ -499,9 +579,18 @@ def tilize(
     out_mem_config = memory_config if memory_config is not None else input_tensor.memory_config()
     out_dtype = _resolve_output_dtype(input_tensor, dtype)
     tile_h = _tile_height_of(tile) or 32
-    output_tensor = _allocate_output(
-        ttnn.Shape(list(input_tensor.shape)), out_dtype, device, out_mem_config, tile_h=tile_h
+    logical_shape = [int(d) for d in input_tensor.shape]
+    padding = _resolve_padding(
+        logical_shape, output_padded_shape=output_padded_shape, pad_value=pad_value, tile_h=tile_h
     )
+    pad = None
+    out_shape = logical_shape
+    if padding is not None:
+        out_shape, expanded = padding
+        pad = PadSpec(out_shape, expanded, _fill_bits(pad_value, input_tensor.dtype))
+    # The device program writes the whole padded tile grid, so the output is allocated at the
+    # padded shape; only the returned tensor's metadata carries the logical shape.
+    output_tensor = _allocate_output(ttnn.Shape(out_shape), out_dtype, device, out_mem_config, tile_h=tile_h)
 
     program_descriptor = create_program_descriptor(
         input_tensor,
@@ -509,6 +598,28 @@ def tilize(
         tile_h=tile_h,
         in_tile_h=_input_tile_height(input_tensor),
         low_l1=low_l1,
+        pad=pad,
     )
     # Output tensor MUST be last in the list.
-    return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+    output_tensor = ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+    if out_shape == logical_shape:
+        return output_tensor
+    return _logical_view(output_tensor, logical_shape, out_shape)
+
+
+def _logical_view(tensor, logical_shape, padded_shape):
+    """The same device buffer with logical shape `logical_shape` and padded shape `padded_shape`.
+
+    For a Layout::TILE tensor whose padded last two dims are tile multiples and whose padded
+    last dim is unchanged, ttnn.reshape(tensor, logical, padded) resolves to the metadata-only
+    view (tt::tt_metal::view): no device program. Checked, never assumed: a copy here would be
+    a second dispatch.
+    """
+    view = ttnn.reshape(tensor, ttnn.Shape(logical_shape), ttnn.Shape(padded_shape))
+    if (
+        view.buffer_address() != tensor.buffer_address()
+        or list(view.shape) != list(logical_shape)
+        or list(view.padded_shape) != list(padded_shape)
+    ):
+        raise RuntimeError(f"tilize: the logical view {logical_shape} / {padded_shape} of the output is not zero-copy")
+    return view

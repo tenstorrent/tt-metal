@@ -24,8 +24,149 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 namespace tilize_dataflow {
+
+// ---------------------------------------------------------------------------
+// Padding (op_design.md -> load_block, pad refinement)
+// ---------------------------------------------------------------------------
+//
+// The output tile grid is the PADDED shape's: R = prod(P[:-2]) * P[-2] / tile_h tile-rows,
+// C = P[-1] / 32 tile-columns. Output tile-row r belongs to padded image r / rows_per_image;
+// its sticks are rows h0 .. h0 + tile_h - 1 of that image (h0 = (r % rows_per_image) * tile_h).
+// A stick exists in the input iff its image exists there (every leading index < the input's
+// dim) and h < H; of an existing stick, the first in_row_bytes bytes are data. Everything else
+// of the tile-row (W tail, H tail, whole pad sticks / tile-rows / images) holds the fill value.
+
+// Where one output tile-row's data comes from.
+struct RowSource {
+    uint32_t first_stick;   // input stick index of the tile-row's first stick (valid if valid_sticks > 0)
+    uint32_t valid_sticks;  // leading sticks of the tile-row that exist in the input (0..tile_h)
+    uint32_t data_bytes;    // bytes of the segment each existing stick carries (0..segment bytes)
+};
+
+// The per-image stick map r -> (image, h). Leading dims: the host passes only the innermost
+// `num_lead` padded dims up to the outermost one the pad grows (innermost first); every outer
+// leading dim is equal on both sides, so it folds into the remaining quotient unchanged.
+template <uint32_t tile_h, uint32_t tile_col_bytes>
+struct PadMap {
+    static constexpr uint32_t MAX_LEAD_DIMS = 8;
+    uint32_t rows_per_image;  // padded tile-rows per padded image: P[-2] / tile_h
+    uint32_t in_h;            // input rows per image: X[-2]
+    uint32_t in_row_bytes;    // data bytes per input stick: X[-1] * elem_bytes
+    uint32_t num_lead;
+    uint32_t lead_padded[MAX_LEAD_DIMS];
+    uint32_t lead_input[MAX_LEAD_DIMS];
+
+    // RT args at `base`: rows_per_image, in_h, in_row_bytes, num_lead, then num_lead
+    // (padded, input) dim pairs, innermost first.
+    explicit PadMap(uint32_t base) :
+        rows_per_image(get_arg_val<uint32_t>(base)),
+        in_h(get_arg_val<uint32_t>(base + 1)),
+        in_row_bytes(get_arg_val<uint32_t>(base + 2)),
+        num_lead(get_arg_val<uint32_t>(base + 3)) {
+        for (uint32_t d = 0; d < num_lead; ++d) {
+            lead_padded[d] = get_arg_val<uint32_t>(base + 4 + 2 * d);
+            lead_input[d] = get_arg_val<uint32_t>(base + 5 + 2 * d);
+        }
+    }
+
+    FORCE_INLINE RowSource source(uint32_t row, uint32_t first_col, uint32_t valid_width) const {
+        const uint32_t image = row / rows_per_image;
+        const uint32_t h0 = (row - image * rows_per_image) * tile_h;
+        uint32_t rem = image;
+        uint32_t in_image = 0;
+        uint32_t in_stride = 1;
+        bool exists = true;
+        for (uint32_t d = 0; d < num_lead; ++d) {
+            const uint32_t q = rem / lead_padded[d];
+            const uint32_t idx = rem - q * lead_padded[d];
+            exists = exists && idx < lead_input[d];
+            in_image += idx * in_stride;
+            in_stride *= lead_input[d];
+            rem = q;
+        }
+        in_image += rem * in_stride;
+        RowSource src{0, 0, 0};
+        if (exists && h0 < in_h) {
+            const uint32_t left = in_h - h0;
+            src.valid_sticks = left < tile_h ? left : tile_h;
+            src.first_stick = in_image * in_h + h0;
+            const uint32_t offset = first_col * tile_col_bytes;
+            const uint32_t segment = valid_width * tile_col_bytes;
+            if (offset < in_row_bytes) {
+                const uint32_t avail = in_row_bytes - offset;
+                src.data_bytes = avail < segment ? avail : segment;
+            }
+        }
+        return src;
+    }
+};
+
+// Fills L1 byte ranges with the pad value. Short ranges are CPU-stored
+// (dataflow_kernel_lib::fill_l1_range); long ones are copied from a reader-private
+// source region pre-filled once (`src_bytes`, in its own CB) by NoC loopback reads on this
+// Tensix core, so the RISC-V only issues commands. The loopback reads carry their own
+// transaction id (`trid`); complete() waits for them. Every range is a multiple of
+// elem_bytes and starts on an element boundary.
+template <uint32_t elem_bytes, uint32_t src_bytes, uint32_t noc_min_bytes, uint32_t trid>
+struct PadFill {
+    static_assert(src_bytes % L1_ALIGNMENT == 0 && src_bytes > 0, "pad source: whole NoC-aligned units");
+    static_assert(noc_min_bytes >= 2 * L1_ALIGNMENT, "a NoC fill needs an aligned interior");
+    static constexpr uint32_t MAX_READS_PER_TRID = 255;  // NOC_MAX_TRANSACTION_ID_COUNT
+    uint32_t value;
+    uint64_t src_noc_addr;
+    uint32_t reads_in_flight = 0;
+
+    PadFill(uint32_t cb_pad_source, uint32_t value_) : value(value_) {
+        const uint32_t src = get_write_ptr(cb_pad_source);
+        dataflow_kernel_lib::fill_l1_range<elem_bytes>(src, src_bytes, value);
+        src_noc_addr = get_noc_addr(src);
+        asm volatile("" ::: "memory");  // the source stores precede every loopback read of it
+    }
+
+    // Fill [dst, dst + bytes). May leave loopback reads in flight under `trid` and leaves `trid`
+    // as the NoC read state: the caller re-selects its own read trid afterwards and calls
+    // complete() before publishing the destination.
+    FORCE_INLINE void fill(uint32_t dst, uint32_t bytes) {
+        if (bytes < noc_min_bytes) {
+            dataflow_kernel_lib::fill_l1_range<elem_bytes>(dst, bytes, value);
+            return;
+        }
+        const uint32_t head = (L1_ALIGNMENT - (dst % L1_ALIGNMENT)) % L1_ALIGNMENT;
+        dataflow_kernel_lib::fill_l1_range<elem_bytes>(dst, head, value);
+        dst += head;
+        bytes -= head;
+        const uint32_t tail = bytes % L1_ALIGNMENT;
+        uint32_t bulk = bytes - tail;
+        noc_async_read_set_trid(trid);
+        while (bulk > 0) {
+            if (reads_in_flight == MAX_READS_PER_TRID) {
+                complete();
+            }
+            const uint32_t chunk = bulk < src_bytes ? bulk : src_bytes;
+            noc_async_read(src_noc_addr, dst, chunk);
+            ++reads_in_flight;
+            dst += chunk;
+            bulk -= chunk;
+        }
+        dataflow_kernel_lib::fill_l1_range<elem_bytes>(dst, tail, value);
+    }
+
+    // Every loopback fill issued so far has landed.
+    FORCE_INLINE void complete() {
+        if (reads_in_flight != 0) {
+            noc_async_read_barrier_with_trid(trid);
+            reads_in_flight = 0;
+        }
+    }
+};
+
+// No padding: the producer never calls into it.
+struct NoPadFill {
+    FORCE_INLINE void complete() {}
+};
 
 // One position of the per-core walk.
 template <uint32_t block_width>
@@ -163,14 +304,16 @@ struct StickProducer {
     // Tile-rows fully published (pushed) so far.
     uint32_t rows_pushed() const { return (next_slot - outstanding) * rows_per_slot; }
 
-    template <typename Accessor>
-    FORCE_INLINE void issue_row(const Accessor& accessor, uint32_t row, uint32_t first_col, uint32_t valid_width) {
+    // Open the next tile-row (opening a slot if none is open): returns its L1 base. The open
+    // slot's transaction id is the NoC read state on return.
+    template <typename Fill = NoPadFill>
+    FORCE_INLINE uint32_t open_row(Fill& fill) {
         if constexpr (eager_publish) {
             publish_landed();
         }
         if (open_rows == 0) {
             if (outstanding == read_ahead) {
-                complete_oldest();
+                complete_oldest(fill);
             }
             cb_reserve_back(cb, slot_pages * (outstanding + 1));
             open_base = base_addr + (next_slot % depth) * slot_bytes;
@@ -181,7 +324,56 @@ struct StickProducer {
             ++next_slot;
             ++outstanding;
         }
-        const uint32_t l1_base = open_base + open_rows * row_bytes;
+        return open_base + open_rows * row_bytes;
+    }
+
+    FORCE_INLINE void close_row() {
+        if (++open_rows == rows_per_slot) {
+            open_rows = 0;  // slot sealed; it completes lazily
+        }
+    }
+
+    // Padded load_block for one tile-row: read the existing sticks' data bytes, fill each
+    // existing stick's W tail [data_bytes, segment) and the trailing non-existing sticks.
+    // Every read of the tile-row is issued before its fills, under the slot's transaction id.
+    template <typename Accessor, typename Fill>
+    FORCE_INLINE void issue_row_padded(
+        const Accessor& accessor, const RowSource& src, uint32_t first_col, uint32_t valid_width, Fill& fill) {
+        static_assert(stride_banks == 0 && noc_split == 0 && !eager_publish, "parked levers are off when padded");
+        const uint32_t l1_base = open_row(fill);
+        const uint32_t segment_bytes = valid_width * tile_col_bytes;
+        const uint32_t segment_offset = first_col * tile_col_bytes;
+        if (src.data_bytes != 0) {
+            for (uint32_t s = 0; s < tile_h; ++s) {
+                const uint32_t stick = (s + stick_rotation) & (tile_h - 1);
+                if (stick >= src.valid_sticks) {
+                    continue;
+                }
+                const uint32_t l1_dst = l1_base + stick * block_stick_bytes;
+                if constexpr (pages_per_stick == 1) {
+                    noc_async_read(
+                        accessor.get_noc_addr(src.first_stick + stick, segment_offset), l1_dst, src.data_bytes);
+                } else {
+                    read_paged_segment(accessor, src.first_stick + stick, segment_offset, l1_dst, src.data_bytes);
+                }
+            }
+        }
+        const uint32_t tail_sticks = src.data_bytes < segment_bytes ? src.valid_sticks : 0;
+        for (uint32_t stick = 0; stick < tail_sticks; ++stick) {
+            fill.fill(l1_base + stick * block_stick_bytes + src.data_bytes, segment_bytes - src.data_bytes);
+        }
+        if (src.valid_sticks < tile_h) {
+            // Trailing whole pad sticks (the H tail, or the whole tile-row) are one contiguous range.
+            fill.fill(l1_base + src.valid_sticks * block_stick_bytes, (tile_h - src.valid_sticks) * block_stick_bytes);
+        }
+        noc_async_read_set_trid(trid_of(next_slot - 1));  // later rows of this slot read under its id
+        close_row();
+    }
+
+    template <typename Accessor>
+    FORCE_INLINE void issue_row(const Accessor& accessor, uint32_t row, uint32_t first_col, uint32_t valid_width) {
+        NoPadFill no_fill;
+        const uint32_t l1_base = open_row(no_fill);
         const uint32_t segment_bytes = valid_width * tile_col_bytes;
         const uint32_t segment_offset = first_col * tile_col_bytes;
         const uint32_t first_stick = row * tile_h;
@@ -201,9 +393,7 @@ struct StickProducer {
                 }
             }
         }
-        if (++open_rows == rows_per_slot) {
-            open_rows = 0;  // slot sealed; it completes lazily
-        }
+        close_row();
     }
 
     // The tile_h stick reads of one tile-row from the primed per-bank addresses: stick at distance
@@ -281,14 +471,18 @@ struct StickProducer {
                     return;
                 }
             }
-            complete_oldest();
+            NoPadFill no_fill;
+            complete_oldest(no_fill);
         }
     }
 
-    FORCE_INLINE void complete_oldest() {
+    // `fill`: the pad fills of every issued tile-row land before any slot is published.
+    template <typename Fill = NoPadFill>
+    FORCE_INLINE void complete_oldest(Fill& fill) {
         const uint32_t oldest = next_slot - outstanding;
         // Only the newest slot can be partial, and only at kernel end (complete_all).
         const bool partial = outstanding == 1 && open_rows != 0;
+        fill.complete();
         noc_async_read_barrier_with_trid(trid_of(oldest));
         if constexpr (noc_split != 0) {
             noc_async_read_barrier_with_trid(trid_of(oldest), 1 - noc_index);
@@ -301,8 +495,14 @@ struct StickProducer {
     }
 
     FORCE_INLINE void complete_all() {
+        NoPadFill no_fill;
+        complete_all(no_fill);
+    }
+
+    template <typename Fill>
+    FORCE_INLINE void complete_all(Fill& fill) {
         while (outstanding > 0) {
-            complete_oldest();
+            complete_oldest(fill);
         }
         noc_async_read_set_trid(0);
         if constexpr (noc_split != 0) {

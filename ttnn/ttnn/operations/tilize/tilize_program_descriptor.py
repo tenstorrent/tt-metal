@@ -55,6 +55,7 @@ CB_INPUT_STICKS = 0  # reader -> compute: tile_h stick segments per tile-row, bl
 CB_OUTPUT_TILES = 1  # compute -> writer: block_width TILE pages per tile-row
 CB_INPUT_STICKS_ODD = 2  # split reader only: BRISC -> compute, the odd tile-rows (one producer per CB)
 CB_RETILE_STAGING = 3  # retile only: reader-private staging of whole input tiles (or the resident input shard)
+CB_PAD_SOURCE = 4  # padded only: reader-private region of fill values, the source of NoC loopback fills
 
 # Buffer-depth knobs, counted in CB quanta (one quantum = rows_per_quantum tile-rows
 # of block_width pages each).
@@ -156,6 +157,45 @@ EAGER_PUBLISH = False
 # (flat). Parked off.
 READ_NOC_SPLIT = 0
 WRITE_NOC_SPLIT = 0
+
+# ---- Padding (Refinement 4). The reader fills everything of the padded tile grid the input does
+# not cover (W tail, H tail, whole pad sticks / tile-rows / images) before it publishes a slot.
+# Fills shorter than PAD_NOC_MIN_BYTES are RISC-V stores (fill_l1_range); longer ones are NoC
+# loopback copies, in chunks of up to PAD_SOURCE_BYTES, from a reader-private source region
+# (cb_pad_source) filled once per kernel, so the RISC-V only issues commands for whole pad
+# sticks and tiles. Both are live knobs; PAD_NOC_MIN_BYTES must be >= 2 * L1 alignment.
+PAD_SOURCE_BYTES = 1024
+PAD_NOC_MIN_BYTES = 128
+MAX_PAD_LEAD_DIMS = 8  # PadMap::MAX_LEAD_DIMS (tilize_stick_reads.hpp)
+
+
+class PadSpec:
+    """What the reader fills: the padded output shape, the input left-expanded to its rank, the fill bits."""
+
+    def __init__(self, padded_shape, input_shape_expanded, fill_bits):
+        assert len(padded_shape) == len(input_shape_expanded) >= 2
+        self.padded_shape = [int(d) for d in padded_shape]
+        self.input_shape = [int(d) for d in input_shape_expanded]
+        self.fill_bits = int(fill_bits)
+
+    @property
+    def needs_fill(self):
+        return self.padded_shape != self.input_shape
+
+    def reader_rt_args(self, tile_h, in_elem_bytes):
+        """PadMap RT args (tilize_stick_reads.hpp): rows per padded image, input H, input stick
+        data bytes, then the leading dims to decode (innermost first, up to the outermost one the
+        pad grows; the outer, equal dims fold into the quotient)."""
+        P, X = self.padded_shape, self.input_shape
+        lead_p, lead_x = P[:-2], X[:-2]
+        differ = [k for k in range(len(lead_p)) if lead_p[k] != lead_x[k]]
+        decode = list(range(differ[0], len(lead_p)))[::-1] if differ else []
+        assert len(decode) <= MAX_PAD_LEAD_DIMS
+        args = [P[-2] // tile_h, X[-2], X[-1] * in_elem_bytes, len(decode)]
+        for k in decode:
+            args += [lead_p[k], lead_x[k]]
+        return args
+
 
 # Reader address generation on a DRAM-interleaved input: 1 = bank-stride reuse (stick p + NB
 # is stick p's bank, one aligned page further, so only NB accessor calls per core), 2 = the
@@ -324,14 +364,20 @@ def create_program_descriptor(
     tile_h: int = 32,
     in_tile_h: int | None = None,
     low_l1: bool = False,
+    pad: PadSpec | None = None,
 ) -> ttnn.ProgramDescriptor:
+    """`output_tensor` is allocated at the PADDED shape (the input's shape when nothing is padded);
+    the output tile grid, and so the whole schedule, is that shape's. `pad` describes the fill."""
     device = input_tensor.device()
 
     # ---------------- geometry ----------------
     shape = list(input_tensor.shape)
-    R, C = _tile_grid(shape, tile_h)
-    rows_total = R * tile_h  # folded sticks (tile-aligned H: every image's H is a multiple of tile_h)
-    width = int(shape[-1])
+    out_shape = list(output_tensor.shape)  # the padded shape
+    padded = pad is not None and pad.needs_fill
+    R, C = _tile_grid(out_shape, tile_h)
+    rows_total = R * tile_h  # folded output sticks (the padded H is a multiple of tile_h per image)
+    width = int(out_shape[-1])  # elements of an output stick
+    in_width = int(shape[-1]) if len(shape) >= 1 else 1  # elements of an input stick (rank 0: one)
 
     in_elem_bytes = input_tensor.element_size()
     in_tile_bytes = tile_h * TILE_WIDTH * in_elem_bytes  # tile-sized page holding tile_h stick segments
@@ -342,7 +388,7 @@ def create_program_descriptor(
     # A WIDTH / BLOCK / ND-sharded Layout::ROW_MAJOR input cuts every stick into pages of the
     # shard width; a stick-segment read then splits at page boundaries (reader CT args).
     in_page_bytes = input_tensor.buffer_page_size()
-    pages_per_stick = _div_up(width * in_elem_bytes, in_page_bytes)
+    pages_per_stick = _div_up(in_width * in_elem_bytes, in_page_bytes)
 
     # retile_l1_facewalk (Layout::TILE input): the reader stages whole input tiles (one
     # [in_tile_h, 32] page each) and face-walks them into cb_input_sticks. A unit is row_align
@@ -350,6 +396,7 @@ def create_program_descriptor(
     # when every image's H is a whole number of input tile-rows (else each output tile-row
     # reads its input tile-row whole: correct, in_tile_h / tile_h read amplification).
     retile = in_tile_h is not None
+    assert not (retile and padded), "retile x padding is refused by EXCLUSIONS"
     if retile:
         in_page_bytes = stick_page_bytes  # one input tile, the unit of every retile NoC read
         pages_per_stick = 1
@@ -393,7 +440,8 @@ def create_program_descriptor(
         width=width,
         tile_h=tile_h,
         max_block_width=max_shard_block_width,
-        input_may_reside=input_whole_tiles,
+        # A padded input's stick layout is not the tilize layout of the padded grid: stream it.
+        input_may_reside=input_whole_tiles and not padded,
     )
     any_resident = input_resident or output_resident
 
@@ -446,6 +494,7 @@ def create_program_descriptor(
     split_reader = (
         not any_resident
         and not retile
+        and not padded
         and split_segment_bytes <= SPLIT_READER_MAX_SEGMENT_BYTES
         and core_row_tiles_max * num_col_blocks_max >= 2
     )
@@ -468,6 +517,7 @@ def create_program_descriptor(
     # The stick reader (StickProducer) streams cb_input_sticks with NoC reads; a resident input only
     # publishes pages, retile face-walks, and the split reader has its own schedule.
     stick_reader = not (input_resident or retile or split_reader)
+    assert stick_reader or not padded, "the pad fill lives in the stick reader"
     # One NoC transaction id counts at most NOC_MAX_TRANSACTION_ID_COUNT outstanding reads, and a
     # stick slot's reads share one id: cap the slot's read count (tile_h per tile-row, times the
     # pages a stick segment can straddle on a paged input).
@@ -519,7 +569,7 @@ def create_program_descriptor(
     # the write-ahead window's per-quantum trids live on the writer's own NoC only, so a write
     # split keeps one write quantum in flight. Bank-stride addressing needs an interleaved DRAM
     # input with one page per stick, read on the reader's own NoC.
-    read_noc_split = READ_NOC_SPLIT if stick_reader and pages_per_stick == 1 else 0
+    read_noc_split = READ_NOC_SPLIT if stick_reader and pages_per_stick == 1 and not padded else 0
     write_noc_split = WRITE_NOC_SPLIT if not (output_resident or split_reader) else 0
     if write_noc_split != 0:
         write_ahead = 1
@@ -528,6 +578,7 @@ def create_program_descriptor(
     bank_stride = (
         BANK_STRIDE
         if stick_reader
+        and not padded
         and read_noc_split == 0
         and pages_per_stick == 1
         and in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
@@ -581,6 +632,16 @@ def create_program_descriptor(
                 core_ranges=all_cores,
                 format_descriptors=[staging_format],
             )
+    if padded:
+        cb_pad_source = ttnn.CBDescriptor(
+            total_size=PAD_SOURCE_BYTES,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_PAD_SOURCE, data_format=input_tensor.dtype, page_size=PAD_SOURCE_BYTES
+                )
+            ],
+        )
     if split_reader:
         cbs.append(
             ttnn.CBDescriptor(
@@ -599,6 +660,8 @@ def create_program_descriptor(
     assert len(cbs) == num_input_cbs
     if retile:
         cbs.append(cb_retile_staging)  # reader-private: not a compute input
+    if padded:
+        cbs.append(cb_pad_source)  # reader-private: not a compute input
     if output_resident:
         # Zero-copy: compute packs straight into the output shard (TILE pages, shard order).
         cb_output_tiles = ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor, core_ranges=all_cores)
@@ -640,8 +703,13 @@ def create_program_descriptor(
         RETILE_STAGE_DEPTH,
         int(RETILE_FACEWALK_NOC),
         read_noc_split,
-        int(EAGER_PUBLISH and stick_reader),
+        int(EAGER_PUBLISH and stick_reader and not padded),
         bank_stride,
+        int(padded),
+        CB_PAD_SOURCE,
+        PAD_SOURCE_BYTES,
+        PAD_NOC_MIN_BYTES,
+        in_elem_bytes,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     writer_ct_args = [
@@ -672,6 +740,7 @@ def create_program_descriptor(
     compute_rt_args = ttnn.RuntimeArgs()
     in_addr = input_tensor.buffer_address()
     out_addr = output_tensor.buffer_address()
+    pad_map_args = pad.reader_rt_args(tile_h, in_elem_bytes) if padded else []
 
     for core_idx, (core, row_start, core_row_tiles, col_start, core_col_tiles) in enumerate(assignment):
         # Per-core traversal rotation (single source for reader AND writer): spreads the
@@ -692,6 +761,8 @@ def create_program_descriptor(
             out_rows_per_image,
             in_rows_per_image,
         ]
+        if padded:
+            reader_rt_args[core.x][core.y].extend([pad.fill_bits, *pad_map_args])
         writer_rt_args[core.x][core.y] = [
             out_addr,
             row_start,
