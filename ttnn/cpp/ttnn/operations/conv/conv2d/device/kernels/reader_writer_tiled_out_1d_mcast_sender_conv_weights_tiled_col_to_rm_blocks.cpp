@@ -347,11 +347,11 @@ void kernel_main() {
     }  // out_num_blocks_h
     noc.async_write_barrier();
 
-    if constexpr (split_reader_enabled) {
 #ifdef CONFIG_TENSOR_IN_DRAM
+    if constexpr (split_reader_enabled) {
         // The reader-index page is waited once as a readiness handshake and then read through a raw
         // pointer for the rest of the kernel; pop it here to leave the buffer balanced.
         dfb_reader_indices_obj.pop_front(1);
-#endif
     }
+#endif
 }
