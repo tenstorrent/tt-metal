@@ -452,6 +452,45 @@ no-op. Swept e2e and confirmed flat, so the default stays at 512:
 
 `QWEN_PREFILL_LEN_CUTOFF` is retained as a default-off probe knob.
 
+### L1-resident batched activations — why they do not fit (2026-09-23)
+
+Asked whether keeping activations block-sharded/L1-resident across the whole
+model improves latency (per-op it is a wash, but cross-op it removes DRAM
+round-trips; at batch 92% of op time reads DRAM-interleaved inputs).
+
+bs1 is already L1-resident and unchanged at 25.9 ms. bs8/16/32 do not fit. The
+useful finding is that **two separate static regions** compete with the L1
+activation buffer, not one, and they are controlled by different knobs:
+
+| region | core range | knob | shortfall at bs8 |
+|---|---|---|---|
+| SDPA circular buffers | `[0-0 - 7-9]` (8x10) | `QWEN_SDPA_Q_CHUNK` / `_K_CHUNK` | 81.7 KB/core |
+| matmul dataflow buffers | `[0-0 - 11-9]` (12x10) | (not `QWEN_MM_BLOCK`) | 89.4 KB/core |
+
+Shrinking the SDPA chunks clears the first clash and immediately exposes the
+second. Note that **`QWEN_MM_BLOCK` moved the CB boundary by exactly zero
+bytes** (region end 1226880 at both `8,8,8` and `4,8,8`), so the "shrink blocks
+to free L1" lever the code comments point at does not apply to this clash —
+do not spend runs on it. Also note `N_block_size % subblock_w == 0`, so
+`QWEN_MM_BLOCK` N-reductions must be paired with a smaller `QWEN_MM_SUBBLOCK`.
+
+Even if it fits, the fit is not free: `q_chunk=128` alone costs +8.5% at bs8
+(see the SDPA table above), so L1-residency has to beat that before it is a
+win. And the MLP interior (9728-dim, 169 MB at bs32 = 1.4 MB/core) cannot be
+resident regardless, so only the 2560-dim residual stream is in scope.
+
+**Status: unfinished.** The remaining experiment is a two-knob fit (SDPA chunk
+x matmul dataflow footprint) at bs8/16/32.
+
+**Operational note:** do not `kill -9` a run that is mid-device-operation. Doing
+so left the board unable to initialise firmware, and `tt-smi -r` is the wrong
+recovery on this host — it is a 32-chip Galaxy, where tt-smi itself warns that
+`-r` needs CPLD FW v1.16+ and that `-glx_reset` should be used instead. `-r`
+issued RESET_PCIE_LINK across all 32 devices and left every query failing with
+"Query mappings failed on device 0: No such device". Recovery needs sudo
+(`tt-smi -glx_reset` via ipmitool, a `tenstorrent` module reload, or a reboot).
+Stop runs with SIGTERM and let them close the device.
+
 **Second lesson:** benchmark the op in the *rank and batching* the model uses.
 A `[1,1,M,K]` sweep of the MLP matmul showed 34% -> 57% "efficiency scaling"
 with M that vanished entirely in the real `[1,Z,M,K]` form, because the 2-D form
