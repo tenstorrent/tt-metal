@@ -14,8 +14,9 @@ measurements, and they were not always kept apart. This section is the line betw
 
 **Exactly one performance number in this document is a result:**
 
-> **39.80 ms** prefill wavefront (min 39.77), SP=4 x TP=8, all 32 chips, **PCC 0.9994**, argmax equal,
-> 2026-09-23 -- `QWEN36_ATUPE_OPTS` on (now the default).
+> **37.43 ms** prefill wavefront (min 37.41), SP=4 x TP=8, all 32 chips, **PCC 0.9993**, argmax equal,
+> 2026-09-23, **defaults only -- no env overrides**. Two verified changes stacked:
+> Aniruddha's round-4 opts (42.78 -> 39.80) and the replicated residual (39.80 -> 37.43).
 >
 > Prior best **42.79 ms**, commit `b9356ef71e3` (reproduced 2026-09-23 on the reset device at 42.78 ms).
 
@@ -25,12 +26,18 @@ Everything else is one of:
 |---|---|---|
 | **measured** (Tracy / traced microbenchmarks) | per-op costs, collective costs, peak TFLOPS, MLP floor per split | yes -- these are the "now" columns |
 | **estimated** (formula or judgment) | the 8-11 ms budget's "target" column, every pipeline-parallel number | no -- not verified, do not quote as results |
-| **implemented, failing** | the `QWEN36_REPL_RESIDUAL` path | retested 2026-09-23 on the healthy device: fails in 17 s with `TT_THROW: Invalid subtile broadcast type` -- a **real bug** in this path (the earlier blank runs were the wedge, but not only the wedge); being located. Off by default. |
+| **verified, default ON** | the `QWEN36_REPL_RESIDUAL` path | **39.80 -> 37.43 ms**, PCC 0.9993, argmax equal (2026-09-23). Collectives 6/layer -> 4/layer. |
 | **verified, default ON** | the `QWEN36_ATUPE_OPTS` port of Aniruddha's round-4 GDN/SDPA/L1 changes | **42.78 -> 39.80 ms**, PCC 0.9994, argmax equal (2026-09-23); per-feature attribution pending |
 
-**Verified savings so far: one -- 2.98 ms (42.78 -> 39.80), from porting Aniruddha's round-4
-GDN/SDPA/L1 changes to TP=8.** Everything else in the 8-11 ms plan below is still an estimated cut
-against a measured cost.
+**Verified savings so far: 5.35 ms (42.78 -> 37.43), from two changes:**
+
+| change | wavefront | PCC | commit |
+|---|---|---|---|
+| baseline | 42.78 ms | 0.9991 | `b9356ef71e3` |
+| + Aniruddha's round-4 opts (`QWEN36_ATUPE_OPTS`) | 39.80 ms (**-2.98**) | 0.9994 | `34a28258232` |
+| + **replicated residual** (`QWEN36_REPL_RESIDUAL`) | **37.43 ms** (**-2.37**) | 0.9993 | this commit |
+
+Everything else in the ~11 ms plan below is still an estimated cut against a measured cost.
 
 ## The 42.79 ms result: exact configuration and run details
 
@@ -220,11 +227,31 @@ printed neither a wavefront time nor a PASSED/FAILED line. Each run had `timeout
 baseline with full stdout captured showed exactly what that looks like: the process hangs
 silently at `Loading 24 transformer layers` (weight upload, before any forward pass) and is
 killed at 25 min with no error. All six modules import cleanly, so it was not an import break.
-See *Hang diagnosis* under the port section for the evidence and recovery. Retested 2026-09-23 on the
-healthy device (with `QWEN36_ATUPE_OPTS` on): **fails in 17 s** with `TT_THROW: Invalid subtile
-broadcast type` -- an eltwise-binary shape/broadcast error, i.e. a real bug in this path on top of
-the wedge. Most likely the fused `ttnn.all_reduce` output's shape or layout differs from what the
-residual add or the local norm expects. Being located; stays off by default.
+See *Hang diagnosis* under the port section for the evidence and recovery. **Resolved 2026-09-23: verified at 37.43 ms, PCC 0.9993, now the default.** Three bugs, all mine:
+
+1. **The embedding is hidden-fractured.** `model.embd` returns `[1, T, dim/tp]`, and under the
+   fractured layout every layer keeps it that way. Once the out-projections return replicated
+   tensors the very first residual add broadcasts `dim/tp` against `dim` -> `Invalid subtile
+   broadcast type`. Fix: `tp_common.replicate_residual` all-gathers once after the embedding,
+   per die, for the whole model.
+2. **DistributedNorm was still wrapping every norm.** Its gather-then-norm branch fires when
+   `is_distributed_norm()` is False *and* `is_multichip` is True -- so turning the distributed
+   norm off silently turned on a DIFFERENT gather, one per norm, and double-gathered a
+   replicated stream. Fix: skip the wrapper entirely under this path (`layer.py`, `model.py`);
+   the bare `RMSNorm` already holds the full replicated gamma.
+3. **The full-attention out-proj was never converted.** `gdn/tp.py` (x3) and `mlp.py` were
+   switched to `residual_all_reduce`, but `attention/tp.py` had three more `tt_all_reduce` sites
+   of its own. GDN and MLP layers returned replicated tensors while FA layers still returned a
+   1/8 shard -- the debug trace showed exactly that: `x [1,1,1024,2048]` vs
+   `attn [1,1,1024,256]` at the first `fa=True` layer. Fix: all 7 sites go through one helper.
+
+The **fused** `ttnn.all_reduce` (one collective instead of two) still hangs in-model on the
+layer-0 GDN out-proj, and that is NOT explained: it works in isolation in both bf16 (26 ms) and
+**fp32 (34 ms)** on the same `(1,8)` submesh at `num_links=2`, so the fp32 hypothesis is refuted.
+The shipped default is the **composite** (reduce-scatter in the input dtype -> typecast the final
+shard to bf16 -> all-gather), which is two collectives per half-layer instead of the old three.
+`QWEN36_REPL_MODE=fused` keeps the one-op path for whoever gets to the bottom of it; a third
+collective per layer is still available there.
 
 Today each half-layer pays three collectives:
 
@@ -507,10 +534,12 @@ none of it has been demonstrated.
 | misc (unary, socket recv) | 0.9 ms | 0.5 | -- | high |
 | **total** | **~38 ms** | **~11.3 ms** | | |
 
-**Verified against this table so far (2026-09-23):** SDPA **-1.64 ms** (3.0 -> ~1.4, the row's
-target reached), GDN plumbing **-1.10 ms** (KDA fused conv), eltwise DRAM round-trips **-0.46 ms**
-(L1 residency) -- **-2.98 ms combined, 42.78 -> 39.80.** Collectives, the 15.1 ms row, are untouched:
-the replicated-residual attempt at them is currently failing.
+**Verified against this table so far (2026-09-23): -5.35 ms total, 42.78 -> 37.43.** SDPA
+**-1.64 ms** (the row's target reached), GDN plumbing **-1.10 ms** (KDA fused conv), eltwise DRAM
+round-trips **-0.46 ms** (L1 residency), and **collectives -2.37 ms** (replicated residual, 6 -> 4
+per layer). The collectives row still has the most left in it: 4 per layer at ~120 us each is
+~11.5 ms, against a 1.5 ms target that needs both a narrower TP and the fused single-op
+all-reduce working in-model.
 
 So **~11 ms is reachable on measured line items if every estimated cut lands; 8 ms is not**
 without also winning on matmul MFU. Commit to ~11-13 ms; treat 8 ms as stretch.

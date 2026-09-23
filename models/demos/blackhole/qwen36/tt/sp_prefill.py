@@ -113,6 +113,11 @@ def _sp_layer_mixer(layer, x, *, cos, sin, d, span_len, page_table, chunk_page_t
         gdn_out = (final_state, conv_new_state)
     ttnn.deallocate(attn_input)
 
+    if os.environ.get("QWEN36_REPL_DEBUG") == "1":
+        logger.info(
+            f"[repl] mixer fa={layer.is_full_attention}: x {x.shape} {x.dtype} {x.layout} {x.memory_config().memory_layout}"
+            f" | attn {attn_output.shape} {attn_output.dtype} {attn_output.layout} {attn_output.memory_config().memory_layout}"
+        )
     h = ttnn.add(x, attn_output)
     ttnn.deallocate(attn_output)
     return h, gdn_out
@@ -554,6 +559,10 @@ class SPPrefill:
             if _tpc.repl_residual_enabled(model.args):
                 # One all-gather per die for the whole model; see tp_common.replicate_residual.
                 xs[d] = _tpc.replicate_residual(xs[d], model)
+                if os.environ.get("QWEN36_REPL_DEBUG") == "1":
+                    logger.info(
+                        f"[repl] die {d} residual after embed gather: {xs[d].shape} {xs[d].dtype} {xs[d].layout}"
+                    )
             if not traced:
                 logger.debug(f"[SPPrefill] die {d} embed enqueued")
 

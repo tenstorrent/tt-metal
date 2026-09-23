@@ -869,7 +869,9 @@ def repl_residual_enabled(args=None):
     Replicating costs activation memory, which is why the fractured layout exists -- but this is
     a 2B model on 189 MB of L1 per chip, so that tradeoff does not bind here.
     """
-    if os.environ.get("QWEN36_REPL_RESIDUAL") != "1":
+    # Default ON since 2026-09-23: verified 39.80 -> 37.47 ms, PCC 0.9993, argmax equal at
+    # SP=4 x TP=8. QWEN36_REPL_RESIDUAL=0 restores the fractured residual.
+    if os.environ.get("QWEN36_REPL_RESIDUAL", "1") == "0":
         return False
     # Scoped to sequence_parallel models. The SP PCC test builds a TP=4 ORACLE model (not SP) in
     # the same process: it must keep the fractured layout and its DistributedNorm, or the oracle
@@ -945,6 +947,12 @@ def residual_all_reduce(
     from models.tt_transformers.tt.ccl import tt_all_gather
 
     out = tt_all_gather(shard, mesh_device, tt_ccl, cluster_axis=None, dim=dim, topology=topology)
+    if os.environ.get("QWEN36_REPL_DEBUG") == "1":
+        from loguru import logger
+
+        logger.info(
+            f"[repl] residual_all_reduce composite: in {x.shape} {x.dtype} -> shard {shard.shape} -> out {out.shape} {out.dtype} {out.layout}"
+        )
     ttnn.deallocate(shard)
     return out
 

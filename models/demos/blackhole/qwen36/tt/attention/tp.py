@@ -13,7 +13,6 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
-from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
@@ -498,10 +497,11 @@ class TPAttention:
         ttnn.deallocate(gate_flat)
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
-        return tt_all_reduce(
+        return tpc.residual_all_reduce(
             partial,
             self.mesh,
             self.tt_ccl,
+            args=self.args,
             cluster_axis=0,
             dim=3,
             topology=self.args.ccl_topology(),
@@ -685,10 +685,11 @@ class TPAttention:
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
-        return tt_all_reduce(
+        return tpc.residual_all_reduce(
             wo_partial,
             self.mesh,
             self.tt_ccl,
+            args=self.args,
             cluster_axis=0,
             dim=3,
             topology=self.args.ccl_topology(),
@@ -858,10 +859,11 @@ class TPAttention:
         # tt_all_reduce no-ops on a 1x1 mesh (num_devices==1) and returns partial as-is without ever
         # consulting memory_config, so skip forcing DRAM there and let wo's own L1 output stand.
         _ar_mc = None if self.args.num_devices == 1 else ttnn.DRAM_MEMORY_CONFIG
-        return tt_all_reduce(
+        return tpc.residual_all_reduce(
             partial,
             self.mesh,
             self.tt_ccl,
+            args=self.args,
             cluster_axis=0,
             dim=3,
             topology=self.args.ccl_topology(),
