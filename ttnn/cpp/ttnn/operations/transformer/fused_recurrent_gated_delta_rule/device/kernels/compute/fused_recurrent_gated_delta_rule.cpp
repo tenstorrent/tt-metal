@@ -24,13 +24,17 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/sfpu_binary_bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
 namespace {
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_decay = 3, cb_beta = 4, cb_S = 5;
 constexpr uint32_t cb_out = 6, cb_state = 7, cb_s2 = 8, cb_s3 = 9, cb_sd = 10;
-constexpr uint32_t cb_vread = 11, cb_u = 12, cb_kcol = 13, cb_supd = 14, cb_delta = 15;
+constexpr uint32_t cb_vread = 11, cb_u = 12, cb_kcol = 13;
+
+// fp32 DST tiles available per tile_regs_acquire (half-sync).
+constexpr uint32_t DST_TILES = 4;
 
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
@@ -57,27 +61,65 @@ void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t N
     cb_push_back(o, Mt * Nt);
 }
 
-// out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
-void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
+// S_new[Kt,Vt] = sd + kcol[Kt,1] (x) u[1,Vt]. Each DST tile is seeded with sd and the rank-1
+// matmul accumulates onto it, so the outer product never round-trips through L1. When
+// emit_state, the same DST tiles are also packed as the state output.
+template <uint32_t Kt, uint32_t Vt>
+void rank1_update(uint32_t sd, uint32_t kcol, uint32_t u, uint32_t o, bool emit_state) {
+    constexpr uint32_t kv = Kt * Vt;
+    cb_reserve_back(o, kv);
+    if (emit_state) {
+        cb_reserve_back(cb_state, kv);
+    }
+    pack_reconfig_data_format(o);
+    for (uint32_t mi = 0; mi < Kt; mi++) {
+        for (uint32_t n0 = 0; n0 < Vt; n0 += DST_TILES) {
+            const uint32_t nn = (Vt - n0 < DST_TILES) ? (Vt - n0) : DST_TILES;
+            tile_regs_acquire();
+            reconfig_data_format_srca(sd);
+            copy_init(sd);
+            for (uint32_t j = 0; j < nn; j++) {
+                copy_tile(sd, mi * Vt + n0 + j, j);
+            }
+            reconfig_data_format(u, kcol);
+            matmul_init(kcol, u, 0);
+            for (uint32_t j = 0; j < nn; j++) {
+                matmul_tiles(kcol, u, mi, n0 + j, j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < nn; j++) {
+                pack_tile<true>(j, o, mi * Vt + n0 + j);
+                if (emit_state) {
+                    pack_tile<true>(j, cb_state, mi * Vt + n0 + j);
+                }
+            }
+            tile_regs_release();
+        }
+    }
+    cb_push_back(o, kv);
+    if (emit_state) {
+        cb_push_back(cb_state, kv);
+    }
+}
+
+// out = (A - B) * beta, n tiles, without spilling A - B to L1: FPU sub into DST[0], the beta
+// tile into DST[1], then an SFPU multiply by DST[1]'s column 0 in place. beta sits at [0,0]
+// and only row 0 of A/B carries data (rows 1..31 are zero), so row 0 is scaled by beta and
+// the zero padding rows stay zero.
+void delta_rule_residual(uint32_t a, uint32_t b, uint32_t beta, uint32_t o, uint32_t n) {
     cb_reserve_back(o, n);
     pack_reconfig_data_format(o);
-    reconfig_data_format(a, b);
-    if (op == 0) {
-        add_tiles_init(a, b);
-    } else if (op == 1) {
-        sub_tiles_init(a, b);
-    } else {
-        mul_tiles_init(a, b);
-    }
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
-        if (op == 0) {
-            add_tiles(a, b, i, i, 0);
-        } else if (op == 1) {
-            sub_tiles(a, b, i, i, 0);
-        } else {
-            mul_tiles(a, b, i, i, 0);
-        }
+        reconfig_data_format(a, b);
+        sub_tiles_init(a, b);
+        sub_tiles(a, b, i, i, 0);
+        reconfig_data_format_srca(beta);
+        copy_init(beta);
+        copy_tile(beta, 0, 1);
+        sfpu_mul_bcast_col_init();
+        sfpu_mul_bcast_col(0, 1);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, i);
@@ -120,23 +162,6 @@ void transpose_block(uint32_t in, uint32_t o, uint32_t n) {
     cb_push_back(o, n);
 }
 
-// out = copy of in (front, no pop), n tiles.
-void cp(uint32_t in, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(in);
-    copy_tile_to_dst_init_short(in);
-    for (uint32_t i = 0; i < n; i++) {
-        tile_regs_acquire();
-        copy_tile(in, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, o, i);
-        tile_regs_release();
-    }
-    cb_push_back(o, n);
-}
-
 }  // namespace
 
 void kernel_main() {
@@ -167,31 +192,25 @@ void kernel_main() {
         mm(cb_k, cb_sd, cb_vread, 1, Kt, Vt, false);
         WAIT(cb_vread, Vt);
 
-        // delta = v - vread ; u = beta * delta
+        // u = beta * (v - vread)
         WAIT(cb_v, Vt);
-        ew(cb_v, cb_vread, cb_delta, Vt, 1);
+        WAIT(cb_beta, 1);
+        delta_rule_residual(cb_v, cb_vread, cb_beta, cb_u, Vt);
         POP(cb_v, Vt);
         POP(cb_vread, Vt);
-        WAIT(cb_delta, Vt);
-        WAIT(cb_beta, 1);
-        bcast_scalar_mul(cb_delta, cb_beta, cb_u, Vt);
         POP(cb_beta, 1);
-        POP(cb_delta, Vt);
         WAIT(cb_u, Vt);
 
-        // kcol = transpose(k) ([K,1]); supd = kcol (x) u  ([K,V] rank-1 outer)
+        // kcol = transpose(k) ([K,1])
         transpose_block(cb_k, cb_kcol, Kt);
         POP(cb_k, Kt);
         WAIT(cb_kcol, Kt);
-        mm(cb_kcol, cb_u, cb_supd, Kt, 1, Vt, false);
+
+        // S_new = sd + kcol (x) u -> nxt_S (and the state output, per token or last)
+        rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S, per_token || last);
         POP(cb_kcol, Kt);
         POP(cb_u, Vt);
-        WAIT(cb_supd, kv);
-
-        // S_new = sd + supd -> nxt_S
-        ew(cb_sd, cb_supd, nxt_S, kv, 0);
         POP(cb_sd, kv);
-        POP(cb_supd, kv);
         WAIT(nxt_S, kv);
 
         // o = q . S_new  (read from POST-update state)
@@ -199,10 +218,6 @@ void kernel_main() {
         mm(cb_q, nxt_S, cb_out, 1, Kt, Vt, false);
         POP(cb_q, Kt);
 
-        // state output: per token, or just the final state
-        if (per_token || last) {
-            cp(nxt_S, cb_state, kv);
-        }
         // nxt_S is intentionally NOT popped: the next iteration reads it as cur_S.
     }
 }

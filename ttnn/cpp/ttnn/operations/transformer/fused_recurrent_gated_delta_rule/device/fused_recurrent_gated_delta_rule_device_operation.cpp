@@ -43,6 +43,15 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     // reader/writer index pages as [BH*T,1,K] / [BH*T,1,V] / [BH*T,1,1] / [BH,K,V]; a mismatch
     // would read past the buffer instead of failing, so every dim is checked here.
     auto* device = in.q.device();
+
+    // The recurrent state is carried across tokens in DST (see rank1_update in the compute
+    // kernel), which requires fp32 DST registers.
+    const bool fp32_dest_acc_en =
+        std::get<2>(get_compute_kernel_config_args(device->arch(), attrs.compute_kernel_config));
+    TT_FATAL(
+        fp32_dest_acc_en,
+        "fused_recurrent_gated_delta_rule: requires fp32_dest_acc_en (the recurrent state is carried in fp32 DST)");
+
     auto check = [&](const Tensor& t, const char* name, std::initializer_list<uint32_t> expected) {
         TT_FATAL(
             t.storage_type() == StorageType::DEVICE && t.buffer() != nullptr,
