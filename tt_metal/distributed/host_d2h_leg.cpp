@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/sockets/internal/host_d2h_leg.hpp>
+#include "tt_metal/distributed/host_d2h_leg.hpp"
 
 #include <fmt/format.h>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_ring_alias.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
+#include "tt_metal/distributed/host_ring_alias.hpp"
+#include <tt-metalium/experimental/sockets/host_uva_layout.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -74,8 +74,20 @@ D2HLeg::~D2HLeg() = default;
 std::unique_ptr<D2HLeg> D2HLeg::create(
     const std::shared_ptr<dist::MeshDevice>& mesh, const Config& cfg, std::string& err) {
     err.clear();
-    if (mesh == nullptr || cfg.cores == 0 || cfg.grid_width == 0 || cfg.payload_bytes == 0) {
-        err = "D2HLeg::create: mesh, cores, grid_width and payload_bytes are all required";
+    if (mesh == nullptr || cfg.cores == 0 || cfg.grid_width == 0 || cfg.payload_bytes == 0 ||
+        cfg.ring_pages == 0) {
+        err = "D2HLeg::create: mesh, cores, grid_width, payload_bytes and ring_pages are all required";
+        return nullptr;
+    }
+    // page_size and fifo_bytes end up as divisors in poll() and retire(), so a 32-bit wrap
+    // to zero here is a SIGFPE later. Checked in 64 bits, where it cannot wrap.
+    const uint64_t page64 = static_cast<uint64_t>(cfg.payload_bytes) + kFrameTrailerBytes;
+    const uint64_t fifo64 = page64 * cfg.ring_pages;
+    if (page64 > UINT32_MAX || fifo64 > UINT32_MAX) {
+        err = fmt::format(
+            "D2HLeg::create: {} B payload x {} ring pages overflows the 32-bit ring geometry",
+            cfg.payload_bytes,
+            cfg.ring_pages);
         return nullptr;
     }
 
@@ -95,7 +107,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
     Impl& im = *leg->impl_;
     im.cfg = cfg;
     im.page_size = page;
-    im.fifo_bytes = cfg.ring_pages * page;
+    im.fifo_bytes = static_cast<uint32_t>(fifo64);
     im.device_id = static_cast<uint32_t>(mesh->get_devices()[0]->id());
 
     const uint32_t n = cfg.cores;
@@ -181,7 +193,9 @@ uint32_t D2HLeg::poll(const Sink& sink) {
                     "d2h: core {} page at ring offset {} has guard {:#x}, expected an armed frame", c, off, t->guard));
                 break;
             }
-            if (t->length + kFrameTrailerBytes > im.page_size) {
+            // Subtract rather than add: t->length is device-written, and near UINT32_MAX
+            // the addition wraps to a small number and passes. page_size > trailer always.
+            if (t->length > im.page_size - kFrameTrailerBytes) {
                 im.fail(fmt::format(
                     "d2h: core {} trailer claims {} payload bytes, which does not fit a {} B page",
                     c,
