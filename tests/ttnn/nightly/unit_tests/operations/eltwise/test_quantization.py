@@ -1255,24 +1255,51 @@ def test_quantize_tensor_zero_point_honors_output_tensor(device, use_tensor_scal
 
 
 # With a tensor zero point, quantize takes the composite path, which narrowed to uint8 with a bare
-# typecast that wraps modulo 256 (300 -> 44, -1 -> 255) instead of saturating (#57356).
-@pytest.mark.parametrize("op", ["quantize", "requantize"])
+# typecast: it wrapped modulo 256 (300 -> 44, -1 -> 255) and floored instead of rounding (#57356).
+# Scale 0.5 keeps x / scale exact. The n + 0.6 values (12.8 -> 25.6, 1.3 -> 2.6) pin rounding over
+# truncation without landing on a tie, where torch rounds half-to-even and the QUANT kernel half away
+# from zero.
+_UINT8_ROW = [150.0, -0.5, 50.0, 25.0, 127.5, 128.0, -150.0, 0.0, 12.8, 1.3, 0.2, -0.2]
+
+
+@pytest.mark.parametrize("op", ["quantize_float_scale", "quantize_tensor_scale", "requantize"])
 def test_uint8_composite_saturates(device, op):
-    row = [30.0, -0.1, 10.0, 5.0, 25.5, 25.6, -30.0, 0.0]
-    x = torch.tensor([row] * 32, dtype=torch.float32).repeat(1, 4)
-    scale = 0.1
+    x = torch.tensor([_UINT8_ROW] * 32, dtype=torch.float32)
+    x = torch.nn.functional.pad(x, (0, 32 - len(_UINT8_ROW)))
+    scale = 0.5
     expected = torch.clamp(torch.round(x / scale), 0, 255).to(torch.uint8)
 
-    zero_point = ttnn.from_torch(
-        torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
-    )
-    tx = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    if op == "quantize":
+    as_tt = lambda t, dtype: ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    zero_point = as_tt(torch.zeros(1, dtype=torch.int32), ttnn.int32)
+    tx = as_tt(x, ttnn.float32)
+    if op == "quantize_float_scale":
         out = ttnn.quantize(tx, scale, zero_point, dtype=ttnn.uint8)
+    elif op == "quantize_tensor_scale":
+        out = ttnn.quantize(tx, as_tt(torch.tensor([scale]), ttnn.float32), zero_point, dtype=ttnn.uint8)
     else:
-        q = ttnn.quantize(tx, 1.0, 0, dtype=ttnn.int32)
-        out = ttnn.requantize(q, 1.0, 0, scale, zero_point, dtype=ttnn.uint8)
-        expected = torch.clamp(torch.round(torch.round(x) / scale), 0, 255).to(torch.uint8)
+        # Build the int32 input directly rather than through quantize, so this only exercises requantize.
+        q = torch.round(x).to(torch.int32)
+        out = ttnn.requantize(as_tt(q, ttnn.int32), 1.0, 0, scale, zero_point, dtype=ttnn.uint8)
+        expected = torch.clamp(torch.round(q / scale), 0, 255).to(torch.uint8)
     assert out.dtype == ttnn.uint8
     result = ttnn.to_torch(out)
-    assert torch.equal(result, expected), f"got {result[0, :8].tolist()} expected {expected[0, :8].tolist()}"
+    n = len(_UINT8_ROW)
+    assert torch.equal(result, expected), f"got {result[0, :n].tolist()} expected {expected[0, :n].tolist()}"
+
+
+# The composite path must round exactly like the scalar (QUANT LLK) path, ties included.
+def test_uint8_composite_matches_scalar_path(device):
+    row = [24.5, 25.5, 2.5, 3.5, 254.5, 255.5, 12.8, 1.3, 0.5, -0.5, -3.0, 300.0]
+    x = torch.nn.functional.pad(torch.tensor([row] * 32, dtype=torch.float32), (0, 32 - len(row)))
+    as_tt = lambda t, dtype: ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tx = as_tt(x, ttnn.float32)
+    scalar = ttnn.to_torch(ttnn.quantize(tx, 1.0, 0, dtype=ttnn.uint8))
+    composite = ttnn.to_torch(
+        ttnn.quantize(tx, 1.0, as_tt(torch.zeros(1, dtype=torch.int32), ttnn.int32), dtype=ttnn.uint8)
+    )
+    n = len(row)
+    positive = x >= 0  # negatives: the composite clamps to 0, the scalar path returns the magnitude
+    assert torch.equal(
+        composite[positive], scalar[positive]
+    ), f"{composite[0, :n].tolist()} vs {scalar[0, :n].tolist()}"
+    assert torch.equal(composite[~positive], torch.zeros_like(composite[~positive]))

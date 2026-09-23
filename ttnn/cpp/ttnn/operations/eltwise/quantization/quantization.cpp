@@ -189,30 +189,22 @@ ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
     return ttnn::dequantize(input, 1.0f, 0, /*axis=*/std::nullopt, ttnn::DataType::FLOAT32, std::nullopt, std::nullopt);
 }
 
-// Narrow composite's fp result to the output dtype. typecast wraps modulo 256 for the narrow types, and
-// callers here pass unbounded floats, so both saturate first. int8 goes through quantize, whose QUANT
-// kernel clamps to [-128, 127]. uint8 is clamped to [0, 255] in float instead: the QUANT kernel maps a
-// negative uint8 value to its magnitude rather than to 0.
+// Narrow composite's fp result to the output dtype. typecast wraps modulo 256 for the narrow types (and
+// floors), and callers here pass unbounded floats, so the narrow types go through quantize instead: the
+// QUANT kernel rounds half-to-even and saturates, matching the scalar fast path. uint8 is clamped to
+// [0, 255] first because the kernel maps a negative uint8 value to its magnitude rather than to 0.
 ttnn::Tensor narrow_composite_result(
     const ttnn::Tensor& shifted,
     ttnn::DataType c_dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::Tensor> optional_output_tensor) {
-    if (c_dtype == ttnn::DataType::UINT8) {
-        ttnn::Tensor saturated = ttnn::clamp_tss(shifted, 0.0f, 255.0f, memory_config);
-        return ttnn::typecast(saturated, c_dtype, memory_config, optional_output_tensor);
-    }
-    if (c_dtype != ttnn::DataType::INT8) {
+    if (!is_narrow_quantized_dtype(c_dtype)) {
         return ttnn::typecast(shifted, c_dtype, memory_config, optional_output_tensor);
     }
+    const ttnn::Tensor in_range =
+        c_dtype == ttnn::DataType::UINT8 ? ttnn::clamp_tss(shifted, 0.0f, 255.0f, memory_config) : shifted;
     return ttnn::quantize(
-        shifted,
-        1.0f,
-        0,
-        /*axis=*/std::nullopt,
-        ttnn::DataType::INT8,
-        memory_config,
-        std::move(optional_output_tensor));
+        in_range, 1.0f, 0, /*axis=*/std::nullopt, c_dtype, memory_config, std::move(optional_output_tensor));
 }
 
 }  // anonymous namespace
