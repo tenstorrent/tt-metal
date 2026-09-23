@@ -61,9 +61,8 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT);
     const uint32_t noc_xy_addr =
         config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_NOC_XY_OFFSET);
-    // Sender page: block bases. Receiver page: this receiver's lane-0 slot in each block.
-    // Sender and receiver pages share one layout, so each offset also addresses the mirror
-    // counter on the peer core.
+    // Sender page: block bases. Receiver page: this receiver's lane-0 slot in each block. Both
+    // are local; where the peer's mirror counters sit comes from word[9] below.
     const uint32_t sent_ptr =
         config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET);
     const uint32_t acked_ptr =
@@ -84,8 +83,11 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         iface.receiver_noc_xy_ptr = noc_xy_addr;
         iface.aligned_pages_sent_ptr = sent_ptr;    // local, cached stores
         iface.aligned_pages_acked_ptr = acked_ptr;  // receivers' NoC atomics
-        // Remote sent base = same offset on each receiver page.
-        iface.num_receivers_and_remote_pages_sent_ptr = cross_node_dfb_pack(num_receivers, sent_ptr);
+        // Receivers' SENT block base, page-relative to this page (word[9]); every receiver page
+        // sits at one address. A worker sender's page shares that address, a DRAM sender's does not.
+        iface.num_receivers_and_remote_pages_sent_ptr = cross_node_dfb_pack(
+            num_receivers,
+            config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET));
         iface.fifo_limit_page_aligned = fifo_limit;
     } else {
         volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_addr);
