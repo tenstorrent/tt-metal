@@ -10,6 +10,16 @@ if(TT_METAL_USE_EMULE)
     target_compile_definitions(fabric PRIVATE TT_METAL_USE_EMULE=1)
 endif()
 
+# find_and_load() for physical grouping descriptors also searches the installed SDK datadir (where the
+# textprotos in tests/tt_metal/tt_fabric/physical_groupings/ are shipped by tools/scaleout/CMakeLists.txt),
+# not just ${TT_METAL_HOME}. Bake the configured absolute datadir so single-card installs can resolve them.
+include(GNUInstallDirs)
+target_compile_definitions(
+    fabric
+    PRIVATE
+        "TT_METAL_INSTALLED_PGD_DIR=\"${CMAKE_INSTALL_FULL_DATADIR}/tt-metalium/tests/tt_metal/tt_fabric/physical_groupings\""
+)
+
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(fabric)
 

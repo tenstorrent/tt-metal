@@ -1399,7 +1399,7 @@ tt::tt_fabric::FabricConfig fabric_config_for_active_mgd() {
         }
         any_mesh = true;
         const auto effective = tt::tt_fabric::with_effective_ring_dims(*declared);
-        ring_ns = ring_ns && (effective.ring_dims.size() > 0 && effective.ring_dims[0]);
+        ring_ns = ring_ns && (!effective.ring_dims.empty() && effective.ring_dims[0]);
         ring_ew = ring_ew && (effective.ring_dims.size() > 1 && effective.ring_dims[1]);
     }
     if (!any_mesh) {
