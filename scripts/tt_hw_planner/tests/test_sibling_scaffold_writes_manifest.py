@@ -144,3 +144,51 @@ def test_escalation_still_rescaffolds_on_purpose():
     early = src.find("ALREADY SCAFFOLDED")
     guard = src.rfind("if not force_already_supported:", 0, early)
     assert guard >= 0, "the short-circuit must be gated on force_already_supported"
+
+
+def test_every_mesh_label_the_planner_emits_resolves_in_the_demo_it_invokes():
+    """A label the planner exports must exist in the demo's table.
+
+    The tables read MESH_DEVICE with `.get(label, <default>)`, so an unknown
+    label does not error — it silently falls back to a DIFFERENT mesh. A
+    planner that emits a label the demo has never heard of therefore runs the
+    model on the wrong topology and reports success. Pin that every Wormhole
+    label in MESH_DEVICE_MAP resolves, to the same shape, in the demo the
+    planner actually invokes."""
+    import ast
+    import re
+    from pathlib import Path
+
+    from scripts.tt_hw_planner.bringup import MESH_DEVICE_MAP
+
+    consumers = [
+        Path("models/tt_transformers/demo/simple_text_demo.py"),
+        Path("models/tt_transformers/conftest.py"),
+    ]
+    for path in consumers:
+        src = path.read_text()
+        match = re.search(r'\{\s*"N150".*?\}', src, re.S)
+        assert match, f"no mesh-label table found in {path}"
+        table = ast.literal_eval(match.group(0))
+        # Some labels are deliberately aliased to both orientations of one
+        # shape (Galaxy's (4,8)/(8,4) -> "TG"). For those, orientation is the
+        # authors' choice; a CHIP-COUNT difference never is.
+        shapes_per_label = {}
+        for (arch, shape), label in MESH_DEVICE_MAP.items():
+            if arch == "Wormhole":
+                shapes_per_label.setdefault(label, set()).add(shape)
+
+        for label, shapes in shapes_per_label.items():
+            if label not in table:
+                continue
+            got = table[label]
+            assert got[0] * got[1] in {s[0] * s[1] for s in shapes}, (
+                f"{path}: label {label!r} resolves to {got} "
+                f"({got[0] * got[1]} chips) but the planner emits it for "
+                f"{sorted(shapes)} — the demo would run on a different number of chips"
+            )
+            if len(shapes) == 1:
+                assert got == next(iter(shapes)), (
+                    f"{path}: label {label!r} resolves to {got} but the planner "
+                    f"emits it for {next(iter(shapes))} — the demo would run on the wrong mesh"
+                )
