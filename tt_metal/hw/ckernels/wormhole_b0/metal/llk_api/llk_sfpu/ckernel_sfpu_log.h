@@ -45,7 +45,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     if constexpr (!FAST_APPROX) {
         // normalise a (-0.0 and subnormals become +0.0). This must run before
         // the exponent read below so that -0.0 follows the same path as +0.0
-        // and the zero result ends up -inf, matching torch.
+        // and log(±0.0) returns -inf, matching torch.
         a = a * 1.0f + 0.0f;
     }
 
