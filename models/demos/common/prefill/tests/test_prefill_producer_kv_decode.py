@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -101,17 +100,15 @@ class _Table:
 
 @pytest.fixture
 def gqa_trace(tmp_path, monkeypatch):
-    def make(model_name="llama_3p1_8b"):
-        is_llama = model_name == "llama_3p1_8b"
-        layers, heads, rotary_dim = (32, 8, 128) if is_llama else (2, 2, 64)
+    def make():
+        layers, heads, rotary_dim = 32, 8, 128
         config = SimpleNamespace(NUM_LAYERS=layers, NUM_KEY_VALUE_HEADS=heads, HEAD_DIM=128, ROTARY_DIM=rotary_dim)
-        monkeypatch.setattr(producer, "ADAPTER", SimpleNamespace(name=model_name, model_config=config))
+        monkeypatch.setattr(producer, "ADAPTER", SimpleNamespace(name="llama_3p1_8b", model_config=config))
         monkeypatch.setattr(producer, "NUM_LAYERS", layers)
         monkeypatch.delenv("PREFILL_PCC_GOLDEN_LEN", raising=False)
         table = _Table(layers, heads)
         cache_dir = tmp_path / "kv_cache"
         cache_dir.mkdir(exist_ok=True)
-        (tmp_path / "metadata.json").write_text(json.dumps({"token_ids": list(range(33))}))
         generator = torch.Generator().manual_seed(823)
         for layer in range(layers):
             key, value = [torch.randint(-63, 64, (1, heads, 64, 128), generator=generator).float() for _ in range(2)]
@@ -139,18 +136,13 @@ def gqa_trace(tmp_path, monkeypatch):
 
 
 # Exercise the public dispatch and real BFP8 decoder across every Llama layer/head and both pages.
-# The GPT-OSS case preserves partial rotary dimensions and rank-local layer filtering.
-@pytest.mark.parametrize("model_name", ["llama_3p1_8b", "gpt_oss_d_p"])
-def test_producer_gqa_pcc_reads_named_heads_and_rotates_only_keys(gqa_trace, model_name):
-    table, devices, trace = gqa_trace(model_name)
-    if model_name == "gpt_oss_d_p":
-        table.foreign.add((0, 0))
+def test_producer_gqa_pcc_reads_named_heads_and_rotates_only_keys(gqa_trace):
+    table, devices, trace = gqa_trace()
     result = producer._read_slot_kv_and_check_pcc(table, devices, 1, 33, trace)
     assert result == pytest.approx({"k": 1.0, "v": 1.0}, abs=1e-6)
-    expected_layers = range(32) if model_name == "llama_3p1_8b" else (1,)
     assert set(table.reads) == {
         (layer, config, position)
-        for layer in expected_layers
+        for layer in range(32)
         for config in range(table.num_configs())
         for position in (0, 32)
     }

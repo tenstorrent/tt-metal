@@ -7,40 +7,6 @@ import socket
 from .kv_layout import PrefillKVLayout
 
 
-def build_address_table(*, layout, base_addresses, fabric_nodes, host_name, api):
-    """Populate the shared table API from explicit cache geometry and chip ownership."""
-    required = {(row, col) for row in range(layout.sp) for col in range(layout.tp)}
-    if set(fabric_nodes) != required or len(base_addresses) != 2:
-        raise ValueError(f"table requires every SP{layout.sp}/TP{layout.tp} fabric node and separate K/V bases")
-    configs = {}
-    for name in layout.config_names:
-        cfg = api.KvChunkAddressTableConfig()
-        cfg.num_layers = layout.num_layers
-        cfg.max_sequence_length = layout.max_seq_len
-        cfg.num_slots = layout.num_slots
-        cfg.chunk_n_tokens = 32
-        cfg.chunk_size_bytes = layout.chunk_size_bytes
-        configs[name] = cfg
-    table = api.KvChunkAddressTable(configs)
-    if tuple(table.config_name(i) for i in range(table.num_configs())) != layout.config_names:
-        raise RuntimeError("shared table changed the K/V config order")
-    groups = {}
-    for coord, node in fabric_nodes.items():
-        groups[coord] = table.add_device_group([node])
-        table.set_fabric_node_host(node, host_name=host_name)
-    for config in range(len(layout.config_names)):
-        for slot in range(layout.num_slots):
-            for layer in range(layout.num_layers):
-                for position in range(0, layout.max_seq_len, 32):
-                    coord, bank, offset = layout.locate(config, layer, position, slot, base_addresses[config // 8])
-                    location = api.KvCacheLocation()
-                    location.noc_addr = (bank << 32) | offset
-                    location.size_bytes = layout.chunk_size_bytes
-                    location.device_group_index = groups[coord]
-                    table.set(layer, position, slot, location, config)
-    return table
-
-
 def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     import ttnn
     from models.demos.common.prefill.runners.migration import get_num_dram_banks
@@ -79,13 +45,36 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
         for row in range(prefill_layout.sp)
         for col in range(prefill_layout.tp)
     }
-    return build_address_table(
-        layout=layout,
-        base_addresses=tuple(int(t.buffer_address()) for t in (kv_cache.k, kv_cache.v)),
-        fabric_nodes=nodes,
-        host_name=socket.gethostname(),
-        api=ttnn.experimental.disaggregation,
-    )
+    api = ttnn.experimental.disaggregation
+    base_addresses = tuple(int(t.buffer_address()) for t in (kv_cache.k, kv_cache.v))
+    host_name = socket.gethostname()
+    configs = {}
+    for name in layout.config_names:
+        cfg = api.KvChunkAddressTableConfig()
+        cfg.num_layers = layout.num_layers
+        cfg.max_sequence_length = layout.max_seq_len
+        cfg.num_slots = layout.num_slots
+        cfg.chunk_n_tokens = 32
+        cfg.chunk_size_bytes = layout.chunk_size_bytes
+        configs[name] = cfg
+    table = api.KvChunkAddressTable(configs)
+    if tuple(table.config_name(i) for i in range(table.num_configs())) != layout.config_names:
+        raise RuntimeError("shared table changed the K/V config order")
+    groups = {}
+    for coord, node in nodes.items():
+        groups[coord] = table.add_device_group([node])
+        table.set_fabric_node_host(node, host_name=host_name)
+    for config in range(len(layout.config_names)):
+        for slot in range(layout.num_slots):
+            for layer in range(layout.num_layers):
+                for position in range(0, layout.max_seq_len, 32):
+                    coord, bank, offset = layout.locate(config, layer, position, slot, base_addresses[config // 8])
+                    location = api.KvCacheLocation()
+                    location.noc_addr = (bank << 32) | offset
+                    location.size_bytes = layout.chunk_size_bytes
+                    location.device_group_index = groups[coord]
+                    table.set(layer, position, slot, location, config)
+    return table
 
 
 def build_and_serialize_kv_chunk_table(*, mesh_device, kv_cache, chunk_size, path):

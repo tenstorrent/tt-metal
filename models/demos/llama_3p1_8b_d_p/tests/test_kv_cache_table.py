@@ -5,16 +5,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 import torch
-from safetensors import safe_open
 from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache, write_kv_chunk
 from models.demos.llama_3p1_8b_d_p.tt.model_config import resolve_weights_path
@@ -38,15 +37,6 @@ HEAD_DIM = 128
 def _check_index(name: str, value: int, upper: int) -> None:
     if type(value) is not int or not 0 <= value < upper:
         raise ValueError(f"{name} must be an int in [0, {upper}), got {value!r}")
-
-
-def _logical_tag(slot: int, layer: int, head: int, position: int) -> int:
-    """Pack all non-K/V coordinates into one collision-free integer."""
-    _check_index("slot", slot, NUM_SLOTS)
-    _check_index("layer", layer, NUM_LAYERS)
-    _check_index("head", head, NUM_KV_HEADS)
-    _check_index("position", position, MAX_SEQ_LEN)
-    return (((slot * NUM_LAYERS + layer) * NUM_KV_HEADS + head) * MAX_SEQ_LEN) + position
 
 
 def _device_major_positions(start: int) -> list[int]:
@@ -218,16 +208,6 @@ def _assert_tables_equivalent(expected, actual):
                     )
 
 
-def _load_layer_zero_qkv_weights():
-    with (HF_MODEL / "model.safetensors.index.json").open() as index_file:
-        weight_map = json.load(index_file)["weight_map"]
-    weights = {}
-    for local_name, checkpoint_name in QKV_WEIGHT_NAMES.items():
-        with safe_open(HF_MODEL / weight_map[checkpoint_name], framework="pt", device="cpu") as checkpoint:
-            weights[local_name] = checkpoint.get_tensor(checkpoint_name)
-    return weights
-
-
 def _producer_input():
     positions = torch.tensor(_device_major_positions(0), dtype=torch.float32)
     columns = torch.arange(Llama31_8BConfig.EMB_SIZE, dtype=torch.float32)
@@ -246,13 +226,15 @@ def test_kv_table_oracle_coordinates_are_unique_and_exact():
         for head in range(NUM_KV_HEADS)
         for position in BOUNDARY_POSITIONS
     ]
-    assert len({_logical_tag(*key) for key in keys}) == len(keys)
     for kind in ("k", "v"):
+        encoded_tags = set()
         for key in keys:
             page = _tagged_page(kind, *key)
+            encoded_tags.add(tuple(page[0, 0, 0].tolist()))
             allowed = {32.0, 64.0} if kind == "k" else {-64.0, -32.0}
             assert set(torch.unique(page).tolist()) <= allowed
             assert torch.equal(page, page.to(torch.bfloat16).float())
+        assert len(encoded_tags) == len(keys)
     assert [_independent_tensor_location(position) for position in BOUNDARY_POSITIONS] == [
         (0, 0),
         (0, 224),
@@ -320,7 +302,7 @@ def test_llama_kv_table_reads_all_synthetic_cache_pages(mesh_device, device_para
 # then compare every produced page through the table with the independently read live cache tensor.
 def test_llama_gqa_producer_pages_match_kv_table(mesh_device, device_params):
     mesh_config = MeshConfig(MESH_SHAPE, TP)
-    projection = QKVProjection(mesh_device, mesh_config, _load_layer_zero_qkv_weights())
+    projection = QKVProjection(mesh_device, mesh_config, read_raw_weights(HF_MODEL, QKV_WEIGHT_NAMES))
     rope_tables = build_indexed_rope(mesh_device, max_seq_len=MAX_SEQ_LEN, chunk_size=GLOBAL_CHUNK, sp_axis=0)
     transformation = build_transformation_mat(mesh_device)
     cache = allocate_kv_cache(
