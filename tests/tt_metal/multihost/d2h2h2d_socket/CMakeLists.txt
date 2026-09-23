@@ -22,7 +22,14 @@ target_compile_definitions(
         TT_DIRECT_KERNEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-target_link_libraries(d2h2h2d_socket_d2h_bw_test PRIVATE test_metal_common_libs)
+# benchmark, not benchmark_main: this binary keeps its own main so DistributedContext::create
+# sees argv before google-benchmark takes its share of it.
+target_link_libraries(
+    d2h2h2d_socket_d2h_bw_test
+    PRIVATE
+        test_metal_common_libs
+        benchmark::benchmark
+)
 
 add_executable(d2h2h2d_socket_d2h_bw)
 set_target_properties(
@@ -31,4 +38,9 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
-target_link_libraries(d2h2h2d_socket_d2h_bw PRIVATE d2h2h2d_socket_d2h_bw_test)
+target_link_libraries(
+    d2h2h2d_socket_d2h_bw
+    PRIVATE
+        d2h2h2d_socket_d2h_bw_test
+        benchmark::benchmark
+)

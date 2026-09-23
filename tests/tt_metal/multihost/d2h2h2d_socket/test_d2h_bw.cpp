@@ -4,15 +4,14 @@
 // The device-to-host leg alone: one rank, no peer, no H2H. The sink retires on sight, so a
 // frame's slot is freed by this host seeing it rather than by a transport draining it.
 #include <algorithm>
-#include <cerrno>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
-#include <iomanip>
-#include <iostream>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include <benchmark/benchmark.h>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
@@ -43,119 +42,71 @@ constexpr int kDeviceId = 0;
 // pages go unacked, and Finish() would then never return.
 constexpr auto kStall = std::chrono::seconds(30);
 
-struct Options {
-    uint32_t payload = 16384;
-    uint32_t cores = 4;
-    uint32_t ring = 8;
-    uint32_t iters = 20000;
-    uint32_t warmup_pct = 10;
+// The swept axes. A single-element list pins one: `cores` has to be pinned because the
+// region maps once per process and refuses a second, differently-sized reservation.
+const std::vector<int64_t> kPayloadBytes = {16384};
+const std::vector<int64_t> kCores = {4};
+const std::vector<int64_t> kRingPages = {8};
+const std::vector<int64_t> kIterations = {20000};
+const std::vector<int64_t> kWarmupPct = {10};
+
+// SkipWithError marks the report but not the exit status, and a CI step reads the status.
+bool g_run_failed = false;
+
+struct Args {
+    uint32_t payload = 0;
+    uint32_t cores = 0;
+    uint32_t ring = 0;
+    uint32_t iters = 0;
+    uint32_t warmup_pct = 0;
 };
-
-// strtoul, not stoul: an uncaught exception here aborts the rank before the device is torn
-// down, which leaves the pinned region and the shm rings behind.
-bool parse_u32(const char* text, uint32_t& out) {
-    errno = 0;
-    char* end = nullptr;
-    const unsigned long v = std::strtoul(text, &end, 10);
-    if (end == text || errno == ERANGE) {
-        return false;
-    }
-    uint64_t mult = 1;
-    if (*end != '\0' && end[1] == '\0') {
-        switch (*end) {
-            case 'K': mult = 1024ull; break;
-            case 'M': mult = 1ull << 20; break;
-            default: return false;
-        }
-    } else if (*end != '\0') {
-        return false;
-    }
-    const uint64_t scaled = static_cast<uint64_t>(v) * mult;
-    if (scaled == 0 || scaled > UINT32_MAX) {
-        return false;
-    }
-    out = static_cast<uint32_t>(scaled);
-    return true;
-}
-
-bool parse(int argc, char** argv, Options& o) {
-    for (int i = 1; i < argc; ++i) {
-        const std::string a = argv[i];
-        const bool has_next = i + 1 < argc;
-        if (a == "--payload" && has_next && parse_u32(argv[++i], o.payload)) {
-            continue;
-        }
-        if (a == "--cores" && has_next && parse_u32(argv[++i], o.cores)) {
-            continue;
-        }
-        if (a == "--ring" && has_next && parse_u32(argv[++i], o.ring)) {
-            continue;
-        }
-        if (a == "--iters" && has_next && parse_u32(argv[++i], o.iters)) {
-            continue;
-        }
-        // Not parse_u32: its blanket zero-rejection would refuse 0, which means
-        // "measure the whole run" and is a setting a caller legitimately wants.
-        if (a == "--warmup-pct" && has_next) {
-            const std::string v = argv[++i];
-            char* end = nullptr;
-            errno = 0;
-            const unsigned long pct = std::strtoul(v.c_str(), &end, 10);
-            if (end != v.c_str() && *end == '\0' && errno != ERANGE && pct < 100) {
-                o.warmup_pct = static_cast<uint32_t>(pct);
-                continue;
-            }
-            std::cerr << "error: --warmup-pct must be 0..99\n";
-            return false;
-        }
-        std::cerr << "usage: " << argv[0]
-                  << " [--payload B] [--cores N] [--ring frames] [--iters N] [--warmup-pct P]\n";
-        return false;
-    }
-    return true;
-}
 
 uint64_t pct(const std::vector<uint64_t>& v, double p) {
     const size_t i = static_cast<size_t>(p * static_cast<double>(v.size() - 1) + 0.5);
     return v[i];
 }
 
-}  // namespace
+// Declared before the run so a skipped case still reports every column, which keeps the
+// CSV and JSON outputs the same shape across a sweep.
+void init_counters(benchmark::State& state) {
+    state.counters["page_bytes"] = 0;
+    state.counters["frames"] = 0;
+    state.counters["bandwidth_gbps"] = 0;
+    state.counters["issue_p50_us"] = 0;
+    state.counters["slot_wait_p50_us"] = 0;
+}
 
-int main(int argc, char** argv) {
-    mh::DistributedContext::create(argc, argv);
-    Options o;
-    if (!parse(argc, argv, o)) {
-        return 2;
-    }
-    if (*mh::DistributedContext::get_current_world()->size() != 1) {
-        std::cerr << "error: this leg is local to one host; run it without mpirun or with `-n 1`\n";
-        return 2;
-    }
+void fail(benchmark::State& state, const std::string& why) {
+    g_run_failed = true;
+    state.SkipWithError(why);
+}
 
+void run_leg(benchmark::State& state, const Args& o) {
     const uint32_t page = tt_uva_frame_page_size(o.payload);
     // RingAlias refuses an overlay wider than an arena, but it refuses it after the sockets
     // are built. Cheaper to say so here, in terms of the knob the caller turned.
     if (static_cast<uint64_t>(o.ring) * page > kArenaBytes) {
-        std::cerr << "error: ring " << o.ring << " x page " << page << " B exceeds the " << (kArenaBytes >> 10)
-                  << " KiB arena; lower --ring or --payload\n";
-        return 2;
+        fail(state,
+             "ring " + std::to_string(o.ring) + " x page " + std::to_string(page) + " B exceeds the " +
+                 std::to_string(kArenaBytes >> 10) + " KiB arena; lower ring or payload");
+        return;
     }
+    state.counters["page_bytes"] = static_cast<double>(page);
 
     auto mesh = distributed::MeshDevice::create_unit_mesh(kDeviceId);
     IDevice* device = mesh->get_devices().front();
     const CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t grid_width = static_cast<uint32_t>(grid.x);
     if (o.cores == 0 || o.cores > grid_width * static_cast<uint32_t>(grid.y) || o.cores > kProvisionedCores) {
-        std::cerr << "error: --cores " << o.cores << " does not fit this grid\n";
-        return 2;
+        fail(state, "cores " + std::to_string(o.cores) + " does not fit this grid");
+        return;
     }
 
     const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
     const L1MapNew l1 = L1MapNew::compute(l1_base, static_cast<uint32_t>(device->l1_size_per_core()), o.payload, false);
     if (const std::string e = l1.fits(o.payload); !e.empty()) {
-        std::cerr << "error: " << e << "\n";
-        return 2;
+        fail(state, e);
+        return;
     }
 
     // The leg first, then the pin: D2HLeg MAP_FIXEDs its rings over the arenas, and a pin
@@ -175,12 +126,12 @@ int main(int argc, char** argv) {
         dc.alias_region_base = region.reserved_base(o.cores);
         d2h = D2HLeg::create(mesh, dc, err);
     } catch (const std::exception& ex) {
-        std::cerr << "host region unavailable: " << ex.what() << "\n";
-        return 1;
+        fail(state, std::string("host region unavailable: ") + ex.what());
+        return;
     }
     if (!d2h) {
-        std::cerr << "d2h bringup failed: " << err << "\n";
-        return 1;
+        fail(state, "d2h bringup failed: " + err);
+        return;
     }
     try {
         // try to alias the d2h rings with the region reserved above; this gets registered w/RDMA via MPI_Windows
@@ -191,13 +142,13 @@ int main(int argc, char** argv) {
             HostTopology{0, 1, 1},
             HostRegion::Grid{grid_width, static_cast<uint32_t>(grid.y)});
         if (const std::string e = region.verify_header(); !e.empty()) {
-            std::cerr << "region header check failed: " << e << "\n";
             region.release();
-            return 1;
+            fail(state, "region header check failed: " + e);
+            return;
         }
     } catch (const std::exception& ex) {
-        std::cerr << "host region unavailable: " << ex.what() << "\n";
-        return 1;
+        fail(state, std::string("host region unavailable: ") + ex.what());
+        return;
     }
 
     CoreRangeSet cores;
@@ -208,10 +159,9 @@ int main(int argc, char** argv) {
         cores = cores.merge(CoreRangeSet(CoreRange(c, c)));
     }
 
-    // 64-bit: iters and warmup_pct are both user-supplied uint32, and the 32-bit product
-    // wraps well inside the range the test accepts, reporting a wrong rate as a clean PASS.
-    const uint32_t warmup_iters =
-        static_cast<uint32_t>(static_cast<uint64_t>(o.iters) * o.warmup_pct / 100);
+    // 64-bit: iters and warmup_pct are both caller-supplied, and the 32-bit product wraps
+    // well inside the range the test accepts, reporting a wrong rate as a clean pass.
+    const uint32_t warmup_iters = static_cast<uint32_t>(static_cast<uint64_t>(o.iters) * o.warmup_pct / 100);
     const uint64_t total = static_cast<uint64_t>(o.cores) * o.iters;
     // Per core, then scaled: the kernel stamps steady state at its own warmup_iters, so a
     // differently-rounded host figure would divide the wrong frame count by that window.
@@ -268,6 +218,7 @@ int main(int argc, char** argv) {
     stall_cycles.reserve(samples);
     uint64_t frames = 0;
     bool ok = true;
+    std::string run_error;
     // Per core, not against the global count: poll() drains one core fully before moving
     // on, so a global gate admits a fast core's ramp and drops its steady-state samples.
     std::vector<uint32_t> seen(o.cores, 0);
@@ -300,10 +251,10 @@ int main(int argc, char** argv) {
             }
         }
         if (const std::string e = d2h->first_error(); !e.empty()) {
-            std::cerr << "d2h: " << e << "\n";
+            run_error = "d2h: " + e;
             ok = false;
         } else if (std::chrono::steady_clock::now() > deadline) {
-            std::cerr << "stalled at " << frames << " of " << total << " frames\n";
+            run_error = "stalled at " + std::to_string(frames) + " of " + std::to_string(total) + " frames";
             ok = false;
         }
     }
@@ -323,8 +274,9 @@ int main(int argc, char** argv) {
             std::vector<uint32_t> r;
             slow_dispatch::ReadFromL1(*mesh, core_list[i], l1.verify_addr, 7 * sizeof(uint32_t), r);
             if (r.size() < 7 || r[4] != o.iters) {
-                std::cerr << "core " << i << " reported " << (r.size() > 4 ? r[4] : 0) << " of " << o.iters
-                          << " iterations\n";
+                run_error = "core " + std::to_string(i) + " reported " +
+                            std::to_string(r.size() > 4 ? r[4] : 0) + " of " + std::to_string(o.iters) +
+                            " iterations";
                 ok = false;
                 break;
             }
@@ -334,26 +286,70 @@ int main(int argc, char** argv) {
         }
     }
 
+    state.counters["frames"] = static_cast<double>(frames);
     if (ok && end > begin) {
         std::sort(issue_cycles.begin(), issue_cycles.end());
         std::sort(stall_cycles.begin(), stall_cycles.end());
         const double secs = static_cast<double>(end - begin) * ns_per_cycle / 1e9;
         const double gb = static_cast<double>(total - warmup) * o.payload / 1e9;
-        std::cout << std::fixed << std::setprecision(2);
-        std::cout << "bandwidth " << (gb / secs) << " GB/s\n";
+        state.counters["bandwidth_gbps"] = gb / secs;
         // Both stamped in stage(): issue is the payload write and its barrier, slot wait is
         // the block in socket_reserve_pages -- this host's turnaround, seen from the device.
         if (!issue_cycles.empty()) {
-            std::cout << "latency " << (static_cast<double>(pct(issue_cycles, 0.50)) * ns_per_cycle / 1e3)
-                      << " us issue, " << (static_cast<double>(pct(stall_cycles, 0.50)) * ns_per_cycle / 1e3)
-                      << " us slot wait\n";
+            state.counters["issue_p50_us"] = static_cast<double>(pct(issue_cycles, 0.50)) * ns_per_cycle / 1e3;
+            state.counters["slot_wait_p50_us"] = static_cast<double>(pct(stall_cycles, 0.50)) * ns_per_cycle / 1e3;
         }
     }
-    std::cout << (ok ? "PASS\n" : "FAIL\n");
+    if (!ok) {
+        fail(state, run_error.empty() ? "d2h leg failed" : run_error);
+    }
 
     // Unpin BEFORE the leg's destructor puts anonymous pages back over the arenas: the pin
     // must not still name the pages being swapped out.
     region.release();
     d2h.reset();
-    return ok ? 0 : 1;
+}
+
+void BM_D2HBandwidth(benchmark::State& state) {
+    init_counters(state);
+    const Args o{
+        static_cast<uint32_t>(state.range(0)),
+        static_cast<uint32_t>(state.range(1)),
+        static_cast<uint32_t>(state.range(2)),
+        static_cast<uint32_t>(state.range(3)),
+        static_cast<uint32_t>(state.range(4))};
+    for ([[maybe_unused]] auto _ : state) {
+        run_leg(state, o);
+    }
+}
+
+}  // namespace
+
+// Iterations(1): the run is the measurement, and the numbers come off the device, so a
+// repeat would only re-pay the mesh bringup and the pin.
+BENCHMARK(BM_D2HBandwidth)
+    ->ArgsProduct({
+        kPayloadBytes,  // payload
+        kCores,         // cores
+        kRingPages,     // ring
+        kIterations,    // iters
+        kWarmupPct,     // warmup_pct
+    })
+    ->ArgNames({"payload", "cores", "ring", "iters", "warmup_pct"})
+    ->UseRealTime()
+    ->Iterations(1)
+    ->Unit(benchmark::kSecond);
+
+int main(int argc, char** argv) {
+    // Before Initialize: the context claims MPI's own argv entries, and this leg refuses a
+    // world it cannot drive on its own.
+    mh::DistributedContext::create(argc, argv);
+    if (*mh::DistributedContext::get_current_world()->size() != 1) {
+        std::fprintf(stderr, "error: this leg is local to one host; run it without mpirun or with `-n 1`\n");
+        return 2;
+    }
+    benchmark::Initialize(&argc, argv);
+    benchmark::RunSpecifiedBenchmarks();
+    benchmark::Shutdown();
+    return g_run_failed ? 1 : 0;
 }

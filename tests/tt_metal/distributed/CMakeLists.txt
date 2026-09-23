@@ -87,6 +87,48 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
+# Its own target, not a source in distributed_benchmarks: this binary keeps its own main so
+# DistributedContext::create sees argv, and that main must not displace benchmark_main there.
+add_executable(d2h_leg_benchmark)
+target_sources(
+    d2h_leg_benchmark
+    PRIVATE
+        benchmark_d2h_leg.cpp
+        hd_socket_test_utils.cpp
+)
+
+target_link_libraries(
+    d2h_leg_benchmark
+    PRIVATE
+        tt_metal
+        test_common_libs
+        benchmark::benchmark
+)
+
+# TT_DIRECT_KERNEL_DIR: the kernel stays with the rest of the d2h2h2d socket tests, and
+# CreateKernel takes an absolute path, so it is found without a copy step.
+target_compile_definitions(
+    d2h_leg_benchmark
+    PRIVATE
+        TT_METAL_HOST_BRIDGE=1
+        TT_DIRECT_KERNEL_DIR="${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost/d2h2h2d_socket"
+)
+
+target_include_directories(
+    d2h_leg_benchmark
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}
+)
+
+set_target_properties(
+    d2h_leg_benchmark
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+
 add_executable(multiproc_loopback_test)
 target_sources(multiproc_loopback_test PRIVATE test_multiproc_loopback.cpp)
 
