@@ -44,6 +44,10 @@ public:
     // Frames the device has pulled since the last call, per core. Drives the H2H credit.
     uint32_t drained(uint32_t core);
 
+    // Where this core's ring starts inside its RX arena. Anyone addressing a slot must add
+    // it: rx_slot_offset() takes it, and omitting it points at the wrong bytes.
+    uint32_t data_offset(uint32_t core) const;
+
     // Per core, for the receiver kernel's create_receiver_socket_interface() arg.
     std::vector<uint32_t> config_addresses() const;
 
