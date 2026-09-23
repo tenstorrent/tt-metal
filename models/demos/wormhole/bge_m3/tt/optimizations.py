@@ -420,8 +420,9 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
     # calls it the Blackhole default. It drops the row buffers and overlaps the
     # FPU with the SFPU, so it removes the pack and unpack passes over the score
     # tiles. Its smaller circular buffers also let the masked B32 path fit L1.
-    # B8 runs the streaming kernel at LoFi: 13.766 ms to 13.646 ms, PCC 0.93923 to 0.93962.
-    if max_seq_len == 512 and max_batch == 8 and dtype == ttnn.bfloat8_b:
+    # B8 and B16 run the streaming kernel at LoFi. B8 13.766 ms to 13.646 ms, PCC
+    # 0.93923 to 0.93962; B16 26.100 ms to 25.817 ms, PCC 0.93791 to 0.94151.
+    if max_seq_len == 512 and max_batch in (8, 16) and dtype == ttnn.bfloat8_b:
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     if max_seq_len == 512 and max_batch in (8, 16, 32) and dtype == ttnn.bfloat8_b:
         return _make_compute_kernel(
