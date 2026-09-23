@@ -366,6 +366,12 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
     const uint32_t a2a_cb_pages = moe_ring::even_stride_at_least_a2a_width(a2a_cb_pages_raw);
 
+    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14 tiles, or 10
+    // for the 2560/640 expert), passed to the kernels as the "tiles_per_txn" compile arg.
+    const uint32_t weight_tiles_per_txn =
+        moe_ring::tiles_per_txn_for_shape(hidden_tiles, intermediate_tiles, args.has_bias);
+    const uint32_t weight_tiles_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK * weight_tiles_per_txn;
+
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
 
@@ -756,7 +762,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         | Name           | CB Index     | Dtype     | Tile? | Tiles/CB  | DS  | GPT | Remarks                    |
         ----------------------------------------------------------------------------------------------------------
         | cb_s2c_in      | CBIndex::c_0 | Float16_b | true  | (shared)  | 448 | 180 | Shared output buf          |
-        | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | 14*6      |  84 |  84 | 3 triple-bufs W0/W1        |
+        | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | slots*2*t |  84 |  84 | 3 blocks W0/W1 + W2 (txn=  |
+        |                |              |           |       |           |     |     | 14 tiles; 20 -> 3 x 40)    |
         | cb_c2w_rdy     | CBIndex::c_4 | Float32   | false | 1         |   — |   — | Compute->writer ready      |
         | cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | 1         |   — |   — | Writer->compute ready      |
         | cb_s2c_in2     | CBIndex::c_6 | Float16_b | true  | a2a*cores |  72 |  96 | Ring A2A activation        |
@@ -769,7 +776,13 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2s_out are handled separately as it is allocated on Tilize, Matmul, and Combine cores
     std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, true, 14 * 6},
+        // dm0's slots of one block each (moe_ring::weight_cb_slots: 3 for 14- and 20-tile transactions);
+        // whole blocks so the ring buffer wraps on a block boundary.
+        {"cb_r2c_w0",
+         tt::CBIndex::c_3,
+         tt::DataFormat::Bfp4_b,
+         true,
+         moe_ring::weight_cb_slots(weight_tiles_per_txn) * weight_tiles_per_block},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
@@ -1193,19 +1206,43 @@ MoEComputeMeshWorkloadFactory::create_at(
     {
         const uint32_t w0_w1_layers = matmul_w0_w1_tensor.logical_shape()[1];
         const uint32_t w0_w1_bank_blocks = moe_ring::w0_w1_bank_blocks_per_expert(
-            args.has_bias ? hidden_tiles + 1 : hidden_tiles, intermediate_tiles, matmul_num_cores, num_dram_banks);
-        const uint32_t w0_w1_expected_pages = num_dram_banks * w0_w1_layers * experts_per_device * w0_w1_bank_blocks *
-                                              moe_ring::W0_W1_TXNS_PER_BLOCK * moe_ring::W0_W1_TILES_PER_TXN;
+            args.has_bias ? hidden_tiles + 1 : hidden_tiles,
+            intermediate_tiles,
+            matmul_num_cores,
+            num_dram_banks,
+            weight_tiles_per_txn);
+        const uint32_t w0_w1_expected_pages =
+            num_dram_banks * w0_w1_layers * experts_per_device * w0_w1_bank_blocks * weight_tiles_per_block;
         TT_FATAL(
             w0_w1_total_pages_buf == w0_w1_expected_pages,
             "moe_compute: w0_w1 tensor has {} tile pages, the compact layout for {} layers x {} experts over {} banks "
-            "needs {} ({} blocks per bank per expert); pack it with prepare_w0_w1_tensor_for_moe_compute",
+            "needs {} ({} blocks of {} tiles per bank per expert); pack it with prepare_w0_w1_tensor_for_moe_compute",
             w0_w1_total_pages_buf,
             w0_w1_layers,
             experts_per_device,
             num_dram_banks,
             w0_w1_expected_pages,
-            w0_w1_bank_blocks);
+            w0_w1_bank_blocks,
+            weight_tiles_per_block);
+        const uint32_t w2_layers = matmul_w2_tensor.logical_shape()[1];
+        const uint32_t w2_core_blocks = moe_ring::w2_core_blocks_per_expert(
+            hidden_tiles,
+            args.has_bias ? intermediate_tiles + 1 : intermediate_tiles,
+            matmul_num_cores,
+            weight_tiles_per_txn);
+        const uint32_t w2_expected_pages =
+            matmul_num_cores * w2_layers * experts_per_device * w2_core_blocks * weight_tiles_per_block;
+        TT_FATAL(
+            w2_total_pages_buf == w2_expected_pages,
+            "moe_compute: w2 tensor has {} tile pages, the layout for {} layers x {} experts over {} ring cores needs "
+            "{} ({} blocks of {} tiles per core per expert); pack it with prepare_w2_tensor_for_moe_compute",
+            w2_total_pages_buf,
+            w2_layers,
+            experts_per_device,
+            matmul_num_cores,
+            w2_expected_pages,
+            w2_core_blocks,
+            weight_tiles_per_block);
     }
     TT_FATAL(
         w2_total_pages_buf % matmul_num_cores == 0,
@@ -1249,6 +1286,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", combine_data_parallel_cores},
         {"hidden_tiles", hidden_tiles},
+        {"tiles_per_txn", weight_tiles_per_txn},
         {"intermediate_tiles", intermediate_tiles},
         {"noc_max_burst_bytes", noc_max_burst_bytes},
         // Matmul -> combine: dm1 increments this on combine cores when data is written

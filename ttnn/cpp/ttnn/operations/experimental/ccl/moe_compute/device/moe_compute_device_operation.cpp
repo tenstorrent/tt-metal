@@ -76,34 +76,38 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         "matmul_w2_tensor must be rank 6 ([num_cores, L, E, groups_per_core, N, 4*TILE_SIZE]); got rank {}",
         rank_of(tensor_args.matmul_w2_tensor));
 
-    // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
-    // ceil((N+1)/W2_TXN)*W2_TXN. The physical tensors must be padded to those tile counts; if not,
-    // dm0 silently reads from wrong expert boundaries after the first expert.
+    // When has_bias=True, dm0 derives per-expert byte strides from K+1 and N+1 padded to whole DRAM
+    // blocks. The physical tensors must be padded to those tile counts; if not, dm0 silently reads from
+    // wrong expert boundaries after the first expert. (The program factory also checks both tensors'
+    // total page counts against the layout.) Block height = 2 * tiles_per_txn / 4 rows for the per-shape
+    // transaction size.
     if (args.has_bias) {
         constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
-        constexpr uint32_t w0w1_txn = moe_ring::W0_W1_BLOCK_TILES_H * tile_h;  // bytes per transaction row
-        constexpr uint32_t w2_txn = moe_ring::W2_TILES_PER_A2A_ITER_H * tile_h;
+        const uint32_t tiles_per_txn = moe_ring::tiles_per_txn_for_shape(
+            tensor_args.tilize_input_tensor.logical_shape()[-1] / tile_h, args.intermediate_size / tile_h, true);
+        const uint32_t w0w1_rows_per_block = moe_ring::block_tiles_h(tiles_per_txn) * tile_h;
+        const uint32_t w2_rows_per_block = moe_ring::block_tiles_h(tiles_per_txn) * tile_h;
 
         const auto& w0_w1_shape = tensor_args.matmul_w0_w1_tensor.tensor_spec().logical_shape();
         const uint32_t w0_w1_k = w0_w1_shape[-2];
         TT_FATAL(
-            w0_w1_k % w0w1_txn == 0,
+            w0_w1_k % w0w1_rows_per_block == 0,
             "matmul_w0_w1_tensor K-dimension ({}) must be a multiple of {} elements ({} tiles * {} rows/tile) "
             "when has_bias=True. Use moe_compute_utils.prepare_w0_w1_tensor_with_bias() to prepare the tensor.",
             w0_w1_k,
-            w0w1_txn,
-            moe_ring::W0_W1_TILES_PER_TXN,
+            w0w1_rows_per_block,
+            moe_ring::block_tiles_h(tiles_per_txn),
             tile_h);
 
         const auto& w2_shape = tensor_args.matmul_w2_tensor.tensor_spec().logical_shape();
         const uint32_t w2_n = w2_shape[-2];
         TT_FATAL(
-            w2_n % w2_txn == 0,
+            w2_n % w2_rows_per_block == 0,
             "matmul_w2_tensor N-dimension ({}) must be a multiple of {} elements ({} tiles * {} rows/tile) "
             "when has_bias=True. Use moe_compute_utils.prepare_w2_tensor_with_bias() to prepare the tensor.",
             w2_n,
-            w2_txn,
-            moe_ring::W2_TILES_PER_TXN,
+            w2_rows_per_block,
+            moe_ring::block_tiles_h(tiles_per_txn),
             tile_h);
     }
 
