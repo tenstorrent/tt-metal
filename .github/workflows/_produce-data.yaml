@@ -173,7 +173,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --repo ${{ github.repository }} --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --repo ${{ github.repository }} --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --workflow-name "${{ github.event.workflow_run.name }}"
           find generated/cicd/ -type f
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
