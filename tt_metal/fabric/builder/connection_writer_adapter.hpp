@@ -13,6 +13,8 @@
 
 namespace tt::tt_fabric {
 
+class FabricBuilderContext;
+
 // Local tensix (relay) connection info for UDM mode
 struct LocalTensixRelayConnectionInfo {
     tt::tt_metal::CoreCoord noc_xy = {0, 0};
@@ -91,7 +93,9 @@ private:
  */
 class StaticSizedChannelConnectionWriterAdapter final : public ChannelConnectionWriterAdapter {
 public:
+    // builder_context must outlive the adapter.
     StaticSizedChannelConnectionWriterAdapter(
+        const FabricBuilderContext& builder_context,
         FabricStaticSizedChannelsAllocator& allocator,
         tt::tt_fabric::Topology topology,
         eth_chan_directions my_direction);
@@ -176,6 +180,7 @@ private:
         builder_config::num_max_receiver_channels>
         downstream_edm_buffer_index_semaphore_addresses = {};
 
+    const FabricBuilderContext& builder_context_;
     bool is_2D_routing = false;
     eth_chan_directions my_direction = eth_chan_directions::EAST;
 

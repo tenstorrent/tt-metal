@@ -188,6 +188,8 @@ void create_mux_kernel(
     };
     std::vector<uint32_t> mux_fabric_connection_rt_args;
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
+        tt::tt_metal::MetalContext::instance().get_cluster(),
+        tt::tt_metal::MetalContext::instance().hal(),
         sender_worker_adapter_spec,
         device->id(),
         {mux_logical_core},

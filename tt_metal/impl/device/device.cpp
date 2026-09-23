@@ -514,7 +514,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
 bool Device::compile_fabric() {
-    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(MetalEnvAccessor(*env_).impl(), this);
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(
+        MetalEnvAccessor(*env_).impl(), context_->get_dispatch_core_manager().get_dispatch_core_config(), this);
     return fabric_program_ != nullptr;
 }
 

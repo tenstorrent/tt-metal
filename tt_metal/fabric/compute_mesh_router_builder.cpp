@@ -235,6 +235,7 @@ ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
 
 std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const FabricContext& fabric_context,
+    CoreType dispatch_core_type,
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
@@ -450,6 +451,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // NOW create erisc builder with computed injection flags and actual channel counts
     auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(
+        fabric_context,
+        dispatch_core_type,
         device,
         program,
         eth_logical_core,

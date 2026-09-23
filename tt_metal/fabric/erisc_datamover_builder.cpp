@@ -35,14 +35,12 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
-#include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
 class Program;
@@ -561,17 +559,18 @@ void append_worker_to_fabric_edm_sender_rt_args(
 
 // TODO: will be deprecated. non device init fabric case
 void append_worker_to_fabric_edm_sender_rt_args(
+    const tt::Cluster& cluster,
+    const tt::tt_metal::Hal& hal,
     const SenderWorkerAdapterSpec& connection,
     ChipId chip_id,
     const CoreRangeSet& worker_cores,
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    chan_id_t eth_channel =
-        tt::tt_metal::MetalContext::instance()
-            .get_cluster()
-            .get_logical_ethernet_core_from_virtual(chip_id, tt::tt_metal::CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
-            .y;
+    chan_id_t eth_channel = cluster
+                                .get_logical_ethernet_core_from_virtual(
+                                    chip_id, tt::tt_metal::CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
+                                .y;
 
     // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
     // because this function is called several times for same device which overwrites info written by previous calls
@@ -601,13 +600,12 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::vector<tt::tt_metal::CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
     for (const auto& logical_core : worker_core_coords) {
         tt::tt_metal::CoreCoord tensix_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                chip_id, logical_core, CoreType::WORKER);
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, CoreType::WORKER);
+        cluster.write_core(
             &connection_info,
             sizeof(tt::tt_fabric::fabric_connection_info_t),
             tt_cxy_pair(chip_id, tensix_core),
-            tt_metal::MetalContext::instance().hal().get_dev_addr(
+            hal.get_dev_addr(
                 tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) +
                 connection_offset);
     }
@@ -645,6 +643,8 @@ size_t log_worker_to_fabric_edm_sender_rt_args(
 }
 
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
+    const FabricContext& fabric_context,
+    CoreType dispatch_core_type,
     const tt::tt_metal::CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
     size_t my_noc_y,
@@ -669,6 +669,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
     std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) :
     FabricDatamoverBuilderBase(my_noc_x, my_noc_y, direction),
+    fabric_context_(fabric_context),
+    dispatch_core_type_(dispatch_core_type),
     my_eth_core_logical(my_eth_core_logical),
     my_eth_channel(my_eth_core_logical.y),
     config(config),
@@ -676,7 +678,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     peer_fabric_node_id(peer_fabric_node_id),
     is_inter_mesh(local_fabric_node_id.mesh_id != peer_fabric_node_id.mesh_id),
     handshake_address(tt::round_up(
-        tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
+        fabric_context.get_hal().get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
+        FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
     local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),
     termination_signal_ptr(config.termination_signal_address),
@@ -718,8 +722,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const auto& receiver_counts =
         actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
 
-    bool is_mux_mode = has_tensix_extension && (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
-                                                tt::tt_fabric::FabricTensixConfig::MUX);
+    bool is_mux_mode =
+        has_tensix_extension && (fabric_context.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX);
 
     size_t num_riscv_cores = this->config.risc_configs.size();
     for (size_t risc_id = 0; risc_id < num_riscv_cores; ++risc_id) {
@@ -792,7 +796,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         "error.");
     this->receiver_channel_to_downstream_adapter =
         std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
-            *static_allocator, config.topology, direction);
+            fabric_context.get_builder_context(), *static_allocator, config.topology, direction);
     // Worker channels need their buffer-index-counter L1 address set so the EDM kernel can reset it on each launch.
     // Channel 0 is always a worker. VC2 is also a worker channel when active.
     downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
@@ -819,13 +823,12 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 }
 
 void FabricEriscDatamoverBuilder::configure_telemetry_settings() {
-    auto& telemetry_rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& telemetry_rtoptions = fabric_context_.get_rtoptions();
     const auto& telemetry_settings = telemetry_rtoptions.get_fabric_telemetry_settings();
     const bool telemetry_globally_enabled = telemetry_rtoptions.get_enable_fabric_telemetry() &&
                                             telemetry_settings.enabled && telemetry_settings.stats_mask != 0;
     const auto local_physical_chip_id =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
-            this->local_fabric_node_id);
+        fabric_context_.get_control_plane().get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
     for (uint32_t risc_id = 0; risc_id < this->config.num_riscv_cores; risc_id++) {
         bool telemetry_enabled_on_erisc =
             telemetry_globally_enabled &&
@@ -841,7 +844,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     const auto& risc_config = config.risc_configs[risc_id];
     const bool telemetry_enabled = risc_config.telemetry_enabled();
 
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = fabric_context_.get_rtoptions();
     named_args["ENABLE_FABRIC_TELEMETRY"] = static_cast<uint32_t>(telemetry_enabled);
 
     // Add telemetry statistic mask (per ERISC)
@@ -912,23 +915,21 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
 
-    auto dispatch_core_type = get_core_type_from_config(
-        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config());
     uint32_t my_eth_channel_ = [&]() -> uint32_t {
-        if (dispatch_core_type == CoreType::WORKER) {
+        if (dispatch_core_type_ == CoreType::WORKER) {
             return this->my_eth_channel;
         }
-        if (dispatch_core_type == CoreType::ETH) {
+        if (dispatch_core_type_ == CoreType::ETH) {
             return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
         }
-        TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
+        TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type_));
     }();
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = fabric_context_.get_control_plane();
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
+    const auto& soc_desc = fabric_context_.get_cluster().get_soc_desc(local_physical_chip_id);
 
-    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& fabric_context = fabric_context_;
     const auto topology = fabric_context.get_fabric_topology();
 
     auto sender_channel_to_check = get_worker_connected_sender_channel();
@@ -946,8 +947,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
 
     bool update_pkt_hdr_on_rx_ch = true;
-    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool fabric_tensix_extension_enabled = fabric_context_.is_tensix_enabled();
     bool support_pkt_hdr_update_on_sender_channel =
         !fabric_tensix_extension_enabled &&
         (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Mesh);
@@ -1507,48 +1507,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
-    tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreCoord& ethernet_core,
-    ChipId local_physical_chip_id,
-    ChipId peer_physical_chip_id,
-    const FabricEriscDatamoverConfig& config,
-    std::vector<bool>&& sender_channel_injection_flags,
-    bool build_in_worker_connection_mode,
-    eth_chan_directions direction,
-    bool has_tensix_extension,
-    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
-    std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
-    std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
-    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    log_debug(
-        tt::LogFabric,
-        "Building FabricEriscDatamover for device {}:  "
-        "channel_buffer_size={}, topology={}, num_sender_channels={}, num_receiver_channels={}",
-        device->id(),
-        config.channel_buffer_size_bytes,
-        (int)config.topology,
-        config.num_used_sender_channels,
-        config.num_used_receiver_channels);
-    return FabricEriscDatamoverBuilder::build(
-        device,
-        program,
-        ethernet_core,
-        control_plane.get_fabric_node_id_from_physical_chip_id(local_physical_chip_id),
-        control_plane.get_fabric_node_id_from_physical_chip_id(peer_physical_chip_id),
-        config,
-        std::move(sender_channel_injection_flags),
-        build_in_worker_connection_mode,
-        direction,
-        has_tensix_extension,
-        actual_sender_channels_per_vc,
-        actual_receiver_channels_per_vc,
-        channel_trimming_overrides,
-        vc0_trim_fast_path_info);
-}
-
-FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
+    const FabricContext& fabric_context,
+    CoreType dispatch_core_type,
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& /*program*/,
     const tt::tt_metal::CoreCoord& ethernet_core,
@@ -1615,8 +1575,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
                 config.sender_channels_connection_semaphore_address[vc2_flat];
         }
     } else {
-        const bool is_2D_routing =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
+        const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
         uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
 
@@ -1637,6 +1596,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         }
     }
     return FabricEriscDatamoverBuilder(
+        fabric_context,
+        dispatch_core_type,
         ethernet_core,
         device->ethernet_core_from_logical_core(ethernet_core).x,
         device->ethernet_core_from_logical_core(ethernet_core).y,
@@ -1723,8 +1684,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
         downstream_vc_idx,
         builder_config::MAX_NUM_VCS);
 
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
+    const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
 
     // VC1 is only supported for 2D routing
     if (upstream_vc_idx == 1 || downstream_vc_idx == 1) {
@@ -1772,7 +1732,7 @@ size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return t
 
 tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_level() const {
     // User override via TT_METAL_FABRIC_OPT_LEVEL takes priority
-    auto opt_level_override = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_kernel_opt_level();
+    auto opt_level_override = fabric_context_.get_rtoptions().get_fabric_kernel_opt_level();
     if (opt_level_override.has_value()) {
         return opt_level_override.value();
     }
