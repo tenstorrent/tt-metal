@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Named SDPA precision recipes on exp_ring_joint_scaled_dot_product_attention (single pass).
+"""Named SDPA precision recipes on exp_ring_joint_scaled_dot_product_attention (1-3 passes per row).
 
 Runs on two connected Blackholes as a 1x2 FABRIC_1D_RING mesh (exp ring needs Ring topology and two
 links). The gate mirrors test_sdpa_recipe_ring.py: for B/C/D/E, each chip's output must equal dense
@@ -139,7 +139,7 @@ def upload_case(mesh, host, variant):
 
 # (heads, local rows, joint rows, logical_n or None, grid, q_chunk). grid = (SDPA columns + 1 MUX column,
 # 4 rows: the minimum at which the backward (rows 0, 3) and forward (rows 1, 2) MUX cores are distinct);
-# heads x segments-per-head must equal the 4 rows for a single pass.
+# heads x segments-per-head over the 4 rows sets the passes per row (1-3; recipes run pass-outer).
 CASES = {
     "aligned": dict(heads=4, local=1024, joint=0, logical_n=None, grid=(5, 4)),
     "joint": dict(heads=2, local=1024, joint=512, logical_n=None, grid=(4, 4)),
@@ -147,9 +147,18 @@ CASES = {
     "subtile-pad-shard": dict(heads=4, local=1024, joint=0, logical_n=777, grid=(5, 4)),
     "joint-tail": dict(heads=4, local=1024, joint=768, logical_n=None, grid=(8, 4)),
     "padded-tails": dict(heads=2, local=768, joint=768, logical_n=1300, grid=(4, 4)),
+    # Multi-pass: 8 / 12 head-segments on 4 rows -> 2 / 3 passes per row.
+    "two-pass": dict(heads=8, local=1024, joint=0, logical_n=None, grid=(5, 4)),
+    "three-pass": dict(heads=12, local=1024, joint=0, logical_n=None, grid=(5, 4)),
+    # 6 segments on 4 rows: rows 0-1 run 2 passes, rows 2-3 idle the second pass.
+    "uneven-pass": dict(heads=6, local=1024, joint=0, logical_n=None, grid=(5, 4)),
+    # 2 segments per head (split-head forwarding dedup) x 4 heads = 2 passes, with all three tails.
+    "two-pass-tails": dict(heads=4, local=768, joint=768, logical_n=1300, grid=(4, 4)),
+    # 3 passes with joint KV and a whole skipped K chunk.
+    "three-pass-joint-skip": dict(heads=6, local=1024, joint=512, logical_n=1536, grid=(4, 4)),
 }
-Q128_GRIDS = {"aligned": (5, 4), "joint": (4, 4), "padded-tails": (4, 4)}
-Q128_HEADS = {"aligned": 2, "joint": 1, "padded-tails": 1}
+Q128_GRIDS = {"aligned": (5, 4), "joint": (4, 4), "padded-tails": (4, 4), "two-pass": (5, 4)}
+Q128_HEADS = {"aligned": 2, "joint": 1, "padded-tails": 1, "two-pass": 4}
 # Q224 (Wan's 4x32 exp-ring chunk): 1024-row shards give 5 Q chunks per head, filling 5 SDPA columns.
 Q224_GRIDS = {"aligned": (6, 4)}
 PAIRED_VARIANTS = ("B", "E_bf16", "E_bfp8", "E_bfp4")
@@ -196,6 +205,14 @@ def test_recipe_exp_ring(exp_ring_mesh, case, variant, q_chunk, record_property)
     if q_chunk == 224 and variant in PAIRED_VARIANTS:
         with pytest.raises(RuntimeError, match="multiple of 64 rows"):
             invoke()
+        return
+    if variant == "A" and heads * (-(-(local + joint) // q_chunk) // (grid[0] - 1)) > 2 * grid[1]:
+        # FAST keeps the legacy exp compute and its multi-pass L1 layout (all passes' Q chunks and
+        # accumulator states resident), which does not fit three passes at Q256/K512: the legacy call
+        # and FAST must reject it identically.
+        for call in (invoke, lambda: run_exp_ring(mesh, subdevice, semaphores, inputs, joints, backing, **kwargs)):
+            with pytest.raises(RuntimeError, match="Exp ring joint SDPA CBs need"):
+                call()
         return
     outputs = invoke()
     actual = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(outputs[0])]
@@ -268,7 +285,7 @@ def test_recipe_exp_ring(exp_ring_mesh, case, variant, q_chunk, record_property)
         precision=precision,
         inputs_prepared=variant.startswith("E_"),
         program_config=ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(heads, 1), q_chunk_size=q_chunk, k_chunk_size=K_CHUNK
+            compute_with_storage_grid_size=(min(heads, 8), -(-heads // 8)), q_chunk_size=q_chunk, k_chunk_size=K_CHUNK
         ),
     )
     dense = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(dense_output)]
@@ -332,13 +349,13 @@ def test_legacy_exp_ring_two_chip(exp_ring_mesh, case, record_property):
 
 @pytest.mark.parametrize(
     "case",
-    ["multi_pass", "logical_n_tensor", "compute", "exp", "scale", "prepared", "unprepared", "q512", "k256", "l1_q320"],
+    ["four_pass", "logical_n_tensor", "compute", "exp", "scale", "prepared", "unprepared", "q512", "k256", "l1_q320"],
 )
 def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
     """Rejected on the host before dispatch. (Causal/balanced/window/cache do not exist on this op;
-    stream_q only arises with several passes, so multi_pass covers it.)"""
+    Recipes run pass-outer with a single-slot Q per pass, so the legacy stream_q fallback never applies.)"""
     mesh, subdevice, semaphores = exp_ring_mesh
-    heads = 8 if case == "multi_pass" else 4
+    heads = 16 if case == "four_pass" else 4
     local = 1280 if case == "l1_q320" else 1024
     host = generate(heads, RING * local, RING * local, 0)
     inputs, joints, backing = upload_case(mesh, host, "B")
@@ -374,7 +391,7 @@ def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
         ),
     }
     messages = {
-        "multi_pass": "single pass",
+        "four_pass": "at most 3 are supported",
         "logical_n_tensor": "scalar logical_n",
         "compute": "not both",
         "exp": "exp_approx_mode=false",
@@ -399,3 +416,40 @@ def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
             logical_n=logical_n,
             **options,
         )
+
+
+@pytest.mark.skipif(os.getenv("TEST_EXP_RING_PERF") != "1", reason="Opt-in exp ring pass timing")
+@pytest.mark.parametrize("variant", ["A", "B", "D"])
+@pytest.mark.parametrize("heads", [4, 8, 12], ids=["1pass", "2pass", "3pass"])
+def test_recipe_exp_ring_pass_timing(exp_ring_mesh, variant, heads, record_property):
+    """Trace wall time on the same 4x4 SDPA grid: work grows linearly with the passes per row."""
+    import statistics
+    import time
+
+    if variant == "A" and heads == 12:
+        pytest.skip("FAST keeps the legacy multi-pass L1 layout, which does not fit three passes at Q256/K512")
+    mesh, subdevice, semaphores = exp_ring_mesh
+    host = generate(heads, 2048, 2048, 0)
+    inputs, joints, backing = upload_case(mesh, host, variant)
+    kwargs = dict(grid=(5, 4), q_chunk=256, logical_n=2048)
+    options = dict(precision=getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")))
+
+    def invoke():
+        return run_exp_ring(mesh, subdevice, semaphores, inputs, joints, backing, **kwargs, **options)
+
+    invoke()
+    trace = ttnn.begin_trace_capture(mesh, cq_id=0)
+    invoke()
+    ttnn.end_trace_capture(mesh, trace, cq_id=0)
+    try:
+        ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+        samples = []
+        for _ in range(9):
+            start = time.perf_counter()
+            ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+            samples.append((time.perf_counter() - start) * 1000)
+    finally:
+        ttnn.release_trace(mesh, trace)
+    record_property("passes", heads // 4)
+    record_property("trace_wall_ms_median", statistics.median(samples))
+    record_property("trace_wall_ms_min", min(samples))

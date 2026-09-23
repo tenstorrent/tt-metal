@@ -147,14 +147,20 @@ recipe: each core keeps one recurrent state resident in L1 across every active r
 releases Q and normalizes only on the last KV chunk of the last active iteration, and masks key tails
 (local shard padding, the global `logical_n` tail and the joint tail) from valid-row counts. The
 existing reader's chunk skipping, phase-alignment chunks and MUX forwarding are reused unchanged.
-The recipe owns CB indices 0-16; the MUX-writer K/V aliases move to 19/20 and Q is single-slot
-(each Q chunk is read once and stays resident), so B/E_bf16/C/D fit Q256/K512 in the pipeline's L1.
+The recipe owns CB indices 0-16; the MUX-writer K/V aliases move to 19/20 and Q is single-slot,
+so B/E_bf16/C/D fit Q256/K512 in the pipeline's L1.
+
+Rows with several head-segments (passes, up to three) run **pass-outer, ring-inner** in recipe
+mode: each pass reads its Q chunk once, keeps one recurrent state across the whole ring, normalizes
+on its last active ring iteration and releases Q before the next pass. The reader, MUX writers and
+compute all replay the ring sequence per pass, so the per-link forwarding counts, mcast credits,
+split-head dedup relays and phase-alignment pairs stay matched on every device. Recipe L1 does not
+grow with the pass count, and the legacy streamed-Q fallback never applies. The legacy (no
+`precision`) loop order is unchanged.
 
 Current exp-ring recipe scope is Blackhole, D128, Q128-Q320 in 32-row steps (as L1 allows; B/E need
-a multiple of 64) with K512, scalar
-`logical_n`, the default scale and **one head-segment per core row** (a single pass). Several
-passes per row (and therefore the streamed-Q fallback) and a device-tensor `logical_n` are rejected:
-per-pass recipe state would need a pass-outer loop order or DRAM checkpoints. An L1 overflow is
+a multiple of 64) with K512, scalar `logical_n`, the default scale and 1-3 passes per core row. A
+device-tensor `logical_n` is rejected. An L1 overflow is
 rejected with the required and usable sizes. Two connected devices (1x2 `FABRIC_1D_RING`, two links)
 are qualified: B/C/D/E equal dense recipe attention bit-for-bit on the chip's KV in ring visiting
 order whenever every visited segment but the last is a whole number of K512 chunks, and otherwise

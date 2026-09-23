@@ -395,17 +395,6 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         device_grid.y,
         kMaxPasses);
 
-    // Named recipes keep one resident recurrent state per core across every ring iteration; several
-    // head-passes per core row would need a pass-outer loop order or DRAM checkpoints (not yet
-    // implemented), and stream_q only ever applies to multi-pass programs.
-    TT_FATAL(
-        !args.precision || num_passes == 1,
-        "Named exp ring recipes currently support one head-segment per core row (single pass); got {} "
-        "head-segments on {} rows ({} passes). Use more grid rows, fewer heads per device, or omit precision.",
-        total_segments,
-        sdpa_grid_y,
-        num_passes);
-
     // Final sanity: total Q chunks must fit the cores across all passes.
     TT_FATAL(
         total_q_chunks <= num_passes * num_sdpa_cores,

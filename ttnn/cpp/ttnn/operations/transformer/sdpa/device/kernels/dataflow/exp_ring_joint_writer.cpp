@@ -368,8 +368,16 @@ void kernel_main() {
     const uint32_t last_active_ring_iter =
         find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_nt, L);
 
+#ifdef SDPA_RECIPE_EXP_RING
+    // Pass-outer, ring-inner, matching the reader and compute (see exp_ring_joint_reader.cpp).
+    for (uint32_t pass = 0; pass < q_count; ++pass) {
+    RingIdSequencer pass_seq = fused_op_indexer.seq;
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        uint32_t ring_id = pass_seq.get_next_ring_id([](uint32_t, uint32_t) {});
+#else
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+#endif
 
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
@@ -389,7 +397,9 @@ void kernel_main() {
             // Serial passes, same order as the reader and compute: pass p handles head
             // (p * rows + my_row). Both the AG forwarding below and the output drain are already
             // parameterized per chunk, so they are correct per pass with no addressing change.
+#ifndef SDPA_RECIPE_EXP_RING
             for (uint32_t pass = 0; pass < q_count; ++pass) {
+#endif
                 const uint32_t global_q_chunk = q_base + pass * q_stride;
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
@@ -623,9 +633,14 @@ void kernel_main() {
                     cb_v_w.pop_front(v_chunk_tiles);
                 }
 #endif
+#ifndef SDPA_RECIPE_EXP_RING
             }
+#endif
         }
     }
+#ifdef SDPA_RECIPE_EXP_RING
+    }
+#endif
 
 #ifdef USE_MUX
     if (mux_connection_valid) {
