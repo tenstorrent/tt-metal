@@ -5,7 +5,6 @@
 #include <tt_stl/fmt.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
-#include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
 
@@ -14,7 +13,6 @@
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
@@ -35,7 +33,6 @@
 #include <vector>
 
 #include "allocator.hpp"
-#include "common/env_lib.hpp"
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
