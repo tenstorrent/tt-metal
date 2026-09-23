@@ -4,10 +4,9 @@ name: "Verify changed tests"
 # the merge queue until that specific entry has run green
 #
 # All logic lives in the tenstorrent/tt-metal/.github/actions/verify-changed-tests
-# action, meant to be pinned to @main so a PR branch always runs the current gate
-# rather than whatever copy (or lack of one) sits at its own head -- referenced by
-# local path below until this action exists on main, then switch to @main. This
-# file only wires it up, plus the two policy lists below.
+# action, pinned to @main so a PR branch always runs the current gate rather than
+# whatever copy (or lack of one) sits at its own head. This file only wires it up,
+# plus the two policy lists below.
 #
 # merge_group runs `scope` only. The hardware legs already ran on the PR head;
 # re-firing them in the queue would spend the same scarce hardware twice. The
@@ -138,11 +137,9 @@ jobs:
 
       - name: Scope the changed tests, narrow the matrix, enforce owner review
         id: gate
-        # TODO: switch to tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
-        # once this action lands on main -- @main can't resolve to a path that doesn't
-        # exist there yet. Pinning to @main is the point: a PR branch then always runs
-        # the current gate, not whatever copy (or lack of one) sits at its own head.
-        uses: ./.github/actions/verify-changed-tests
+        # Pinned to @main: a PR branch runs the current gate, not whatever
+        # copy (or lack of one) happens to sit at its own head.
+        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
         env:
           GH_TOKEN: ${{ github.token }}
         with:

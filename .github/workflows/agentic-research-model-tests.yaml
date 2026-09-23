@@ -61,7 +61,7 @@ jobs:
       - run: pip3 install PyYAML
       - name: Resolve hardware
         id: hardware
-        uses: ./.github/actions/prepare-test-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
         with:
           tests-yaml: ${{ env.REGISTRY }}
           enabled-skus: ${{ env.SKU == 'all' && 'ALL_SKUS_IN_TESTS' || env.SKU }}
