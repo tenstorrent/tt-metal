@@ -4546,6 +4546,7 @@ def test_matmul_per_core_m_exceeds_mt_rejected(device, expect_error, config_kind
         ttnn.matmul(in0, in1, program_config=program_config)
 
 
+@skip_for_slow_dispatch()
 def test_matmul_batched_weights_optional_input_slot(device):
     """Vector prim::matmul must pass a size-1 optional-input slot (bias unused)."""
     torch.manual_seed(0)
@@ -4592,6 +4593,7 @@ def test_matmul_batched_weights_optional_input_slot(device):
         device.remove_sub_device_manager(mgr)
 
 
+@skip_for_slow_dispatch()
 def test_quasar_matmul_batched_weights_optional_input_slot(device):
     """Quasar vector prim::matmul must pass a size-1 optional-input slot (bias unused)."""
     if device.arch() != ttnn.device.Arch.QUASAR:
