@@ -115,6 +115,7 @@ def parse_args():
     parser.add_argument("--bank-vc", action="store_true")
     parser.add_argument("--wide-subblocks", action="store_true")
     parser.add_argument("--bounded-layer-barrier", action="store_true")
+    parser.add_argument("--inline-cb-reset", action="store_true")
     parser.add_argument("--multicast-layer-barrier", action="store_true")
     parser.add_argument("--gu-workers", type=int, choices=(8, 16), default=8)
     parser.add_argument("--reuse-mlp-scratch", action="store_true")
@@ -150,7 +151,7 @@ def run(args):
         qkv_custom_mm=args.qkv_custom_mm, qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
         attention_workers=args.attention_workers, attention_chunk=args.attention_chunk,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
-        bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
+        bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, inline_cb_reset=args.inline_cb_reset, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
@@ -239,6 +240,8 @@ def run(args):
         result["warmup_capture_generation_seconds"] = time.perf_counter() - warmup_start
         result["warmup_perf"] = deepcopy(generator.last_perf)
         result["timing_denominator"] = args.tokens - 1
+        if hasattr(generator.model, "fused_decode_loop"):
+            result["resident_program_plan"] = generator.model.fused_decode_loop.program_plan
         evidence["warmup_tokens"] = warmup
         # Allocator metadata only, outside every measurement window. Static
         # program CBs/code are additional; this is not an execution peak.

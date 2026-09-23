@@ -11,6 +11,7 @@ class ProjectionTuning:
     wide_subblocks: bool = False
     bounded_barrier: bool = False
     multicast_barrier: bool = False
+    inline_cb_reset: bool = False
     buffer_count: int = 2
     lookahead: int = 2
     hoist_pack_config: bool = False
@@ -116,6 +117,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("INLINE_CB_RESET", str(int(self.inline_cb_reset))),
             ("QKV_CUSTOM_MM", str(int(self.qkv_custom_mm))),
             ("HEAD_EARLY_BLOCKS", str(self.head_early_blocks)),
             ("ATTENTION_WORKERS", str(self.attention_workers)),

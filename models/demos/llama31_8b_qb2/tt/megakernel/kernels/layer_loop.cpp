@@ -99,6 +99,31 @@ void layer_barrier() {
 }
 #endif
 
+#if INLINE_CB_RESET
+// Called while every local RISC is held at the existing end boundary.
+// Peers only see tensor data and semaphores, never these local interfaces.
+// NCRISC resets stream registers only after the cross-core end rendezvous;
+// no subsequent producer runs until the unchanged next start rendezvous.
+void reset_layer_cb_interfaces(uint32_t tt_l1_ptr* state) {
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    constexpr bool read = true, write = true, tile_ptr = false;
+#elif defined(UCK_CHLKC_UNPACK)
+    constexpr bool read = true, write = false, tile_ptr = false;
+#elif defined(UCK_CHLKC_PACK)
+    constexpr bool read = false, write = true, tile_ptr = true;
+#endif
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_NCRISC)
+    constexpr bool stream = true;
+#else
+    constexpr bool stream = false;
+#endif
+    unified_kernels::reconfig_cbs_for_mask<read, write, tile_ptr, stream>(state, state[256], 0);
+    unified_kernels::reconfig_cbs_for_mask<read, write, tile_ptr, stream>(state, state[257], 32);
+#endif
+}
+#endif
+
 void kernel_main() {
     auto* state = reinterpret_cast<uint32_t tt_l1_ptr*>(get_arg_val<uint32_t>(LOOP_RT_OFFSET));
     // Separate start/end words prevent a fast RISC from consuming a prior
@@ -196,12 +221,17 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
         layer_barrier();
 #endif
+#if INLINE_CB_RESET
+        if (layer + 1 < count) { reset_layer_cb_interfaces(state); }
+#endif
         unified_kernels::sync_riscs_exit<>(end_sync);
+#if !INLINE_CB_RESET
         if (layer + 1 < count) {
             // Current Blackhole implementation handles all64 CB indices and
             // synchronizes stream-register reset with producer/consumer RISCs.
             unified_kernels::reconfig_cb_interfaces(state);
         }
+#endif
     }
 #if defined(COMPILE_FOR_NCRISC) && defined(PROFILE_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
     // Export the total independently of optional marker-buffer capacity.

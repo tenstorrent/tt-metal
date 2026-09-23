@@ -281,6 +281,8 @@ class DecoderLoop:
             program = self.head.append(program, self.body.gather_output, wait_for_gather=True)
             if self.head_prefetch is not None:
                 program = self.head_prefetch.append_helpers(program)
+        from .plan import describe_program
+        self.program_plan = describe_program(self, program)
         return program
 
     def tensors(self):
