@@ -708,17 +708,7 @@ class DeepSeekV4Indexer:
         users = _packed_users(tokens)
         # RoPE leaves a width-sharded L1 row. Reshaping that shard into heads
         # asks for a page size L1 will not take, so interleave in DRAM first.
-        q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        _release_if_distinct(q, q_dram)
-        q_heads = ttnn.reshape(q_dram, [users, self.num_heads, 1, self.head_dim])
-        _release_if_distinct(q_dram, q_heads)
-        q = self._score_block(q_heads)
         w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
-        w_dram = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
-        _release_if_distinct(w, w_dram)
-        w_heads = ttnn.reshape(w_dram, [users, 1, 1, self.num_heads])
-        _release_if_distinct(w_dram, w_heads)
-        w = self._score_block(w_heads)
         topk = self.select(
             q, key_cache, w, logits_out=logits_out, valid_length_tensor=self._closed_windows(compress_pos)
         )

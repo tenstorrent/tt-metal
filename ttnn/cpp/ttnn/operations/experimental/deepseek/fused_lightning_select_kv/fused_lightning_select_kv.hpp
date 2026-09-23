@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -18,31 +19,35 @@ namespace ttnn::experimental::deepseek {
 // ``sparse_sdpa`` does from the index list, and returns the selected attention
 // KV rows so a dense SDPA can consume them directly (K == V).
 //
-//     scores  = indexer_score_dsa(query, key_cache, head_weights, chunk_start_idx = T - Sq)
-//     indices = topk_large_indices(scores, k, valid_length_tensor)
-//     out     = kv_cache gathered at indices through page_table          [B, Hkv, k, Dh]
+//     scores[t] = sum_h ReLU(q_h . key_cache[t]) * w_h
+//     indices   = topk_large_indices(scores, k, valid_length_tensor)
+//     out       = kv_cache gathered at indices through page_table        [1, Hkv, k, Dh]
 //
-// ``query`` is TILE ``[B, Hi, Sq, D]``, ``key_cache`` is the indexer key cache
-// TILE ``[B, 1, T, D]``, ``head_weights`` is TILE ``[B, 1, Sq, Hi]``.
+// Decode only: one user (B == 1) and one query token (Sq == 1).
+//
+// ``query`` ``[num_cores, Hi, 1, D]`` and ``head_weights`` ``[num_cores, 1, 1, Hi]``
+// are ROW_MAJOR HEIGHT_SHARDED in L1 with one full replica per core (shards
+// ``[Hi, D]`` and ``[1, Hi]``), the ``matmul_decode`` rm_hs layout. The op runs on
+// their shared shard grid. ``key_cache`` is the indexer key cache ``[1, 1, T, D]``.
 //
 // ``kv_cache`` is a paged block pool ``[num_blocks, Hkv, block_size, Dh]``, read
-// through ``page_table_tensor`` ``[B, max_blocks_per_user]`` INT32, the same
+// through ``page_table_tensor`` ``[1, max_blocks_per_user]`` INT32, the same
 // layout ``paged_scaled_dot_product_attention_decode`` takes. ``cur_pos_tensor``
-// ``[B]`` INT32 is each user's current (inclusive) position on that axis; rows
+// ``[1]`` INT32 is the user's current (inclusive) position on that axis; rows
 // past it are never read.
 //
-// The output keeps ``kv_cache``'s dtype and layout; its shape is ``[B, Hkv, k, Dh]``.
+// The output keeps ``kv_cache``'s dtype and layout; its shape is ``[1, Hkv, k, Dh]``.
 //
 // The device kernel is not implemented. This entry point only fixes the
 // host-side contract (arguments, validation, output spec).
 //
 // Args:
-//   query:             indexer query, ``[B, Hi, Sq, D]``.
-//   key_cache:         indexer key cache, ``[B, 1, T, D]``.
-//   head_weights:      folded head scales, ``[B, 1, Sq, Hi]``.
+//   query:             indexer query, ``[num_cores, Hi, 1, D]`` replicated rm_hs.
+//   key_cache:         indexer key cache, ``[1, 1, T, D]``.
+//   head_weights:      folded head scales, ``[num_cores, 1, 1, Hi]`` replicated rm_hs.
 //   kv_cache:          paged attention KV pool, ``[num_blocks, Hkv, block_size, Dh]``.
-//   page_table_tensor: per-user block ids, ``[B, max_blocks_per_user]`` INT32.
-//   cur_pos_tensor:    per-user current position, ``[B]`` INT32.
+//   page_table_tensor: block ids, ``[1, max_blocks_per_user]`` INT32.
+//   cur_pos_tensor:    current position, ``[1]`` INT32.
 //   k:                 number of selected rows.
 //
 // Keyword Args:
@@ -52,8 +57,11 @@ namespace ttnn::experimental::deepseek {
 //   compute_kernel_config: compute settings for the score. Defaults to HiFi4
 //                    with fp32 destination accumulation.
 //
-// Returns: selected KV rows, ``[B, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``.
-Tensor fused_lightning_select_kv(
+// Returns: ``[kv_rows, scores]``.
+//   kv_rows: selected KV rows, ``[1, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``.
+//   scores:  index scores, ``[1, 1, 1, max_blocks_per_user * block_size]`` fp32 ROW_MAJOR. Only the
+//            first ``div_up((cur_pos + 1) / 4, block_size) * block_size`` entries are written.
+std::vector<Tensor> fused_lightning_select_kv(
     const Tensor& query,
     const Tensor& key_cache,
     const Tensor& head_weights,
