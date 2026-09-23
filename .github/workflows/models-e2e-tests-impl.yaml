@@ -92,11 +92,11 @@ jobs:
       - name: Build unified test matrix based on enabled SKUs
         if: ${{ inputs.matrix == '' }}
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
       - name: Apply filters and split single-host vs multihost
         id: apply-filters
         # Pass values via env rather than inline ${{ }} so arbitrary cmd content in the matrix

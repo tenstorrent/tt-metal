@@ -69,20 +69,15 @@ jobs:
         run: pip3 install PyYAML
       - name: Build test matrix
         id: build-matrix
-        run: |
-          set -euo pipefail
-          allowlist_args=()
-          allowlist='${{ inputs.sku-allowlist }}'
-          # "*" (default) = omit flag (no filter). Empty = skip all. Else CSV.
-          if [ "$allowlist" != '*' ]; then
-            allowlist_args+=(--sku-allowlist "$allowlist")
-          fi
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}" \
-            "${allowlist_args[@]}"
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          # "*" (default) = omit --sku-allowlist (no filter). Empty = skip all. Else CSV.
+          extra-args: >-
+            --event ${{ github.event_name }}
+            ${{ inputs.sku-allowlist != '*' && format('--sku-allowlist {0}', inputs.sku-allowlist) || '' }}
 
   llk-smoke-exec:
     needs: load-test-matrix

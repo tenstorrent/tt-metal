@@ -42,12 +42,12 @@ jobs:
         run: pip3 install PyYAML
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.runs-on-sku }}" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}"
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.runs-on-sku }}"
+          sku-config: ./.github/sku_config.yaml
+          extra-args: --event "${{ github.event_name }}"
 
   fabric-cpu-unit-tests:
     needs: load-test-matrix

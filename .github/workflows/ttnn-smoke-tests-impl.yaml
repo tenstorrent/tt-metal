@@ -71,12 +71,12 @@ jobs:
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}"
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
+          extra-args: --event "${{ github.event_name }}"
 
       # Load the TTSim skip list ONCE for the whole matrix and expose per-arch --deselect
       # args. The ttnn job applies these (via PYTEST_ADDOPTS) on every sim_* entry so the

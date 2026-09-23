@@ -1,0 +1,47 @@
+name: "Prepare test matrix"
+description: >-
+  Runs .github/scripts/utils/prepare_test_matrix.py in place, pinned to
+  whatever ref the caller's own @ref resolves to (callers pin @main), so
+  every pipeline always builds its matrix with the current script rather
+  than whatever copy (or lack of one) its own branch carries.
+
+inputs:
+  tests-yaml:
+    description: "Path to the tests yaml (tests_yaml_path positional)"
+    required: true
+  enabled-skus:
+    description: "Comma-separated SKUs, or ALL_SKUS_IN_TESTS (enabled_skus positional)"
+    required: true
+  sku-config:
+    description: "Path to sku_config.yaml (sku_config_yaml_path positional)"
+    required: true
+  extra-args:
+    description: >-
+      Extra flags appended verbatim, e.g. --event pull_request or
+      --sku-allowlist a,b,c or --allow-missing-cmd. Omit for none.
+    required: false
+    default: ""
+
+outputs:
+  matrix:
+    description: "JSON array of matrix rows"
+    value: ${{ steps.build.outputs.matrix }}
+  sim-libs:
+    description: "JSON array of ttsim libs the matrix needs fetched"
+    value: ${{ steps.build.outputs.sim-libs }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Build test matrix
+      id: build
+      shell: bash
+      run: |
+        # GITHUB_ACTION_PATH is this action's directory inside the checkout of
+        # this repo at the ref the caller's `uses:` line pinned (@main). The
+        # script two levels up from there is that same checkout's copy, so
+        # running it in place -- rather than a copy bundled into this action --
+        # is what makes pinning this action pin the script.
+        python3 "${GITHUB_ACTION_PATH}/../../scripts/utils/prepare_test_matrix.py" \
+          "${{ inputs.tests-yaml }}" "${{ inputs.enabled-skus }}" "${{ inputs.sku-config }}" \
+          ${{ inputs.extra-args }}
