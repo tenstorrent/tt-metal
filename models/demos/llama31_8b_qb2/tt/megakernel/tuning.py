@@ -11,11 +11,13 @@ class ProjectionTuning:
     wide_subblocks: bool = False
     bounded_barrier: bool = False
     buffer_count: int = 2
+    hoist_pack_config: bool = False
+    bank_vc: bool = False
 
     def __post_init__(self):
         if self.buffer_count not in (2, 3):
             raise ValueError("Projection buffer_count must be two or three")
-        if self.reader not in ("original", "coalesced", "pipelined"):
+        if self.reader not in ("original", "coalesced", "pipelined", "pipelined_rows"):
             raise ValueError(f"Unknown projection reader: {self.reader}")
 
     @property
@@ -25,7 +27,9 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
-            ("PROJECTION_READER", str(("original", "coalesced", "pipelined").index(self.reader))),
+            ("PROJECTION_READER", str(("original", "coalesced", "pipelined", "pipelined_rows").index(self.reader))),
+            ("PROJECTION_HOIST_PACK", str(int(self.hoist_pack_config))),
+            ("PROJECTION_BANK_VC", str(int(self.bank_vc))),
             ("PROJECTION_BUFFERS", str(self.buffer_count)),
             ("PROJECTION_WIDE", str(int(self.wide_subblocks))),
         ]

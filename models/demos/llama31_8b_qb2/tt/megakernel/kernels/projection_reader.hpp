@@ -9,15 +9,16 @@
 template <uint32_t KBlock, uint32_t N, uint32_t Workers, uint32_t WeightBytes, typename Weight>
 void read_projection_weights(const Weight& weight, uint32_t worker, uint32_t k, uint32_t destination) {
     static_assert(WeightBytes % 64 == 0);
-    if constexpr (Workers == 8) {
+    const uint32_t vc = PROJECTION_BANK_VC ? (worker / (Workers / 8)) % 4 : 1;
+    if constexpr (Workers == 8 && PROJECTION_READER != 3) {
         noc_async_read<KBlock * N * WeightBytes>(
-            weight.get_noc_addr(k * Workers * N + worker * N), destination, KBlock * N * WeightBytes);
+            weight.get_noc_addr(k * Workers * N + worker * N), destination, KBlock * N * WeightBytes, noc_index, vc);
     } else {
-        static_assert(Workers == 16);
+        static_assert(Workers == 8 || Workers == 16);
         for (uint32_t row = 0; row < KBlock; ++row) {
             noc_async_read<N * WeightBytes>(
                 weight.get_noc_addr((k + row) * Workers * N + worker * N),
-                destination + row * N * WeightBytes, N * WeightBytes);
+                destination + row * N * WeightBytes, N * WeightBytes, noc_index, vc);
         }
     }
 }
@@ -27,7 +28,7 @@ template <uint32_t A, uint32_t B, uint32_t KBlock, uint32_t N, uint32_t K, uint3
 void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t worker) {
     constexpr uint32_t blocks = K / KBlock;
     static_assert(K % KBlock == 0 && blocks >= 2);
-#if PROJECTION_READER == 2
+#if PROJECTION_READER >= 2
     // Two or three physical slots; two DMA blocks in flight. Reservations include
     // both the unpublished in-flight block and the next block to issue.
     // TRIDs are reused only after their prior block has completed. This is
@@ -38,7 +39,7 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
     const uint32_t b_start = get_write_ptr(B);
 #endif
     for (uint32_t block = 0; block < blocks; ++block) {
-#if PROJECTION_READER == 2
+#if PROJECTION_READER >= 2
         const uint32_t slot = block % PROJECTION_BUFFERS;
         const uint32_t trid = slot + 1;
         noc_async_read_set_trid(trid);
@@ -57,7 +58,7 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
             noc_async_read_page(block * KBlock + row, input, a + row * 2048);
         }
         read_projection_weights<KBlock, N, Workers, WeightBytes>(weight, worker, block * KBlock, b);
-#if PROJECTION_READER == 2
+#if PROJECTION_READER >= 2
         if (block > 0) {
             noc_async_read_barrier_with_trid((block - 1) % PROJECTION_BUFFERS + 1);
             cb_push_back(A, KBlock);
@@ -73,10 +74,15 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         cb_push_back(B, KBlock * N);
 #endif
     }
-#if PROJECTION_READER == 2
+#if PROJECTION_READER >= 2
     noc_async_read_barrier_with_trid((blocks - 1) % PROJECTION_BUFFERS + 1);
     cb_push_back(A, KBlock);
     cb_push_back(B, KBlock * N);
     noc_async_read_set_trid(0);
+#endif
+#if PROJECTION_BANK_VC
+    // Stateful readers in subsequent phases/programs expect firmware VC1.
+    // Configure the register without issuing an extra memory transaction.
+    noc_async_read_one_packet_set_state<true>(weight.get_noc_addr(worker * N), WeightBytes, 1);
 #endif
 }

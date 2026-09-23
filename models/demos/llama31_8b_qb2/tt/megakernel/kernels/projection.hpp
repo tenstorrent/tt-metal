@@ -19,6 +19,12 @@ void projection() {
         cb_wait_front(A, KBlock);
         cb_wait_front(B, KBlock * N);
         const bool last = block == blocks - 1;
+#if PROJECTION_HOIST_PACK
+        // These settings persist across subblocks. Each setter drains the
+        // packer, so change them only when accumulation/output mode changes.
+        if (block == 1 || last) { pack_reconfig_l1_acc(!last); }
+        if (last) { pack_reconfig_data_format(Out); }
+#endif
         for (uint32_t n = 0; n < N; n += Subblock) {
             tile_regs_acquire();
             if (last) {
@@ -37,8 +43,10 @@ void projection() {
             const uint32_t destination = last ? Out : Partial;
             cb_reserve_back(destination, Subblock);
             tile_regs_wait();
+#if !PROJECTION_HOIST_PACK
             pack_reconfig_data_format(destination);
             pack_reconfig_l1_acc(!last && block > 0);
+#endif
             pack_block(0, destination, Subblock);
             tile_regs_release();
             cb_push_back(destination, Subblock);

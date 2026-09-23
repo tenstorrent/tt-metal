@@ -55,7 +55,7 @@ class FusedMLP:
         if gu_workers not in (8, 16):
             raise ValueError("gu_workers must be 8 or 16")
         self.tuning = tuning or ProjectionTuning()
-        if reuse_scratch and self.tuning.reader != "original":
+        if reuse_scratch and (self.tuning.reader != "original" or self.tuning.buffers != 2):
             raise ValueError("Tuned readers require independent projection buffers")
         self.gu_workers = gu_workers
         self.layers = tuple(layers)

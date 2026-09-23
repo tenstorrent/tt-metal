@@ -81,8 +81,10 @@ def parse_args():
         help="Optional HF accuracy gate; otherwise report BF16-reference drift separately from matched TT checks",
     )
     parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined"), default="original")
+    parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined", "pipelined_rows"), default="original")
     parser.add_argument("--projection-buffers", type=int, choices=(2, 3), default=2)
+    parser.add_argument("--hoist-pack-config", action="store_true")
+    parser.add_argument("--bank-vc", action="store_true")
     parser.add_argument("--wide-subblocks", action="store_true")
     parser.add_argument("--bounded-layer-barrier", action="store_true")
     parser.add_argument("--gu-workers", type=int, choices=(8, 16), default=8)
@@ -108,7 +110,7 @@ def run(args):
     from models.demos.llama31_8b_qb2.tt.generator_vllm import LlamaForCausalLM
     from models.demos.utils.trace_region_sizes import build_trace_device_params
 
-    tuning = ProjectionTuning(args.projection_reader, args.wide_subblocks, args.bounded_layer_barrier, args.projection_buffers)
+    tuning = ProjectionTuning(args.projection_reader, args.wide_subblocks, args.bounded_layer_barrier, args.projection_buffers, args.hoist_pack_config, args.bank_vc)
     if args.mode == "baseline" and tuning != ProjectionTuning():
         raise ValueError("Projection tuning applies only to experimental kernels")
     torch.set_num_threads(8)

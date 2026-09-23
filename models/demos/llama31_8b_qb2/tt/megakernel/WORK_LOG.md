@@ -39,3 +39,13 @@ All eight runs pass exact teacher logits, all64 request-touched KV tensors, all 
 - Context128/256 outputs (255 decode steps): 7.678513819 / 9.287472176.
 
 Native is ~1.15 ms faster than historical results at every context, while original resident remains close to history. Cause unisolated; use these refreshed pairs, not historical timings, for candidate score. HF diagnostic target remains failed at 128/2048. Kernel sources were unchanged throughout initial suite.
+
+## 10:04 UTC — initial interventions measured
+
+All nine focused variants pass bitwise real layer0/31 GU/SwiGLU/down and replay. Component medians (us; 20 trials of100 replays, four layer/input cases): original GU8 144.258; wide143.379; coalesced148.086; coalesced+wide147.714; pipelined2+wide141.339; pipelined3+wide133.956. GU16 original153.595, wide152.284, pipeline2+wide147.338. Wider GU work is not currently justified.
+
+Full context128 pipeline2+wide+bounded-barrier passes exact teacher logits, all64 touched KV tensors and32 greedy outputs; five-trial median9.132832ms versus original9.243841 and native7.635744. A measured component/model improvement, still no native-baseline win.
+
+Packer configuration hoisting and per-bank request VC are separately implemented/tested, but have only small component effects: original+hoist144.269, wide+hoist143.615, pipeline2+wide+hoist140.890, pipeline3+wide+hoist133.671, row-pipeline3+wide+hoist135.676, pipeline3+wide+hoist+bankVC133.691. GU16+wide+hoist152.254; pipeline3+wide+hoist+bankVC144.810. All exact. Native reader placement queried: bank-order logical cores [(0,9),(0,0),(0,7),(0,3),(7,9),(7,1),(7,6),(7,4)], unlike row3 resident projection workers. Physical mapping saved in reader-placement-mesh.log; healthy open/close passed.
+
+Next: separate full-model profiles; phase-ahead L1 weight staging on idle norm readers, initially six GU/down K blocks, tested separately to expose contention. Needed reads/refills stay inside token time. Existing arithmetic and first-experiment defaults remain available.
