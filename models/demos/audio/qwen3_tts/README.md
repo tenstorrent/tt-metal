@@ -402,11 +402,27 @@ two frames**, upstream's `min_new_tokens=2`, since one frame is 80 ms and not sp
 
 ## Hardware
 
-Bring-up runs on Blackhole. CI covers both single-chip SKUs, Wormhole N150 and Blackhole
-P150, so an architecture-specific regression shows up on whichever side it breaks. P150
-stands in for the dev machine's P300s: the model is single-device at batch 1, so a two-card
-SKU buys no coverage, and P150 uses the standard shared weight cache while P300 runs in LFC
-mode and would need to pull its own weights.
+Bring-up ran on Blackhole; the 0.6B work and everything below was measured on a Wormhole
+N150. CI covers both single-chip SKUs, Wormhole N150 and Blackhole P150, so an
+architecture-specific regression shows up on whichever side it breaks. P150 stands in for
+the dev machine's P300s: the model is single-device at batch 1, so a two-card SKU buys no
+coverage, and P150 uses the standard shared weight cache while P300 runs in LFC mode and
+would need to pull its own weights.
+
+**Wormhole needed three things Blackhole did not.**
+
+- **The codec decoder's convolutions keep their config tensors in DRAM.** In L1_SMALL,
+  Wormhole hung once a decode reached 64 frames (about 5 s of audio): cold in the final conv,
+  warm in the last transposed conv. Each op passes on its own at that length; it fails only
+  beside the decode's other resident programs. A hang left running took the whole host down
+  with a fatal hardware error. `config_tensors_in_dram=True` fixes it at 64 and 160 frames,
+  cold and warm, with identical PCC.
+- **The codec tests open the device with 64 KB of L1_SMALL**, the pipeline's own figure. At
+  32 KB, two decode lengths in one process no longer fit.
+- **A stage gate of 0.985 in `test_codec_pcc.py`** rather than 0.99. Wormhole's codec
+  intermediates land lower on random codes (`decoder.3` at 0.9895 on one seed, 0.9963 on
+  another) while the waveform clears 0.99. HiFi3, which tt-metal recommends on Wormhole with
+  fp32 accumulation, measured no better than HiFi4, so the model stays on HiFi4.
 
 ## Dependencies
 

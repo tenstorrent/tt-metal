@@ -136,17 +136,24 @@ def test_the_feed_sends_eos_once_and_then_pads(tables):
 
 
 def test_text_in_pieces_matches_the_same_text_whole(tables):
-    """Feeding "a b" as ["a ", "b"] must give the same positions, when the split is clean."""
+    """Feeding "a b" as ["a ", "b"] must give the same positions, when the split is clean.
+
+    Same to fp32 rounding, not bit for bit: the feed projects whatever ids are waiting in one
+    call, so pieces project in different batch sizes, and CPU matmuls round differently by batch
+    size on some builds (torch 2.11 measured 1.2e-7 at worst). A different tokenisation, the
+    failure this guards against, differs at order 1.
+    """
+    same = lambda a, b: torch.allclose(a, b, rtol=0, atol=1e-6)
     whole, whole_feed = build_streaming_prefill(
         "The kettle is on, and the rain has not let up.", SPEAKER, LANGUAGE, tables
     )
     pieces, piece_feed = build_streaming_prefill(
         iter(["The kettle is on,", " and the rain has not let up."]), SPEAKER, LANGUAGE, tables
     )
-    assert torch.equal(whole, pieces), "the prompt must not depend on how the text arrived"
+    assert same(whole, pieces), "the prompt must not depend on how the text arrived"
 
     for index in range(12):
-        assert torch.equal(whole_feed.next(), piece_feed.next()), f"position {index} differed"
+        assert same(whole_feed.next(), piece_feed.next()), f"position {index} differed"
 
 
 def test_a_split_inside_a_word_is_a_different_tokenisation(tables):

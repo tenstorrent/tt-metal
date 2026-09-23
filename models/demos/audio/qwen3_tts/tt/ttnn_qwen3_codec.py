@@ -357,7 +357,9 @@ class TtCodecDecoder:
         self.p = parameters
         self.config = parameters["config"]
         self.compute_config = _compute_config(device)
-        self.conv_config = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16)
+        # Config tensors in DRAM: in L1_SMALL, Wormhole hung at 64 frames and up (README).
+        self.conv_config = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16, config_tensors_in_dram=True)
+        self.trans_conv_config = ttnn.Conv2dConfig(config_tensors_in_dram=True)
         self.heads = self.config["num_attention_heads"]
         self.kv_heads = self.config["num_key_value_heads"]
         self.head_dim = self.config["head_dim"]
@@ -419,6 +421,7 @@ class TtCodecDecoder:
             output_padding=(0, 0),
             dilation=(1, 1),
             groups=1,
+            conv_config=self.trans_conv_config,
             return_output_dim=True,
         )
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
