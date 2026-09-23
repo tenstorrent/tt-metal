@@ -225,4 +225,4 @@ Isolatedone-layerQKVsave showedEVERYfirst16columnsofevery32-columntile EXACT, wh
 ## 14:02 UTC — custom GU synchronization gate and checkpoint
 CustomQKV exactfull1288.013220290mslosescontrol7.937779. CustomGUstridedreader initialcomponentfailedPCC.999366701;93–94%elementsexact, errorsconcentratedfirsttileof7-columnsubblocks (7/14/21), timing-dependentacrosscores. ExplicitUNPACK/MATHtensix_syncbeforeeachcustomcall made12componentchecksEXACTandcomplete2-layerWorkerWatcherEXACT. Supportsconfiguration-orderingrace; thesafetysyncispartoftestedcandidateandmustnotberemovedwithoutcontrolledqualification. Fullcustom-gu128screenrunning. Refreshedscreeningsummary78runs;hourlysource/evidencecheckpointnow. No nativewin.
 
-14:03UTC customGUfull128=7.656967935843333ms, allstrictEXACT. Losesfreshcontrol7.937778647; keepdisabled. Allnewarithmeticvariantsqualifiedorfailurepreserved, no nativewin.
+14:03UTC customGUfull128=7.656967935843333ms, allstrictEXACT. IMPROVESfreshcontrol7.937778647by0.28081ms; only0.02122msbehindnative. Qualifyothercasesnext. Initialcheckpointtextautomaticallymislabelledthisasaloss; correctedimmediatelyagainstthenumericresult. No nativewinyet.
