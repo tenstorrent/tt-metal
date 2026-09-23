@@ -58,7 +58,11 @@ def test_vision_tower_inference(
         pytest.skip("CI only runs the two_layers test")
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.99 if num_layers and num_layers <= 3 else 0.91
+    # Full depth measured 0.9887 (300dpi) / 0.9912 (240dpi) against the correctly
+    # masked reference, so 0.98 is earned with margin. It was 0.91 while the
+    # encoder applied no padding mask, where full depth scored 0.9246 / 0.8569 --
+    # a threshold set below a known defect rather than above a measured result.
+    pcc = 0.99 if num_layers and num_layers <= 3 else 0.98
     batch_size = 1  # prefill only supports batch_size = 1
     seq_len = ((token_budget // 2048) + 1) * 2048  # pad to a multiple of MAX_QKV_MM_SEQ_LEN (2048)
 
@@ -95,12 +99,14 @@ def test_vision_tower_inference(
     output_length = num_patches // (pooling_kernel_size**2)
     logger.info(f"num_patches={num_patches}, output_length={output_length}")
 
-    # Reference: compose the HF submodules with attention_mask=None to match the TT encoder, which
-    # does not apply the bidirectional padding mask (same as the encoder unit test). Then pool and
-    # strip padded soft tokens exactly as Gemma4VisionModel does.
+    # Reference: compose the HF submodules exactly as ``Gemma4VisionModel.forward``
+    # does, including ``attention_mask=~padding_positions``. This previously passed
+    # ``attention_mask=None`` to match a TT encoder that applied no padding mask --
+    # i.e. the reference was handicapped to match the implementation, which hid the
+    # defect and cost ~0.03 PCC of apparent quality. The mask is implemented now.
     inputs_embeds = reference_model.patch_embedder(pt_pixel_values, pixel_position_ids, padding_positions)
     encoder_output = reference_model.encoder(
-        inputs_embeds=inputs_embeds, attention_mask=None, pixel_position_ids=pixel_position_ids
+        inputs_embeds=inputs_embeds, attention_mask=~padding_positions, pixel_position_ids=pixel_position_ids
     ).last_hidden_state
     pooled_ref, pooler_mask = reference_model.pooler(
         hidden_states=encoder_output,

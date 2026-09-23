@@ -113,6 +113,7 @@ class VisionAttention(LightweightModule):
         self,
         x,
         rot_mats,
+        cu_window_seqlens=None,
         user_id=0,
         page_table=None,
         chunk_page_table=None,
@@ -121,6 +122,7 @@ class VisionAttention(LightweightModule):
         return self.forward_prefill(
             x,
             rot_mats=rot_mats,
+            cu_window_seqlens=cu_window_seqlens,
             user_id=user_id,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
@@ -474,6 +476,7 @@ class VisionAttention(LightweightModule):
         self,
         x_11SH,
         rot_mats,
+        cu_window_seqlens=None,
         user_id: int = 0,
         page_table=None,
         chunk_page_table=None,
@@ -580,15 +583,42 @@ class VisionAttention(LightweightModule):
         ttnn.deallocate(v_heads_1VSD)
 
         # ---- SDPA (purely local; each device runs its own n_local_heads) ----------
-        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
-            q_heads_1QSD_8b,
-            k_heads_1KSD_8b,
-            v_heads_1VSD_8b,
-            is_causal=False,
-            scale=self.scale,
-            compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-            program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
-        )
+        # Bidirectional padding mask. ``Gemma4VisionModel`` always passes
+        # ``attention_mask=~padding_positions`` to its encoder, so real patches
+        # never attend to the (-1,-1) padding patches. Without it every real
+        # token mixes padding into its output, and because that happens in all
+        # 27 blocks the error compounds -- which is why no compute-fidelity or
+        # weight-dtype change moves the tower PCC (all measured at +/-0.001).
+        #
+        # Expressed as window boundaries rather than an [1,1,S,S] mask tensor:
+        # padding is a contiguous suffix (asserted upstream), so
+        # ``[0, valid, S]`` makes real patches attend only among themselves and
+        # padding only among itself. The padded rows are discarded by the pooler
+        # mask, so their values do not matter. At S=10080 an explicit mask would
+        # be ~203 MB of bf16; this is built on device.
+        if cu_window_seqlens is not None:
+            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+                q_heads_1QSD_8b,
+                k_heads_1KSD_8b,
+                v_heads_1VSD_8b,
+                cu_window_seqlens=cu_window_seqlens,
+                # Explicit: ``is_causal`` defaults to True, and windowed SDPA
+                # asserts ``!is_causal`` (sdpa_device_operation.cpp).
+                is_causal=False,
+                scale=self.scale,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+            )
+        else:
+            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+                q_heads_1QSD_8b,
+                k_heads_1KSD_8b,
+                v_heads_1VSD_8b,
+                is_causal=False,
+                scale=self.scale,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+            )
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)

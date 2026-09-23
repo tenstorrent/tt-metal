@@ -107,6 +107,7 @@ class VisionBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         rot_mats,
+        cu_window_seqlens=None,
     ) -> ttnn.Tensor:
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
@@ -118,6 +119,7 @@ class VisionBlock(LightweightModule):
         attn_out = self.attention.forward(
             attn_in,
             rot_mats=rot_mats,
+            cu_window_seqlens=cu_window_seqlens,
         )
         attn_normed = self.post_attention_norm(attn_out, mode=Mode.PREFILL)
         h = ttnn.add(x, attn_normed, memory_config=skip_mem_cfg, dtype=None)
