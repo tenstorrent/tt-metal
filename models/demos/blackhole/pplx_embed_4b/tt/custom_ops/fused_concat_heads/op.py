@@ -19,6 +19,7 @@ adapted from the original in-tree Qwen3-Embedding head-split patch).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import ttnn
@@ -130,7 +131,8 @@ def nlp_concat_heads_headsplit(
     device = context.device()
     plan = _Plan.from_input(context)
     if head_groups is None:
-        head_groups = plan.num_heads
+        _env = os.getenv("QWEN_HEADSPLIT_GROUPS_CONCAT")
+        head_groups = int(_env) if _env else plan.num_heads
     if plan.num_heads % head_groups != 0:
         raise ValueError(f"num_heads ({plan.num_heads}) must be divisible by head_groups ({head_groups})")
     heads_per_group = plan.num_heads // head_groups
