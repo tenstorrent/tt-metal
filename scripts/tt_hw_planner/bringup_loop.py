@@ -967,7 +967,9 @@ def find_demo_dir(model_id: str, repo_root: Optional[Path] = None) -> Optional[P
     for root in search_roots:
         if not root.is_dir():
             continue
-        for status_file in root.rglob("bringup_status.json"):
+        from .bringup_plan import BRINGUP_STATUS_FILENAME
+
+        for status_file in root.rglob(BRINGUP_STATUS_FILENAME):
             try:
                 data = json.loads(status_file.read_text())
             except Exception:

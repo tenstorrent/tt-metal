@@ -52,15 +52,22 @@ def test_sibling_branch_reports_its_demo_dir():
     )
 
 
-def test_manifest_is_among_the_collected_plan_files():
-    """The helper the branch relies on must actually produce the manifest
-    the downstream lookup keys on."""
-    from scripts.tt_hw_planner.bringup_plan import collect_bringup_plan_files
+def test_emitter_lookup_and_short_circuit_agree_on_the_manifest_name():
+    """The manifest filename is a contract between three places: the emitter
+    (collect_bringup_plan_files), the lookup that decides whether a component
+    exists (bringup_loop.find_demo_dir) and scaffold's already-scaffolded
+    short-circuit. They must all read it from one constant, or a rename
+    silently splits them and components go missing again."""
+    from scripts.tt_hw_planner import bringup_loop, bringup_plan
 
-    sig = inspect.signature(collect_bringup_plan_files)
-    assert "new_demo_dir_rel" in sig.parameters
-    body = inspect.getsource(collect_bringup_plan_files)
-    assert MANIFEST_NAME in body, f"{MANIFEST_NAME} is no longer emitted by collect_bringup_plan_files"
+    assert bringup_plan.BRINGUP_STATUS_FILENAME == MANIFEST_NAME
+
+    emitter = inspect.getsource(bringup_plan.collect_bringup_plan_files)
+    lookup = inspect.getsource(bringup_loop.find_demo_dir)
+    short_circuit = inspect.getsource(scaffold_mod.plan_scaffold)
+    for name, body in (("emitter", emitter), ("lookup", lookup), ("short-circuit", short_circuit)):
+        assert "BRINGUP_STATUS_FILENAME" in body, f"{name} does not use the shared constant"
+        assert f'"{MANIFEST_NAME}"' not in body, f"{name} still hardcodes the manifest filename"
 
 
 def test_all_three_scaffold_routes_share_one_demo_dir_resolver():

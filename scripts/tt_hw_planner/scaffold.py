@@ -18,6 +18,7 @@ from .bringup_plan import (
     NEW,
     BringUpPlan,
     build_bringup_plan,
+    BRINGUP_STATUS_FILENAME,
     collect_bringup_plan_files,
 )
 from .compatibility import Status, check_compatibility
@@ -260,7 +261,7 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
 
         _root = BRINGUP_ROOT()
         _done_dir = _find_demo_dir_idem(new_model_id, repo_root=_root)
-        if _done_dir is not None and (_done_dir / "bringup_status.json").is_file():
+        if _done_dir is not None and (_done_dir / BRINGUP_STATUS_FILENAME).is_file():
             try:
                 _done_rel = _done_dir.relative_to(_root)
             except Exception:

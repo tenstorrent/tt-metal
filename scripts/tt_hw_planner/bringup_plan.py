@@ -808,6 +808,13 @@ def render_stub(plan: BringUpPlan, component: Component) -> str:
     )
 
 
+# Machine-readable bring-up manifest. Its PRESENCE is how the tool decides a
+# component is scaffolded (bringup_loop.find_demo_dir matches on it), so the
+# emitter, the lookup and the already-scaffolded short-circuit must agree on
+# the name.
+BRINGUP_STATUS_FILENAME = "bringup_status.json"
+
+
 def collect_bringup_plan_files(
     *,
     plan: BringUpPlan,
@@ -823,7 +830,7 @@ def collect_bringup_plan_files(
     )
     out.append(
         (
-            new_demo_dir_rel / "bringup_status.json",
+            new_demo_dir_rel / BRINGUP_STATUS_FILENAME,
             render_json(plan).encode("utf-8"),
             "bring-up plan (machine)",
         )
