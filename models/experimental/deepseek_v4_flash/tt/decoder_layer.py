@@ -183,8 +183,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         scache: "_StaticLayerCache",
         sliding_pos: ttnn.Tensor,
         compress_pos: ttnn.Tensor,
+        paged: PagedLayerView | None,
         input_ids: Optional[torch.Tensor] = None,
-        paged: PagedLayerView | None = None,
         pool_compressor: bool = True,
         sdpa_cur_pos: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
@@ -218,8 +218,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             scache,
             sliding_pos,
             compress_pos,
+            paged,
             hash_token=hash_token,
-            paged=paged,
             pool_compressor=pool_compressor,
             sdpa_cur_pos=sdpa_cur_pos,
             win_slot=win_slot,
@@ -239,8 +239,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         scache: "_StaticLayerCache",
         sliding_pos: ttnn.Tensor,
         compress_pos: ttnn.Tensor,
+        paged: PagedLayerView | None,
         hash_token: ttnn.Tensor | None = None,
-        paged: PagedLayerView | None = None,
         pool_compressor: bool = True,
         sdpa_cur_pos: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
@@ -257,8 +257,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         ``None`` when the step is causal-only; ``sliding_pos`` and ``compress_pos`` are INT32
         ``[B]`` absolute positions; ``sdpa_cur_pos``/``win_slot``/``win_row`` INT32 ``[B]``
         per-user indices; ``hash_token`` a uint32 ROW_MAJOR ``[1,B]`` for a hash-routed MoE;
-        ``scache`` the layer's fixed-size in-place caches (``_StaticLayerCache``) and ``paged``
-        the shared-block-pool view of its KV.
+        ``scache`` the layer's dense KV and compressor window buffers (``_StaticLayerCache``)
+        and ``paged`` the shared-block-pool view of an HCA layer's KV (``None`` otherwise).
 
         ``pool_compressor`` is fixed at capture time: the traced path captures one
         variant per window phase (see :meth:`DeepSeekV4Model._capture_traces`)."""
@@ -278,7 +278,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
                 scache,
                 sliding_pos,
                 compress_pos,
-                paged=paged,
+                paged,
                 pool_compressor=pool_compressor,
                 sdpa_cur_pos=sdpa_cur_pos,
                 win_slot=win_slot,

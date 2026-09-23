@@ -3,13 +3,12 @@
 Compresses every complete window of ``compress_rate`` (128) source tokens into a single
 softmax-gated KV entry with the Welford-free shared pooling (``gate`` softmaxed over the window
 axis, convex-combining the ``kv`` rows), then RoPEs that entry at its window's absolute position
-and appends it to the compressed region of the layer's combined KV buffer
-(:class:`_StaticLayerCache`). Only the window currently being filled is buffered, so a step
+and appends it to the compressed region of the layer's paged KV axis. Only the window currently being filled is buffered, so a step
 costs ``O(compress_rate)``.
 
 HCA has no lightning indexer: every closed window is visible to every query, which is why the
 valid KV set is a contiguous prefix and the caller can bound SDPA by a position instead of an
-additive mask (see :func:`~.attention.sdpa_causal_ok`). CSA's short-sequence trace (sequence
+additive mask. CSA's short-sequence trace (sequence
 length below ``compress_rate * index_topk``) and its long-sequence indexer trace both leave
 HCA on that dense path. The compressor's state is the one-window ``win_kv`` / ``win_gate``
 pair, kept as TILE DRAM ``[B, 1, compress_rate, Dh]`` for ``paged_update_cache``.
@@ -38,6 +37,7 @@ from .attention import (
     _one_row_per_user,
     _packed_users,
     _update_cache_at,
+    _update_kv_at,
 )
 from .common import _signpost
 from .layers import DeepSeekV4RMSNorm
@@ -65,7 +65,7 @@ class DeepSeekV4HCACompressor:
     Compresses every complete window of ``compress_rate`` (m'=128) source tokens
     into a single softmax-gated KV entry, then RoPEs that entry at its window's
     absolute position and appends it to the compressed region of the layer's
-    combined KV buffer (see :class:`_StaticLayerCache`). Only the window currently
+    paged KV axis. Only the window currently
     being filled is buffered, so a step costs ``O(compress_rate)``.
     """
 
@@ -172,17 +172,15 @@ class DeepSeekV4HCACompressor:
         cos_row: ttnn.Tensor,
         sin_row: ttnn.Tensor,
         scache: "_StaticLayerCache",
-        combined_cache: ttnn.Tensor | None,
+        paged: PagedLayerView,
         win_slot: ttnn.Tensor,
         win_row: ttnn.Tensor | None = None,
         pool: bool = True,
-        paged: PagedLayerView | None = None,
     ) -> None:
         """Trace-safe decode: write each user's token projection in place at ``win_slot``
         (``pos % compress_rate``) into the one-window ``[B, 1, compress_rate, Dh]``
         buffers, and -- on the step that closes the window -- pool just that window
-        and append its single entry at row ``win_row`` of the layer's KV axis
-        (``combined_cache``, or ``paged``'s block pool).
+        and append its single entry at row ``win_row`` of the layer's paged KV axis.
 
         ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``, already gathered
         onto the decode activation grid when the caller used :meth:`~.attention.DeepSeekV4Attention.decode_static`;
@@ -202,8 +200,8 @@ class DeepSeekV4HCACompressor:
         gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, self.head_dim]))
         _update_cache_at(scache.win_kv, kv, win_slot)
         _update_cache_at(scache.win_gate, gate, win_slot)
-        if pool and (combined_cache is not None or paged is not None):
+        if pool:
             pooled = self._pool_window(scache.win_kv, scache.win_gate, cos_row, sin_row)
-            _update_cache_at(combined_cache, pooled, win_row, paged=paged)
+            _update_kv_at(paged, pooled, win_row)
             ttnn.deallocate(pooled)
         _signpost("HCA_END")

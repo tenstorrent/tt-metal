@@ -154,8 +154,6 @@ profiles:
       # Cap the decoder stack; 0 = every layer in the checkpoint.
       # env: DEEPSEEK_V4_DECODE_LAYERS
       num_layers: 0
-      # Traced decode rather than eager. env: DEEPSEEK_V4_TRACED_DECODE
-      traced: true
 
   # ------------------------------------------------------------------------- #
   # p150x8 -- 8x Blackhole P150. The measured configuration: 16.2 tok/s/user at
