@@ -557,7 +557,10 @@ def _b16s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_siz
 
 
 def _b8s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size):
-    grid_x, grid_y = 11, 10
+    # The full 13x10 grid: per_core_N 10 covers N=128 tiles with 2 idle columns,
+    # where 11x10 leaves 4. The in-model sweep took B8 from 13.101 ms to 12.704 ms;
+    # an isolated sweep had ranked 11x10 first.
+    grid_x, grid_y = 13, 10
     if mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
     try:
@@ -573,7 +576,7 @@ def _b8s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=min(8, hidden_tiles),
         out_subblock_h=1,
-        out_subblock_w=4,
+        out_subblock_w=5,
         per_core_M=(m_tiles + grid_y - 1) // grid_y,
         per_core_N=(intermediate_tiles + grid_x - 1) // grid_x,
         transpose_mcast=False,
