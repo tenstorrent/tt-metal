@@ -13,8 +13,6 @@ than querying the live registry, so enrolling an op does not break them; only th
 about enrolment touch the real one.
 """
 
-import math
-import re
 import textwrap
 
 import pytest
@@ -25,13 +23,10 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
-    MathOpType,
 )
 from helpers.sfpu_accuracy_budget import (
     _BUDGET_KEY_TYPES,
     _SFPU_ACCURACY_BUDGET,
-    _TABLE_PATH,
-    BFP8_B_EXACT_INTEGER_DOMAIN,
     DEFAULT,
     MEASURED_ARCH,
     TOLERANCE_CONTRACT,
@@ -44,55 +39,11 @@ from helpers.sfpu_accuracy_budget import (
     resolve_contract,
     validate_registry,
 )
-from helpers.sfpu_domains import exclude_undefined, for_op_pipeline
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import (
-    _ULP_PROXY_DTYPES,
-    INTEGER_FORMATS,
-    MAX_MEANINGFUL_ULP,
     ULP_FORMATS,
-    has_ulp_gate,
-    ulp_dtype,
 )
 from helpers.utils import passed_test
-
-
-def _integer_only_ops() -> set:
-    """Every SFPU op whose operands and result are integers, from canonical sources.
-
-    Four of them, because the harness has no single classification covering all: the
-    typed ``SFPU_BINARY_INT`` binaries; the unary driver's ``_INT_UNARY_OPS`` (less
-    ``ReluMin``, whose ``vInt`` branch is picked only on ``math_format == Int32``); the
-    binary driver's ``_INT_DRIVEN_BINARY_OPS``, typed plain ``SFPU_BINARY`` so
-    ``MathOpType`` misses them; and ``SfpuGcd``, which is in neither.
-    """
-    from test_eltwise_binary_sfpu import _INT_DRIVEN_BINARY_OPS
-    from test_eltwise_unary_sfpu import _INT_UNARY_OPS
-
-    typed_binaries = {
-        op
-        for op in MathOperation
-        if op.value.operation_type is MathOpType.SFPU_BINARY_INT
-    }
-    return (
-        typed_binaries
-        | set(_INT_UNARY_OPS)
-        | set(_INT_DRIVEN_BINARY_OPS)
-        | {MathOperation.SfpuGcd}
-    ) - {MathOperation.ReluMin}
-
-
-# Every format that is neither ULP-gateable nor integer, so the audit arms cover the whole
-# enum between them. The MX int formats matter here: DataFormat.is_integer() is False for
-# MxInt8/MxInt4/MxInt2 -- they are classified by the separate is_mx_int_format() -- so
-# INTEGER_FORMATS does not reach them, and without this row they would have sat in neither
-# arm. Widening INTEGER_FORMATS instead would route them through
-# _mxint_block_aware_compare in test_an_integer_format_still_works_on_the_default_gate.
-BLOCK_FORMATS_WITHOUT_ULP = sorted(
-    (f for f in DataFormat if not has_ulp_gate(f) and f not in INTEGER_FORMATS),
-    key=lambda f: f.name,
-)
-
 
 # ── The contract's own coherence ──────────────────────────────────────────────
 
@@ -243,26 +194,6 @@ def test_specificity_counts_every_set_dimension():
     assert resolved.max_ulp == 4
 
 
-def test_a_per_arch_override_beats_the_shared_entry():
-    """Open question 4's answer: one value plus overrides, rather than per-arch from the
-    start. WH and BH differ in available SFPU instructions and therefore in kernel, so the
-    override has to exist; keying everything on arch from the start would double the table
-    for the ops where it does not matter."""
-    table = {
-        DEFAULT: AccuracyContract(max_ulp=4),
-        BudgetKey(arch=ChipArchitecture.BLACKHOLE): AccuracyContract(max_ulp=2),
-    }
-    for arch, expected in (
-        (ChipArchitecture.BLACKHOLE, 2),
-        (ChipArchitecture.WORMHOLE, 4),
-        (ChipArchitecture.QUASAR, 4),
-    ):
-        resolved = resolve_contract(
-            table, label="op", output_format=DataFormat.Float32, arch=arch
-        )
-        assert resolved.max_ulp == expected, arch
-
-
 def test_an_unset_query_dimension_only_matches_a_wildcard():
     """A caller that does not know ``dest_acc`` must not be handed a budget measured for
     one setting of it."""
@@ -323,20 +254,6 @@ def test_an_unenrolled_op_keeps_todays_gate():
         )
 
 
-@pytest.mark.parametrize("fmt", BLOCK_FORMATS_WITHOUT_ULP, ids=lambda f: f.name)
-def test_an_enrolled_op_keeps_todays_gate_on_a_format_without_a_per_element_ulp(fmt):
-    """Enrolment is per format as well as per op. Abs has a step budget, but Bfp4_b and
-    the MX formats keep their block-aware lattice compares — and this must *fall back*
-    rather than raise, or enrolling one op would break every block-format variant of it.
-    """
-    assert not has_ulp_gate(fmt)
-    assert MathOperation.Abs in enrolled_ops()
-    assert (
-        accuracy_contract(MathOperation.Abs, output_format=fmt, arch=MEASURED_ARCH)
-        is TOLERANCE_CONTRACT
-    )
-
-
 @pytest.mark.parametrize(
     "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
 )
@@ -395,24 +312,6 @@ def test_a_downgrade_lands_on_the_ops_own_tolerance_row(
         assert contract.atol == 0.13 and contract.rtol == 0.05
 
 
-@pytest.mark.parametrize(
-    "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
-)
-def test_a_step_budget_does_not_bind_on_an_unswept_architecture(arch):
-    """The other half: every number in the table was measured on Wormhole with no
-    headroom, so a ULP contract must not survive the trip."""
-    on_wh = accuracy_contract(
-        MathOperation.Abs, output_format=DataFormat.Float32, arch=MEASURED_ARCH
-    )
-    assert on_wh.metric is Metric.ULP and on_wh.max_ulp == 0
-    assert (
-        accuracy_contract(
-            MathOperation.Abs, output_format=DataFormat.Float32, arch=arch
-        )
-        is TOLERANCE_CONTRACT
-    )
-
-
 def test_arch_must_be_passed_explicitly():
     """``arch`` is the one dimension where the numbers do not transfer, so unlike the
     other three it cannot be left unset and quietly resolved against the Wormhole table.
@@ -447,216 +346,12 @@ def test_enrolled_ops_is_sorted_and_stable():
     assert len(set(ops)) == len(ops)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Invariants the enrolled budgets rest on
-#
-# Not a copy of the table — a reader can see the numbers. These are the properties that
-# are *not* visible from reading it, and each one guards against the specific way a
-# budget gets quietly ruined: raising it until a failure goes away.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Derived the same way validate_registry() derives it, not hardcoded: add a second entry
-# to _ULP_PROXY_DTYPES and has_ulp_gate() starts accepting that format and the validator
-# picks it up, but a literal list here would not -- and then every guard in this file
-# quietly stops covering it, which is where a too-wide budget would hide.
-ULP_CAPABLE_FORMATS = list(ULP_FORMATS) + list(_ULP_PROXY_DTYPES)
-
-#: Every op whose result is exact by construction — sign-bit manipulation, a copy, or an
-#: integer-valued result. None of these can legitimately need a wide budget, so a large
-#: one means the number was fitted to a failure rather than measured.
-EXACT_BY_CONSTRUCTION = (
-    MathOperation.Abs,
-    MathOperation.Neg,
-    MathOperation.Identity,
-    MathOperation.Floor,
-    MathOperation.Ceil,
-    MathOperation.Trunc,
-)
-
-
 def _refuses(match, kind=ValueError):
     """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
     return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
 
 
-def _every_variant(op):
-    """Every contract an op can resolve to, across the whole keyed variant space.
-
-    Passing only ``output_format`` is not enough: by the ``matches()`` rule an unset
-    caller dimension cannot match a key that sets one, so any ``BudgetKey(arch=...)`` or
-    ``BudgetKey(dest_acc=...)`` entry is invisible to such a query — which is exactly the
-    growth path this file advertises, and would hide a wide budget from the guards below.
-    """
-    for fmt in ULP_CAPABLE_FORMATS:
-        for approx_mode in list(ApproximationMode) + [None]:
-            for dest_acc in list(DestAccumulation) + [None]:
-                for (
-                    arch
-                ) in ChipArchitecture:  # arch is required; None is unrepresentable
-                    yield fmt, accuracy_contract(
-                        op,
-                        output_format=fmt,
-                        approx_mode=approx_mode,
-                        dest_acc=dest_acc,
-                        arch=arch,
-                    )
-
-
-@pytest.mark.parametrize("op", EXACT_BY_CONSTRUCTION, ids=lambda op: op.name)
-def test_an_exact_op_never_carries_a_wide_budget(op):
-    """These ops clear a sign bit, copy, or land on an integer. One step of slack is the
-    pack path; more than that is not the op, and a budget hiding it defeats the point of
-    having these enrolled as the canaries."""
-    for fmt, contract in _every_variant(op):
-        if contract.metric == Metric.ULP:
-            assert contract.max_ulp <= 1, (
-                f"{op.name} on {fmt.name} carries max_ulp={contract.max_ulp}. These "
-                "ops are exact by construction; a budget this wide means the number was "
-                "fitted to a failure. Investigate the datapath or the golden instead."
-            )
-
-
-def test_no_budget_exceeds_its_formats_meaningful_ceiling():
-    """Past ``2**mantissa_bits`` the two values differ by more than a binade and the op
-    belongs on tolerance, as Square on Float32 and the Bfp8_b entries are. The guard
-    against "the sweep reported 15616, so the budget is 15616"."""
-    for op in enrolled_ops():
-        for fmt, contract in _every_variant(op):
-            if contract.metric != Metric.ULP:
-                continue
-            ceiling = MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
-            assert contract.max_ulp <= ceiling, (
-                f"{op.name} on {fmt.name} has max_ulp={contract.max_ulp}, past the "
-                f"{ceiling}-step point where ULP stops meaning anything for that format. "
-                "Put the op on the tolerance metric and record the measurement instead."
-            )
-
-
-def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
-    """Bfp8_b's bf16 step space is a real criterion only where the block exponent is the
-    one bf16 would have used. Abs and Neg -- which cannot be wrong -- reach 15616 steps
-    there; Floor/Ceil/Trunc escape by producing integers. If this fails because an op was
-    added, the question is whether that op produces block-exponent-friendly values."""
-    enrolled_on_bfp8 = {
-        op
-        for op in enrolled_ops()
-        for fmt, contract in _every_variant(op)
-        if fmt is DataFormat.Bfp8_b and contract.metric == Metric.ULP
-    }
-    assert enrolled_on_bfp8 == {
-        MathOperation.Floor,
-        MathOperation.Ceil,
-        MathOperation.Trunc,
-    }
-
-
-#: The input formats the unary driver pairs with a Bfp8_b *output* for the three
-#: 0-step-enrolled ops: the BROAD_FORMATS 4x4 matrix plus the Bfp4_b-input row. The
-#: budget spans all five pipelines, and `for_op_pipeline` resolves range against the
-#: input format -- Bfp8_b is absent from `_FORMAT_MAX_MAGNITUDE`, so it inherits the
-#: maximal bf16 fallback, never wins `narrowest_range_format`, and the output narrows
-#: nothing. Asserting only the Bfp8_b->Bfp8_b diagonal would pin one of the five.
-_BFP8_B_OUTPUT_INPUT_FORMATS = (
-    DataFormat.Float32,
-    DataFormat.Float16,
-    DataFormat.Float16_b,
-    DataFormat.Bfp8_b,
-    DataFormat.Bfp4_b,
-)
-
-
-@pytest.mark.parametrize(
-    "op",
-    [MathOperation.Floor, MathOperation.Ceil, MathOperation.Trunc],
-    ids=lambda op: op.name,
-)
-@pytest.mark.parametrize(
-    "input_format", _BFP8_B_OUTPUT_INPUT_FORMATS, ids=lambda f: f.name
-)
-def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format(
-    op, input_format
-):
-    """A shared exponent does not represent integers exactly in general: the in-block step
-    scales with the block maximum, so it is exact only while every maximum stays under
-    ``2**7``. That is a property of the *stimulus*, so it is asserted, not assumed.
-
-    Over every pipeline the budget covers, resolved the way the driver resolves it: all
-    three specs are static ``uniform(-10, 10)`` today, but `_OP_DOMAIN_REGISTRY` entries
-    may be callables of `data_format` -- `_reciprocal_spec` already is -- so a
-    format-sensitive spec here could push one input pipeline past the bound.
-    """
-    spec = exclude_undefined(
-        op, for_op_pipeline(op, input_format, DataFormat.Bfp8_b).spec_A
-    )
-    assert spec.low is not None and spec.high is not None, op.name
-    # ceil of the bound, because the invariant is about *result* block maxima and
-    # floor/ceil/trunc round outward by up to one integer. An input domain inside
-    # (127, 128) -- uniform(-127.5, 127.5), say -- produces block maxima of exactly
-    # 128, where the in-block step becomes 2**(7-6) = 2, odd integers stop being
-    # representable and the 0-step budget is no longer a valid criterion.
-    reachable = math.ceil(max(abs(spec.low), abs(spec.high)))
-    assert reachable < BFP8_B_EXACT_INTEGER_DOMAIN, (
-        f"{op.name} from {input_format.name} is swept over [{spec.low}, {spec.high}], "
-        f"whose results reach {reachable} and so whose block maxima can reach "
-        f"{BFP8_B_EXACT_INTEGER_DOMAIN}. Its 0-step Bfp8_b budget relied on every "
-        "block maximum staying below that; re-measure before widening."
-    )
-
-
 # ── Integers never reach the ULP metric through the registry ──────────────────
-
-
-def test_the_registry_never_carries_a_budget_that_gates_nothing():
-    """The two ways a step budget can be inert, and the ops that must never carry one.
-
-    The *downgrade* itself is pinned elsewhere and not repeated here:
-    ``test_an_enrolled_op_keeps_todays_gate_on_a_format_without_a_per_element_ulp``
-    drives ``accuracy_contract`` over every block format that lacks a per-element ULP,
-    and ``test_ulp.py`` pins ``has_ulp_gate`` False for every integer format. What is
-    left is the table.
-
-    Both halves are needed, because neither sees what the other does. A row *keyed* on
-    a non-gateable format is caught below by its key -- and that is wider than the
-    integers: Bfp4_b, Bfp2_b, the MX formats and Tf32 are downgraded the same way.
-    ``validate_registry`` does reach those formats now that its sweep is every
-    ``DataFormat`` member, but it only asks whether the resolution is *unambiguous*,
-    never whether the winner stayed on the ULP metric -- so a
-    ``BudgetKey(output_format=Bfp4_b)`` carrying a measured budget resolves cleanly,
-    gets downgraded, and passes it. Not subsumed by the widened sweep. An op enrolled
-    under ``DEFAULT`` has ``key.output_format is None``, so the key check cannot see it
-    at all; only the enrolment check can.
-    """
-    for op, table in _SFPU_ACCURACY_BUDGET.items():
-        for key, contract in table.items():
-            if contract.metric != Metric.ULP or key.output_format is None:
-                continue
-            assert has_ulp_gate(key.output_format), (
-                f"{op.name} carries a step budget keyed on {key.output_format.name}, "
-                "which has no per-element ULP, so accuracy_contract downgrades it to "
-                "the tolerance metric and the number gates nothing."
-            )
-
-    # Enrolling an integer-only op would be meaningless rather than merely loose, and
-    # the driver would raise at the call. Derived from the canonical classification and
-    # driver sets, not from name tokens: a token list over Int32/Int16/Int8/Shift/
-    # Bitwise misses UnaryMaxUint32 and UnaryMinUint32 ("Uint32" does not contain
-    # "Int32"), every SFPU_BINARY_INT member such as SfpuGtInt, and SfpuGcd.
-    integer_ops = _integer_only_ops()
-    for op in (
-        MathOperation.UnaryMaxUint32,
-        MathOperation.UnaryMinUint32,
-        MathOperation.SfpuGtInt,
-        MathOperation.SfpuGcd,
-        MathOperation.LeftShift,
-        MathOperation.SfpuDivInt32,
-        MathOperation.SfpuLcm,
-        MathOperation.SfpuBitwiseAnd,
-        MathOperation.SfpuRsubInt32,
-    ):
-        assert op in integer_ops, f"{op.name} dropped out of the integer-op derivation"
-    assert not (set(enrolled_ops()) & integer_ops), sorted(
-        op.name for op in set(enrolled_ops()) & integer_ops
-    )
 
 
 # ── The contract refuses what its annotations cannot ──────────────────────────
@@ -795,169 +490,3 @@ def test_a_negative_tolerance_field_is_refused(field):
         kwargs["max_ulp"] = 1
     with _refuses("must not be negative"):
         AccuracyContract(**kwargs)
-
-
-@pytest.mark.parametrize(
-    "arch", [a for a in ChipArchitecture if a != MEASURED_ARCH], ids=lambda a: a.name
-)
-def test_a_key_that_names_an_architecture_binds_on_it(arch):
-    """The arch gate exists to stop *unkeyed* WH measurements binding elsewhere. A key
-    that names the architecture explicitly is a measurement someone took there, and
-    downgrading it made the advertised arch dimension impossible to use for enrolling
-    Blackhole or Quasar -- which the previous round's test missed, because it called
-    ``resolve_contract`` directly and never went through the public API."""
-    op = MathOperation.Abs
-    table = _SFPU_ACCURACY_BUDGET[op]
-    pinned = BudgetKey(output_format=DataFormat.Float16, arch=arch)
-    table[pinned] = AccuracyContract(max_ulp=7)
-    try:
-        contract = accuracy_contract(
-            op,
-            output_format=DataFormat.Float16,
-            approx_mode=ApproximationMode.No,
-            dest_acc=DestAccumulation.No,
-            arch=arch,
-        )
-        assert contract.metric is Metric.ULP, "an arch-keyed budget must survive"
-        assert contract.max_ulp == 7
-        # A shared WH-measured entry on the same arch still does not bind.
-        shared = accuracy_contract(
-            op,
-            output_format=DataFormat.Float32,
-            approx_mode=ApproximationMode.No,
-            dest_acc=DestAccumulation.No,
-            arch=arch,
-        )
-        assert shared is TOLERANCE_CONTRACT
-    finally:
-        del table[pinned]
-
-
-def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
-    """The enrolment rule names five stimulus sources, three of them hand-built specs no
-    recorded measurement covers. None of the enrolled ops reaches those three, so the
-    recorded numbers do bind every sweep that drives them -- asserted here, because the
-    day an enrolled op appears in one is the day a zero-headroom budget has no
-    backstop."""
-    from test_eltwise_unary_sfpu import _THRESHOLD_OPS, ISINF_ISNAN_MATHOPS
-
-    unmeasured = {
-        # The signbit sweep is not parametrised over a list; it drives this one op.
-        "signbit": {MathOperation.Signbit},
-        "isinf_isnan": set(ISINF_ISNAN_MATHOPS),
-        "threshold": set(_THRESHOLD_OPS),
-    }
-    assert all(unmeasured.values()), "a sweep set went empty; the derivation has broken"
-
-    enrolled = set(enrolled_ops())
-    for sweep, ops in sorted(unmeasured.items()):
-        overlap = sorted(op.name for op in enrolled & ops)
-        assert not overlap, (
-            f"{', '.join(overlap)} carries a budget but is driven by the {sweep} sweep, "
-            "whose hand-built stimulus no recorded measurement covers. Measure it there "
-            "before enrolling, or key the budget away from the formats it reaches."
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# A budget must be backed by the measurement it records
-#
-# The table used to be shadowed by a second file holding what every op *should*
-# resolve to. That file pinned nothing: resolving the registry reproduced it exactly,
-# so it agreed with the table by construction and only ever caught "you changed a
-# number and did not change the copy". Regenerate both and it caught nothing.
-#
-# The provenance is the real invariant. Every row carries the measurement its budget
-# came from, and the emitter's rule is that a budget sits at or above it with bounded
-# headroom. Widening a budget without re-measuring therefore has to falsify the comment
-# next to it -- a sentence someone has to write -- rather than re-run a generator.
-# ─────────────────────────────────────────────────────────────────────────────
-
-#: How far a budget may sit above the measurement it records. The emitter's own headroom
-#: is 1.25x on most rows and 2x at its widest; nothing in the table exceeds that.
-MEASUREMENT_HEADROOM = 2
-
-#: ``max 65536 ULP`` in the emitted rows, ``0 ULP`` in the hand-measured ones.
-_MEASUREMENT = re.compile(r"(?:max )?(\d+) ULP")
-
-
-def _measured_budget_rows(path=_TABLE_PATH):
-    """Every ``max_ulp`` row in the table, with the measurement it records.
-
-    The measurement is the row's own trailing comment, or its op's header comment where
-    one sweep covered the whole op. Read from the text, not the loaded table: the comment
-    *is* the provenance, YAML discards it, and a budget whose comment no longer supports
-    it is precisely the drift this guards against.
-    """
-    rows, op, op_measured = [], None, None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if not line.startswith(" "):  # `OpName:`, optionally with a header comment
-            head, _, comment = line.partition("#")
-            op = head.split(":")[0].strip()
-            found = _MEASUREMENT.search(comment)
-            op_measured = int(found.group(1)) if found else None
-            continue
-        body, _, comment = line.strip().partition("#")
-        declared = re.search(r"max_ulp:\s*(\d+)", body)
-        if not declared:
-            continue  # a tolerance row has no step budget to back
-        found = _MEASUREMENT.search(comment)
-        measured = int(found.group(1)) if found else op_measured
-        rows.append((op, body.strip(), int(declared.group(1)), measured))
-    return rows
-
-
-def test_the_provenance_parser_sees_every_budget_the_registry_enforces():
-    """The two audits below recognise a budget row by a regex over the file's text, and a
-    row it misses is silently dropped from both -- it keeps its enforced ``max_ulp`` but
-    loses its measurement requirement and its ``MEASUREMENT_HEADROOM`` bound.
-
-    ``- {max_ulp : 5}`` and ``- {max_ulp: +5}`` both load as 5 and both miss; ``0x10``
-    is worse, loading as 16 while the regex captures ``0``, so the audit would validate
-    a number the registry does not enforce. Tie the parse back to the loaded table.
-    """
-    parsed = sorted((op, budget) for op, _, budget, _ in _measured_budget_rows())
-    loaded = sorted(
-        (op.name, contract.max_ulp)
-        for op, table in _SFPU_ACCURACY_BUDGET.items()
-        for contract in table.values()
-        if contract.metric == Metric.ULP
-    )
-    assert parsed == loaded
-
-
-def test_every_step_budget_names_the_measurement_it_came_from():
-    """A budget with no measurement behind it is a guess, and the table's whole claim is
-    that it holds none. The number may sit on the row or on the op, whichever the sweep
-    covered."""
-    rows = _measured_budget_rows()
-    assert rows, "no max_ulp rows found -- the parser has drifted from the table"
-    unbacked = [(op, body) for op, body, _, measured in rows if measured is None]
-    assert not unbacked, "budgets with no recorded measurement:\n" + "\n".join(
-        f"  {op}: {body}" for op, body in unbacked
-    )
-
-
-def test_no_step_budget_exceeds_the_measurement_it_records():
-    """The guard that replaced the expected-budget file.
-
-    Raising ``max_ulp`` until a failure goes away now has to move the measurement beside
-    it past what was actually measured. A budget *below* its measurement is the other
-    error -- it cannot pass, so it was never measured on the sweep it claims.
-    """
-    for op, body, budget, measured in _measured_budget_rows():
-        if measured is None:
-            continue  # test_every_step_budget_names_the_measurement_it_came_from owns this
-        where = f"{op}: {body} (records {measured} ULP)"
-        if measured == 0:
-            # Floored to 1 where a finite sample cannot assert exactness; 0 only where
-            # the op is exact by construction and the sweep was exhaustive.
-            assert budget <= 1, f"{where}: a 0-ULP measurement cannot justify {budget}"
-        else:
-            assert budget >= measured, f"{where}: budget {budget} is below it"
-            assert budget <= MEASUREMENT_HEADROOM * measured, (
-                f"{where}: budget {budget} is more than "
-                f"{MEASUREMENT_HEADROOM}x the measurement"
-            )

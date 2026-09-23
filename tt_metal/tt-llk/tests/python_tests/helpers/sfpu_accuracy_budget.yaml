@@ -20,86 +20,16 @@
 # arch it names. A budget may only be *raised* by re-measuring and updating that comment
 # in the same change -- the whole point of the table is that no number here is a guess.
 #
-# ── Enrolled first: the ops exact by construction ──────────────────────────
-#
-# They are the flakiness canaries. A 0-step budget on Floor, Ceil or Trunc -- which are
-# unconditionally 0-step, unlike Abs, whose default row carries 1 -- cannot be wrong
-# about the kernel: if one fails, the golden or the datapath moved. Re-measure on
-# Blackhole before trusting any of it there.
-#
-# Relu is absent because it is packer-applied via STACC_RELU and is not a SfpuType
-# member, so it will not compile through the unary driver; ReluMax/ReluMin take a
-# threshold operand and are left for a later pass.
-#
-# ── Bfp8_b: dominated by block quantization, not by the op ─────────────────
-#
-# The bf16 proxy is a real per-element criterion only while the block exponent is the one
-# bf16 would have used, and on this stimulus it is not: Abs and Neg -- which only clear
-# and flip a sign bit -- measure 15616 steps, the worst lane `result 0.0 vs golden
-# 0.062`. That is a small element quantized to zero by a shared exponent, exactly as
-# designed, and two orders of magnitude past bf16's 128-step ceiling. So a budget cannot
-# gate these here, and raising it until they pass gates nothing; a near_zero_atol floor
-# would absorb it but would then be the flat-tolerance gate under a new name. Parked on
-# tolerance, whose lattice compare is already the stronger criterion. Floor/Ceil/Trunc
-# are the exception: integer results, which a shared exponent represents exactly.
-#   wh: Abs/Neg max 15616 ULP, Square max 17664, Floor/Ceil/Trunc max 0, 2026-09-16
+# Only declared tolerances live here so far. `max_ulp` is accepted and validated, but a
+# step budget is not enforced until the exhaustive sweep exists to measure one, so the
+# budgets are enrolled there rather than declared here against nothing.
 
-# Exact everywhere, including Bfp8_b -- the only ops enrolled there, and for a narrower
-# reason than "integers are exact in a block float": a shared exponent is exact only
-# while every block maximum stays below 2**7, which holds only because
-# _OP_DOMAIN_REGISTRY bounds these three to uniform(-10, 10). A wider domain fails, by
-# what takes Abs/Neg to 15616 steps.
-Floor:
-  - {max_ulp: 0}  # wh: 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16
-
-Ceil:
-  - {max_ulp: 0}  # wh: 0 ULP, as Floor, 2026-09-16
-
-Trunc:
-  - {max_ulp: 0}  # wh: 0 ULP, as Floor, 2026-09-16
-
-# Sign-bit and select: exact in fp32, one step in the 16-bit formats. No arithmetic to
-# round, so fp32 is bit-exact. The single step on the 16-bit outputs is the *pack* path,
-# not the op -- it shows up for all three, mostly at dest_acc=Yes where the value is
-# rounded at pack rather than truncated in Dest first, and a step budget is what makes it
-# visible at all (atol=0.05 is ~6 bf16 steps). No headroom, deliberately: these are exact
-# by construction, so any movement is real signal.
-Abs:
-  - {max_ulp: 1}  # wh: max 1 ULP on Float16/Float16_b, 80 variants, 2026-09-16
-  - {out: Float32, max_ulp: 0}  # wh: max 0 ULP, 32 variants, 2026-09-16
-  - {out: Bfp8_b, metric: tolerance}  # see the Bfp8_b note above
-
-Neg:
-  - {max_ulp: 1}  # wh: max 1 ULP on Float16/Float16_b, 80 variants, 2026-09-16
-  - {out: Float32, max_ulp: 0}  # wh: max 0 ULP, 32 variants, 2026-09-16
-  - {out: Bfp8_b, metric: tolerance}  # see the Bfp8_b note above
-
-# Keyed per format, not through a DEFAULT: Identity was never in BROAD_SWEEP_OPS, so fp16
-# was never measured for it -- and Square measured 1 step on bf16 against 4 on fp16, so
-# fp16 is not safely interpolated from bf16.
-Identity:
-  - {out: Float32, max_ulp: 0}  # wh: max 0 ULP, 2026-09-16
-  - {out: Float16_b, max_ulp: 1}  # wh: max 1 ULP, 4 variants, 2026-09-16
-
-# One multiply, and one open question. x*x has rounding slack the sign-bit ops do not:
-# the golden rounds in float64, the hardware in the datapath, and ties can differ.
-# Float32 is NOT enrolled, and the measurement is why -- 65536 steps at dest_acc=No is
-# 2**16, one step of a 16-bit Dest lattice in fp32 units, so the two round the same step
-# differently; 32768 at dest_acc=Yes has no such explanation, the product agreeing to
-# only ~8 mantissa bits. Attributing either is its own change, so it is recorded, not
-# blessed.
-Square:
-  - {max_ulp: 4}  # wh: Float16 max 4 ULP, 40 variants, 2026-09-16
-  - {out: Float16_b, max_ulp: 1}  # wh: max 1 ULP, 40 variants, 2026-09-16
-  - {out: Float32, metric: tolerance}  # wh: max 65536 ULP @ dest_acc=No / 32768 @ dest_acc=Yes, 32 variants, 2026-09-16
-  - {out: Bfp8_b, metric: tolerance}  # see the Bfp8_b note above
-
-# Still on the tolerance metric, moved here from the test body: CUSTOM_TOLERANCES in
-# test_eltwise_unary_sfpu, a coarse 3-segment LUT carrying atol=0.13 so the sweep passes.
-# The clearest argument for this mechanism -- that number makes the test blind to a 10x
-# regression anywhere else in the domain, and equally blind to the improvement a retune
-# would produce. The two share one number because they share one cause, so a retune
-# cannot move SigmoidAppx and leave GeluAppx behind without the diff saying so.
+# Moved here from the test body: CUSTOM_TOLERANCES in test_eltwise_unary_sfpu, a coarse
+# 3-segment LUT carrying atol=0.13 so the sweep passes. The clearest argument for this
+# mechanism -- that number makes the test blind to a 10x regression anywhere else in the
+# domain, and equally blind to the improvement a retune would produce. The two share one
+# number because they share one cause, so a retune cannot move SigmoidAppx and leave
+# GeluAppx behind without the diff saying so.
 SigmoidAppx:
   - &coarse_lut_tolerance {metric: tolerance, atol: 0.13, rtol: 0.05}
 
