@@ -124,3 +124,27 @@ port was a method swap `create_descriptor` → `create_program_artifacts` inside
   resolve by keeping one (the reviewed one) and repointing the other factory's `KernelSpec::source` +
   binding names, per the shared-kernel Caution. The fork vocabulary this port uses is listed above so a
   resolver can align the two.
+
+## Update: rebased onto the tilize block port + kernel sunset
+
+After both ports existed, this branch was rebased onto `gchoudhary/tilize-block-metal2-port` (which
+ports the plain `tilize` block factory, `TilizeMultiCoreBlockProgramFactory`). The concurrent-fork
+collision above was resolved and the shared kernels were **sunset** — the two block factories were the
+only two consumers of all three kernels, so no legacy consumer remained once both were ported.
+
+- **Collision resolution:** both branches created same-named `_metal2` forks. Kept the target branch's
+  fork content for all three; the only real vocabulary difference was the reader's staging DFB
+  (`dfb::staging` on the target vs `dfb::stage` here) — this factory's staging `DFBBinding.accessor_name`
+  was changed to `staging` to match. Writer and compute fork vocabularies were already identical.
+- **Sunset (repo-wide census cleared it):** the three `_metal2` forks were renamed onto their original
+  canonical names (the legacy content deleted, the Metal 2.0 content taking the original name), and
+  **both** block factories (`tilize_with_val_padding` and `tilize`) now bind the canonical names. No
+  `_metal2` kernel files remain. Census confirmed no other consumer anywhere in the repo (the only
+  non-fork references were the two block factories, the two explicit `CMakeLists.txt` entries — which
+  reference the original names and stay valid — and a comment in `tilize_device_operation.cpp` naming the
+  reader, whose name is unchanged). The forks' stale "this is a fork of X" headers were trimmed to
+  canonical-kernel headers keeping the binding-interface note.
+- **Final shared-kernel state:** `reader_unary_pad_multicore_both_dims.cpp` (this op's dir),
+  `eltwise/unary/.../writer_unary_interleaved_start_id_wh.cpp`, and
+  `data_movement/tilize/.../compute/tilize_wh.cpp` are now single canonical Metal 2.0 kernels bound by
+  both block factories. Reader vocab is `dfb::in` / `dfb::staging` / `tensor::src`.

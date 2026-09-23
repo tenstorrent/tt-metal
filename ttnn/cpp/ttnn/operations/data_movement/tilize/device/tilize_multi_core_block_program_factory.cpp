@@ -110,12 +110,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
 
     constexpr const char* READER_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
-        "reader_unary_pad_multicore_both_dims_metal2.cpp";
+        "reader_unary_pad_multicore_both_dims.cpp";
     constexpr const char* WRITER_SRC =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-        "writer_unary_interleaved_start_id_wh_metal2.cpp";
+        "writer_unary_interleaved_start_id_wh.cpp";
     constexpr const char* COMPUTE_SRC =
-        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh_metal2.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp";
 
     ProgramSpec spec{.name = "tilize_multi_core_block"};
 
