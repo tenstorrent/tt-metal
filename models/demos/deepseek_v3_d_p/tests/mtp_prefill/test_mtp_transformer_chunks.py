@@ -4,10 +4,8 @@
 
 """GLM-5.2 MTP4 and MTP7 chunked prefill through the real ``TtPrefillTransformer``.
 
-Drives the production device path -- the same union embedding, per-level windows and on-device
-generation the runtime uses -- and gates every level against a teacher-forced CPU reference.
-:data:`SCHEDULE_AXIS` chooses how the request is cut up: three full chunks, a short last chunk,
-or two turns sharing one cache.
+Drives the production device path and gates every level against a teacher-forced CPU reference.
+:data:`SCHEDULE_AXIS` chooses how the request is cut up.
 """
 
 from __future__ import annotations
@@ -88,17 +86,8 @@ SCHEDULE_AXIS = {
 }
 """Name -> K -> the ``(actual_start, actual_isl)`` of every chunk this test drives, in order.
 
-``provided-*`` are one request of three full chunks, extended ``j`` tokens past them so the final
-chunk arrives with exactly ``j`` of its K levels already in the stream -- the axis a wrongly
-cleared union row shows up on. The other two are the partial-chunk coverage #57013 asked for:
-
-* ``partial`` ends the request 2540 tokens into its third chunk. That chunk is SHORT and its real
-  end falls inside a tile, and row ``real_len - 1`` lands on chip 3 of 8 -- so the LM head reads
-  its row off a middle chip instead of the last one, which every other leg does.
-* ``multiturn`` is two requests over one cache: 3072 tokens, then 2500 more resumed at 3072. That
-  start is tile-aligned but not chunk-aligned, so the second turn drives update_padded_kv_cache's
-  ROTATED mid-slab write and the indexed rope/SDPA that go with it. Both are degenerate on every
-  chunk-aligned leg. Its first turn is short too, so both of its chunks generate.
+``provided-*`` vary how much of the final chunk's lookahead is already in the stream; ``partial``
+ends mid-chunk, and ``multiturn`` resumes one cache at a tile-aligned but not chunk-aligned start.
 """
 
 MTP_LEVEL_AXIS = (4, 7)
@@ -270,12 +259,10 @@ def _next_token_fn(transformer: TtPrefillTransformer, actual_isl: int):
 
 
 def _expected_window(full_seq: list[int], chunk_start: int, level: int, width: int) -> list[int]:
-    """The ONE statement this whole test is checking, written independently of production code.
+    """The one statement this test checks, written independently of the production code.
 
-    Level ``k`` of the chunk at ``s`` sees ``full_seq[s + k + 1 : s + k + 1 + width]`` -- one
-    expression for an interior chunk, a turn's last chunk and a resumed turn alike, indexed off the
-    full sequence, not off the stream. ``width`` is the chunk's REAL length: the device fills the
-    rows past it with Emb(clamped pad) and nothing here compares them.
+    Level ``k`` of the chunk at ``s`` sees ``full_seq[s + k + 1 : s + k + 1 + width]``, where ``width``
+    is the chunk's real length -- one expression for interior, final and resumed chunks alike.
     """
     start = chunk_start + level + 1
     return list(full_seq[start : start + width])
@@ -543,9 +530,8 @@ def test_mtp_transformer_chunks(
     # Teacher forcing hands level k the device's ``out_head_normed[k-1]`` -- H^{k-1}, matching how
     # TtMTPPredictor chains levels: shared_head.norm(h^k), not the raw block output.
 
-    # One persistent SparseMLAReference PER LEVEL, carried across every chunk the schedule drives:
-    # per level so levels cannot see each other's keys, persistent so each chunk attends over the
-    # earlier ones -- which is also what makes the multi-turn schedule's second turn a real resume.
+    # One persistent SparseMLAReference per level: per level so levels cannot see each other's keys,
+    # persistent so each chunk attends over the earlier ones.
     ref_mla = None if skip_pcc else [SparseMLAReference(config, mla_weights, seq_len=TOTAL) for _ in range(NUM_LEVELS)]
 
     # --- Caches ------------------------------------------------------------------------------------
@@ -740,11 +726,8 @@ def test_mtp_transformer_chunks(
         # --- (2) numerics, teacher-forced ---------------------------------------------------------
         host_embeds = [_host_window_embedding(embed_table, w) for w in windows[chunk_idx]]
 
-        # H^{k-1} for the reference is the DEVICE's, never the reference's own previous output. All
-        # device readbacks happen here: touching the device across the reference's host gap faults.
-        # Sliced to real_len, not C: SparseMLAReference sizes its rope slice as actual_end -
-        # actual_start, so a short chunk must hand it exactly its real rows. A no-op when the chunk
-        # is full, which is why the full-chunk legs are unchanged by it.
+        # H^{k-1} for the reference is the DEVICE's, never the reference's own previous output; all
+        # readbacks happen here, sliced to real_len because the reference sizes its rope slice from it.
         dev_x = [_from_device(res.x[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]
         dev_out = [_from_device(res.out[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]
         dev_normed = [_from_device(res.out_head_normed[k], mesh_device)[:, :, :real_len] for k in range(NUM_LEVELS)]

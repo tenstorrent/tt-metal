@@ -183,9 +183,8 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
-        # The head is MTP-only (see `build_tail`) and its weight cache is column-sharded, so
-        # column-parallel is the only strategy that matches what is on disk. Row-parallel wants a
-        # weight sharded on emb instead, and the cache key does not encode which one it holds.
+        # The head is MTP-only and its weight cache is column-sharded, so column-parallel is the
+        # only strategy that matches what is on disk.
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
     ):

@@ -1638,25 +1638,8 @@
   sp_config: sc4
 
 
-# 4-galaxy (SC4) GLM-5.2 MTP7 prefill KV accuracy. Shares a launcher with the SC1 MTP7 entry below and
-# not with the two entries above: those take their shape from the manifest and the MTP manifests carry no
-# PREFILL_MAX_SEQ_LEN/PREFILL_NUM_USERS on purpose (the pytest MTP scenarios own those), MTP is gated
-# against a DIFFERENT golden -- its own tail trace -- and the GLM-5.2 entry above is a release gate whose
-# env must not grow a branch on a new feature.
-# Seven levels is what the tail golden actually covers: its kv_cache/ holds layer_78 .. layer_84 and its
-# metadata.json declares "levels": 7, so every MTP measurement to date has consumed 4 of the 7 present.
-# The trunk split is 22/20/20/16 at starts 0/22/42/62, the same as MTP4 -- compute_layer_split balances
-# num_layers+K EQUIVALENTS and then snaps each boundary onto a `full` indexer layer, which collapses both
-# raw splits onto the same starts. The equivalents do differ: [22,20,20,23] here against MTP4's
-# [22,20,20,20], so the tail rank holds 16 trunk layers plus all 7 levels and is the critical path at
-# ~15% more work than ranks 1 and 2, which is not the balance the splitter was aiming for.
-# Perf as well as PCC, from the one run: the launcher gives the runner PREFILL_SYNC_PER_CHUNK=1 and a
-# timing dir, so summarize_ci_run.py reports its completion cadence in tok/s over the same 11 chunks the
-# PCC is taken from. That cadence is the throughput number; the producer DONE line the launcher also
-# scrapes is push-side only and is there for its backpressure percentiles. There is no longer perf arm the
-# way the trunk entry above runs 1M: MTP has never run on four ranks, so its per-chunk time is
-# unmeasured and a 215-chunk arm cannot be budgeted against the timeout below with any honesty.
-# Untraced, as the MTP4 work is, so neither number is comparable to the traced entries above.
+# 4-galaxy (SC4) GLM-5.2 MTP7 prefill KV accuracy and throughput, sharing a launcher with the SC1 MTP7
+# entry below. MTP is gated against its own tail-trace golden, not the manifest golden the entries above use.
 - name: "(GLM-5.2-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC4"
   cmd: |
     set -euo pipefail
@@ -1671,18 +1654,12 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # An ESTIMATE, not a measurement: MTP7 has never run at any rank count. Anchored on the trunk
-      # GLM-5.2 entry above, which reaches a verdict in ~16.5 min and unwinds the mesh in ~7 inside 60.
-      # This one runs 11 chunks rather than 215, so its chunk loop is minutes, but it loads 7 modules
-      # from a SECOND ttnn cache dir (TT_GLM52_MTP_TTNN_CACHE) that all four ranks pull over the same NFS
-      # mount. That load is the dominant unknown and the whole margin. None of the budget is warmup: the
-      # launcher sets no WARMUP and the producer defaults to 0 chunks, which is what an 11-chunk run
-      # needs -- the trunk launcher's 10 would nearly double it.
+      # An estimate: MTP7 has never run at this rank count. The unknown is loading seven MTP modules
+      # from a second ttnn cache over NFS; the 11-chunk loop itself is minutes and there is no warmup.
       timeout: 60
       tier: 1
-      # Not a release gate: MTP7 is first-execution code at every rank count, and it is gated at
-      # thresholds that are single-galaxy MTP4 measurements (trunk 0.859015, MTP 0.882565, 2026-09-16).
-      # Flip this once it has been green twice.
+      # Not a release gate yet: MTP7 is first-execution code and its thresholds are carried over from
+      # single-galaxy MTP4. Flip this once it has been green twice.
       release_ready: false
   owner_id: U09L76N1MAT # Nenad Babin
   team: models
@@ -1756,20 +1733,8 @@
   sp_config: sc1
 
 
-# Single-galaxy (SC1) GLM-5.2 MTP7 prefill KV accuracy, same launcher as the SC4 MTP7 entry above and
-# the control for it: one rank makes is_first_rank and is_last_rank both true, so the D2D union-embedding
-# transport and _mtp_prepare_input's non-first-rank branch never execute and a failure here is MTP7
-# numerics or fit rather than multi-rank plumbing.
-# Nothing is shrunk for SC1. The launcher pins max_seq_len to the golden's 56320 and 1 user for both
-# configs, and the depth MUST stay 78: the golden's MTP layers are 78..84, which only exist after the
-# whole trunk, so cutting depth the way the Kimi-K3 SC1 entry does would leave nothing to gate. That
-# makes this 78 trunk layers plus 7 MTP modules on one galaxy -- 85 equivalents against the 20-23 an SC4
-# rank carries, and 3 more KV caches than the single-galaxy MTP4 runs that have passed. Whether it fits
-# is the open question this leg exists to answer; if it dies in weight load or on a static-CB/L1 clash
-# (the runner has hit L1_SMALL exhausted at 1152 B), that is the answer, and MTP7 is SC4-only.
-# Reports the same completion cadence as the SC4 entry, from the same launcher, which makes it the
-# pipeline-free control: a rate here is one rank's compute, so a quad rate below it is the pipeline,
-# not the model.
+# Single-galaxy (SC1) GLM-5.2 MTP7 prefill KV accuracy, same launcher as the SC4 entry above and the
+# control for it: one rank skips the D2D union-embedding transport, so a failure here is MTP7 itself.
 - name: "(GLM-5.2-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -1784,9 +1749,8 @@
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      # An ESTIMATE. The closest measurement is single-galaxy MTP4 on this rig at 13 min warm and 57 min
-      # with cold JIT after a rebuild -- a 4x spread on the same configuration -- and MTP7 adds 3 more
-      # modules on top of the slower end. Sized for the cold case, since a CI container is always cold.
+      # An estimate, sized for a cold CI container: single-galaxy MTP4 on this rig spans warm to cold-JIT
+      # by roughly 4x on the same configuration, and MTP7 adds three more modules on top of the slow end.
       timeout: 75
       tier: 1
       release_ready: false

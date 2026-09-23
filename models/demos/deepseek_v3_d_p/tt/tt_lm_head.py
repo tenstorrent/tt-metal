@@ -118,10 +118,8 @@ class TtLMHead(LightweightModule):
             dims=TtLMHead._weight_shard_dims(is_column_parallel),
         )
 
-        # The key omits `is_column_parallel`, and the cached file holds already-sharded device
-        # tensors, so the mapper above is ignored on a cache hit. A column-parallel cache loaded
-        # into a row-parallel head therefore keeps its full-emb contracted dim and fails only at
-        # the matmul. Switching strategy needs the cache rebuilt, not just the flag flipped.
+        # The key omits the TP strategy and the cached file holds already-sharded tensors, so the
+        # mapper above is ignored on a cache hit: switching strategy needs the cache rebuilt.
         cache_file_name = str(cache_path / "lm_head_weight") if cache_path else None
 
         tt_weight = ttnn.as_tensor(

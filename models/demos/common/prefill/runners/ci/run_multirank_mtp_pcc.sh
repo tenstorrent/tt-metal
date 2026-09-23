@@ -1,29 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
-# Multi-galaxy GLM-5.2 MTP prefill KV accuracy. Sibling of run_multirank_pcc.sh, which gates the TRUNK's
-# two caches only -- that leg sets no PREFILL_MTP_LEVELS and cannot be extended in place:
-#   * its shape comes from the manifest (manifest_env PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS) and the MTP
-#     manifests deliberately carry neither, so they stay usable by the pytest e2e scenarios unchanged;
-#   * it runs the release-gating glm52 entry, whose env must not grow a branch on a new feature;
-#   * MTP PCC has to stop at the TAIL trace's 56320 rows, a different golden from the trunk's.
-# MODEL stays `glm52` so both existing CI mesh-graph descriptors are reused as-is; the MTP-ness of the run
-# is this script plus the manifest it picks, not a new model key. The descriptors are per-SKU since #57093,
-# so the MGD path is ${CONFIG} alone and MODEL does not appear in it.
-#
-# What only the 4-rank shape covers -- none of it has ever executed, on any machine:
-#   * the MTP layer re-split. compute_layer_split balances num_layers+K EQUIVALENTS, so MTP4 on 4 ranks is
-#     a 22/20/20/16 trunk at starts 0/22/42/62, not the 18/20/20/20 the trunk-only legs run.
-#   * the D2D union-embedding transport. The last rank has no embedding table, so the chunk's union
-#     embedding rides under the hidden: d2d_activation_rows goes 5120 -> 10496 for chunk 5120 at sp=8,
-#     K=4 (+105%). If rank 1 dies at MLA_START of layer 0 with a static-CB/L1 clash, the knob is
-#     PREFILL_PP_D2D_FIFO_BYTES (default 256; DFlash's 2x-wide activation had to cap it at 5632).
-#   * TtPrefillRuntime._mtp_prepare_input's else-branch -- _mtp_unpack_activation and
-#     MTPUnionEmbedding.from_embedding are unreachable on one galaxy, where every rank is the first rank.
-#   * the merged KV chunk table at NUM_LAYERS+K = 82 slots, and the index stage's own MTP slot
-#     (full_indexer_rank over first_layer_idx + num_my_layers + mtp_tail).
-# Everything above is what the producer's `config 0 declares N layers, not 78+4` assert is guarding.
+
+# Multi-galaxy GLM-5.2 MTP prefill KV accuracy. Sibling of run_multirank_pcc.sh, which gates the trunk
+# caches only; MTP needs its own manifest, its own golden trace and its own PCC gate.
 set -euo pipefail
 
 MODEL="${1:-glm52}"
@@ -36,23 +16,16 @@ export PYTHONPATH="${TT_METAL_HOME}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
-# One length, not two. The MTP tail golden is exactly [0, 56320) -- kv_cache/layer_78/ holds the single
-# shard rows_00000000_00056320.safetensors -- so running past it would add only unverifiable rows. The
-# trunk leg is the same shape: one run, PCC over the golden's prefix and the rate over the whole thing.
-# This leg reports a rate too -- the runner gets PREFILL_SYNC_PER_CHUNK=1 and PREFILL_TIMING_DIR below,
-# so summarize_ci_run.py prints its completion cadence in tok/s. That cadence is THE throughput number;
-# the producer DONE line cleanup() also scrapes is push-side only (see there). Both are UNTRACED
-# (PREFILL_USE_TRACE=0 in the manifest, because the MTP path is not trace-captured), so the rate compares
-# against this leg's own history and never against a traced one.
+# One length for both PCC and rate: the MTP golden covers exactly GOLDEN_LEN rows, so a longer run would
+# only add rows nothing can check.
 CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=${GOLDEN_LEN}
 # Only slot 0 has a golden behind it, and the MTP tail costs K more cache layers per user, so extra users
 # buy no coverage. The trunk legs pin the producer to 1 user for the same reason.
 NUM_USERS=1
-# The measured floor for this configuration, not a chosen target: the trunk reads 0.859015 at full depth
-# and the MTP levels 0.882565, both re-reproduced 2026-09-16. An MTP level is a layer of this same cache,
-# so _check_mtp_kv_slots folds its minimum into this one gate rather than inventing a second threshold.
+# The measured floor for this configuration rather than a target; the MTP levels are layers of the same
+# cache, so their minimum folds into this one gate.
 PCC_THRESHOLD=0.85
 
 case "${MODEL}" in
@@ -75,11 +48,8 @@ MTP_LEVELS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["en
 TRUNK_TRACE=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
 MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k}"
 
-# Fail here, not after 25 minutes of quad time. The MTP golden lives in its OWN trace: unset
-# PREFILL_MTP_TRACE_DIR and _mtp_golden_source silently falls back to the trunk trace, which carries no
-# kv_post_transform for layers 78+. The producer then logs "MTP: golden KV comparison SKIPPED", returns
-# None, and this leg goes GREEN having gated the MTP tail on plumbing alone (finite, non-zero, pairwise
-# distinct slots). Check the exact files kv_golden_present() reads, for every level this run will write.
+# Fail fast: without its own trace the producer silently skips the MTP KV comparison and the leg passes
+# on plumbing alone. Check every level's golden before spending quad time.
 for k in $(seq 0 $((MTP_LEVELS - 1))); do
   layer=$((NUM_LAYERS + k))
   if [ ! -f "${MTP_TRACE}/kv_cache/layer_${layer}.safetensors" ] \
@@ -108,11 +78,8 @@ TIMING_DIR="${MR_DIR}/timing"
 mkdir -p "${TIMING_DIR}"
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
-# First and last chunk only: 11 chunks is too few for a rate/latency split, and the indexer's cost grows
-# with the prefix, so the pair brackets the run instead of pretending to sample it.
-# No warmup here, unlike the trunk launcher's 10 chunks -- 11 chunks is the whole run. That costs the
-# chunk_time and ttft rows at probe 0, which carry the cold first chunk, but not the throughput rows:
-# those are a completion CADENCE (end[hi] - end[lo]), so chunk 0's own latency is never inside one.
+# First and last chunk only: 11 chunks is too few to sample, so the pair brackets the run. No warmup
+# either -- the throughput rows are a completion cadence, so chunk 0's cold latency never lands in one.
 PROBE_CHUNKS="0,$((REAL_CHUNKS - 1))"
 
 cleanup() {
@@ -130,11 +97,8 @@ cleanup() {
   echo "==================== MTP per-level KV PCC ===================="
   find "${RANKLOGS}" -type f 2>/dev/null -exec grep -h -E "MTP level|MTP KV PCC|MTP: golden|MTP:.*level slots" {} + \
     | tail -40 || echo "no MTP PCC lines in the rank logs"
-  # The PUSH side of the same request -- NOT the prefill rate. Its `wall` covers only the push loop, which
-  # returns once the sockets have taken the chunks: measured 8.7s for 56320 tokens (6459 tok/s) on a run
-  # whose producer process actually spanned ~300s. So read it for push_ms p50/p90/p99, which is where
-  # socket backpressure shows up; summarize_ci_run.py below owns the throughput number. Scraped because
-  # the tails below are capped at 40 lines.
+  # The push side only, not the prefill rate: `wall` covers the push loop, which returns once the
+  # sockets take the chunks. Read it for the push_ms percentiles; summarize_ci_run.py owns throughput.
   echo "==================== producer push-side rate + backpressure ===================="
   if ! find "${RANKLOGS}" -type f 2>/dev/null -exec grep -h -F "[producer] DONE" {} +; then
     echo "no producer DONE line in the rank logs"
@@ -188,12 +152,8 @@ python3 "${TTRUN_PY}" \
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
 
-# Bounds mesh bringup + weight load, not the chunk loop: the table is published once the runner serves.
-# 3600s follows the trunk launcher, which was raised from 30 min after Kimi-K3 at 93 layers over 4 ranks
-# measured 42.6 min to first serve and exited 1 while the ranks were still compiling. MTP needs the room
-# for its own reason: it loads one module per level beyond the trunk and pulls them from a SECOND ttnn
-# cache dir (TT_GLM52_MTP_TTNN_CACHE) that every rank hits over the same NFS mount. The real liveness
-# guard is the kill -0 below, which catches a dead runner in seconds, so a larger bound costs nothing.
+# Bounds mesh bringup and weight load, not the chunk loop. Generous because MTP pulls extra modules from
+# a second ttnn cache over NFS; the kill -0 below is the real liveness guard.
 TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-3600}"
 for _ in $(seq 1 $((TABLE_WAIT_SECS / 5))); do
   [ -f "${TABLE_PATH}" ] && break
@@ -242,10 +202,8 @@ if [ "${PROD_RC}" -eq 0 ]; then
   wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
 fi
 
-# Same gate as the trunk legs, with one addition: exactly one rank must have reported an "mtp" entry. The
-# MTP levels run on the LAST rank only, so _check_mtp_kv_slots returns None everywhere else -- and it also
-# returns None when the golden is absent, which the preflight above rules out. Without this count a run
-# that placed the levels on no rank at all, or on several, reads as a clean pass.
+# Same gate as the trunk legs plus one check: exactly one rank must report an "mtp" entry, since the
+# levels run on the last rank only. Without it, levels placed nowhere would read as a pass.
 EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 PCC_GATE_RC=0
 python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" <<'PY' || PCC_GATE_RC=$?
