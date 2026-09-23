@@ -99,6 +99,11 @@ private:
  * Config pages are written to device L1 at Create (safe-point initial write).
  * Caller keeps the returned pipe alive for cross-program persistence; Attach wires programs
  * to the same ring/config addresses.
+ *
+ * Quasar multi-DM pipe consumers: config pages reserve PREFETCHER_PIPE_MAX_CREDIT_LANES
+ * slots at create (page sizing, like max_receivers). Active lane count is programmed at
+ * consumer bind — `AttachPrefetcherPipe(..., num_pipe_consumer_threads)` and/or relay
+ * `num_producers` — before enqueue. Not a Create knob.
  */
 PrefetcherPipe CreatePrefetcherPipe(
     distributed::MeshDevice* device,
@@ -121,10 +126,27 @@ PrefetcherPipe CreatePrefetcherPipe(
  * cursor. Host binding / kernel placement should pin a single sender DM owner
  * until Attach can enforce this.
  *
+ * Quasar multi-DM:
+ *   - Sender: `num_threads_per_cluster` / `get_num_threads()` partitions receivers.
+ *     Hart `h` owns `{ r | r % P == h }`. Flows A/B/C/D skip non-owned receivers.
+ *   - Receiver pipe consumers: `num_pipe_consumer_threads` programs lane credits on
+ *     the shared pipe when this Attach includes receivers (must match the consumer
+ *     kernel's `num_threads_per_cluster`). Hart tid owns entries `tid, tid+P, …`.
+ *     With a relay, `DataflowBufferConfig.num_producers` must match (or alone may
+ *     arm lanes if Attach left the default of 1). Relay TRISC consumers use
+ *     `num_consumers` / `cap`. Pipe is created first; after programs are bound,
+ *     enqueue order is free.
+ *
  * @param entry_size Dense entry size for this Program execution epoch.
+ * @param num_pipe_consumer_threads Active credit lanes when attaching receivers
+ *        (default 1). Ignored for sender-only Attach (must be 1).
  */
 uint8_t AttachPrefetcherPipe(
-    Program& program, PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
+    Program& program,
+    PrefetcherPipe& prefetcher_pipe,
+    const CoreRangeSet& cores,
+    uint32_t entry_size,
+    uint32_t num_pipe_consumer_threads = 1);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

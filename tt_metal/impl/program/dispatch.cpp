@@ -37,6 +37,7 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
@@ -511,6 +512,7 @@ uint32_t finalize_prefetcher_pipes(
     for (ProgramImpl* program : programs) {
         const auto& per_core_participants = program->get_per_core_prefetcher_pipes();
         for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+            program->validate_prefetcher_pipe_consumer_threads(*kg);
             bool has_participants = false;
             for (const CoreRange& cr : kg->core_ranges.ranges()) {
                 for (const auto& core : cr) {
@@ -535,7 +537,8 @@ uint32_t finalize_prefetcher_pipes(
 }
 
 std::vector<uint32_t> build_prefetcher_pipe_config_payload(
-    uint8_t num_program_slots, const std::vector<ProgramImpl::PrefetcherPipeParticipant>& sparse_participants) {
+    const ProgramImpl& program, const std::vector<ProgramImpl::PrefetcherPipeParticipant>& sparse_participants) {
+    const uint8_t num_program_slots = program.num_prefetcher_pipe_slots();
     std::vector<uint32_t> payload(remote_dfb_config_region_words(num_program_slots), 0u);
     payload[0] = num_program_slots;
     for (const auto& participant : sparse_participants) {
@@ -546,17 +549,21 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
             num_program_slots);
         const uint32_t base =
             REMOTE_DFB_REGION_HEADER_WORDS + participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+        // P is a pipe-lifetime property read at build time, not a participant field: a relay or
+        // later Attach may arm lanes after this record was added. Packing it here (rather than
+        // poking the persistent page) keeps it ordered with this program in the command queue.
+        const uint32_t num_credit_lanes =
+            program.get_prefetcher_pipe_attachment(participant.prefetcher_pipe_id).num_credit_lanes();
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;
-        payload[base + 2] = participant.relay_dfb_id;
+        payload[base + 2] = pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, num_credit_lanes);
     }
     return payload;
 }
 
 std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
-    const CoreRangeSet& kernel_group_cores,
-    const std::unordered_map<CoreCoord, std::vector<ProgramImpl::PrefetcherPipeParticipant>>& per_core_prefetcher_pipes,
-    uint8_t num_program_slots) {
+    const ProgramImpl& program, const CoreRangeSet& kernel_group_cores) {
+    const auto& per_core_prefetcher_pipes = program.get_per_core_prefetcher_pipes();
     std::map<std::vector<uint32_t>, std::pair<CoreCoord, std::vector<CoreCoord>>> cores_by_payload;
 
     for (const CoreRange& core_range : kernel_group_cores.ranges()) {
@@ -566,7 +573,7 @@ std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
                 continue;
             }
 
-            std::vector<uint32_t> payload = build_prefetcher_pipe_config_payload(num_program_slots, it->second);
+            std::vector<uint32_t> payload = build_prefetcher_pipe_config_payload(program, it->second);
             auto& entry = cores_by_payload[payload];
             if (entry.second.empty()) {
                 entry.first = core;
@@ -1807,10 +1814,8 @@ public:
             prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE,
             "PrefetcherPipeCommandGenerator: unexpected REMOTE_DFB_OFFSET_NONE with participants present");
         const uint32_t start_addr = prefetcher_pipe_offset;
-        const uint8_t num_program_slots = program.num_prefetcher_pipe_slots();
         for (const auto& kg : kernel_groups) {
-            for (auto& group : partition_cores_by_prefetcher_pipe_payload(
-                     kg->core_ranges, per_core_prefetcher_pipes, num_program_slots)) {
+            for (auto& group : partition_cores_by_prefetcher_pipe_payload(program, kg->core_ranges)) {
                 payloads_.push_back(std::move(group.payload));
                 const auto& payload = payloads_.back();
                 const uint32_t payload_bytes = static_cast<uint32_t>(payload.size() * sizeof(uint32_t));

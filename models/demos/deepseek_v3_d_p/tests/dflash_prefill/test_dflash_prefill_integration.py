@@ -60,7 +60,6 @@ MAX_RANDOM_LAYERS = 12
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole")
 @pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
-@pytest.mark.parametrize("temperature", [0.0], ids=["greedy"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize("isl_total, dispatch_buffer_capacity_factor", [(SEQ_LEN_5K, 8)], ids=["5k"])
 @pytest.mark.parametrize(
@@ -96,7 +95,6 @@ def test_dflash_prefill_integration(
     gate_fallback_mode,
     num_links,
     use_pretrained,
-    temperature,
     tokenizer,
     request,
     drafter_cfg,
@@ -223,7 +221,6 @@ def test_dflash_prefill_integration(
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,  # real cache (pretrained) or None (random)
-        lm_head_is_column_parallel=True,
     )
     del verifier_state_dict
     gc.collect()
@@ -254,7 +251,6 @@ def test_dflash_prefill_integration(
         actual_isl=isl_total,
         return_intermediates=False,
         read_profiler=False,
-        temperature=temperature,
         on_layer_hidden=on_layer_hidden,
     )
 

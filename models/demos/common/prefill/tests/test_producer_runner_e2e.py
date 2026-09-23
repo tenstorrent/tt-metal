@@ -151,9 +151,6 @@ SCENARIOS = {
         "env": {
             "PREFILL_MODEL": "glm_5_2",
             "PREFILL_TRACE_DIR": GLM52_TRACE,
-            # The table describes all 78 layers, so the last layer must still WRITE its KV; the runner's
-            # default headless-last-layer optimization would leave layer 77 empty.
-            "PREFILL_KV_ONLY_LAST_LAYER": "0",
         },
         # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
         # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases
@@ -171,7 +168,6 @@ SCENARIOS = {
         "env": {
             "PREFILL_MODEL": "glm_5_2",
             "PREFILL_TRACE_DIR": GLM52_TRACE,
-            "PREFILL_KV_ONLY_LAST_LAYER": "0",  # match (4): the table covers all 78 layers
             "PREFILL_TP_SHARD_KV": "1",
             "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },

@@ -289,8 +289,10 @@ def register_pre_operation_hook(hook):
 
     global PRE_OPERATION_HOOKS
     PRE_OPERATION_HOOKS.append(hook)
-    yield
-    PRE_OPERATION_HOOKS.pop()
+    try:
+        yield
+    finally:
+        PRE_OPERATION_HOOKS.pop()
 
 
 @contextmanager
@@ -345,8 +347,10 @@ def register_post_operation_hook(hook):
 
     global POST_OPERATION_HOOKS
     POST_OPERATION_HOOKS.append(hook)
-    yield
-    POST_OPERATION_HOOKS.pop()
+    try:
+        yield
+    finally:
+        POST_OPERATION_HOOKS.pop()
 
 
 def get_devices(object_value):

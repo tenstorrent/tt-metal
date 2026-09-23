@@ -27,6 +27,12 @@ on:
         required: true
         type: string
         description: "JSON array of exabox multihost legs (models-unit-tests-impl.yaml matrix_multihost output)."
+      hang-detection-timeout:
+        required: false
+        type: number
+        default: 120
+        description: >-
+          Seconds without dispatch progress before tt-triage fires; 0 or less disables it.
 
 # Callers must grant id-token: write on the job that `uses` this workflow (job-level permissions
 # replace inherited defaults) and pass `secrets: inherit`.
@@ -53,6 +59,7 @@ jobs:
       # Shared NFS scratch for automapper launches (empty ttrun-cwd + ranklogs).
       PIPELINE_DIR: /ci/models-unit-${{ github.run_id }}-${{ strategy.job-index }}
       TTRUN_CWD: /ci/models-unit-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
+      TRIAGE_OUTPUT_DIR: /ci/models-unit-${{ github.run_id }}-${{ strategy.job-index }}/triage_output
       TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
       # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
       # downloaded. Requires the token's HF account to have accepted the model's license.
@@ -76,6 +83,10 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           extra-pip-packages: pytest==9.0.3 pytest-timeout==2.4.0
+          auto-triage: ${{ inputs.hang-detection-timeout > 0 }}
+          hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
+          triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
+          hang-report-test-id: "tests/pipeline_reorg/models_unit_tests.py::${{ matrix.test-group.name }}"
 
       - name: Create pipeline directory
         shell: bash
@@ -119,6 +130,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: ${{ env.PIPELINE_DIR }}/
+
+      # Hang report the triage hook wrote. Must precede the cleanup that removes it.
+      - name: ⬆️ Upload hang report
+        uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+          path: ${{ env.TRIAGE_OUTPUT_DIR }}/test_reports/
 
       - name: Clean up shared staging dir
         if: always()

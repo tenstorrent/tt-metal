@@ -267,14 +267,28 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
     auto all_devices = cluster_.all_chip_ids();
 
     if (!cluster_.is_mock_or_emulated()) {
+        // Teardown runs from ~MetalContext and from the atexit handler, both of which cannot let an
+        // exception escape (a throw from a noexcept destructor is std::terminate). When a device has
+        // already failed (for example a PCIe MMIO timeout during init), asserting its cores throws
+        // again here; log and move on so the process still exits cleanly instead of aborting under
+        // a profiler or crash handler and holding the CI step open.
         for (tt::ChipId device_id : all_devices) {
-            assert_cores(device_id);
-            cluster_.l1_barrier(device_id);
+            try {
+                assert_cores(device_id);
+                cluster_.l1_barrier(device_id);
+            } catch (const std::runtime_error& e) {
+                log_warning(
+                    tt::LogMetal, "Skipping RISC reset on device {} during teardown: {}", device_id, e.what());
+            }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW
         // Must be last
         if (get_control_plane_) {
-            cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
+            try {
+                cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
+            } catch (const std::runtime_error& e) {
+                log_warning(tt::LogMetal, "Skipping ethernet routing reset during teardown: {}", e.what());
+            }
         }
     }
 

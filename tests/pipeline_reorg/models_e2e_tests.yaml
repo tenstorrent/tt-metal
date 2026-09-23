@@ -1286,14 +1286,16 @@
     # Empty-generation regressions live here, after the perf test has compiled the pipeline they
     # share: 118 s here against 294 s in the unit job.
     pytest models/experimental/xtts/tests/pcc/test_empty_generation.py --timeout=900
-    python models/experimental/xtts/demo/xtts_demo.py
+    pytest models/experimental/xtts/tests/pcc/test_budget_length_generation.py --timeout=900
+    python models/experimental/xtts/demo/xtts_demo.py --seed 0
   model: xtts-v2
   model_family: XTTS
   skus:
     bh_p150b_civ2:
-      # Measured 9m20s / 9m08s / 9m00s across runs 34453045104, 34444464755, 34450411323.
-      # 15 min leaves ~5.5 min for a first-run 1.9 GB weight download on a fresh runner.
-      timeout: 15
+      # Measured 9m20s / 9m08s / 9m00s across runs 34453045104, 34444464755, 34450411323;
+      # 11m00s / 11m18s with test_budget_length_generation (runs 35092523568, 35092533229).
+      # 18 min leaves ~6.5 min for a first-run 1.9 GB weight download on a fresh runner.
+      timeout: 18
       tier: 3
       release_ready: false
   owner_id: U087HGJ455E # Sudhanshu Singhal

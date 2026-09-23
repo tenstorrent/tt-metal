@@ -12,7 +12,12 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_pcc,
     compare_equal,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_div_by_zero_outputs
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    assert_div_by_zero_outputs,
+    assert_equal,
+)
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -1375,3 +1380,57 @@ def test_clamped_silu_glu_limit_guard(device, expect_error, limit):
     # At limit <= 0 the gate half is the constant silu(limit).
     with expect_error(RuntimeError, "limit must be positive"):
         ttnn.clamped_silu_glu(gate, gate, limit)
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 64, 64])),))
+@pytest.mark.parametrize("weight", [0.25, [0.25]], ids=["scalar", "array_of_one"])
+@pytest.mark.parametrize(
+    "request_tag",
+    ("DRAM", "sharded", None),
+    ids=["explicit_DRAM", "explicit_sharded", "unset_follows_input"],
+)
+def test_prelu_scalar_honours_memory_config(input_shapes, device, weight, request_tag):
+    """Both scalar prelu overloads place the result where the caller asks.
+
+    An explicit `memory_config` controls the returned tensor's placement; an unset one
+    follows the input. The input is interleaved in L1 and every request differs from it,
+    so a config that is accepted but never applied is distinguishable from one that is
+    honoured; with matching configs the requested and inherited values coincide and the
+    assertion holds either way. The sharded request moves more than the buffer type — it
+    carries a shard spec the interleaved input cannot supply. The unset case pins the
+    default, which is a separate path and can regress on its own (#55359).
+
+    Placement is the only thing this op's config controls, so each explicit request is
+    also checked to be bit-identical to the same call with no config.
+
+    See #56835.
+    """
+    _, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+
+    if request_tag == "DRAM":
+        requested_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    elif request_tag == "sharded":
+        requested_memcfg = ttnn.create_sharded_memory_config(
+            input_shapes,
+            core_grid=ttnn.CoreGrid(y=1, x=2),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        requested_memcfg = None
+
+    expected_memcfg = ttnn.L1_MEMORY_CONFIG if requested_memcfg is None else requested_memcfg
+
+    output = (
+        ttnn.prelu(input_tensor, weight)
+        if requested_memcfg is None
+        else ttnn.prelu(input_tensor, weight, memory_config=requested_memcfg)
+    )
+
+    assert (
+        output.memory_config() == expected_memcfg
+    ), f"weight {weight}, requested {request_tag}: expected {expected_memcfg} but landed in {output.memory_config()}"
+
+    if requested_memcfg is not None:
+        assert_equal(ttnn.to_torch(output), ttnn.to_torch(ttnn.prelu(input_tensor, weight)))

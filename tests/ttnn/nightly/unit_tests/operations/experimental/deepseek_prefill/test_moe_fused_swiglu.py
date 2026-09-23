@@ -32,6 +32,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     SINGLE_EXPERT_MODELS,
+    to_dram_nd_sharded,
 )
 
 # Device activation -> the TorchExpert reference that must match it, so a case cannot grade one
@@ -65,7 +66,7 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 #   289 -> m_t 10: a FULL block then a 2-tile tail, a different path from a lone short block
 #          because the tail reuses CB slots the full block already cycled.
 _ISL_SHORT_BLOCK_SWEEP = [67, 289]
-_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 # "kimi_k26" used to sit here and matched nothing: SINGLE_EXPERT_MODELS calls that shape
 # kimi_k2_7, so the sweep silently ran ONE model for however long the name was stale.
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
@@ -88,6 +89,7 @@ def run_moe_fused_swiglu(
     hidden_dim: int,
     active_tokens: int = None,
     x_row_major: bool = True,
+    weights_dram_sharded: bool = False,
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
@@ -170,6 +172,14 @@ def run_moe_fused_swiglu(
     w_gate = to_device(weights["gate_proj"].T, weights_dtype, ttnn.TILE_LAYOUT)
     w_up = to_device(weights["up_proj"].T, weights_dtype, ttnn.TILE_LAYOUT)
     w_down = to_device(weights["down_proj"].T, weights_dtype, ttnn.TILE_LAYOUT)
+
+    if weights_dram_sharded:
+        # The same placement the composite's tests build, not one chosen here: this op reads
+        # whatever width it is handed, so a test-local spec would measure a layout the other op
+        # would reject. Built interleaved and resharded.
+        w_gate = to_dram_nd_sharded(w_gate, device)
+        w_up = to_dram_nd_sharded(w_up, device)
+        w_down = to_dram_nd_sharded(w_down, device)
 
     # ROW_MAJOR x is bf16 and tilized inside the op (the Blackhole production fast path); TILE x is
     # consumed directly as bf8. Pair dtype with layout so each variant drives its real device path.
@@ -291,11 +301,29 @@ def test_moe_fused_swiglu_functional(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
+# DRAM ND-sharded weights let a core fetch its whole K-row weight slice in one NoC request instead
+# of one per tile. Both placements are swept so the interleaved default stays covered.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
-def test_moe_fused_swiglu_isl_sweep(device, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int):
+def test_moe_fused_swiglu_isl_sweep(
+    device,
+    allocated_tokens: int,
+    active_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    weights_dram_sharded: bool,
+):
     """The aligned sweep the perf baselines are keyed on, x_rm only (the production path)."""
     _skip_if_grid_too_small(device)
-    run_moe_fused_swiglu(device, allocated_tokens, emb_dim, hidden_dim, active_tokens=active_tokens, x_row_major=True)
+    run_moe_fused_swiglu(
+        device,
+        allocated_tokens,
+        emb_dim,
+        hidden_dim,
+        active_tokens=active_tokens,
+        x_row_major=True,
+        weights_dram_sharded=weights_dram_sharded,
+    )
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)

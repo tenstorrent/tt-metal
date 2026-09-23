@@ -16,7 +16,7 @@ Two layers:
     the model registry (``get_adapter`` / ``ADAPTER_PATHS``). Both are common.
   * A concrete adapter per model, living in that model's own package. The
     DeepSeek-V3 family ships a shared ``MLAPrefillAdapter`` base (MLA attention +
-    MoE) with thin ``DeepSeekV3Adapter`` / ``KimiK26Adapter`` subclasses; a
+    MoE) with thin ``DeepSeekV3Adapter`` / ``KimiK27Adapter`` subclasses; a
     different architecture subclasses ``PrefillModelAdapter`` directly with its own
     KV layout. See ``docs/ADDING_A_PREFILL_MODEL.md``.
 
@@ -294,8 +294,7 @@ ADAPTER_PATHS = {
     # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
-    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
-    # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
+    # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",

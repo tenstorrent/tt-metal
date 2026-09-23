@@ -1,4 +1,6 @@
 set(HW_JIT_API_HEADERS
+    inc/experimental/drisc_mode.h
+    inc/experimental/gddr_dma.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
@@ -217,9 +219,11 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/device_print_structures.h
     inc/hostdev/fabric_telemetry_msgs.h
     inc/hostdev/profiler_common.h
+    inc/hostdev/profiler_zone_id.h
     inc/hostdev/realtime_profiler_msgs.h
     inc/hostdev/remote_dfb_constants.h
     inc/hostdev/remote_dfb_config_layout.h
+    inc/hostdev/streaming_profiler_common.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/internal/hw_thread.h
@@ -232,6 +236,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/cross_node_dfb_interface.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h
+    inc/internal/pch.h
     inc/internal/risc_attribs.h
     inc/internal/template_string.h
     inc/internal/tensix_functions.h

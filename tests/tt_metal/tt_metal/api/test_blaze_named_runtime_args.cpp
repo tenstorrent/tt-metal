@@ -29,7 +29,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using NamedArgsTest = GenericMeshDeviceFixture;
+using NamedArgsTest = MeshDevice1x1Fixture;
 
 TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     auto mesh_device = get_mesh_device();

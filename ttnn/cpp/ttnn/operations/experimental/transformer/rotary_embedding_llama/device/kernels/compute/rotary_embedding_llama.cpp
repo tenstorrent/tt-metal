@@ -11,6 +11,10 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -43,6 +47,26 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto n_heads = get_arg(args::n_heads);
     constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
+    constexpr auto bulk_block_input = [](auto dfb_id) {
+        return ckl::input(
+            dfb_id,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::AtEnd,
+            ckl::InputTileMapping::Block,
+            ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto bulk_output = [](auto dfb_id) {
+        return ckl::output(dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto sin_cos_input = [](auto dfb_id) {
+        return ckl::input(
+            dfb_id,
+            RELOAD_IMPL == 0 ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront,
+            RELOAD_IMPL == 0 ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd,
+            ckl::InputTileMapping::Block,
+            ckl::DataFormatReconfig::Disabled,
+            RELOAD_IMPL == 0 ? ckl::TileAddressing::Offset : ckl::TileAddressing::Direct);
+    };
 
     DataflowBuffer in_dfb_obj(in_dfb);
     DataflowBuffer cos_dfb_obj(cos_dfb);
@@ -59,7 +83,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb, trans_mat_dfb, out_dfb);
     // Start from the state at the end of each iteration so same-format reconfigurations compile out.
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call,
+    // but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cos_interm_dfb, sin_interm_dfb, out_dfb);
 
     // Get the trans_mat
@@ -103,52 +128,39 @@ void kernel_main() {
                 }
                 REL();
                 rotated_in_interm_dfb_obj.push_back(Wt);
-                rotated_in_interm_dfb_obj.wait_front(Wt);
-
                 reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
                 mul_init(rotated_in_interm_dfb, sin_dfb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // sin_interim = rotated * sin
-                    mul_tiles(rotated_in_interm_dfb, sin_dfb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, sin_interm_dfb, j);
-                }
-                REL();
-                sin_interm_dfb_obj.push_back(Wt);
-                rotated_in_interm_dfb_obj.pop_front(Wt);
+                // sin_interim = rotated * sin
+                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
+                        bulk_block_input(rotated_in_interm_dfb),
+                        sin_cos_input(sin_dfb)>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<bulk_output(sin_interm_dfb)>{});
 
                 reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // cos_interim = x * cos
-                    mul_tiles(in_dfb, cos_dfb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, cos_interm_dfb, j);
-                }
-                REL();
-                cos_interm_dfb_obj.push_back(Wt);
-                in_dfb_obj.pop_front(Wt);  // Done with input
-#if RELOAD_IMPL == 1
-                sin_dfb_obj.pop_front(Wt);
-                cos_dfb_obj.pop_front(Wt);
-#endif
+                // cos_interim = x * cos
+                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::input(
+                            in_dfb,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::InputTileMapping::Block,
+                            ckl::DataFormatReconfig::Disabled),
+                        sin_cos_input(cos_dfb)>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<bulk_output(cos_interm_dfb)>{});
 
-                sin_interm_dfb_obj.wait_front(Wt);
-                cos_interm_dfb_obj.wait_front(Wt);
                 reconfig_data_format(in_dfb, cos_interm_dfb, cos_dfb, sin_interm_dfb);
                 pack_reconfig_data_format(cos_interm_dfb, out_dfb);
-                add_init(cos_interm_dfb, sin_interm_dfb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // out = cos_interim + sin_interim
-                    add_tiles(cos_interm_dfb, sin_interm_dfb, j, j, j);
-                    pack_tile(j, out_dfb, j);
-                }
-                REL();
-                out_dfb_obj.push_back(Wt);
-                sin_interm_dfb_obj.pop_front(Wt);
-                cos_interm_dfb_obj.pop_front(Wt);
+                // out = cos_interim + sin_interim
+                ckl::add<bulk_block_input(cos_interm_dfb), bulk_block_input(sin_interm_dfb), bulk_output(out_dfb)>(
+                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

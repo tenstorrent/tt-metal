@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import torch
+from conftest import skip_for_coverage
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -1668,6 +1669,12 @@ def run_case(case: Case) -> bool:
     return test_passed
 
 
+# Gated under coverage for the same reason as accuracy/test_sfpu_accuracy.py: three of
+# the cases below drive Reciprocal, whose coverage build returns wrong results on
+# Blackhole (tt-metal#56751), and the module-private exclusion table in
+# test_eltwise_unary_sfpu.py does not reach here. This is a diagnostic sweep whose
+# coverage data duplicates the unary sweep's, so gating the whole test is enough.
+@skip_for_coverage
 @pytest.mark.accuracy
 @pytest.mark.parametrize("case", CASES, ids=[c.test_id for c in CASES])
 def test_sfpu_stress(case: Case):
