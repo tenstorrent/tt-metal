@@ -40,11 +40,20 @@ enum class PixelUnshuffleChannelOrder {
 // Output layout: ROW_MAJOR by default; pass output_layout=TILE for TILE output.
 // Output memory: Controlled by memory_config (DRAM, L1, or sharded L1).
 // channel_order: CHANNEL_MAJOR (PyTorch, default) or SPATIAL_MAJOR (ONNX).
+//
+// channels_last: emit the result as NHWC, [N, H/r, W/r, padded_channels], ROW_MAJOR, with the
+//   C*r^2 channels of each pixel contiguous and zero-padded up to `padded_channels` (default:
+//   C*r^2 rounded up to the L1 alignment; conv2d wants a multiple of 8, 16 or 32). The output
+//   must be HEIGHT_SHARDED in L1: every core writes its own shard directly, so the tensor is
+//   exactly what a height-sharded conv2d consumes - no permute, no tilize, no re-shard.
+//   Equivalent to pixel_unshuffle(x, r).permute(0, 2, 3, 1) padded on the channel axis.
 Tensor pixel_unshuffle(
     const Tensor& input_tensor,
     uint32_t downscale_factor,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Layout>& output_layout = std::nullopt,
-    PixelUnshuffleChannelOrder channel_order = PixelUnshuffleChannelOrder::CHANNEL_MAJOR);
+    PixelUnshuffleChannelOrder channel_order = PixelUnshuffleChannelOrder::CHANNEL_MAJOR,
+    bool channels_last = false,
+    const std::optional<uint32_t>& padded_channels = std::nullopt);
 
 }  // namespace ttnn

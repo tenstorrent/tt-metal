@@ -6,6 +6,9 @@
 #include "device/pixel_unshuffle_device_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
+
 namespace ttnn {
 
 Tensor pixel_unshuffle(
@@ -13,7 +16,9 @@ Tensor pixel_unshuffle(
     uint32_t downscale_factor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Layout>& output_layout,
-    PixelUnshuffleChannelOrder channel_order) {
+    PixelUnshuffleChannelOrder channel_order,
+    bool channels_last,
+    const std::optional<uint32_t>& padded_channels) {
     // ── Validation ────────────────────────────────────────────────────────────
 
     TT_FATAL(
@@ -50,6 +55,25 @@ Tensor pixel_unshuffle(
     Tensor processed = input_tensor;
     if (processed.layout() == Layout::TILE) {
         processed = ttnn::to_layout(processed, Layout::ROW_MAJOR);
+    }
+
+    // ── channels_last: NHWC, zero-padded channels, height-sharded L1, core-local write ──
+    if (channels_last) {
+        TT_FATAL(
+            !(output_layout.has_value() && output_layout.value() == Layout::TILE),
+            "pixel_unshuffle: channels_last output is ROW_MAJOR (it is the row-major sharded activation conv2d "
+            "consumes directly); do not request TILE.");
+        TT_FATAL(
+            memory_config.has_value() && memory_config->is_sharded() &&
+                memory_config->memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                memory_config->buffer_type() == BufferType::L1,
+            "pixel_unshuffle: channels_last needs a HEIGHT_SHARDED L1 memory_config whose shard is "
+            "[pixels_per_core, padded_channels].");
+        const uint32_t c_out = shape[1] * downscale_factor * downscale_factor;
+        const uint32_t datum = processed.element_size();
+        const uint32_t align_elems = tt::tt_metal::hal::get_l1_alignment() / datum;
+        const uint32_t cp = padded_channels.value_or(tt::round_up(c_out, align_elems));
+        return ttnn::prim::pixel_unshuffle(processed, downscale_factor, memory_config.value(), channel_order, true, cp);
     }
 
     // ── Output memory config ──────────────────────────────────────────────────
