@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
+#include <umd/device/types/arch.hpp>
 #include <vector>
 #include <algorithm>
 
@@ -37,6 +38,7 @@ struct MemoryRegion {
 struct FabricEriscDatamoverOptions {
     FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED;
     eth_chan_directions direction = eth_chan_directions::EAST;  // only used by 2D to get the correct router direction
+    tt::ARCH arch = tt::ARCH::Invalid;                          // selects the per-arch buffer slot tables
 };
 
 namespace builder_config {
