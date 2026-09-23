@@ -8,8 +8,8 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -19,8 +19,8 @@ void kernel_main() {
 
     CircularBuffer input(cb_in);
     CircularBuffer output(cb_out);
-    unary_op_init_common(cb_in, cb_out);
-    copy_tile_init(cb_in);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
 
     for (uint32_t tile = 0; tile < num_tiles; ++tile) {
         input.wait_front(1);

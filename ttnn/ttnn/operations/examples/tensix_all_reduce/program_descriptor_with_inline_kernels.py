@@ -407,19 +407,21 @@ _MCAST_ALL_GATHER_KERNEL = r"""
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t scalars = McastArgs<2, 2>::next_compile_time_args_offset();
+    constexpr uint32_t scalars = 2;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
     constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 3);
-    constexpr auto mc = McastArgs<2, 2>();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t my_index = get_arg_val<uint32_t>(1);
@@ -459,20 +461,22 @@ _REDUCE_ROOT_KERNEL = r"""
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t scalars = McastArgs<2, 5>::next_compile_time_args_offset();
+    constexpr uint32_t scalars = 2;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
     constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 3);
     constexpr uint32_t progress_sem_id = get_compile_time_arg_val(scalars + 4);
-    constexpr auto mc = McastArgs<2, 5>();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_addr = get_arg_val<uint32_t>(1);
@@ -528,14 +532,14 @@ _REDUCE_SCATTER_KERNEL = r"""
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
     constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
-    constexpr uint32_t scalars = McastArgs<2, 5>::next_compile_time_args_offset();
+    constexpr uint32_t scalars = 2;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
     constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
@@ -543,8 +547,9 @@ void kernel_main() {
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 4);
     constexpr uint32_t progress_sem_id = get_compile_time_arg_val(scalars + 5);
     constexpr uint32_t coords_base = 5;
-    constexpr uint32_t mcast_rt_base = coords_base + 2 * group_size;
-    constexpr auto mc = McastArgs<2, mcast_rt_base>();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_addr = get_arg_val<uint32_t>(1);
@@ -732,14 +737,14 @@ _REDUCE_SCATTER_PUSH_KERNEL = r"""
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
     constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
-    constexpr uint32_t scalars = McastArgs<2, 5>::next_compile_time_args_offset();
+    constexpr uint32_t scalars = 2;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
     constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
@@ -748,8 +753,9 @@ void kernel_main() {
     constexpr uint32_t progress_sem_id = get_compile_time_arg_val(scalars + 5);
     constexpr uint32_t gather_sem_id = get_compile_time_arg_val(scalars + 6);
     constexpr uint32_t coords_base = 5;
-    constexpr uint32_t mcast_rt_base = coords_base + 2 * group_size;
-    constexpr auto mc = McastArgs<2, mcast_rt_base>();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_addr = get_arg_val<uint32_t>(1);
@@ -840,7 +846,7 @@ _TREE_REDUCE_KERNEL = r"""
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -849,7 +855,7 @@ void kernel_main() {
     constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
     constexpr uint32_t cb_stage2 = get_compile_time_arg_val(2);
     constexpr uint32_t cb_output = get_compile_time_arg_val(3);
-    constexpr uint32_t scalars = McastArgs<4, 8>::next_compile_time_args_offset();
+    constexpr uint32_t scalars = 4;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
     constexpr uint32_t rows = get_compile_time_arg_val(scalars + 2);
@@ -857,7 +863,9 @@ void kernel_main() {
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 4);
     constexpr uint32_t stage1_sem_id = get_compile_time_arg_val(scalars + 5);
     constexpr uint32_t stage2_sem_id = get_compile_time_arg_val(scalars + 6);
-    constexpr auto mc = McastArgs<4, 8>();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_addr = get_arg_val<uint32_t>(1);
@@ -993,12 +1001,24 @@ def _virtual_coords(device, cores):
     return result
 
 
-def _mcast_helpers(device, layout, *, rotating, sem_ids):
-    helpers = []
-    config = ttnn.McastConfig(rotating_sender=rotating, sem_ids=list(sem_ids))
+def _mcast_family(device, layout, *, rotating, sem_ids, first_root=False):
+    family = ttnn.McastFamily(device, ttnn.McastConfig(sem_ids=list(sem_ids)))
     for group in layout.groups:
-        helpers.append(ttnn.Mcast2D(device, group.core_range_set, group.root, config))
-    return helpers
+        senders = (
+            [ttnn.CoreCoord(*core) for core in group.cores]
+            if rotating
+            else [ttnn.CoreCoord(*group.cores[0]) if first_root else group.root]
+        )
+        family.add_group(group.core_range_set, senders)
+    family.prepare_arguments()
+    return family
+
+
+def _attach_mcast(family, dataflow, compute, semaphores, cbs):
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
+    family.attach(descriptor, "mcast", [dataflow])
+    descriptor.kernels = [dataflow, compute]
+    return descriptor
 
 
 def _compute_kernel(core_ranges, runtime_by_core, output_cb=CB_OUTPUT):
@@ -1089,14 +1109,12 @@ def _create_unicast_all_gather_descriptor(input_tensor, output_tensor, layout, n
 
 def _create_mcast_all_gather_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
     group_size = layout.group_size
-    helpers = _mcast_helpers(input_tensor.device(), layout, rotating=True, sem_ids=(SEM_PROGRESS, SEM_MCAST_READY))
-    mcast_ct = list(helpers[0].compile_time_args())
+    family = _mcast_family(input_tensor.device(), layout, rotating=True, sem_ids=(SEM_PROGRESS, SEM_MCAST_READY))
     dataflow_rt = ttnn.RuntimeArgs()
     compute_rt = {}
-    for group, helper in zip(layout.groups, helpers):
+    for group in layout.groups:
         for index, (x, y) in enumerate(group.cores):
-            core = ttnn.CoreCoord(x, y)
-            dataflow_rt[x][y] = [input_tensor.buffer_address(), index] + list(helper.runtime_args(core))
+            dataflow_rt[x][y] = [input_tensor.buffer_address(), index]
             compute_rt[(x, y)] = [group_size, num_tiles, kernel_iters]
 
     cbs = [
@@ -1110,38 +1128,36 @@ def _create_mcast_all_gather_descriptor(input_tensor, output_tensor, layout, num
     dataflow = _inline_kernel(
         _MCAST_ALL_GATHER_KERNEL,
         layout.core_ranges,
-        [CB_GATHER, CB_OUTPUT] + mcast_ct + [num_tiles, page_bytes, group_size, kernel_iters],
+        [CB_GATHER, CB_OUTPUT] + [num_tiles, page_bytes, group_size, kernel_iters],
         dataflow_rt,
         ttnn.ReaderConfigDescriptor(),
     )
     compute = _compute_kernel(layout.core_ranges, compute_rt)
-    return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
+    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
 
 
 def _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
     group_size = layout.group_size
-    helpers = _mcast_helpers(
+    family = _mcast_family(
         input_tensor.device(),
         layout,
         rotating=False,
         sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED),
     )
-    mcast_ct = list(helpers[0].compile_time_args())
     dataflow_rt = ttnn.RuntimeArgs()
     compute_rt = {}
     roots = []
-    for group, helper in zip(layout.groups, helpers):
+    for group in layout.groups:
         root_virtual = input_tensor.device().worker_core_from_logical_core(group.root)
         roots.append((group.root.x, group.root.y))
         for index, (x, y) in enumerate(group.cores):
-            core = ttnn.CoreCoord(x, y)
             dataflow_rt[x][y] = [
                 input_tensor.buffer_address(),
                 output_tensor.buffer_address(),
                 index,
                 root_virtual.x,
                 root_virtual.y,
-            ] + list(helper.runtime_args(core))
+            ]
         compute_rt[(group.root.x, group.root.y)] = [group_size, num_tiles, kernel_iters]
 
     root_ranges = _core_range_set(roots)
@@ -1157,12 +1173,12 @@ def _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tile
     dataflow = _inline_kernel(
         _REDUCE_ROOT_KERNEL,
         layout.core_ranges,
-        [CB_GATHER, CB_OUTPUT] + mcast_ct + [num_tiles, page_bytes, group_size, kernel_iters, SEM_PROGRESS],
+        [CB_GATHER, CB_OUTPUT] + [num_tiles, page_bytes, group_size, kernel_iters, SEM_PROGRESS],
         dataflow_rt,
         ttnn.ReaderConfigDescriptor(),
     )
     compute = _compute_kernel(root_ranges, compute_rt)
-    return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
+    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
 
 
 def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
@@ -1173,32 +1189,26 @@ def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_t
     # idle through the whole gather/reduce phase.
     num_workers = min(num_tiles, group_size)
     max_assigned = (num_tiles + num_workers - 1) // num_workers
-    helpers = _mcast_helpers(
+    family = _mcast_family(
         input_tensor.device(),
         layout,
         rotating=False,
         sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED),
     )
-    mcast_ct = list(helpers[0].compile_time_args())
     dataflow_rt = ttnn.RuntimeArgs()
     compute_rt = {}
     worker_cores = []
-    for group, helper in zip(layout.groups, helpers):
+    for group in layout.groups:
         virtual = _virtual_coords(input_tensor.device(), group.cores)
         root_virtual = input_tensor.device().worker_core_from_logical_core(group.root)
         for index, (x, y) in enumerate(group.cores):
-            core = ttnn.CoreCoord(x, y)
-            dataflow_rt[x][y] = (
-                [
-                    input_tensor.buffer_address(),
-                    output_tensor.buffer_address(),
-                    index,
-                    root_virtual.x,
-                    root_virtual.y,
-                ]
-                + virtual
-                + list(helper.runtime_args(core))
-            )
+            dataflow_rt[x][y] = [
+                input_tensor.buffer_address(),
+                output_tensor.buffer_address(),
+                index,
+                root_virtual.x,
+                root_virtual.y,
+            ] + virtual
             if index < num_workers:
                 worker_cores.append((x, y))
                 # max_assigned, not this worker's ragged share: the CBs are sized on
@@ -1221,46 +1231,38 @@ def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_t
     dataflow = _inline_kernel(
         _REDUCE_SCATTER_KERNEL,
         layout.core_ranges,
-        [CB_GATHER, CB_PARTIAL]
-        + mcast_ct
-        + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS],
+        [CB_GATHER, CB_PARTIAL] + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS],
         dataflow_rt,
         ttnn.ReaderConfigDescriptor(),
     )
     compute = _compute_kernel(worker_ranges, compute_rt, output_cb=CB_PARTIAL)
-    return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
+    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
 
 
 def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
     group_size = layout.group_size
     num_workers = min(num_tiles, group_size)
     max_assigned = (num_tiles + num_workers - 1) // num_workers
-    helpers = _mcast_helpers(
+    family = _mcast_family(
         input_tensor.device(),
         layout,
         rotating=False,
         sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED),
     )
-    mcast_ct = list(helpers[0].compile_time_args())
     dataflow_rt = ttnn.RuntimeArgs()
     compute_rt = {}
     worker_cores = []
-    for group, helper in zip(layout.groups, helpers):
+    for group in layout.groups:
         virtual = _virtual_coords(input_tensor.device(), group.cores)
         root_virtual = input_tensor.device().worker_core_from_logical_core(group.root)
         for index, (x, y) in enumerate(group.cores):
-            core = ttnn.CoreCoord(x, y)
-            dataflow_rt[x][y] = (
-                [
-                    input_tensor.buffer_address(),
-                    output_tensor.buffer_address(),
-                    index,
-                    root_virtual.x,
-                    root_virtual.y,
-                ]
-                + virtual
-                + list(helper.runtime_args(core))
-            )
+            dataflow_rt[x][y] = [
+                input_tensor.buffer_address(),
+                output_tensor.buffer_address(),
+                index,
+                root_virtual.x,
+                root_virtual.y,
+            ] + virtual
             if index < num_workers:
                 worker_cores.append((x, y))
                 compute_rt[(x, y)] = [group_size, max_assigned, kernel_iters]
@@ -1284,13 +1286,12 @@ def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, 
         _REDUCE_SCATTER_PUSH_KERNEL,
         layout.core_ranges,
         [CB_GATHER, CB_PARTIAL]
-        + mcast_ct
         + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS, SEM_GATHER],
         dataflow_rt,
         ttnn.ReaderConfigDescriptor(),
     )
     compute = _compute_kernel(worker_ranges, compute_rt, output_cb=CB_PARTIAL)
-    return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
+    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
 
 
 def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
@@ -1301,17 +1302,14 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
         return _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
 
     device = input_tensor.device()
-    config = ttnn.McastConfig(rotating_sender=False, sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
-    helpers = []
-    for group in layout.groups:
-        root_logical = ttnn.CoreCoord(*group.cores[0])
-        helpers.append(ttnn.Mcast2D(device, group.core_range_set, root_logical, config))
-    mcast_ct = list(helpers[0].compile_time_args())
+    family = _mcast_family(
+        device, layout, rotating=False, sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED), first_root=True
+    )
 
     dataflow_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     leader_cores = []
-    for group, helper in zip(layout.groups, helpers):
+    for group in layout.groups:
         root_virtual = device.worker_core_from_logical_core(ttnn.CoreCoord(*group.cores[0]))
         leader_virtual = []
         for row in range(rows):
@@ -1321,7 +1319,6 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
             my_row = index // cols
             my_col = index % cols
             leader_x, leader_y = leader_virtual[my_row]
-            core = ttnn.CoreCoord(x, y)
             dataflow_rt[x][y] = [
                 input_tensor.buffer_address(),
                 output_tensor.buffer_address(),
@@ -1331,7 +1328,7 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
                 leader_y,
                 root_virtual.x,
                 root_virtual.y,
-            ] + list(helper.runtime_args(core))
+            ]
             if my_col == 0:
                 leader_cores.append((x, y))
                 compute_rt[x][y] = [cols, num_tiles, kernel_iters, 1 if index == 0 else 0, rows]
@@ -1353,7 +1350,6 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
         _TREE_REDUCE_KERNEL,
         layout.core_ranges,
         [CB_GATHER, CB_PARTIAL, CB_STAGE2, CB_OUTPUT]
-        + mcast_ct
         + [num_tiles, page_bytes, rows, cols, kernel_iters, SEM_PROGRESS, SEM_STAGE2],
         dataflow_rt,
         ttnn.ReaderConfigDescriptor(),
@@ -1365,7 +1361,7 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
         compute_rt,
         ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
     )
-    return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
+    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
 
 
 def create_program_descriptor(

@@ -129,7 +129,7 @@ _1D_PAIR_READER = r"""
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -138,11 +138,14 @@ void kernel_main() {
     constexpr uint32_t A_SENDS = get_compile_time_arg_val(0);  // this core injects A across its ROW
     constexpr uint32_t B_SENDS = get_compile_time_arg_val(1);  // this core injects B down its COLUMN
 
-    // Two independent mcast families on one grid: the PerRow family (A) then the PerColumn family
-    // (B). Each self-parses a fixed 6-word CT block and a 4-word RT block, laid out back to back.
-    constexpr auto mc_a = McastArgs</*CT=*/2, /*RT=*/2>();  // RT 0,1 = a_addr,b_addr
-    constexpr auto mc_b = McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
-    constexpr uint32_t S = mc_b.next_compile_time_args_offset();
+    // Attachment publishes each channel's CT/RT offsets after the caller arguments.
+    constexpr auto mc_a = McastArgs<
+        get_named_compile_time_arg_val("a_ct_offset"),
+        get_named_compile_time_arg_val("a_rt_offset")>();
+    constexpr auto mc_b = McastArgs<
+        get_named_compile_time_arg_val("b_ct_offset"),
+        get_named_compile_time_arg_val("b_rt_offset")>();
+    constexpr uint32_t S = 2;
     constexpr uint32_t Mloc = get_compile_time_arg_val(S + 0);
     constexpr uint32_t Nloc = get_compile_time_arg_val(S + 1);
     constexpr uint32_t Kt   = get_compile_time_arg_val(S + 2);
@@ -153,7 +156,7 @@ void kernel_main() {
 
     const uint32_t a_addr = get_arg_val<uint32_t>(0);
     const uint32_t b_addr = get_arg_val<uint32_t>(1);
-    const uint32_t scalars = mc_b.next_runtime_args_offset();
+    constexpr uint32_t scalars = 2;
     const uint32_t m0 = get_arg_val<uint32_t>(scalars + 0);  // this core's first output tile-row
     const uint32_t n0 = get_arg_val<uint32_t>(scalars + 1);  // this core's first output tile-col
 
@@ -344,7 +347,6 @@ def create_program_descriptor(a, b, probes, *, variant):
     _, _, mloc, nloc, _ = assign[any_core]
 
     if variant == "per_core_dram":
-        semaphores = []
         rt = ttnn.RuntimeArgs()
         for (cx, cy), (m0, n0, _, _, _) in assign.items():
             rt[cx][cy] = [a_addr, b_addr, m0, n0]
@@ -359,16 +361,18 @@ def create_program_descriptor(a, b, probes, *, variant):
             )
         ]
     else:
-        # TWO 1-D families on the same grid, on disjoint semaphore ids:
-        #   A rides PerRow    (sender = column 0 of each row)  -> base_sem_id 0
-        #   B rides PerColumn (sender = row 0 of each column)  -> base_sem_id 2
+        # Two channels share the grid; attachment allocates distinct semaphore pairs.
+        # A rides rows from column 0; B rides columns from row 0.
         mc_a = ttnn.Mcast1D(
-            device, all_crs, ttnn.Mcast1DShape.PerRow, 0, ttnn.McastConfig(handshake=True, base_sem_id=0)
+            device, all_crs, ttnn.Mcast1DShape.PerRow, ttnn.Mcast1DFixedSenderConfig(), ttnn.McastConfig(handshake=True)
         )
         mc_b = ttnn.Mcast1D(
-            device, all_crs, ttnn.Mcast1DShape.PerColumn, 0, ttnn.McastConfig(handshake=True, base_sem_id=2)
+            device,
+            all_crs,
+            ttnn.Mcast1DShape.PerColumn,
+            ttnn.Mcast1DFixedSenderConfig(),
+            ttnn.McastConfig(handshake=True),
         )
-        semaphores = [*mc_a.owned_semaphores(), *mc_b.owned_semaphores()]
 
         groups = {
             (1, 1): [(0, 0)],
@@ -382,9 +386,8 @@ def create_program_descriptor(a, b, probes, *, variant):
                 continue
             rt = ttnn.RuntimeArgs()
             for cx, cy in members:
-                core = ttnn.CoreCoord(cx, cy)
                 m0, n0, _, _, _ = assign[(cx, cy)]
-                rt[cx][cy] = [a_addr, b_addr, *mc_a.runtime_args(core), *mc_b.runtime_args(core), m0, n0]
+                rt[cx][cy] = [a_addr, b_addr, m0, n0]
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=_1D_PAIR_READER,
@@ -393,8 +396,6 @@ def create_program_descriptor(a, b, probes, *, variant):
                     compile_time_args=[
                         a_sends,
                         b_sends,
-                        *mc_a.compile_time_args(),
-                        *mc_b.compile_time_args(),
                         mloc,
                         nloc,
                         kt,
@@ -413,7 +414,12 @@ def create_program_descriptor(a, b, probes, *, variant):
         _cb(CB_A, mloc * kt, tile_bytes, a.dtype, all_crs),
         _cb(CB_B, kt * nloc, tile_bytes, a.dtype, all_crs),
     ]
-    return ttnn.ProgramDescriptor(kernels=[*kernels, writer], semaphores=semaphores, cbs=cbs)
+    descriptor = ttnn.ProgramDescriptor(cbs=cbs)
+    if variant == "mcast_1d_pair":
+        mc_a.attach(descriptor, "a", kernels)
+        mc_b.attach(descriptor, "b", kernels)
+    descriptor.kernels = [*kernels, writer]
+    return descriptor
 
 
 def num_cores(device, mt, nt):
