@@ -19,7 +19,6 @@
 #include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -305,6 +304,11 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
+#ifdef HORIZON
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+#else
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
+#endif
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
