@@ -527,9 +527,10 @@ def test_a_variant_specific_tolerance_needs_no_driver_override():
 
 
 #: The ops enrolled from the accuracy sweep: 19 transcendentals in P3, the exact and
-#: predicate ops in P5, and the rest of the table here, for 125. Their keys all pin
-#: ``input_format``, which is what makes them the witnesses for the resolution
-#: regression below.
+#: predicate ops in P5, and the 42 this PR re-measures over the whole format, for 68.
+#: The 57 ops that had no block at all are enrolled in the PR after this one. Their
+#: keys all pin ``input_format``, which is what makes them the witnesses for the
+#: resolution regression below.
 _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT = frozenset(
     op
     for op, table in _SFPU_ACCURACY_BUDGET.items()
@@ -568,7 +569,7 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     ``TOLERANCE_CONTRACT`` and the ULP branch below never ran for any — a test named
     "every enrolled op" exercising only the nine that predate them.
     """
-    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 125, sorted(
+    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 68, sorted(
         op.name for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
     )
     saw_ulp = set()
