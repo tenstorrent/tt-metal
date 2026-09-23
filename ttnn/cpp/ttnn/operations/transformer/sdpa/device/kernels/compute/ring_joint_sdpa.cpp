@@ -470,6 +470,7 @@ void kernel_main() {
                                         : valid_l_rows - l_origin < joint_shard_tiles * 32 ? valid_l_rows - l_origin
                                                                                            : joint_shard_tiles * 32;
             sdpa_recipe_ring_segment<
+                Sq_chunk_t,
                 scale_fp32,
 #ifdef SDPA_RECIPE_FP32
                 1

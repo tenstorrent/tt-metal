@@ -1240,7 +1240,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         recipe_program = recipes::recipe_compute_program(
             recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, input_tensor_k.dtype())),
             core_grid_set,
-            1);
+            1,
+            Sq_chunk_t);
         desc.cbs = recipe_program->cbs;
     }
     uint32_t num_cores = grid_size.x * grid_size.y;

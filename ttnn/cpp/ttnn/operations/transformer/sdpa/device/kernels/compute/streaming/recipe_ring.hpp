@@ -4,7 +4,7 @@
 #include "recipe_checkpoint.hpp"
 #include "../../dataflow/chunked_prefill_utils.hpp"
 
-template <uint32_t scale, uint32_t subblock_h>
+template <uint32_t q_tiles, uint32_t scale, uint32_t subblock_h>
 void sdpa_recipe_ring_segment(
     RecipeAccumulatorState& resident,
     uint32_t q_begin,
@@ -21,7 +21,7 @@ void sdpa_recipe_ring_segment(
     for (uint32_t q = q_begin; q < q_end; ++q) {
         RecipeAccumulatorState state = staged ? RecipeAccumulatorState{{12, 10, 8}, {13, 11, 9}} : resident;
         if (staged && !first_ring) {
-            recipe_checkpoint<17, 18>(state, q, true);
+            recipe_checkpoint<q_tiles, 17, 18>(state, q, true);
         }
         uint32_t processed = 0;
         for (uint32_t k = 0; k < total_chunks; ++k) {
@@ -33,11 +33,11 @@ void sdpa_recipe_ring_segment(
             recipe_k_tile_offset = 0;
             recipe_k_valid_rows = rows - origin < 512 ? rows - origin : 512;
             const bool last_k = ++processed == valid_chunks;
-            sdpa_segment_v2<8, 16, 4, 4, scale, subblock_h, 4, subblock_h, 4, 0, 1, 2, 6, 3, 14, 4, 5, 16, true>(
+            sdpa_segment_v2<q_tiles, 16, 4, 4, scale, subblock_h, 4, subblock_h, 4, 0, 1, 2, 6, 3, 14, 4, 5, 16, true>(
                 state, 1, last_ring && last_k, last_k && (staged || last_ring));
         }
         if (staged && !last_ring) {
-            recipe_checkpoint<17, 18>(state, q, false);
+            recipe_checkpoint<q_tiles, 17, 18>(state, q, false);
         }
         if (!staged) {
             resident = state;

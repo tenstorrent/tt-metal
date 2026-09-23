@@ -48,6 +48,7 @@ def recipe_ring_device():
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+@pytest.mark.parametrize("q_chunk", [256, 128, 320], ids=["q256", "q128", "q320"])
 @pytest.mark.parametrize("variant", VARIANTS)
 @pytest.mark.parametrize("distribution", ["normal", "uniform", "changed_max"])
 @pytest.mark.parametrize(
@@ -80,6 +81,7 @@ def recipe_ring_device():
 )
 def test_recipe_ring(
     recipe_ring_device,
+    q_chunk,
     variant,
     distribution,
     q_local,
@@ -93,6 +95,8 @@ def test_recipe_ring(
     record_property,
 ):
     mesh, subdevice, semaphores, ccl_column = recipe_ring_device
+    if q_chunk != 256 and (distribution == "uniform" or batch > 1 or valid_n or joint_kind == "replicated"):
+        pytest.skip("Non-Q256 ring blocking runs a reduced continuation matrix")
 
     def generate(q_length, k_length, seed=20260919):
         values = make_inputs(k_length, distribution, q_length=q_length, heads=batch * heads, seed=seed)
@@ -143,7 +147,7 @@ def test_recipe_ring(
             is_causal=False,
             is_cross=q_local != k_local,
             program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=grid, q_chunk_size=256, k_chunk_size=512
+                compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=512
             ),
             precision=getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")),
             inputs_prepared=variant.startswith("E_"),
@@ -206,7 +210,7 @@ def test_recipe_ring(
         precision=getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")),
         inputs_prepared=variant.startswith("E_"),
         program_config=ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(batch * heads, 1), q_chunk_size=256, k_chunk_size=512
+            compute_with_storage_grid_size=(batch * heads, 1), q_chunk_size=q_chunk, k_chunk_size=512
         ),
     )
     dense = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(dense_output)]

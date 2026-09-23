@@ -5,7 +5,7 @@
 
 // The dataflow owner copies raw tile bytes; no unpack, arithmetic, or narrowing
 // is allowed here. Each recurrent CB spans exactly one complete Q-block state.
-template <uint32_t request_cb, uint32_t ack_cb>
+template <uint32_t q_tiles, uint32_t request_cb, uint32_t ack_cb>
 void recipe_checkpoint(RecipeAccumulatorState& state, uint32_t slot, bool restore) {
     using Transfer = sdpa::streaming::StateTransfer;
     CircularBuffer request(request_cb), ack(ack_cb);
@@ -46,16 +46,16 @@ void recipe_checkpoint(RecipeAccumulatorState& state, uint32_t slot, bool restor
             state.group_local_valid[i] = (flags >> i) & 1;
         }
 #endif
-        CircularBuffer(state.prev.out).reserve_back(32 * sdpa_out_stride);
-        CircularBuffer(state.prev.max).reserve_back(8);
-        CircularBuffer(state.prev.sum).reserve_back(8 * sdpa_sum_stride);
-        CircularBuffer(state.prev.out).push_back(32 * sdpa_out_stride);
-        CircularBuffer(state.prev.max).push_back(8);
-        CircularBuffer(state.prev.sum).push_back(8 * sdpa_sum_stride);
+        CircularBuffer(state.prev.out).reserve_back(q_tiles * 4 * sdpa_out_stride);
+        CircularBuffer(state.prev.max).reserve_back(q_tiles);
+        CircularBuffer(state.prev.sum).reserve_back(q_tiles * sdpa_sum_stride);
+        CircularBuffer(state.prev.out).push_back(q_tiles * 4 * sdpa_out_stride);
+        CircularBuffer(state.prev.max).push_back(q_tiles);
+        CircularBuffer(state.prev.sum).push_back(q_tiles * sdpa_sum_stride);
     } else {
-        CircularBuffer(state.prev.out).pop_front(32 * sdpa_out_stride);
-        CircularBuffer(state.prev.max).pop_front(8);
-        CircularBuffer(state.prev.sum).pop_front(8 * sdpa_sum_stride);
+        CircularBuffer(state.prev.out).pop_front(q_tiles * 4 * sdpa_out_stride);
+        CircularBuffer(state.prev.max).pop_front(q_tiles);
+        CircularBuffer(state.prev.sum).pop_front(q_tiles * sdpa_sum_stride);
     }
     ack.pop_front(1);
     UNPACK({

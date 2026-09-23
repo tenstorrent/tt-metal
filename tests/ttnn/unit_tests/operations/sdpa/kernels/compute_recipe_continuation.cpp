@@ -60,11 +60,11 @@ void kernel_main() {
     };
     if constexpr (stage) {
         segment(state, split, false, true);
-        recipe_checkpoint<17, 18>(state, 0, false);
+        recipe_checkpoint<8, 17, 18>(state, 0, false);
         RecipeAccumulatorState other{{12, 10, 8}, {13, 11, 9}};
         segment(other, chunks, true, true);
         state = {{12, 10, 8}, {13, 11, 9}};
-        recipe_checkpoint<17, 18>(state, 0, true);
+        recipe_checkpoint<8, 17, 18>(state, 0, true);
         segment(state, chunks - split, true, true);
     } else {
         segment(state, split, false, reload_q);

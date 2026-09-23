@@ -786,7 +786,7 @@ void kernel_main() {
         const bool last_ring = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
         for (uint32_t q = global_q_start; q < global_q_end; ++q) {
             if (staged && !is_first_active_iter) {
-                transfer_recipe_state<state_fp32, 17, 18>(noc, state_backing);
+                transfer_recipe_state<state_fp32, Sq_chunk_t, 17, 18>(noc, state_backing);
             }
             if (last_ring) {
                 const auto decoded = decompose_global_q_index(q, num_q_chunks, NH, false);
@@ -817,7 +817,7 @@ void kernel_main() {
                     out_subblock_h,
                     0);
             } else if (staged) {
-                transfer_recipe_state<state_fp32, 17, 18>(noc, state_backing);
+                transfer_recipe_state<state_fp32, Sq_chunk_t, 17, 18>(noc, state_backing);
             }
         }
         noc.async_write_barrier();

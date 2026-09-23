@@ -15,7 +15,7 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer cb(16);
     for (uint32_t pass = 0; pass < 2; ++pass) {
-        transfer_recipe_state<fp32, 17, 18>(noc, state);
+        transfer_recipe_state<fp32, 8, 17, 18>(noc, state);
         for (uint32_t row = 0; row < 8; ++row) {
             cb.wait_front(4);
             if (pass == 1) {

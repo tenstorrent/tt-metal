@@ -579,9 +579,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(
             q_shape[3] == 128 && tensor_args.input_k.logical_shape()[3] == 128 &&
-                tensor_args.input_v->logical_shape()[3] == 128 && args.get_q_chunk_size() == 256 &&
-                args.get_k_chunk_size() == 512,
-            "Named ring recipes require Q256/K512/D128");
+                tensor_args.input_v->logical_shape()[3] == 128 && args.get_q_chunk_size() % 64 == 0 &&
+                args.get_q_chunk_size() >= 128 && args.get_q_chunk_size() <= 320 && args.get_k_chunk_size() == 512,
+            "Named ring recipes require Q128/Q192/Q256/Q320, K512 and D128");
         TT_FATAL(
             !args.is_causal && !args.is_balanced && !args.has_sliding_window() && !has_indexed_kv_cache &&
                 !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink &&
@@ -1096,9 +1096,11 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
         const bool fp32 = *args.precision == ttnn::transformer::SDPAPrecision::BALANCED ||
                           *args.precision == ttnn::transformer::SDPAPrecision::ACCURATE;
         using State = sdpa::streaming::StateTransfer;
-        const uint32_t pages = (fp32 ? State::pages<true> : State::pages<false>)+1;
+        const uint32_t q_chunk = args.get_q_chunk_size();
+        const uint32_t pages = State::page_count(fp32, q_chunk / 32) + 1;
         const uint32_t q_blocks = input.logical_shape()[0] * input.logical_shape()[1] *
-                                  ((input.padded_shape()[2] + 255) / 256 + (joint_padded_seq + 255) / 256);
+                                  ((input.padded_shape()[2] + q_chunk - 1) / q_chunk +
+                                   (joint_padded_seq + q_chunk - 1) / q_chunk);
         specs.emplace_back(
             ttnn::Shape{1, 1, q_blocks * pages * 32, 32},
             TensorLayout(DataType::UINT32, PageConfig(Layout::TILE), args.output_memory_config));

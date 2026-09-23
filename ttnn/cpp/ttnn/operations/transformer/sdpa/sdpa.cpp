@@ -297,10 +297,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
             std::holds_alternative<std::size_t>(logical_n) && std::holds_alternative<std::size_t>(logical_l),
             "Named ring recipes currently require scalar logical lengths");
         TT_FATAL(
-            program_config.q_chunk_size == 256 && program_config.k_chunk_size == 512 &&
-                input_tensor_q.logical_shape()[3] == 128 && input_tensor_k.logical_shape()[3] == 128 &&
-                input_tensor_v.logical_shape()[3] == 128,
-            "Named ring recipes require Q256/K512/D128");
+            program_config.k_chunk_size == 512 && input_tensor_q.logical_shape()[3] == 128 &&
+                input_tensor_k.logical_shape()[3] == 128 && input_tensor_v.logical_shape()[3] == 128,
+            "Named ring recipes require K512/D128");
+        operations::transformer::sdpa::detail::recipe_q_tiles(program_config);
         TT_FATAL(
             input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
             "Named ring recipes require BF16 Q and matching KV types");
