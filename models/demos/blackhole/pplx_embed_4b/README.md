@@ -452,35 +452,62 @@ no-op. Swept e2e and confirmed flat, so the default stays at 512:
 
 `QWEN_PREFILL_LEN_CUTOFF` is retained as a default-off probe knob.
 
-### L1-resident batched activations — why they do not fit (2026-09-23)
+### L1-resident residual stream at batch — measured, net regression (2026-09-23)
 
-Asked whether keeping activations block-sharded/L1-resident across the whole
-model improves latency (per-op it is a wash, but cross-op it removes DRAM
-round-trips; at batch 92% of op time reads DRAM-interleaved inputs).
+Question (Sankar): per-op, block-sharding is a wash, but keeping activations
+sharded/L1-resident *across the model* removes DRAM round-trips — does full-model
+latency improve? Measured, same invocation (`TT_VISIBLE_DEVICES=0`), ISL=512,
+10 iterations, best-of.
 
-bs1 is already L1-resident and unchanged at 25.9 ms. bs8/16/32 do not fit. The
-useful finding is that **two separate static regions** compete with the L1
-activation buffer, not one, and they are controlled by different knobs:
-
-| region | core range | knob | shortfall at bs8 |
+| batch | current best (DRAM) | residual L1 + block-sharded LN | Δ |
 |---|---|---|---|
-| SDPA circular buffers | `[0-0 - 7-9]` (8x10) | `QWEN_SDPA_Q_CHUNK` / `_K_CHUNK` | 81.7 KB/core |
-| matmul dataflow buffers | `[0-0 - 11-9]` (12x10) | (not `QWEN_MM_BLOCK`) | 89.4 KB/core |
+| bs1 | **25.9 ms** | 25.9 ms | 0 — already on the L1 path |
+| bs8 | **156.4 ms** | 161.1 ms | **+3.0%** |
+| bs16 | **290.9 ms** | does not fit — 43 KB/core short | — |
+| bs32 | **557.8 ms** | does not fit — 43 KB/core short | — |
 
-Shrinking the SDPA chunks clears the first clash and immediately exposes the
-second. Note that **`QWEN_MM_BLOCK` moved the CB boundary by exactly zero
-bytes** (region end 1226880 at both `8,8,8` and `4,8,8`), so the "shrink blocks
-to free L1" lever the code comments point at does not apply to this clash —
-do not spend runs on it. Also note `N_block_size % subblock_w == 0`, so
-`QWEN_MM_BLOCK` N-reductions must be paired with a smaller `QWEN_MM_SUBBLOCK`.
+**What fits and what does not.** The wide transients cannot be resident: at bs8
+Q and the SDPA output are ~280 KB/core each and the 9728-wide MLP intermediate
+is 353 KB/core (1.4 MB/core at bs32). Only the 2560-wide residual (91 / 181 /
+363 KB/core bfp8 at bs8/16/32) is in scope, so the measured config spills every
+wide tensor to DRAM via the per-op `TT_PREFILL_{QKV,HEADS,SDPA,CONCAT,FF13}_L1=0`
+knobs and keeps the residual plus the 2560-wide WO/FF2 outputs in L1.
 
-Even if it fits, the fit is not free: `q_chunk=128` alone costs +8.5% at bs8
-(see the SDPA table above), so L1-residency has to beat that before it is a
-win. And the MLP interior (9728-dim, 169 MB at bs32 = 1.4 MB/core) cannot be
-resident regardless, so only the 2560-dim residual stream is in scope.
+**The cross-op effect is real but small, and what it costs to fit is larger.**
+Decomposed at bs8, all at SDPA `q_chunk=256 / k_chunk=128`:
 
-**Status: unfinished.** The remaining experiment is a two-knob fit (SDPA chunk
-x matmul dataflow footprint) at bs8/16/32.
+| config | bs8 | vs DRAM at the same SDPA chunks |
+|---|---|---|
+| DRAM activations | 166.3 ms | — |
+| residual L1, all wide transients spilled | 163.7 ms | −1.6% |
+| + WO/FF2 outputs also L1 | **161.1 ms** | **−3.1%** |
+
+So the L1 residual stream buys −3.1% at matched chunks. But it only fits after
+shrinking SDPA from the shipping 512/256 to 256/128, which alone costs **+6.3%**
+(156.4 → 166.3): SDPA's static CBs at 512/256 are ~1.2 MB/core (q 256 KB, k/v
+256 KB, a 512 KB q×k buffer, outputs), leaving ~300 KB for every L1 tensor
+combined, which is why the very first attempt failed inside SDPA by 82 KB and a
+later one by 1196 KB. Net vs shipping: +3.0%.
+
+**bs16/bs32 stop at a `minimal_matmul` dataflow region 43 KB/core short**, at
+identical addresses (`buf@820992`, region end `865408`) for both batch sizes —
+so the blocking L1 tensor is fixed-size, not the residual (which doubles between
+them). `QWEN_MM_BLOCK` at 4,8,8 and 2,8,8 did not move it (the same plateau seen
+earlier at 53 KB); the RoPE tables are ~1 KB/core and not it. Unidentified; a
+per-op L1 report (`ttnn-visualizer`, Section 6) would name it. Not pursued
+because the bs8 result already shows the approach is net negative.
+
+Two dead ends recorded so they are not repeated: `QWEN_MM_BLOCK` does not shrink
+SDPA's circular buffers at all (region end unchanged to the byte), and it hits
+a floor on the matmul dataflow region after the first M_block halving.
+`N_block_size % subblock_w == 0`, so N reductions need a paired
+`QWEN_MM_SUBBLOCK`.
+
+**Knob semantics fix that made this measurable:** `TT_PREFILL_<op>_L1=0` now
+forces DRAM. Previously "0" only skipped the intermediate-L1 branch and fell
+through to the activation placement — which is itself L1 under
+`TT_BATCHED_L1_PREFILL` — so the knobs could move an op output *into* L1 but
+never *out*. Identical behaviour in the DRAM-activation regime.
 
 **Operational note — device resets on this host.** Use **`tt-smi -r` only**.
 Never run `tt-smi -glx_reset`: this is a shared 32-chip Galaxy and `-glx_reset`
