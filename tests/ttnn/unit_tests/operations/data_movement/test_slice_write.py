@@ -126,3 +126,16 @@ def test_slice_write_nd(rank, layout, device):
 
     assert_equal(torch_src, written_region)
     assert_equal(torch_out_ref, out_host)
+
+    # A second allocation of the same spec must hit the cached program and still write the new buffers.
+    retained = [(tt_in, tt_out)]
+    tt_in_hit = ttnn.from_torch(torch_src, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tt_in_hit = ttnn.to_memory_config(tt_in_hit, ttnn.L1_MEMORY_CONFIG)
+    tt_out_hit = ttnn.from_torch(torch_out_ref * 0, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tt_out_hit = ttnn.to_memory_config(tt_out_hit, ttnn.DRAM_MEMORY_CONFIG)
+    retained.append((tt_in_hit, tt_out_hit))
+    entries = device.num_program_cache_entries()
+    ttnn.experimental.slice_write(tt_in_hit, tt_out_hit, begins, ends, strides)
+    assert device.num_program_cache_entries() == entries
+    assert_equal(torch_src, ttnn.to_torch(tt_out_hit)[slices])
+    assert_equal(torch_out_ref, ttnn.to_torch(tt_out_hit))
