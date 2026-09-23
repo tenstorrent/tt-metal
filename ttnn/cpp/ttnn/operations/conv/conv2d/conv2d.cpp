@@ -24,6 +24,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -328,6 +329,11 @@ Result conv2d_L1(
             conv_config.enable_activation_reuse,
             conv_config.config_tensors_in_dram,
             conv_config.force_split_reader);
+
+        // The 1D depthwise kernel cannot fuse an activation, so apply it here.
+        if (conv_is_1d_depthwise && conv_config.activation.has_value()) {
+            conv_output = ttnn::unary_chain(conv_output, {conv_config.activation.value()}, conv_output.memory_config());
+        }
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
