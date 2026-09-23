@@ -37,11 +37,17 @@ emit_api_usage() {
     annotations=$(_api_sum annotations)
     attempt_meta=$(_api_sum attempt_meta)
     total=$(( jobs_list + artifact_list + artifact_download + log_archive + per_job_log + annotations + attempt_meta ))
-    # One stable, greppable line per execution. This counts every REST call the collection
-    # script makes. The workflow-metadata fetch (workflow.json) is a separate request made by
-    # the workflow step -- intentionally outside this counter, since that is where #57432 samples
-    # the rate-limit headers. artifact_list counts one internal listing per `gh run download`;
-    # its pagination is approximated as one page, which is exact for runs with <=100 artifacts.
+    # One stable, greppable line per execution. This counts the REST calls the collection script
+    # makes. The workflow-metadata fetch (workflow.json) is a separate request made by the
+    # workflow step -- intentionally outside this counter, since that is where #57432 samples the
+    # rate-limit headers.
+    #
+    # Accuracy: jobs_list, log_archive, per_job_log, annotations and attempt_meta are exact
+    # (counted at each call). artifact_download counts the ZIP requests that were billed --
+    # successful downloads plus the request that fails on a partial/rate-limited download.
+    # artifact_list counts each `gh run download`'s internal artifact listing as one page; on a
+    # run with >100 TOTAL artifacts that listing paginates, so artifact_list (and thus total) is
+    # a slight lower bound in that case -- rare for produce-data, and it never over-counts.
     # A run name is arbitrary user-controlled text: spaces/brackets (e.g.
     # "Sanity tests (push) SKUs[WH,Sim]") and in principle double quotes, newlines or CRs. Emit
     # it as one quoted field and neutralise the characters that would break that quoting or the
@@ -87,14 +93,23 @@ download_artifacts() {
     # exceeded" both land here, and collapsing the second into "not found" is how a
     # throttled fetch gets mistaken for a run that simply had no test reports.
     local download_error
+    local download_ok=1
     if ! download_error=$(gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern 'test_reports_*' $workflow_run_id 2>&1 >/dev/null); then
         echo "[Warning] Test reports not downloaded for workflow run $workflow_run_id: ${download_error:-no reason given}"
+        download_ok=0
     fi
 
-    # gh run download issues one artifacts listing plus one ZIP request per matching artifact;
-    # count the downloaded artifact directories to get the exact ZIP-request count.
+    # gh run download bills one artifacts listing plus one ZIP request per matching artifact.
+    # artifact_download = the ZIP requests actually billed: one per successfully downloaded
+    # directory, plus the request that failed when a partial/rate-limited download stops early
+    # (so a throttled collection is not undercounted -- the case rate-limit diagnosis needs most).
     api_count artifact_list 1
     api_count artifact_download "$(find "generated/cicd/$workflow_run_id/artifacts" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+    # `if`, not `&&`: a false `[[ ]]` as the function's last command returns 1 and, under
+    # `set -e`, would abort the whole collection.
+    if [[ "$download_ok" -eq 0 ]]; then
+        api_count artifact_download 1
+    fi
 }
 
 # Only the test_reports_* artifacts this attempt produced.

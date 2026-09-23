@@ -172,15 +172,19 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          # A workflow run name is repository-controlled text and MUST NOT be interpolated into
+          # the run: script (a name with $(...) / backticks would execute here). Pass it as an
+          # environment variable so the shell sees it as data, never as code.
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name }}
         run: |
           # Target workflow name for the [api-usage] label: use the workflow_run event name when
           # present, else read it from the analysed run's workflow.json (written by the step
           # above) so workflow_dispatch / workflow_call runs get the real name, not "unknown".
-          wf_name="${{ github.event.workflow_run.name }}"
+          wf_name="$WORKFLOW_RUN_NAME"
           if [[ -z "$wf_name" && -f workflow.json ]]; then
             wf_name="$(jq -r '.name // ""' workflow.json 2>/dev/null || echo "")"
           fi
-          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --repo ${{ github.repository }} --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --workflow-name "$wf_name"
+          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --repo "${{ github.repository }}" --workflow-run-id "${{ steps.get-run-id-and-attempt.outputs.run-id }}" --attempt-number "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" --workflow-name "$wf_name"
           find generated/cicd/ -type f
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:

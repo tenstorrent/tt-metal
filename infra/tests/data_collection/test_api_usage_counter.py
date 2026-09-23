@@ -217,3 +217,52 @@ def test_first_attempt_counts_against_stub_gh(tmp_path):
     assert f["annotations"] == "0", r.stdout
     assert f["attempt_meta"] == "0", r.stdout
     assert f["total"] == str(2 + 1 + 1 + 1), r.stdout
+
+
+# A partial/rate-limited download: gh run download extracts one artifact, then exits non-zero.
+_GH_STUB_PARTIAL_DOWNLOAD = r"""#!/bin/bash
+sub=$1; shift
+case "$sub" in
+  run)
+    dest=""
+    while [[ $# -gt 0 ]]; do case "$1" in -D) dest=$2; shift ;; esac; shift; done
+    mkdir -p "$dest/test_reports_u1"
+    echo "<testsuite/>" > "$dest/test_reports_u1/r.xml"
+    echo "error: API rate limit exceeded" >&2   # one artifact done, then a failing request
+    exit 1
+    ;;
+  api)
+    path=""
+    for a in "$@"; do [[ "$a" == /* ]] && path=$a; done
+    case "$path" in
+      */attempts/*/jobs) echo '{"total_count":1,"jobs":[{"id":1,"conclusion":"skipped","name":"a"}]}' ;;
+      */attempts/*/logs) echo "not-a-real-zip" ;;
+      *) echo '{}' ;;
+    esac
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq required by the collection script")
+def test_partial_download_failure_counts_the_failed_request(tmp_path):
+    # A rate-limited download that extracts 1 artifact then fails must count BOTH the succeeded
+    # ZIP (the directory) and the request that failed -- 2, not 1 -- so throttled collections
+    # are not undercounted.
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    gh = stub_dir / "gh"
+    gh.write_text(_GH_STUB_PARTIAL_DOWNLOAD)
+    gh.chmod(0o755)
+
+    env = {**os.environ, "PATH": f"{stub_dir}:{os.environ['PATH']}"}
+    r = subprocess.run(
+        ["bash", str(SCRIPT), "--repo", "tenstorrent/tt-metal",
+         "--workflow-run-id", "999", "--attempt-number", "1", "--workflow-name", "X"],
+        cwd=tmp_path, env=env, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+    f = _api_usage_fields(r.stdout)
+    assert f["artifact_download"] == "2", r.stdout  # 1 downloaded dir + 1 failed request
