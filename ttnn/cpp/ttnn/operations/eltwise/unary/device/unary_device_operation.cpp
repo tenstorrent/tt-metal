@@ -154,7 +154,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             const auto type = args.op_chain[i].type();
             const bool leading_mac = i == 0 && type == operations::unary::UnaryOpType::MAC_TSS;
             TT_FATAL(
-                leading_mac || utils::get_compute_kernel_path(type, input_tensor.dtype()) == "eltwise_sfpu.cpp",
+                leading_mac || !utils::uses_dedicated_compute_kernel(type, input_tensor.dtype()),
                 "Unary: {} uses a dedicated compute kernel and must be {} in the chain (chain has {} ops)",
                 type,
                 type == operations::unary::UnaryOpType::MAC_TSS ? "the first op" : "the only op",
