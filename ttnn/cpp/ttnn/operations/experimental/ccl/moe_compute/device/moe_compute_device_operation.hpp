@@ -22,6 +22,7 @@ struct MoEComputeDeviceOperation {
     using operation_attributes_t = MoEComputeParams;
     using tensor_args_t = MoEComputeInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
     using program_factory_t = std::variant<MoEComputeMeshWorkloadFactory>;
 
@@ -30,6 +31,7 @@ struct MoEComputeDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 

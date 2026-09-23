@@ -369,10 +369,14 @@ void kernel_main() {
                     brisc_activation_l1_ptr[1 + e] = k;
                     brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
 
-                    // Write to BRISC's e_t buffer (16B aligned entries)
+                    // Write to BRISC's e_t buffer (16B aligned entries): word 0 token id, word 1 the
+                    // token's k slot for this expert (same entry format as the NCRISC buffer; the
+                    // merge copies whole entries).
                     const uint32_t brisc_e_t_offset =
                         (e * brisc_tokens_capacity + brisc_num_tokens_per_expert[e]) * e_t_entry_size;
-                    *reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset) = t;
+                    uint32_t* brisc_e_t_entry = reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset);
+                    brisc_e_t_entry[0] = t;
+                    brisc_e_t_entry[1] = k;
                     brisc_num_tokens_per_expert[e]++;
                     break;
                 }
