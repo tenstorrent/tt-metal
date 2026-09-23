@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "35767666005",
-    "timestamp": "2026-09-22T18:34:00Z"
+    "run_id": "35804208187",
+    "timestamp": "2026-09-23T01:01:00Z"
   },
-  "run_id": "35728067639",
+  "run_id": "35804208187",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -269,6 +269,16 @@
       "branch": "repo-assist/fix-issue-57408-square-bf16-rne-rounding",
       "title": "fix(sfpu): round ttnn.square to nearest-even instead of truncating to bf16",
       "status": "opened this run; scoped to square only (WH+BH; Quasar addressing left untouched), adds is_fp32_dest_acc_en template param + float32_to_bf16_rne rounding matching calculate_sfpu_binary_mul; regression test asserts bit-exact match vs ttnn.mul(x,x); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
+    },
+    "57446": {
+      "issue": 57446,
+      "branch": "repo-assist/fix-issue-57446-unary-pow-fp32-underflow-nan",
+      "title": "fix(sfpu): flush ttnn.pow (fp32) underflow to 0 instead of NaN",
+      "status": "opened this run; resets FastTwoSum residual e when clamping s (mirrors existing binary_pow reset) and adds explicit out_exp<=0 underflow guard alongside existing overflow guard on WH+BH ckernel_sfpu_unary_power.h; added regression tests for both unary and binary pow paths using issue's exact inputs; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so build unverified locally"
+    },
+    "57349": {
+      "issue": 57322,
+      "status": "MERGED 2026-09-22T14:49:43Z by ijankowskiTT (ternary/tanh_bw program-cache Alignment/Tile hash fix)"
     }
   },
   "issues_labeled": [
@@ -1191,8 +1201,8 @@
     }
   },
   "backlog_cursor": {
-    "task1_task2_latest": "2026-09-22 (2nd run today): reviewed newest ~50 open issues (57413 down through 57301); most in the 573xx range below 57345 are internal team-tracking issues or defect-catalog meta-issues (57352-57367, assignees set / broad multi-defect lists, not single-fix candidates). Engaged substantively on #57408 (opened fix PR, see open_prs). Reviewed and passed on #57323 (dup fix PRs exist), #57326 (sfpi feature request, assigned), #57410 (BFP4/BFP2 host/device rounding mismatch -- deep packer change, deferred, candidate for a future dedicated run). Continue below #57301 next run.",
-    "task6_latest": "2026-09-22: re-pinged 3 stale PRs previously nudged with no author response: #45631, #49317, #50993 (3-action cap reached). Candidates further down oldest-updated list not yet re-checked this run: #51119, #51120, #51129, #51155, #45435, #47426, #38627, #38639, #39293, #40858 (all previously nudged in Aug, worth re-ping when cap allows)."
+    "task1_task2_latest": "2026-09-23: continued below prior cursor #57301, reviewed down through ~#57186 (fetched issues1/2/3 pages). Labeled #57394 (bug, ci-bug: fabric express-link routing hang) and #57385 (ci-bug: RealtimeProfilerSanity intermittent flake), both previously unlabeled. Engaged substantively on #57446 (fp32 pow underflow-to-NaN, opened fix PR, see open_prs). Most 573xx range issues below 57352 remain internal defect-catalog meta-issues or already-covered (57323/57326/57410 reviewed and passed in prior run). Continue below #57186 next run.",
+    "task6_latest": "2026-09-23: re-pinged 3 stale non-draft PRs whose bot-review-only state and dirty/behind/clean-but-stalled mergeable_state indicated author-blocked, all previously nudged ~Aug 25-26 (well past 3-day cadence): #38627, #38639, #39293 (3-action cap reached). Next candidates further down oldest-updated list not yet re-checked: #40858, #45435, #47426, #51119, #51120, #51129, #51155 (all previously nudged in Aug)."
   },
   "labeled_issues": {
     "53866": {
@@ -1599,6 +1609,11 @@
   },
   "run_history": [
     {
+      "run_id": "35804208187",
+      "date": "2026-09-23T01:01:00Z",
+      "summary": "Task5: checked CI via get_check_runs on all 28 open [repo-assist] PRs -- all green (non-required workflow-scaffolding jobs correctly show 'skipped', not failures) except the 2 previously-flagged infra-noise cases (#56195/#55435 RTL Sim CI details_url=github.com/tenstorrernt typo domain, unchanged). Noted PR #57349 (fixes #57322, ternary/tanh_bw alignment hash) merged since last run by ijankowskiTT. Task2/3: investigated fresh, self-contained issue #57446 (ttnn.pow fp32 scalar-exponent path returns NaN instead of 0 for deeply-underflowing inputs like pow(0.1,1000)) -- verified root cause against current tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_unary_power.h: _sfpu_pow2_f32_accurate_hilo_ clamps the reduction argument s without resetting the FastTwoSum residual e, so a stale e can flip the reduced fraction negative and drive the result's biased exponent to 0, which setexp wraps to NaN. Confirmed no existing PR references it (search_pull_requests 0 hits). Opened fix mirroring binary_pow's existing e=0.0f reset on the same clamp, plus an explicit out_exp<=0 underflow guard (closing the residual hole the issue also flagged) alongside the existing out_exp>=255 overflow guard. Added test_unary_pow_fp32_underflow_to_zero/test_binary_pow_fp32_underflow_to_zero regression tests in tests/ttnn/unit_tests/operations/eltwise/test_pow.py covering the issue's exact 3 bases at exponent 1000. Posted PR + issue comment. Task1: labeled 2 unlabeled fresh issues -- #57394 (bug+ci-bug, fabric express-link routing hang, T3K unit tier fully red since 09-21) and #57385 (ci-bug, RealtimeProfilerSanity intermittent 3-of-5-records flake in Merge Gate). Task6: nudged 3 stale non-draft PRs (bot-review-only, dirty/behind/stalled-clean mergeable states, last nudged ~Aug 25-26, well past 3-day cadence): #38627, #38639, #39293 (3-action cap reached). Task8: rewrote monthly summary #55015 (body had regrown to ~215KB via repeated duplication across many prior appends); trimmed to canonical current-state format, kept last 5 run-history entries, added #57446 fix and today's labels/nudges to Suggested Actions, removed items for closed/merged PRs (#57349/#57130 verified still open and green so kept)."
+    },
+    {
       "run_id": "35767666005",
       "date": "2026-09-22T18:34:00Z",
       "summary": "Task5: checked CI via get_check_runs on 26 open [repo-assist] PRs (57131/57146/57130/56817/57244/57311/57288/57145/56529/56375/56428/56943/56598/56396/55688/51868/54932/54666/54792/53113/56195/56714/53690/54246/54862/52106) -- all green except the same known infra-noise case on #56195 (RTL Sim CI details_url=github.com/tenstorrernt typo domain, unchanged since 09-11); #53113 shows only the aw workflow scaffolding jobs (no repo build checks present on this PR's head, unchanged). Task2/3: investigated fresh, highly detailed issue #57408 (ttnn.square vs ttnn.mul(x,x) disagree bit-for-bit on bfloat16 output because calculate_square's SFPSTORE truncates instead of rounding to nearest-even like the binary MUL path already does) -- verified the reporter's root cause and proposed diff against current tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h and compute_kernel_api.h::square_tile; confirmed no existing open PR references #57408 (search_pull_requests 0 hits). Opened a scoped fix PR covering square only on WH+BH (added is_fp32_dest_acc_en template param, round via existing float32_to_bf16_rne helper mirroring calculate_sfpu_binary_mul; fixed the one test-harness call site in tt-llk/tests/helpers/include/sfpu_operations.h that needed the extra template arg; added test_square_matches_mul_bit_exact regression test). Left the other affected ops from the issue (rad2deg/deg2rad/softsign/hardsigmoid/prelu) and the Quasar architecture for follow-up PRs -- Quasar's SFPU addressing (ADDR_MOD_6 based calculate_square_sfp_rows) doesn't fit the same if-constexpr pattern without deeper changes, and doing all 5 remaining ops + 3 archs in one PR would be too large to review surgically. Also reviewed #57323 (generalized_moe_gate Blackhole compile failure) -- already has 2 open fix PRs (#57324, #57396), no action needed. Reviewed #57326 (sfpi::lz cannot set CC without v_block) -- assigned to nathan-TT, sfpi compiler-level feature request, not a quick surgical fix, left alone. Reviewed #57410 (host vs device BFP4/BFP2 rounding disagreement) -- well documented but a deeper blockfloat_common.cpp packer algorithm change, deferred as a candidate for a future run given its complexity and cross-cutting host/device correctness implications. Task8: updated monthly summary #55015 with new PR."
@@ -1622,11 +1637,6 @@
       "run_id": "35494639210",
       "date": "2026-09-20T06:38:00Z",
       "summary": "Task1/2: reviewed newest ~50 open issues (#57103 down through #56904); confirmed #56976 (ttnn.matmul/linear ~4x slower with L1-interleaved operand/output on default program config) as a fresh, well-documented defect -- verified the reported root cause line-by-line against current ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.cpp (all_dram_interleaved gate at L1129-1133 requires DRAM on all three buffers; the spread-blocking branch at L1183 is keyed on that flag), labeled performance monitoring, commented with citations (did not restate reporter's own perf numbers as independently confirmed -- no HW access). Checked #56827 (concat block-sharded width ragged-tail) for existing fixes before considering a new attempt: found repo-assist's own PR #57099 (opened last run) was auto-closed unmerged despite 5/5 green checks -- same unexplained pattern as prior #56864 -- and discovered a new external draft PR #57100 (VirdhatchaniKN) claiming a broader two-defect fix (cursor arithmetic + an alignment-boundary rejection); flagged both for maintainer consolidation in the monthly summary rather than opening a third repo-assist PR. Re-verified CI on #57092/#57093 (opened previous run) -- both 5/5 green. Task6: nudged 3 never-previously-touched stale PRs from the oldest-updated, non-repo-assist list: #52375 (author checkin, dirty since 2026-09-02), #50598 (author checkin, dirty despite 2 approvals, asked to reconfirm an earlier CHANGES_REQUESTED is resolved), #51447 (author checkin, dirty, no substantive review since opened 2026-07-29). Hit the 3-action cap; noted #41596/#40339 (aarch64/Gentoo support, both behind main and untouched since spring 2026) as likely-abandoned candidates for a future closure discussion rather than another nudge. Task8: rewrote monthly summary #55015 with this run's entry, added the #56827 three-way-fix-conflict item and #56976 investigate item, added the 3 new stale-PR author-followup items."
-    },
-    {
-      "run_id": "35480399102",
-      "date": "2026-09-20T01:06:00Z",
-      "summary": "Task5: checked CI on 14 open repo-assist PRs pending outcome (53690/54246/54792/55847/56375/56195/56428/56790/56817/56864-closed/56943/56956/56997) -- all green except #56195 (RTL Sim CI failure but details_url is the same known broken placeholder domain already flagged as infra noise elsewhere, not a real code defect). Task1/2: reviewed ~100 newest open issues (cursor #57096 down through #56755) -- most already labeled/assigned to humans with active fix PRs; confirmed #56865 (vLLM sampling regression) assigned to iwroszTT with draft PR #56467 already addressing it, #56824/#56781/#56769/#56776 assigned to reporters, #57095/#57028/#57011/#56802/#56801/#56803/#56792/#56783 are maintainer-authored perf/infra notes needing no action. Commented on #56967 (LO16 vs tt-isa-documentation UINT16 naming discrepancy in tt-llk) after verifying current llk_defs.h on Blackhole+Wormhole match reporter's citations exactly (LO16=6, no value-9 entry) -- naming-clarity only, not labeled bug. Task3: investigated #56827 (concat block-sharded width ragged-tail corruption) -- confirmed still open, no other PR fixes it (only #56603 fixes the height mirror, itself unmerged), prior repo-assist PR #56864 was auto-closed without merge/comment despite 5/5 green checks for unclear reasons; re-implemented the fix on a fresh branch (real padded_shape()[-1] instead of shard capacity for the per-input cursor, output range clipped via std::min), added a parametrized regression test (2/3 inputs x row/col orientation) adapted from the issue's own repro; opened new ready-for-review PR, commented on issue linking it. Task8: refreshed monthly summary #55015 (added #57092/#57093 PR items, replaced stale #56827/#56864 closed-PR suggested-action with the new PR)."
     }
   ],
   "no_action_reviewed": [
@@ -1713,7 +1723,7 @@
       "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
     }
   },
-  "task8_last_update": "2026-09-22T18:34:00Z",
+  "task8_last_update": "2026-09-23T01:01:00Z",
   "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
   "lessons_learned": [
     "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning.",
