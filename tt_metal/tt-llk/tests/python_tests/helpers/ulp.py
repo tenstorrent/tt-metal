@@ -358,6 +358,13 @@ def ulp_elementwise_valid(
                 f"near_zero_atol must not be negative, got {near_zero_atol}; "
                 "0.0 is the no-floor value, and None is the default"
             )
+        if not near_zero_fraction > 0.0:
+            # It is a divisor here and the relative bound there, so 0.0 raises a bare
+            # ZeroDivisionError and a negative makes both cuts false on every lane --
+            # the same silently inert floor a negative atol would give.
+            raise ValueError(
+                f"near_zero_fraction must be positive, got {near_zero_fraction}"
+            )
         absolute_cut = near_zero_atol / near_zero_fraction
         # In float32, like the error compare below: both cuts are Python floats, so a
         # 16-bit `golden.abs()` would promote them onto the tensor's own lattice and round

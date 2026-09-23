@@ -636,10 +636,11 @@ def passed_test(
     agreement. This layer cannot see ``dest_acc``, so the default is the answer that
     cannot hide error.
 
-    Both are read only by the ULP arm -- the tolerance arm is ``torch.isclose``, which
-    has no flush concept -- so each is rejected without *max_ulp* rather than silently
-    ignored, as is a negative *near_zero_atol*, which would make the floor inert by a
-    different route.
+    *mask*, *near_zero_atol* and *flush_subnormals* are read only by the ULP arm -- the
+    tolerance arm is ``torch.isclose``, which has no flush concept and no lane
+    selection -- so each is rejected without *max_ulp* rather than silently ignored, as
+    is a negative *near_zero_atol*, which would make the floor inert by a different
+    route.
 
     *max_ulp* is the enforced maximum for every format it accepts, with nothing ORed in
     beside it. For ``Bfp8_b`` that has a price: the budget is denominated in bf16 steps
@@ -655,12 +656,14 @@ def passed_test(
 
     if max_ulp is None:
         # Everything only the ULP arm reads: the tolerance arm is `torch.isclose`, which
-        # has no flush concept, so either of these without a budget did nothing at all.
+        # has no flush concept and no lane selection, so any of these without a budget
+        # did nothing at all -- a `mask` silently judging every lane most of all.
         inert = sorted(
             name
             for name, value in {
                 "near_zero_atol": near_zero_atol,
                 "flush_subnormals": flush_subnormals,
+                "mask": mask,
             }.items()
             if value is not None
         )
@@ -670,7 +673,7 @@ def passed_test(
                 f"{' and '.join(inert)} {'is' if one else 'are'} read only by the ULP "
                 f"gate and {'does' if one else 'do'} nothing on "
                 f"{'its own' if one else 'their own'}. Pass max_ulp as well, or use "
-                "custom_atol for a flat tolerance."
+                "custom_atol for a flat tolerance over every lane."
             )
 
     if max_ulp is not None:
@@ -776,24 +779,28 @@ def passed_test(
         )
 
     if max_ulp is not None:
+        # Lanes the caller has already settled are not this gate's to judge. The
+        # exhaustive sweep is the case that needs it: it feeds every value the format
+        # has, including the subnormals the unpack path flushes and the golden does not,
+        # and a flushed lane is worth ~16,000 steps of something that is not the op's
+        # accuracy. Validated by `_selection`, so a wrong shape or a non-boolean mask is
+        # an error rather than a silent reshape.
+        #
+        # Resolved before the verdict, not after it, so the near-zero band sizes its
+        # dynamic range over the judged lanes only -- otherwise a large masked-out golden
+        # widens the relative cut and the floor rescues a lane that should have failed.
+        from .ulp import _selection
+
+        ulp_selected = _selection(mask, golden_tensor, "passed_test")
         is_valid, ulp_distances, ulp_rescued = ulp_elementwise_valid(
             golden_tensor,
             res_tensor,
             max_ulp,
             near_zero_atol=near_zero_atol,
             flush_subnormals=flush_subnormals,
+            selected=ulp_selected,
         )
-        if mask is not None:
-            # Lanes the caller has already settled are not this gate's to judge. The
-            # exhaustive sweep is the case that needs it: it feeds every value the
-            # format has, including the subnormals the unpack path flushes and the
-            # golden does not, and a flushed lane is worth ~16,000 steps of something
-            # that is not the op's accuracy. Validated by `_selection`, so a wrong
-            # shape or a non-boolean mask is an error rather than a silent reshape.
-            from .ulp import _selection
-
-            selected = _selection(mask, golden_tensor, "passed_test")
-            is_valid = is_valid | ~selected
+        is_valid = is_valid | ~ulp_selected
         # No lattice arm here, unlike the Bfp8_b tolerance branch below: ORing the
         # block-aware compare in would mean max_ulp was not the enforced maximum, since a
         # lane many bf16 steps out would pass a 0-step budget on the lattice's say-so. So
@@ -880,7 +887,7 @@ def passed_test(
         #
         # Ranked without the lanes the floor accepted -- they hold the largest step counts
         # by construction, so ranking every lane names one that passed.
-        ranked = ~ulp_rescued
+        ranked = ulp_selected & ~ulp_rescued
 
         def _ulp_summary():
             return ulp_verdict_message(
@@ -895,7 +902,9 @@ def passed_test(
                 # path too, which is what lets a DEBUG export tell a budget-carried pass
                 # from a floor-carried one: the rescued lanes are exactly the ones
                 # `ranked` keeps out of the summary.
-                rescued=None if near_zero_atol is None else ulp_rescued,
+                rescued=(
+                    None if near_zero_atol is None else ulp_rescued & ulp_selected
+                ),
             )
 
         if is_within_tolerance:
