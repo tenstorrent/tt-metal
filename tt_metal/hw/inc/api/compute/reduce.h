@@ -43,7 +43,7 @@ namespace ckernel {
  *
  * Output tile layout: for all three values of `reduce_dim`, `reduce_init` programs the packer's edge masks
  * (`_llk_pack_reduce_mask_config_<reduce_type, reduce_dim, …>`) to replace datums outside the reduction result.
- * MAX selects negative-infinity mode, except BFP outputs retain zero fill to protect their shared exponent.
+ * MAX selects negative-infinity mode, except BFP and MX outputs retain zero fill to protect their shared exponent.
  * SUM and AVG select zero filling. The packed representation of the fill value depends on the output data
  * format. For any tile packed into `ocb` while this state is in effect:
  *   - `REDUCE_SCALAR`: the scalar result is at face-0 `[0, 0]`; every other datum is masked.
