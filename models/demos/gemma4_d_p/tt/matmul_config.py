@@ -6,7 +6,8 @@
 import ttnn
 
 # Tallest per-core output block measured to fit in L1 (chunk 8192 at CP8). Chunk 16384 gives 7 tiles
-# per core and overflows L1, so larger shapes keep ttnn's default config.
+# per core, whose circular buffers need 1,660,032 B against 1,572,864 B of L1, so larger shapes keep
+# ttnn's default config.
 _MAX_PER_CORE_M = 4
 
 
