@@ -25,7 +25,8 @@ void kernel_main() {
         generic_moe_gate<normalize, selected, 256, true, true, true, false, DST_ACCUM_MODE, true>(
             tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0x3f800000);
     } else {
-        // Existing callers must retain the unbiased payload without a new argument.
+        // Intentionally omit scores_include_bias to exercise the existing caller syntax
+        // and verify that the default still returns the unbiased payload.
         generic_moe_gate<normalize, selected, 256, true, true, true, false, DST_ACCUM_MODE>(
             tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0x3f800000);
     }

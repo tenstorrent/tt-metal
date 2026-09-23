@@ -108,7 +108,8 @@ ALWI void rope_sfpu_inplace_fused_rows(const std::uint32_t scale_fp32) {
  */
 template <std::uint32_t Ht, std::uint32_t Wt, std::uint32_t tile_h = 1, bool cos_sin_per_row = false>
 ALWI void rope_sfpu_inplace_fused() {
-    constexpr std::uint32_t dest_tiles = DST_ACCUM_MODE ? 4 : 8;
+    constexpr std::uint32_t dest_tiles =
+        get_dest_max_tiles<DstSync::SyncHalf, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
     static_assert(Ht * Wt + Wt <= dest_tiles, "rope_sfpu: x + fused cos/sin must fit in half DEST");
     constexpr std::uint32_t T = ROPE_SFPU_TILE_ROWS;
     rope_sfpu_inplace_fused_rows<Ht, Wt, 0, T, (Ht * Wt) * T, T, false, tile_h, cos_sin_per_row>(0);

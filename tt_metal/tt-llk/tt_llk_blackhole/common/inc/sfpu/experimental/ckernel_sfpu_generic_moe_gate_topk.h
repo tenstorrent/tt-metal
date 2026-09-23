@@ -356,14 +356,23 @@ inline void _init_generic_moe_gate_topk_()
 // GPT-OSS uses biased logits both for selection and softmax. Copy the unsorted
 // biased scores before the paired sort so index association and tail handling stay
 // identical to the original-score path.
-template <int num_experts, int offset = 0>
+template <int padded_num_total_experts, int offset = 0>
 inline void _generic_moe_gate_copy_biased_scores_()
 {
-    if constexpr (offset < num_experts / 16)
+    static_assert(
+        padded_num_total_experts >= 64 && padded_num_total_experts <= 1024 && padded_num_total_experts % 64 == 0,
+        "padded_num_total_experts must be padded to 64-expert blocks within one tile");
+    static_assert(offset >= 0 && offset % 2 == 0, "offset must address the even or odd columns of a four-row band");
+    if constexpr (offset < padded_num_total_experts / 16)
     {
         TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset);
         TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_scores_tile + offset);
-        _generic_moe_gate_copy_biased_scores_<num_experts, offset + 2>();
+        _generic_moe_gate_copy_biased_scores_<padded_num_total_experts, offset + 2>();
+    }
+    else
+    {
+        // Reaching the end of the padded scores is the valid recursion terminator.
+        static_assert(offset == padded_num_total_experts / 16, "offset must not extend past the padded scores");
     }
 }
 
