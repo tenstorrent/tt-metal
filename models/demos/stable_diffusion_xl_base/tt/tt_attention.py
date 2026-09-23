@@ -6,15 +6,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import (
-    RefinerModelOptimisations512x512,
-    RefinerModelOptimisations1024x1024,
-)
-from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_512x512 import ModelOptimisations512x512
-from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024 import ModelOptimisations1024x1024
-from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024BH import (
-    ModelOptimisations1024x1024BH,
-)
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
@@ -56,24 +47,8 @@ class TtAttention(LightweightModule):
             module_path=module_path, is_self_attention=self.is_self_attention
         )
 
+        # Ablation: revert HiFi2 self-attention back to LoFi (base) to isolate its FID contribution.
         sdpa_math_fidelity = ttnn.MathFidelity.LoFi
-        # Self-attention policies: all base/refiner blocks at 512/1024 on Wormhole,
-        # base down-block1 and up-block0 on Blackhole. Keep cross-attention,
-        # Blackhole refiner and VAE subclasses on their existing precision settings.
-        if self.is_self_attention and (
-            type(model_config)
-            in (
-                ModelOptimisations512x512,
-                ModelOptimisations1024x1024,
-                RefinerModelOptimisations512x512,
-                RefinerModelOptimisations1024x1024,
-            )
-            or (
-                type(model_config) is ModelOptimisations1024x1024BH
-                and module_path.startswith(("down_blocks.1.", "up_blocks.0."))
-            )
-        ):
-            sdpa_math_fidelity = ttnn.MathFidelity.HiFi2
 
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=sdpa_math_fidelity,
