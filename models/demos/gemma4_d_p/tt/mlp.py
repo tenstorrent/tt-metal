@@ -5,6 +5,7 @@
 
 import ttnn
 from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
+from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_config
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
@@ -76,15 +77,37 @@ class MLP:
             **common,
         )
 
+    def _matmul_config(self, hidden_states, weight, fused_activation=None):
+        """Blocking for one projection, on the widest column count that splits N evenly."""
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
+        grid_x = max(x for x in range(1, grid.x + 1) if n_tiles % x == 0)
+        return prefill_matmul_config(hidden_states, weight, grid_x, grid.y, fused_activation)
+
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
-        gate = ttnn.linear(hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
-        gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh)
-        up = ttnn.linear(hidden_states, self.up_proj, compute_kernel_config=self.compute_kernel_config)
+        gelu = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)
+        gate_config = self._matmul_config(hidden_states, self.gate_proj, fused_activation=gelu)
+        gate = ttnn.linear(
+            hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config, program_config=gate_config
+        )
+        if gate_config is None:
+            gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh)
+        up = ttnn.linear(
+            hidden_states,
+            self.up_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=self._matmul_config(hidden_states, self.up_proj),
+        )
         hidden = ttnn.mul(gate, up)
         gate.deallocate(True)
         up.deallocate(True)
-        output = ttnn.linear(hidden, self.down_proj, compute_kernel_config=self.compute_kernel_config)
+        output = ttnn.linear(
+            hidden,
+            self.down_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=self._matmul_config(hidden, self.down_proj),
+        )
         hidden.deallocate(True)
         if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
             output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
