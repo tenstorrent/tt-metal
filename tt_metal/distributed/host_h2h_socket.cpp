@@ -54,6 +54,7 @@ struct H2HSocket::Impl {
     // Recording the order removes every place an origin had to be re-derived.
     struct Delivered {
         uint32_t origin = 0;  // sender's full selector: its host AND its core
+        uint32_t slot = 0;    // the RX slot it landed in, so consumed() can disarm its guard
     };
     std::vector<std::deque<Delivered>> rx_pending;
     std::vector<uint64_t> credit_out;  // frames this host has credited back, per RECEIVING core
@@ -126,8 +127,31 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
               " the credit array indexes";
         return nullptr;
     }
+    // Refused, not merely unimplemented: rx_slot_offset() has no host dimension and the
+    // receiver keeps one cursor per core, so two senders into one ring would collide.
+    if (cfg.topo.num > 2) {
+        err = "H2HSocket: " + std::to_string(cfg.topo.num) +
+              " hosts is not supported; the RX ring is not partitioned per origin (2 max)";
+        return nullptr;
+    }
     if (cfg.cores == 0 || cfg.page_bytes == 0 || cfg.region_base == nullptr) {
         err = "H2HSocket: cores, page_bytes and region_base are all required";
+        return nullptr;
+    }
+    // This class computes credit_offset() and rx_slot_offset() itself, so it has to bound
+    // them itself: HostRegion and RingAlias each only police their own view of the region.
+    if (cfg.cores > kProvisionedCores) {
+        err = "H2HSocket: " + std::to_string(cfg.cores) + " cores exceeds the " + std::to_string(kProvisionedCores) +
+              " the credit and done arrays index";
+        return nullptr;
+    }
+    if (cfg.ring_pages == 0) {
+        err = "H2HSocket: ring_pages must be at least 1";
+        return nullptr;
+    }
+    if (static_cast<uint64_t>(cfg.ring_pages) * cfg.page_bytes > kArenaBytes) {
+        err = "H2HSocket: ring_pages x page_bytes (" + std::to_string(cfg.ring_pages) + " x " +
+              std::to_string(cfg.page_bytes) + ") exceeds the " + std::to_string(kArenaBytes >> 10) + " KiB arena";
         return nullptr;
     }
 
@@ -156,6 +180,14 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
 bool H2HSocket::submit(const SendTask& task) {
     Impl& im = *impl_;
     if (im.broken || task.core >= im.cfg.cores) {
+        return false;
+    }
+    // The put below takes its length from the frame and its target offset from the socket's
+    // geometry, so a mismatched page would overrun into the peer's next arena, remotely.
+    if (task.page_bytes != im.cfg.page_bytes) {
+        im.fail(
+            "h2h: a frame's page size (" + std::to_string(task.page_bytes) + ") does not match the ring's (" +
+            std::to_string(im.cfg.page_bytes) + ")");
         return false;
     }
     // A core can have at most ring_pages in tx_flight, so queueing more just defers the gate.
@@ -254,6 +286,11 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         // The whole ring, not one slot: at depth > 1 a later arrival is otherwise invisible
         // until every poll before it has run.
         for (uint32_t n = 0; n < im.cfg.ring_pages; ++n) {
+            // The guard stays armed until consumed(), so it no longer says "not yet taken".
+            // This bound does: at ring_pages outstanding, next_slot cannot lap onto a live one.
+            if (im.rx_pending[c].size() >= im.cfg.ring_pages) {
+                break;
+            }
             const uint32_t slot = im.next_slot[c];
             volatile uint64_t* const guard = im.trailer_guard(c, slot);
             if (!tt_uva_frame_armed(load_acquire(guard))) {
@@ -274,10 +311,9 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                 break;
             }
 
-            im.rx_pending[c].push_back(Impl::Delivered{t->origin});
-            // Zeroed before the credit, never after: a credit lets the peer re-arm this slot,
-            // and a zero landing on a fresh frame erases it with nothing reporting it.
-            store_release(guard, 0);
+            // Disarmed in consumed(), not here: deliver() above already released the far
+            // device to pull this page, trailer included, and a zero would race that read.
+            im.rx_pending[c].push_back(Impl::Delivered{t->origin, slot});
             im.next_slot[c] = (slot + 1) % im.cfg.ring_pages;
             ++progress;
         }
@@ -295,6 +331,10 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
     for (; pages != 0 && !im.rx_pending[core].empty(); --pages) {
         const Impl::Delivered d = im.rx_pending[core].front();
         im.rx_pending[core].pop_front();
+
+        // The H2D leg has reported this page drained, so the device is done reading it.
+        // Still before the credit: a credit lets the peer re-arm the slot.
+        store_release(im.trailer_guard(core, d.slot), 0);
 
         const uint32_t host = tt_uva_t6_selector_host(d.origin, im.cfg.topo.chips_per_host);
         const uint32_t src_core = tt_uva_t6_selector_core(d.origin);
