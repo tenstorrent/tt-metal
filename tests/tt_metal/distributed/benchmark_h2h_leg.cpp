@@ -35,8 +35,8 @@ constexpr auto kStall = std::chrono::seconds(30);
 
 // The swept axes. Both ranks build this list identically from the same binary, which is
 // what keeps them running the same cases in the same order -- see the note in main().
-const std::vector<int64_t> kPageSizes = {16384};
-const std::vector<int64_t> kWindowFrames = {8};
+const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 262144};
+const std::vector<int64_t> kWindowFrames = {8, 32};
 const std::vector<int64_t> kIterations = {20000};
 const std::vector<int64_t> kWarmupPct = {10};
 const std::vector<int64_t> kPingPongIters = {2000};
