@@ -464,10 +464,11 @@ void kernel_main() {
             }
         }
         if (!use_two_stage_reduce || is_second_stage_reader) {
-            // This buffer is waited by two threads: this kernel reads it back for the rsqrt, and
-            // under two-stage reduction the first-stage reader also gathers from it. Only one of
-            // them may release the pages, and the reader does so exactly when it gathers, so pop
-            // here in the complementary case.
+            // This kernel reads this buffer back for the rsqrt. Under two-stage reduction the
+            // reader kernel also waits it, as a handshake before signalling the second-stage
+            // reader, and releases it there. The second-stage reader is the one that gathers it
+            // over the NOC. Exactly one release may happen, so pop here in the case the reader
+            // does not cover.
             dfb_ex2.pop_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         }
     }

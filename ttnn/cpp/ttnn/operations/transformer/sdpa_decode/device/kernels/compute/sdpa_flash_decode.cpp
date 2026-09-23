@@ -273,7 +273,8 @@ void kernel_main() {
     uint32_t causal_mask_tiles_fronted = 0;
     uint32_t sliding_window_mask_tiles_fronted = 0;
     // The identity scaler is likewise fronted for every reduction (see "scale_cb has 1 produced" in
-    // reduce_c) and released once below; cores with no chunks to process never front it.
+    // reduce_c) and released once below. The flag makes the pop depend on whether the wait
+    // happened, not on the fact that cores with no chunks return early.
     bool identity_scale_fronted = false;
 
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {

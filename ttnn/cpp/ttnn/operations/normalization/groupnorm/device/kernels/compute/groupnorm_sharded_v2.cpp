@@ -831,10 +831,13 @@ void kernel_main() {
     // never popped inside the loops above; pop them here so they are left balanced. This mirrors the
     // cleanup the Welford variant of this kernel performs.
     DataflowBuffer(dfb_scaler_id).pop_front(1);
-    // The all-ones tile and, when pad correction composes one, the row-validity mask are each a
-    // single tile pushed once and re-waited inside the loops above. Without pad correction the
-    // row-validity name aliases the all-ones buffer, so it is popped once in that case.
+    // The all-ones tile is one tile the writer generates once into c_26 and this kernel re-waits
+    // inside the loops above, so pop that one tile here.
     dfb_ones.pop_front(1);
+    // When has_row_mask is true, this kernel waits one more single-use tile near the top: a
+    // row-validity tile the writer synthesizes per core into c_18. Pop that tile here too.
+    // When has_row_mask is false, c_18 does not exist and dfb_rowvalid_id is c_26, which the pop
+    // above has already released, so no need to pop again.
     if constexpr (has_row_mask) {
         dfb_rowvalid.pop_front(1);
     }
