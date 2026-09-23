@@ -125,3 +125,9 @@ Next controlled experiment increases aliased layer-projection buffering from3 to
 ## 11:34 UTC — deeper read-window focused gate passes
 
 Aliased5-buffer/4-outstanding-block composition passes focused exact real layers/pages/inactive/replay under worker-only Watcher (buffer5-lookahead4-loop-watcher). Slot TRIDs1..5 fit hardware0..15; each individual block remains below half255 transaction credits, prior slot completions are waited before reuse, and all final blocks drain before resetting TRID0. Terminal head independently caps at3 buffers/lookahead<=3 to fit L1. Next full128 matrix:4/2,5/2,4/3,5/4 (buffers/outstanding). No helper prefetch or shared-QKV changes in these timings.
+
+## 11:41 UTC — deeper windows give only a small screening gain
+
+Source6992ac33 context128/32, five trials all strict exact: buffers/outstanding4/2=8.497506035ms,5/2=8.501549064,4/3=8.490740419,5/4=8.556033034. Prior3/2=8.504255–8.506229. The~15us advantage of4/3 needs paired/interleaved confirmation;5/4 regresses. No native win.
+
+Next design preloads a2/3-block prefix into each projection's own existing weight ring before the activation wait. It adds no weight bytes or helper-to-consumer copy. O and QKV can start at layer entry; GU waits for local O writer completion, down for local GU writer completion, then reads during norm/SwiGLU dependency windows. Local semaphore8/9 marks aliased-storage release; helper prefetch/shared-QKV combinations are rejected for this initial experiment. Synchronous prefix completion before activation wait makes the refill charged and readiness explicit. Focused exact/Watcher gate precedes per-phase/all full measurements.
