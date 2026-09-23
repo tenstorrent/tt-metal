@@ -852,7 +852,7 @@ def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):
     return taps
 
 
-def repl_residual_enabled():
+def repl_residual_enabled(args=None):
     """QWEN36_REPL_RESIDUAL=1: keep the residual stream REPLICATED instead of hidden-fractured.
 
     Today each half-layer pays three collectives: reduce_scatter (leaving the residual fractured
@@ -869,20 +869,29 @@ def repl_residual_enabled():
     Replicating costs activation memory, which is why the fractured layout exists -- but this is
     a 2B model on 189 MB of L1 per chip, so that tradeoff does not bind here.
     """
-    return os.environ.get("QWEN36_REPL_RESIDUAL") == "1"
+    if os.environ.get("QWEN36_REPL_RESIDUAL") != "1":
+        return False
+    # Scoped to sequence_parallel models. The SP PCC test builds a TP=4 ORACLE model (not SP) in
+    # the same process: it must keep the fractured layout and its DistributedNorm, or the oracle
+    # itself breaks and the test fails for the wrong reason. args=None means "env only" for the
+    # few call sites that have no args in hand (agmm_disabled), where the answer is harmless.
+    return args is None or bool(getattr(args, "sequence_parallel", False))
 
 
-def residual_all_reduce(x, mesh_device, tt_ccl, cluster_axis, dim, topology, memory_config=None, num_links=None):
+def residual_all_reduce(
+    x, mesh_device, tt_ccl, cluster_axis, dim, topology, memory_config=None, num_links=None, args=None
+):
     """Row-parallel partial -> summed activation, as either a fused all-reduce or today's RS.
 
-    With repl_residual_enabled() this returns a REPLICATED full-hidden tensor (one collective);
+    With repl_residual_enabled() this returns a REPLICATED full-hidden tensor (composite: RS + bf16 AG,
+    two collectives, replacing today's three; QWEN36_REPL_MODE=fused: one, but hangs on fp32 in-model);
     otherwise it falls back to tt_all_reduce, which reduce-scatters and returns a tensor
     fractured on `dim`. Callers must not assume a shape: the two differ by design, and
     is_distributed_norm() is gated on the same predicate so the norms match the layout.
     """
     from models.tt_transformers.tt.ccl import tt_all_reduce
 
-    if not repl_residual_enabled():
+    if not repl_residual_enabled(args):
         return tt_all_reduce(
             x,
             mesh_device,
@@ -892,16 +901,52 @@ def residual_all_reduce(x, mesh_device, tt_ccl, cluster_axis, dim, topology, mem
             topology=topology,
             memory_config=memory_config,
         )
-    if num_links is None:
-        num_links = tt_ccl.get_num_links(cluster_axis)
-    # Axis convention differs between the two ops and getting it wrong is silent. tt_all_reduce
-    # IGNORES cluster_axis on a flat mesh (it has a `1 in mesh.shape` branch that reduces across
-    # the whole line), which is why every caller here passes cluster_axis=0 even on a (1,N)
-    # submesh -- where axis 0 has extent 1. ttnn.all_reduce does NOT ignore it and would reduce
-    # over a single device, i.e. return the unreduced partial. Pass None on a flat mesh, which is
-    # its documented "reduce across the line" form.
-    flat = 1 in list(mesh_device.shape)
-    return ttnn.all_reduce(x, cluster_axis=None if flat else cluster_axis, num_links=num_links, topology=topology)
+
+    mode = os.environ.get("QWEN36_REPL_MODE", "composite")
+    if mode == "fused":
+        # Single fused ttnn.all_reduce (223us isolated, bf16, 8 chips). In-model it HANGS on the
+        # layer-0 GDN out-proj, whose partial is fp32 (2026-09-23; the fabric logged "4352 B
+        # packet for 4096 B pages" -- fp32 tiles -- and then nothing). get_num_links is a per-SKU
+        # table ((2,2) for P150x8/BHGLX), so num_links was 2, not the known 1-link deadlock.
+        # Kept for the isolated bf16 case and for when the fp32 path is understood.
+        flat = 1 in list(mesh_device.shape)
+        if num_links is None:
+            live_axis = cluster_axis
+            if flat:
+                live_axis = next((i for i, n in enumerate(mesh_device.shape) if n > 1), cluster_axis)
+            num_links = tt_ccl.get_num_links(live_axis)
+        assert num_links >= 2, f"residual_all_reduce: num_links={num_links}; 1 link deadlocks this fabric"
+        # tt_all_reduce IGNORES cluster_axis on a flat mesh (its `1 in shape` branch), which is why
+        # callers pass 0 on a (1, N) submesh where axis 0 has extent 1. ttnn.all_reduce does not
+        # ignore it and would reduce over one device. None is its "reduce across the line" form.
+        return ttnn.all_reduce(x, cluster_axis=None if flat else cluster_axis, num_links=num_links, topology=topology)
+
+    # composite (default): only collectives already proven in-model, in this order.
+    #  1. reduce-scatter in the INPUT dtype. For the GDN out-proj that is fp32, and the sum is
+    #     exactly where precision matters (bf16 partials took PCC to 0.69). This is the same
+    #     tt_all_reduce flat-mesh branch the default path runs on every layer today.
+    shard = tt_all_reduce(
+        x,
+        mesh_device,
+        tt_ccl,
+        cluster_axis=cluster_axis,
+        dim=dim,
+        topology=topology,
+        memory_config=memory_config,
+    )
+    #  2. the shard is a FINAL summed value, not a partial, so narrowing it to bf16 is safe; it
+    #     halves the gather bytes and matches the bf16 residual stream it is about to be added to.
+    if shard.dtype != ttnn.bfloat16:
+        s16 = ttnn.typecast(shard, ttnn.bfloat16)
+        ttnn.deallocate(shard)
+        shard = s16
+    #  3. all-gather back to replicated -- the identical call replicate_residual made after the
+    #     embedding, which ran fine in the same hung process before the fused op stalled.
+    from models.tt_transformers.tt.ccl import tt_all_gather
+
+    out = tt_all_gather(shard, mesh_device, tt_ccl, cluster_axis=None, dim=dim, topology=topology)
+    ttnn.deallocate(shard)
+    return out
 
 
 def atupe_opts_enabled():
@@ -942,3 +987,22 @@ def kda_channel_chunk(channels):
         if channels % c == 0:
             return c
     return 32
+
+
+def replicate_residual(x, model):
+    """Make the residual stream REPLICATED once, right after the embedding (repl-residual path).
+
+    The framework Embedding shards the hidden dim across the mesh ([1, T, dim/tp]), and under the
+    default fractured layout every layer keeps it that way. Under QWEN36_REPL_RESIDUAL the
+    out-projections return replicated full-hidden tensors, so the very first residual add would
+    try to broadcast dim/tp against dim ("Invalid subtile broadcast type", binary_ng) -- the
+    failure the first attempt hit. One all-gather here, per die, for the whole model, and every
+    downstream norm/add/matmul sees a consistent [1, 1, T, dim]. Same flat-mesh all-gather
+    convention as Qwen36Model._lm_head. Output is moved back to L1: the norm/add chain inherits
+    input_a's memory config, so a DRAM residual would put every norm and add in DRAM.
+    """
+    from models.tt_transformers.tt.ccl import tt_all_gather
+
+    g = tt_all_gather(x, model.mesh_device, model.tt_ccl, cluster_axis=None, dim=3, topology=model.args.ccl_topology())
+    ttnn.deallocate(x)
+    return ttnn.to_memory_config(g, ttnn.L1_MEMORY_CONFIG)

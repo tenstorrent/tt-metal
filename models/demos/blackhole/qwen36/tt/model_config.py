@@ -397,7 +397,7 @@ class Qwen36ModelArgs(ModelArgs):
         # both of its all-gathers (stats + output) disappear. That is the whole point of the
         # replicated layout, so the two must be gated on one predicate -- these gates have drifted
         # apart before and the failure mode is a silent K mismatch in the next matmul.
-        if tpc.repl_residual_enabled():
+        if tpc.repl_residual_enabled(self):
             return False
         if self.is_multichip and mode == Mode.PREFILL:
             return True

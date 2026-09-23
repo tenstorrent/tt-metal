@@ -549,6 +549,11 @@ class SPPrefill:
             # input_a's memory config, so DRAM here (the default) would force every norm/add in DRAM.
             x = model.embd(tok, memory_config=ttnn.L1_MEMORY_CONFIG)
             xs[d] = ttnn.reshape(x, (1, 1, self.span_len, x.shape[-1]))
+            from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+            if _tpc.repl_residual_enabled(model.args):
+                # One all-gather per die for the whole model; see tp_common.replicate_residual.
+                xs[d] = _tpc.replicate_residual(xs[d], model)
             if not traced:
                 logger.debug(f"[SPPrefill] die {d} embed enqueued")
 

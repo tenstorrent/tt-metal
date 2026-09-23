@@ -382,6 +382,7 @@ class Qwen36MLP:
             tpc.ccl_cast(partial),
             self.device,
             self.tt_ccl,
+            args=self.args,
             cluster_axis=0,
             dim=3,
             topology=args.ccl_topology(),

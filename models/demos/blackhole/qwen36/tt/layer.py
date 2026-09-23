@@ -167,7 +167,14 @@ class Qwen36DecoderLayer:
                 else {}
             ),
         )
-        if self.num_devices > 1:
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        # Replicated residual: the stream is already full-hidden, so the wrapper's two gathers
+        # (its gather-then-norm branch when is_distributed_norm() is False, and its post-norm
+        # gather) are not just wasted collectives but wrong -- they would double-gather to
+        # tp*dim. The bare RMSNorm is exactly what the wrapper calls internally, with the full
+        # replicated gamma it already holds.
+        if self.num_devices > 1 and not _tpc.repl_residual_enabled(args):
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
             return DistributedNorm(

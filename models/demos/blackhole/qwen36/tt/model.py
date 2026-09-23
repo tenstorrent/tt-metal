@@ -125,8 +125,11 @@ class Qwen36Model:
                 else {}
             ),
         )
-        if self.num_devices > 1:
-            # TP: DistributedNorm all-gathers fractured hidden for LM head.
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        if self.num_devices > 1 and not _tpc.repl_residual_enabled(args):
+            # TP: DistributedNorm all-gathers fractured hidden for LM head. Under the replicated
+            # residual the tail's x_last is already full-hidden (see layer.py _make_norm).
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
             self.norm = DistributedNorm(self.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy)
