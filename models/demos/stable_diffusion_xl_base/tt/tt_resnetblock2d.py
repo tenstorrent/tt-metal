@@ -6,7 +6,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisationsBase
-from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params, prepare_linear_params
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import (
+    fused_silu,
+    prepare_conv_params,
+    prepare_linear_params,
+    run_group_norm,
+)
 
 
 class TtResnetBlock2D(LightweightModule):
@@ -26,6 +31,8 @@ class TtResnetBlock2D(LightweightModule):
         self.debug_mode = debug_mode
 
         self.is_refiner = isinstance(model_config, RefinerModelOptimisationsBase)
+        # full grid (model_configs_1024x1024BH): the output stays L1 block-sharded for the next block
+        self.keep_l1_output = getattr(model_config, "full_grid", False)
 
         # fixed for ResnetBlock
         self.stride = (1, 1)
@@ -132,39 +139,44 @@ class TtResnetBlock2D(LightweightModule):
         B, C, H, W = input_shape
         hidden_states = input_tensor
 
-        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        if self.groupnorm_memory_config_1 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=hidden_states.shape,
-                core_grid=self.groupnorm_config_1["core_grid"],
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
+        # The generated GroupNorm shards the activation itself (run_group_norm) and keeps its layout: TILE from the
+        # previous block moves 2 KB pages (~4x cheaper than 64 B RM sticks) and the op's TILE shard path is zero-copy.
+        if not self.groupnorm_config_1.get("generated"):
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+            if self.groupnorm_memory_config_1 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=hidden_states.shape,
+                    core_grid=self.groupnorm_config_1["core_grid"],
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
 
-            # This is an optimization to avoid unaligned DRAM/L1 sharded transfer
-            if C == 320 or C == 960:
-                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+                # This is an optimization to avoid unaligned DRAM/L1 sharded transfer
+                if C == 320 or C == 960:
+                    hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
 
-        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-
-        if is_blackhole() and "up_blocks.2.resnets.0" in self.module_path:
             hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-            hidden_states = ttnn.move(hidden_states, memory_config=None)
 
-        hidden_states = ttnn.group_norm(
+            if is_blackhole() and "up_blocks.2.resnets.0" in self.module_path:
+                hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+                hidden_states = ttnn.move(hidden_states, memory_config=None)
+
+        hidden_states = run_group_norm(
             hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask_1,
-            negative_mask=self.input_negative_mask_1,
-            weight=self.gamma_t_1,
-            bias=self.beta_t_1,
-            epsilon=self.norm_eps,
-            memory_config=hidden_states.memory_config(),
-            **self.groupnorm_config_1,
+            self.groupnorm_config_1,
+            self.groupnorm_memory_config_1,
+            self.input_mask_1,
+            self.input_negative_mask_1,
+            self.gamma_t_1,
+            self.beta_t_1,
+            self.norm_groups,
+            self.norm_eps,
+            activation="silu",
         )
 
-        hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
+        if not fused_silu(self.groupnorm_config_1):
+            hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -204,36 +216,44 @@ class TtResnetBlock2D(LightweightModule):
             compute_kernel_config=self.default_compute_config,
         )
 
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        # Keep this add here: changing its placement has shown a performance impact.
-        hidden_states = ttnn.add_(hidden_states, temb)
+        if self.groupnorm_config_2.get("generated"):
+            # add the time embedding on the conv's shard in place; GN2 consumes the same shard
+            hidden_states = ttnn.add_(hidden_states, temb)
+        else:
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            # Keep this add here: changing its placement has shown a performance impact.
+            hidden_states = ttnn.add_(hidden_states, temb)
 
-        if self.groupnorm_memory_config_2 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=hidden_states.shape,
-                core_grid=self.groupnorm_config_2["core_grid"],
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        if not self.groupnorm_config_2.get("generated"):
+            if self.groupnorm_memory_config_2 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=hidden_states.shape,
+                    core_grid=self.groupnorm_config_2["core_grid"],
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
 
-        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
 
-        if "up_blocks.2" in self.module_path:
-            hidden_states = ttnn.move(hidden_states)
-        hidden_states = ttnn.group_norm(
+            if "up_blocks.2" in self.module_path:
+                hidden_states = ttnn.move(hidden_states)
+        hidden_states = run_group_norm(
             hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask_2,
-            negative_mask=self.input_negative_mask_2,
-            weight=self.gamma_t_2,
-            bias=self.beta_t_2,
-            epsilon=self.norm_eps,
-            memory_config=hidden_states.memory_config(),
-            **self.groupnorm_config_2,
+            self.groupnorm_config_2,
+            self.groupnorm_memory_config_2,
+            self.input_mask_2,
+            self.input_negative_mask_2,
+            self.gamma_t_2,
+            self.beta_t_2,
+            self.norm_groups,
+            self.norm_eps,
+            in_place=True,
+            activation="silu",
         )
 
-        ttnn.silu(hidden_states, output_tensor=hidden_states)
+        if not fused_silu(self.groupnorm_config_2):
+            ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         [hidden_states, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
@@ -265,6 +285,9 @@ class TtResnetBlock2D(LightweightModule):
 
         if self.tt_conv3_weights is not None:
             input_tensor_pre_conv = input_tensor
+            if input_tensor.is_sharded():
+                # the shortcut program configs expect an interleaved in0
+                input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
             input_tensor = ttnn.linear(
                 input_tensor,
                 self.tt_conv3_weights,
@@ -280,8 +303,11 @@ class TtResnetBlock2D(LightweightModule):
 
         ttnn.add_(hidden_states, input_tensor)
 
-        if (not self.is_refiner and "up_blocks.2.resnets.2" not in self.module_path) or (
-            self.is_refiner and "up_blocks.3.resnets.2" not in self.module_path
+        # keep_l1_output: the next block's GroupNorm consumes the conv2 shard in place; the down blocks copy their skip
+        # connection to DRAM themselves and the up blocks move to DRAM before the concat
+        if not self.keep_l1_output and (
+            (not self.is_refiner and "up_blocks.2.resnets.2" not in self.module_path)
+            or (self.is_refiner and "up_blocks.3.resnets.2" not in self.module_path)
         ):
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 

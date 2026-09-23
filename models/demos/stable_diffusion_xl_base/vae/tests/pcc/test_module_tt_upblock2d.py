@@ -47,9 +47,6 @@ def test_vae_upblock(
     if is_blackhole():
         if image_resolution == (512, 512):
             pytest.skip("512x512 resolution not supported on Blackhole")
-
-        if input_shape != (1, 256, 1024, 1024):
-            pytest.skip("Skipping on Blackhole due to PCC issue with DRAM group_norm")
     vae = AutoencoderKL.from_pretrained(
         sdxl_base_vae_location,
         torch_dtype=torch.float32,

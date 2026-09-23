@@ -11,6 +11,8 @@ from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1
 # NOTE: This file is a placeholder for future optimizations of SDXL on Blackhole.
 # For now, it has identical configs as Wormhole_b0.
 class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
+    FULL_GRID = False  # the full-grid layout is UNet-only; the VAE takes just the generated GroupNorm
+
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,
@@ -19,12 +21,17 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
         ff_weights_dtype=ttnn.bfloat8_b,
     ):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
+        # The VAE GroupNorms stream their tensors from DRAM, where a separate SiLU would be another full DRAM pass.
+        self.use_generated_groupnorm = True
+        self.fuse_gn_silu = True
 
         self.sdpa_configs["64_K"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=64,
             k_chunk_size=64,
-            exp_approx_mode=False,
+            # Accurate exp (honoured since #57180 on the fp32-DEST path) costs +4 ms on this 16384x16384 single-head
+            # SDPA for ~0.0002 VAE decoder PCC.
+            exp_approx_mode=True,
         )
 
         self.groupnorm_configs["DRAM_GROUPNORM_32"] = {

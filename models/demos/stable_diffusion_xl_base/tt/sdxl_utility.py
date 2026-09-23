@@ -74,3 +74,111 @@ def prepare_conv_params(
     }
 
     return tt_weights, tt_bias, conv_params
+
+
+def _has_usable_divisor(n):
+    """A per-core tile-row count conv2d can block: small, or with a divisor in [3, 26] (not prime like 47)."""
+    return n <= 4 or any(n % d == 0 for d in range(3, 27))
+
+
+def generated_gn_grid(HW, C, cols_hw=11, rows_c=10):
+    """The full-grid UNet block shard: HW across the grid columns, C down the rows, COL_MAJOR.
+
+    Returns (cols, rows, [shard_h, shard_w]). Columns start at 11 and drop while the padding exceeds one core's
+    share (conv2d's rule) or the per-core tile-row count has no usable act-block divisor: 16384 rows -> 10 x 52
+    tiles (11 would give 47, prime), 4096 -> 11 x 12, 1024 -> 11 x 3.
+    """
+    assert C % (rows_c * 32) == 0, f"C={C} is not a multiple of {rows_c * 32}"
+    tiles = -(-HW // 32)
+    cols = cols_hw
+    while cols > 1:
+        per_core = -(-tiles // cols)
+        if per_core * cols - tiles < per_core and _has_usable_divisor(per_core):
+            break
+        cols -= 1
+    per_core = -(-tiles // cols)
+    return cols, rows_c, [per_core * 32, C // rows_c]
+
+
+def generated_gn_sharded_memory_config(shape):
+    *lead, C = [int(v) for v in shape]  # (N, 1, HW, C) or the (N, H, W, C) image form: rows = every leading dim
+    HW = 1
+    for v in lead:
+        HW *= v
+    gx, gy, shard = generated_gn_grid(HW, C)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
+    spec = ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.COL_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+
+
+def prepare_generated_gn_beta_gamma(device, weights, bias):
+    """gamma / beta as (1, 1, 1, C) bf16 ROW_MAJOR DRAM tensors (the generated op's affine contract)."""
+    C = weights.shape[0]
+    mk = lambda t: ttnn.from_torch(
+        t.reshape(1, 1, 1, C).to(torch.float32),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return mk(weights), mk(bias)
+
+
+def run_group_norm(
+    hidden_states,
+    groupnorm_config,
+    groupnorm_memory_config,
+    input_mask,
+    negative_mask,
+    gamma,
+    beta,
+    num_groups,
+    eps,
+    in_place="if_copied",
+    activation=None,
+    placement="sharded",
+):
+    """Apply GroupNorm through whichever implementation the model config selected.
+
+    Generated path (ttnn.operations.groupnorm_sc_N_1_HW_C): placement "sharded" moves the activation onto the
+    full-grid block shard (layout kept as is) if it is not there already; "dram" streams it DRAM interleaved in and
+    out (VAE). in_place: True / False / "if_copied" (in place only when the tensor is our private resharded copy, so a
+    caller that still needs the un-normalized input keeps it). activation "silu" is fused when the config sets
+    fuse_silu; otherwise the caller applies it (see fused_silu()).
+    Reference path: the caller has already placed the tensor for ttnn.group_norm.
+    """
+    if groupnorm_config.get("generated"):
+        from ttnn.operations.groupnorm_sc_N_1_HW_C import groupnorm_sc_N_1_HW_C
+
+        if activation == "silu" and not groupnorm_config.get("fuse_silu"):
+            activation = None
+        if placement == "dram":
+            if hidden_states.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            in_place = False
+        else:
+            mem_cfg = generated_gn_sharded_memory_config(hidden_states.shape)
+            copied = hidden_states.memory_config() != mem_cfg
+            if copied:
+                hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+            if in_place == "if_copied":
+                in_place = copied
+        return groupnorm_sc_N_1_HW_C(
+            hidden_states, num_groups, gamma=gamma, beta=beta, eps=eps, in_place=bool(in_place), activation=activation
+        )
+    return ttnn.group_norm(
+        hidden_states,
+        num_groups=num_groups,
+        input_mask=input_mask,
+        negative_mask=negative_mask,
+        weight=gamma,
+        bias=beta,
+        epsilon=eps,
+        memory_config=hidden_states.memory_config(),
+        **groupnorm_config,
+    )
+
+
+def fused_silu(groupnorm_config):
+    """True when run_group_norm(..., activation="silu") already applied the SiLU (caller must skip its own)."""
+    return bool(groupnorm_config.get("generated") and groupnorm_config.get("fuse_silu"))

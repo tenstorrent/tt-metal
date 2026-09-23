@@ -47,8 +47,9 @@ class TtAttention(LightweightModule):
             module_path=module_path, is_self_attention=self.is_self_attention
         )
 
+        # LoFi truncates the SDPA operands and shrinks the attention output by ~4-6%; configs that care set HiFi2.
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=getattr(model_config, "sdpa_math_fidelity", ttnn.MathFidelity.LoFi),
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -116,6 +117,10 @@ class TtAttention(LightweightModule):
         self.dense_out_program_config = model_config.get_matmul_config(f"{module_path}.to_out")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
         self.out_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_out")
+        # full grid: to_out takes its in0 on the block's transposed shard (a sharded-in0 matmul; interleaved in0 on a
+        # transposed small-N matmul is data-movement bound)
+        get_tbm = getattr(model_config, "get_transposed_block_memory_config", None)
+        self.to_out_in0_memory_config = get_tbm(module_path) if get_tbm else None
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
@@ -198,6 +203,8 @@ class TtAttention(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if self.to_out_in0_memory_config is not None:
+            hidden_states = ttnn.to_memory_config(hidden_states, self.to_out_in0_memory_config)
 
         hidden_states = ttnn.linear(
             hidden_states,

@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import generated_gn_grid, prepare_conv_params
 
 
 class TtUpsample2D(LightweightModule):
@@ -40,8 +40,28 @@ class TtUpsample2D(LightweightModule):
             self.conv_config.weights_dtype,
         )
         self.conv_output_dtype = model_config.get_conv_output_dtype()
+        # full grid: upsample on the transposed block shard, sized so the output lands on the following conv's shard
+        self.transposed = getattr(model_config, "full_grid", False)
 
     def interpolate(self, hidden_states):
+        if self.transposed:
+            # the grid is picked for the upsampled row count; the input shard is a quarter of that per core
+            *lead, C = [int(v) for v in hidden_states.shape]
+            HW = 1
+            for v in lead:
+                HW *= v
+            gx, gy, out_shard = generated_gn_grid(HW * self.scale_factor**2, C)
+            assert out_shard[0] % (32 * self.scale_factor**2) == 0, out_shard
+            grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
+            spec = ttnn.ShardSpec(
+                grid, [out_shard[0] // self.scale_factor**2, out_shard[1]], ttnn.ShardOrientation.COL_MAJOR
+            )
+            memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+            if hidden_states.memory_config() != memory_config:
+                hidden_states = ttnn.to_memory_config(hidden_states, memory_config)
+            hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
+            B, H, W, C = list(hidden_states.shape)
+            return hidden_states, [B, C, H, W]
         memory_config = ttnn.create_sharded_memory_config(
             shape=hidden_states.shape,
             core_grid=ttnn.CoreGrid(y=8, x=5 if hidden_states.shape[3] % 8 != 0 else 8),

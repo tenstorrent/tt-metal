@@ -25,6 +25,7 @@ class TtDownsample2D(LightweightModule):
 
         self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.keep_l1_output = getattr(model_config, "full_grid", False)
         self.compute_config = model_config.get_conv_compute_config(module_path=module_path)
         self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
             weights,
@@ -63,5 +64,7 @@ class TtDownsample2D(LightweightModule):
             self.tt_weights = tt_weights
             self.tt_bias = tt_bias
 
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        # full grid: the next resnet's GroupNorm consumes the conv's shard (the down block copies the skip to DRAM)
+        if not self.keep_l1_output:
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         return hidden_states, [C, H, W]

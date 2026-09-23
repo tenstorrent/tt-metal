@@ -405,6 +405,7 @@ class TtSDXLPipeline(LightweightModule):
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
                 guidance_rescale=self.guidance_rescale,
                 one_minus_guidance_rescale=self.one_minus_guidance_rescale,
+                skip_guidance_rescale=self.pipeline_config.guidance_rescale == 0.0,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -758,6 +759,7 @@ class TtSDXLPipeline(LightweightModule):
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
             return_latents=return_latents,
+            skip_guidance_rescale=self.pipeline_config.guidance_rescale == 0.0,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -951,6 +953,7 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
+            skip_guidance_rescale=self.pipeline_config.guidance_rescale == 0.0,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")

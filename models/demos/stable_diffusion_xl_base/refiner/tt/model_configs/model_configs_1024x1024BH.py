@@ -8,6 +8,9 @@ from models.demos.stable_diffusion_xl_base.tt.model_configs import ModelOptimisa
 
 
 class RefinerModelOptimisations1024x1024BH(RefinerModelOptimisationsBase, ModelOptimisations1024x1024BH):
+    # the refiner UNet keeps the reference GroupNorm and its own matmul / conv configs
+    FULL_GRID = False
+
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,

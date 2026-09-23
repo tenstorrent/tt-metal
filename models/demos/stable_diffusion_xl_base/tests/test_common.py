@@ -825,6 +825,7 @@ def run_tt_image_gen(
     guidance_rescale=0.0,
     one_minus_guidance_rescale=1.0,
     return_latents=False,  # If True, skip VAE decoding and return latents
+    skip_guidance_rescale=False,  # host-known guidance_rescale == 0: the rescale term is exactly zero, skip its ops
 ):
     """Run TT (Tenstorrent) image generation pipeline for Stable Diffusion XL.
 
@@ -951,7 +952,8 @@ def run_tt_image_gen(
             noise_pred_text_new = ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(noise_pred_text)
             noise_pred_text = noise_pred_text_new
-            noise_pred_text_orig = ttnn.clone(noise_pred_text)
+            if not skip_guidance_rescale:
+                noise_pred_text_orig = ttnn.clone(noise_pred_text)
 
             # perform guidance
             noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
@@ -965,25 +967,27 @@ def run_tt_image_gen(
             ttnn.deallocate(noise_pred)
             noise_pred = noise_pred_new
 
-            # perform guidance rescale
-            std_text = ttnn.std(noise_pred_text_orig, dim=[1, 2, 3], keepdim=True)
-            std_cfg = ttnn.std(noise_pred, dim=[1, 2, 3], keepdim=True)
+            # perform guidance rescale (a no-op at guidance_rescale == 0, where its two single-core ttnn.std calls
+            # would cost ~6 ms per step)
+            if not skip_guidance_rescale:
+                std_text = ttnn.std(noise_pred_text_orig, dim=[1, 2, 3], keepdim=True)
+                std_cfg = ttnn.std(noise_pred, dim=[1, 2, 3], keepdim=True)
 
-            std_ratio = ttnn.div(std_text, std_cfg)
+                std_ratio = ttnn.div(std_text, std_cfg)
 
-            noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
+                noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
 
-            rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
-            original_term = ttnn.mul(noise_pred, one_minus_guidance_rescale)
-            ttnn.deallocate(noise_pred)
-            noise_pred = ttnn.add(rescaled_term, original_term)
-            ttnn.deallocate(std_text)
-            ttnn.deallocate(std_cfg)
-            ttnn.deallocate(std_ratio)
-            ttnn.deallocate(noise_pred_rescaled)
-            ttnn.deallocate(rescaled_term)
-            ttnn.deallocate(original_term)
-            ttnn.deallocate(noise_pred_text_orig)
+                rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
+                original_term = ttnn.mul(noise_pred, one_minus_guidance_rescale)
+                ttnn.deallocate(noise_pred)
+                noise_pred = ttnn.add(rescaled_term, original_term)
+                ttnn.deallocate(std_text)
+                ttnn.deallocate(std_cfg)
+                ttnn.deallocate(std_ratio)
+                ttnn.deallocate(noise_pred_rescaled)
+                ttnn.deallocate(rescaled_term)
+                ttnn.deallocate(original_term)
+                ttnn.deallocate(noise_pred_text_orig)
             noise_pred = ttnn.move(noise_pred)
 
             tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]

@@ -89,6 +89,8 @@ class TtCrossAttnUpBlock2D(LightweightModule):
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
 
+            if hidden_states.is_sharded():
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states = ttnn.concat([hidden_states, res_hidden_states], dim=3)
             C = list(hidden_states.shape)[3]
 

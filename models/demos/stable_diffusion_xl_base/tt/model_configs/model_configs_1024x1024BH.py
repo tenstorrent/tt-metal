@@ -6,6 +6,7 @@ import re
 
 import ttnn
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import (
+    prepare_generated_gn_beta_gamma,
     prepare_gn_beta_gamma,
     prepare_gn_mask,
     prepare_gn_mask_negative_mask,
@@ -13,6 +14,12 @@ from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import (
 
 
 class ModelOptimisations1024x1024BH:
+    # Full-grid UNet: the generated GroupNorm (ttnn.operations.groupnorm_sc_N_1_HW_C) instead of ttnn.group_norm,
+    # and the whole UNet on the transposed 11x10 grid (COL_MAJOR block shards: HW across the 11 columns, C down the
+    # 10 rows) with transpose_mcast matmuls, transpose_shards convs and diagonal in1 / weight senders. Activations
+    # stay L1 block-sharded between blocks. Subclasses that reuse these configs for another network set it False.
+    FULL_GRID = True
+
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,
@@ -21,6 +28,14 @@ class ModelOptimisations1024x1024BH:
         ff_weights_dtype=ttnn.bfloat8_b,
         force_full_grid=False,  # This parameter is not used for BH model configs
     ):
+        # full_grid / sdpa_math_fidelity are read by the shared UNet code (the Wormhole configs do not define them)
+        self.full_grid = self.FULL_GRID
+        self.use_generated_groupnorm = self.full_grid
+        # SiLU fused into the generated GN: slower than the standalone unary on the UNet's L1 shards, faster on the
+        # VAE's DRAM path (VAE config).
+        self.fuse_gn_silu = False
+        # LoFi truncation shrinks the SDPA output by 4-6%, which compounds over the denoising loop.
+        self.sdpa_math_fidelity = ttnn.MathFidelity.HiFi2 if self.full_grid else ttnn.MathFidelity.LoFi
         self.conv_configs = {}
         self.conv_output_dtype = conv_act_dtype
         self.matmul_configs = {}
@@ -157,6 +172,17 @@ class ModelOptimisations1024x1024BH:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=26 * 32,
+        )
+        self.conv_configs["ABH_13T_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=13 * 32,
         )
         self.conv_configs["ABH_26T_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -352,6 +378,13 @@ class ModelOptimisations1024x1024BH:
             act_block_w_div=1,
             act_block_h_override=0,
         )
+        if self.full_grid:
+            # every block-sharded conv runs on the transposed (COL_MAJOR) grid; with transpose_shards the default
+            # weight senders are one column of DRAM readers, which saturates its NoC links.
+            for _cfg in self.conv_configs.values():
+                if _cfg.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+                    _cfg.transpose_shards = True
+                    _cfg.diagonal_weight_senders = True
 
         # DRAM CONF
         self.conv_configs["DEFAULT_DRAM"] = ttnn.Conv2dConfig(
@@ -624,7 +657,129 @@ class ModelOptimisations1024x1024BH:
             },
         }
 
-        self.matmul_configs = self.matmul_versions["80_cores"]
+        self.matmul_configs = dict(self.matmul_versions["80_cores"])  # copy: the overrides below must not leak
+        if self.full_grid:
+            # Transformer blocks on the transposed 11x10 grid: M over the 11 columns, N over the 10 rows.
+            # 1280 blocks: 1024 rows -> 3 tiles per core (33 >= 32, the last core is ragged).
+            T = dict(compute_with_storage_grid_size=(11, 10), transpose_mcast=True)
+            self.matmul_configs["2D_TM_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=4,
+                per_core_M=3,
+                per_core_N=4,
+                out_subblock_h=1,
+                out_subblock_w=4,
+                fused_activation=None,
+                **T,
+            )
+            self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=4,
+                per_core_M=3,
+                per_core_N=12,
+                out_subblock_h=1,
+                out_subblock_w=6,
+                fused_activation=None,
+                fuse_batch=True,
+                **T,
+            )
+            self.matmul_configs["2D_ATTN_OUT_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=4,
+                per_core_M=3,
+                per_core_N=4,
+                out_subblock_h=1,
+                out_subblock_w=4,
+                fused_activation=None,
+                fuse_batch=True,
+                **T,
+            )
+            self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=4,
+                per_core_M=3,
+                per_core_N=16,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                fused_activation=None,
+                **T,
+            )
+            self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=4,
+                per_core_M=3,
+                per_core_N=16,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                fused_activation=[ttnn.UnaryOpType.GELU, True],
+                **T,
+            )
+            # FF2: in0 is the GEGLU output shard [96, 512] = 16 K tiles per core, consumed as one K block
+            self.matmul_configs["2D_FF2_SEQ_LEN_1024"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=16,
+                per_core_M=3,
+                per_core_N=4,
+                out_subblock_h=1,
+                out_subblock_w=4,
+                fused_activation=None,
+                **T,
+            )
+            # 640 blocks: 4096 rows -> 12 tiles per core (132 >= 128). Sharded outputs need subblock_w == per_core_N.
+            self.matmul_configs["2D_TM_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=2,
+                per_core_M=12,
+                per_core_N=2,
+                out_subblock_h=4,
+                out_subblock_w=2,
+                fused_activation=None,
+                **T,
+            )
+            self.matmul_configs["2D_ATTN_QKV_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=2,
+                per_core_M=12,
+                per_core_N=6,
+                out_subblock_h=1,
+                out_subblock_w=6,
+                fused_activation=None,
+                **T,
+            )
+            self.matmul_configs["2D_ATTN_OUT_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=2,
+                per_core_M=12,
+                per_core_N=2,
+                out_subblock_h=4,
+                out_subblock_w=2,
+                fused_activation=None,
+                fuse_batch=True,
+                **T,
+            )
+            self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=2,
+                per_core_M=12,
+                per_core_N=8,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                fused_activation=None,
+                **T,
+            )
+            self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=2,
+                per_core_M=12,
+                per_core_N=8,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                fused_activation=[ttnn.UnaryOpType.GELU, True],
+                **T,
+            )
+            self.matmul_configs["2D_FF2_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                in0_block_w=8,
+                per_core_M=12,
+                per_core_N=2,
+                out_subblock_h=4,
+                out_subblock_w=2,
+                fused_activation=None,
+                **T,
+            )
+            # diagonal in1 senders on every 2D mcast matmul: with transpose_mcast the default senders are one column
+            # of DRAM weight readers, which saturates its NoC links
+            for _cfg in self.matmul_configs.values():
+                if isinstance(_cfg, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):
+                    _cfg.diagonal_in1_senders = True
         # endregion
 
         # region LAYERNORM CONFIGS
@@ -632,19 +787,19 @@ class ModelOptimisations1024x1024BH:
 
         self.layernorm_configs = {}
         self.layernorm_configs["640_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(10, 8),
-            subblock_w=640 // 32 // self.core_grid_x,
-            block_h=16,
-            block_w=640 // 32 // self.core_grid_x,
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 10) if self.full_grid else ttnn.CoreCoord(10, 8),
+            subblock_w=2,
+            block_h=12 if self.full_grid else 16,
+            block_w=2,
             inplace=False,
             legacy_reduction=True,
             legacy_rsqrt=True,
         )
         self.layernorm_configs["1280_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(10, 8),
-            subblock_w=1280 // 32 // self.core_grid_x,
-            block_h=4,
-            block_w=1280 // 32 // self.core_grid_x,
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 10) if self.full_grid else ttnn.CoreCoord(10, 8),
+            subblock_w=4,
+            block_h=3 if self.full_grid else 4,
+            block_w=4,
             inplace=False,
             legacy_reduction=True,
             legacy_rsqrt=True,
@@ -711,10 +866,18 @@ class ModelOptimisations1024x1024BH:
 
         # region SDPA CONFIGS
         self.sdpa_configs = {}
+        # 1024-row attention: q256 gives 20 heads x 4 q-chunks = 80 work items, one round on 110 cores (q128 left
+        # half the grid idle in a second round).
         self.sdpa_configs["1024_K"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(11, 10),
-            q_chunk_size=128,
-            k_chunk_size=1024,
+            q_chunk_size=256,
+            k_chunk_size=512,
+            exp_approx_mode=False,
+        )
+        self.sdpa_configs["128_K_S1024"] = ttnn.SDPAProgramConfig(  # cross-attn from 1024 rows
+            compute_with_storage_grid_size=(11, 10),
+            q_chunk_size=256,
+            k_chunk_size=128,
             exp_approx_mode=False,
         )
         self.sdpa_configs["512_K"] = ttnn.SDPAProgramConfig(
@@ -895,19 +1058,35 @@ class ModelOptimisations1024x1024BH:
             return self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"]
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
+    def get_transposed_block_memory_config(self, module_path):
+        """The transposed 11x10 activation shard of a transformer block ([96, 128] COL_MAJOR for the 1280 blocks,
+        [384, 64] for the 640 blocks), or None off the full grid."""
+        if not self.full_grid:
+            return None
+        is_640_block = "down_blocks.1" in module_path or "up_blocks.1" in module_path
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 9))})
+        shard = [384, 64] if is_640_block else [96, 128]
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.COL_MAJOR),
+        )
+
     def get_mm_output_memory_config(self, module_path):
+        # full grid: the 640 blocks stay block-sharded like the 1280 blocks, so LayerNorm / residual adds run sharded
+        is_640_block = "down_blocks.1" in module_path or "up_blocks.1" in module_path
         if "attn1" in module_path or "attn2" in module_path:
             if not "to_out" in module_path:
                 return ttnn.L1_MEMORY_CONFIG
             else:
-                if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                if is_640_block and not self.full_grid:
                     return ttnn.L1_MEMORY_CONFIG
                 else:
                     return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
         if "ff.net" in module_path:
             return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
         if "attentions" in module_path and "proj_in" in module_path:
-            if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+            if is_640_block and not self.full_grid:
                 return ttnn.L1_MEMORY_CONFIG
             else:
                 return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
@@ -927,9 +1106,10 @@ class ModelOptimisations1024x1024BH:
 
         # DOWN BLOCK 0
         elif ("down_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
-            return self.conv_configs["ABH_1024_ADB_WDB_BS"]
+            # full grid: 16384 rows -> 52 tile rows per core; act blocks must divide it
+            return self.conv_configs["ABH_26T_ADB_WDB_BS" if self.full_grid else "ABH_1024_ADB_WDB_BS"]
         elif "down_blocks.0.resnets" in conv_path:
-            return self.conv_configs["ABH_1024_ADB_WDB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS" if self.full_grid else "ABH_1024_ADB_WDB_BS"]
         elif "down_blocks.0.downsamplers.0" == conv_path:
             return self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"]
 
@@ -957,7 +1137,8 @@ class ModelOptimisations1024x1024BH:
         elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
             return self.conv_configs["ABH_0_ADB_WDB_BS"]
         elif "up_blocks.0.upsamplers.0" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_BS"]
+            # full grid: the upsample lands on the 11x10 shard (12 tile rows per core)
+            return self.conv_configs["ABH_0_ADB_WDB_BS" if self.full_grid else "ABH_256_ADB_WDB_BS"]
         elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
             return self.conv_configs["ABH_0_ADB_WDB_BS"]
         elif "up_blocks.0.resnets.2.conv1" == conv_path:
@@ -967,23 +1148,26 @@ class ModelOptimisations1024x1024BH:
         elif "up_blocks.1.resnets.0.conv1" == conv_path:
             return self.conv_configs["ABH_128_ADB_WDB_BS"]
         elif "up_blocks.1.resnets.1.conv1" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_BS"]
+            return self.conv_configs["ABH_13T_ADB_WDB_BS" if self.full_grid else "ABH_256_ADB_WDB_BS"]
         elif "up_blocks.1.resnets.2.conv1" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_BS"]
+            return self.conv_configs["ABH_13T_ADB_WDB_BS" if self.full_grid else "ABH_256_ADB_WDB_BS"]
         elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
             return self.conv_configs["ABH_0_ADB_WDB_BS"]
         elif "up_blocks.1.upsamplers.0" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_BS"]
+            # full grid: the upsample lands on the 10x10 [1664, 64] shard; 26-tile act blocks do not fit L1 next to it
+            return self.conv_configs["ABH_13T_ADB_WDB_BS" if self.full_grid else "ABH_256_ADB_WDB_BS"]
 
         # UP BLOCK 2
+        # full grid: these convs consume a 10x10 [1664, C/10] shard (52 tile rows per core), so act blocks divide 52
         elif "up_blocks.2.resnets.0.conv1" == conv_path:
-            return self.conv_configs["ABH_256_ADB_WDB_MOVE_BS"]
+            # Cin=960: a 26-tile act block does not fit L1 next to the shards
+            return self.conv_configs["ABH_13T_ADB_WDB_BS" if self.full_grid else "ABH_256_ADB_WDB_MOVE_BS"]
         elif ("up_blocks.2.resnets" in conv_path) and ("conv2" in conv_path):
-            return self.conv_configs["ABH_1024_ADB_WDB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS" if self.full_grid else "ABH_1024_ADB_WDB_BS"]
         elif "up_blocks.2.resnets.1.conv1" == conv_path:
-            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS" if self.full_grid else "ABH_512_ADB_WDB_BS"]
         elif "up_blocks.2.resnets.2.conv1" == conv_path:
-            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS" if self.full_grid else "ABH_512_ADB_WDB_BS"]
 
         elif "conv_out" == conv_path:
             return self.conv_configs["ABH_128_ADB_HS"]
@@ -992,7 +1176,8 @@ class ModelOptimisations1024x1024BH:
 
     def get_conv_compute_config(self, module_path):
         if "conv_in" in module_path or "conv_out" in module_path:
-            return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
+            # packer_l1_acc: with a 16-bit DEST, re-rounding the partial sums per K block inflates the output ~3.7%
+            return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
         if "resnets" in module_path:
             conv1_no_fp32 = {
                 "down_blocks.2.resnets",
@@ -1055,6 +1240,10 @@ class ModelOptimisations1024x1024BH:
         return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
 
     def get_groupnorm_params(self, module_path, weights, bias, groups, device):
+        if self.use_generated_groupnorm:
+            gamma, beta = prepare_generated_gn_beta_gamma(device, weights, bias)
+            cfg = {"generated": True, "fuse_silu": self.fuse_gn_silu}
+            return cfg, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, None, None, gamma, beta
         config = self._get_groupnorm_config(module_path)
 
         mask, negative_mask, gamma, beta = self.__generate_groupnorm_params(config, weights, bias, groups, device)
@@ -1067,9 +1256,7 @@ class ModelOptimisations1024x1024BH:
             return self.layernorm_configs["1280_config"]
 
     def get_sdpa_config(self, module_path, is_self_attention):
+        rows_4096 = "down_blocks.1" in module_path or "up_blocks.1" in module_path
         if not is_self_attention:
-            return self.sdpa_configs["128_K"]
-        if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
-            return self.sdpa_configs["512_K"]
-        else:
-            return self.sdpa_configs["1024_K"]
+            return self.sdpa_configs["128_K" if rows_4096 else "128_K_S1024"]
+        return self.sdpa_configs["512_K" if rows_4096 else "1024_K"]
