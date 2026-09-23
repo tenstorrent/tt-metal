@@ -47,9 +47,6 @@ void kernel_main() {
         zero_fill_acc();
     }
 
-    mul_binary_tile_init();
-    addcmul_tile_init();
-
     for (uint32_t r = 0; r < row_count; ++r) {
         cb_wait_front(cb_dy, Wt);
         cb_wait_front(cb_x, Wt);
@@ -59,8 +56,10 @@ void kernel_main() {
 
         for (uint32_t c = 0; c < Wt; ++c) {
             tile_regs_acquire();
-            copy_tile_init(cb_dy);
+            copy_init(cb_dy);
             copy_tile(cb_dy, c, 0);
+            // Only one SFPU init is live at a time, so each run of SFPU ops re-arms it.
+            mul_binary_tile_init();
             if constexpr (with_dgamma) {
                 unary_bcast_init<BroadcastType::ROW>(cb_gamma);
                 unary_bcast<BroadcastType::ROW>(cb_gamma, c, 1);
@@ -69,10 +68,11 @@ void kernel_main() {
             unary_bcast_init<BroadcastType::COL>(cb_inv);
             unary_bcast<BroadcastType::COL>(cb_inv, 0, 1);
             mul_binary_tile(0, 1, 0);
-            copy_tile_init(cb_x);
+            copy_init(cb_x);
             copy_tile(cb_x, c, 2);
             unary_bcast_init<BroadcastType::COL>(cb_d);
             unary_bcast<BroadcastType::COL>(cb_d, 0, 1);
+            addcmul_tile_init();
             addcmul_tile<DataFormat::Float32>(0, 2, 1, 0, neg_one_bits);
             tile_regs_commit();
             tile_regs_wait();
@@ -82,10 +82,10 @@ void kernel_main() {
 
             if constexpr (with_dgamma) {
                 tile_regs_acquire();
-                copy_tile_init(cb_dy);
+                copy_init(cb_dy);
                 copy_tile(cb_dy, c, 0);
-                copy_tile_init(cb_x);
                 copy_tile(cb_x, c, 1);
+                mul_binary_tile_init();
                 mul_binary_tile(0, 1, 0);
                 unary_bcast_init<BroadcastType::COL>(cb_inv);
                 unary_bcast<BroadcastType::COL>(cb_inv, 0, 1);
@@ -108,14 +108,18 @@ void kernel_main() {
     }
 
     if constexpr (with_dgamma) {
-        const uint32_t role = get_arg_val<uint32_t>(1);  // 0 member, 1 row leader, 2 root
+        // Position in the two-stage dgamma reduction tree, and the number of gather stages it runs:
+        // 0 = member (x != 0; scatters its partial to its row leader), 1 = row leader (x == 0; also
+        // gathers its grid row, then scatters to the root), 2 = root (0,0; also gathers the row
+        // leaders and emits dgamma).
+        const uint32_t role = get_arg_val<uint32_t>(1);
 
         auto collapse_acc_to_part = [&]() {
             cb_wait_front(cb_acc, Wt);
             cb_reserve_back(cb_part, Wt);
             reconfig_data_format_srca(cb_acc);
             pack_reconfig_data_format(cb_part);
-            copy_tile_to_dst_init_short(cb_acc);
+            copy_init(cb_acc);
             sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
             for (uint32_t c = 0; c < Wt; ++c) {
                 tile_regs_acquire();

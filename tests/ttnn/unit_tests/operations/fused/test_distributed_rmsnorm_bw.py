@@ -165,6 +165,52 @@ def test_distributed_rms_norm_bw_float32(device):
     )
 
 
+def _max_cores(device):
+    grid = device.compute_with_storage_grid_size()
+    return grid.x, grid.y, grid.x * grid.y
+
+
+def _run_rows(device, num_rows, with_weight=True):
+    _run_distributed_rms_norm_bw(
+        device,
+        batch=1,
+        seq_len=num_rows * 32,
+        hidden_dim_total=512,
+        num_devices=2,
+        with_weight=with_weight,
+        ttnn_dtype=ttnn.bfloat16,
+    )
+
+
+@pytest.mark.parametrize("with_weight", [True, False])
+def test_distributed_rms_norm_bw_spans_multiple_grid_rows(device, with_weight):
+    """dgamma tree stage 2 (row leaders -> root) only runs when work spans multiple grid rows."""
+    grid_x, _, max_cores = _max_cores(device)
+    num_rows = 4 * grid_x
+    assert num_rows <= max_cores, "test needs a grid at least four rows tall"
+    _run_rows(device, num_rows, with_weight)
+
+
+def test_distributed_rms_norm_bw_uneven_row_split(device):
+    """num_rows % num_cores != 0, so some cores take an extra row."""
+    _, _, max_cores = _max_cores(device)
+    _run_rows(device, max_cores + 3)
+
+
+def test_distributed_rms_norm_bw_reuses_program_across_row_counts(device):
+    """Same occupied core count and Wt; override_runtime_arguments must refresh the row split."""
+    _, _, max_cores = _max_cores(device)
+    for num_rows in (max_cores, 2 * max_cores):
+        _run_rows(device, num_rows)
+
+
+def test_distributed_rms_norm_bw_reuses_program_on_same_shape(device):
+    """Same shape twice: writer must reset dgamma semaphores on a program-cache hit."""
+    _, _, max_cores = _max_cores(device)
+    _run_rows(device, max_cores)
+    _run_rows(device, max_cores)
+
+
 def test_distributed_rms_norm_bw_rejects_mismatched_device_counts(device, expect_error):
     """stats and bw_stats scale by the device count read off their width, so a pair gathered over
     different device sets would rescale every gradient rather than fail."""

@@ -17,6 +17,7 @@ Tensor rms_norm_pre_all_gather_bw(
     const Tensor& stats,
     float epsilon = 1e-12,
     const std::optional<const Tensor>& weight = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn

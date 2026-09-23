@@ -32,6 +32,7 @@ set(TTNN_OP_NORMALIZATION_SRCS
     layernorm_distributed/layernorm_pre_all_gather.cpp
     rmsnorm/rmsnorm.cpp
     rmsnorm_distributed/rmsnorm_distributed_bw_utils.cpp
+    rmsnorm_distributed/device/rmsnorm_bw_apply_device_operation.cpp
     rmsnorm_distributed/device/rmsnorm_bw_apply_program_factory.cpp
     rmsnorm_distributed/rmsnorm_post_all_gather_bw.cpp
     rmsnorm_distributed/rmsnorm_pre_all_gather_bw.cpp
