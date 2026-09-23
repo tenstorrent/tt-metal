@@ -454,7 +454,7 @@ def _verify_dst_vs_src_bytes(
             continue
         picked = sorted((l, r) for l, r in rows.items() if not layers or l in set(layers))
         if picked:
-            checkable.append((entry["config_id"], picked))
+            checkable.append((entry["config_id"], picked, entry["kind"]))
     if not checkable:
         logger.error(
             "[migration_driver] verify bytes: no cache has an addressable axis (see the plan above), so "
@@ -464,13 +464,16 @@ def _verify_dst_vs_src_bytes(
 
     failures, checked, skipped, tail_tokens = [], 0, 0, 0
     for src, dst, real_len in triples:
-        for cfg_id, picked in checkable:
+        for cfg_id, picked, kind in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
             stride = int(tcfg.chunk_n_tokens)
-            # A config's position axis ends at its own max_sequence_length, which is the request length
-            # only for token caches. A whole-state config (Kimi-K3's KDA state: one position per segment)
-            # is shorter, and lookups past its end are unchecked.
-            extent = min(int(real_len), int(tcfg.max_sequence_length))
+            # A token cache is checked over the request; a whole-state config (Kimi-K3's KDA state, on a
+            # synthetic axis unrelated to the request length) over its whole extent -- every segment,
+            # and every alias of it, which reads the same bytes.
+            if kind in ("kda_recurrent", "kda_convolution"):
+                extent = int(tcfg.max_sequence_length)
+            else:
+                extent = min(int(real_len), int(tcfg.max_sequence_length))
             n_full = (extent // stride) * stride
             tail_tokens += extent - n_full
             logger.info(

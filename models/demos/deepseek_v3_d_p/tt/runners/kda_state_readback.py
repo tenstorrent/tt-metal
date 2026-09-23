@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     recurrent_segment_to_torch,
 )
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import kda_position, kda_segments_per_layer
 
 GOLDEN_PERIOD = 1024
 GOLDEN_FILES = {"kda_recurrent": "kda_recurrent_state_layer_{}", "kda_convolution": "kda_conv_state_layer_{}"}
@@ -82,9 +83,9 @@ def read_layer(table, config_id: int, kind: str, layer: int, slot: int, geometry
     if unique_id is None:
         return None, "remote"
     segments = {}
-    total = table.config(config_id).max_sequence_length
-    for segment in range(total):
-        loc = table.lookup(layer, segment, slot, config_id)
+    # Window 0: every version window aliases the same bytes.
+    for segment in range(kda_segments_per_layer(geometry, kind)):
+        loc = table.lookup(layer, kda_position(geometry, kind, segment), slot, config_id)
         uid = resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
         if uid is None:
             return None, f"segment {segment} on a remote device"

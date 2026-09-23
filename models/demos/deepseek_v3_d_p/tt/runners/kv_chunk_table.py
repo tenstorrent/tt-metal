@@ -30,8 +30,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
     create_kv_chunk_address_table_block_cyclic,
+    kda_chunk_n_tokens,
+    kda_max_sequence_length,
     kda_segment_bytes,
-    kda_segments_per_layer,
     merged_num_layers,
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
@@ -139,8 +140,8 @@ def build_and_serialize_kv_chunk_table(
     inference server's SET_TABLE. Returns the path on success.
 
     ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "1"
-    (recurrent) and "2" (convolution) after the kvpe config, segment-addressed (``chunk_n_tokens`` 1,
-    ``max_sequence_length`` = segments per layer) and published on the model's layer axis via its own
+    (recurrent) and "2" (convolution) after the kvpe config, on the contract's synthetic position axis (strides 96 / 64 over
+    ``KDA_VERSIONS`` aliased windows, see ``kda_position``) and published on the model's layer axis via its own
     ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged path as well.
 
     Chunked prefill stores KV positions block-cyclic across the SP shards, so the table maps each
@@ -440,9 +441,9 @@ def _build_and_serialize_merged_kv_chunk_table(
         # One layer axis for every config: the KDA rows sit at their model layers, so the extent is the
         # kvpe config's (already widened to the model's layer count) or the KDA rows', whichever is larger.
         cfg.num_layers = max(configs["0"].num_layers, max(spec.layer_rows) + 1)
-        cfg.max_sequence_length = kda_segments_per_layer(spec.geometry, kind)
+        cfg.max_sequence_length = kda_max_sequence_length(spec.geometry)
         cfg.num_slots = num_users
-        cfg.chunk_n_tokens = 1
+        cfg.chunk_n_tokens = kda_chunk_n_tokens(spec.geometry, kind)
         cfg.chunk_size_bytes = kda_segment_bytes(spec.geometry, kind)
         tensor = spec.tensor(kind)
         if tensor is not None:
