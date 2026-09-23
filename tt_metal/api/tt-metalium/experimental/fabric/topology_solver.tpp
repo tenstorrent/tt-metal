@@ -2315,8 +2315,7 @@ int SearchHeuristic::compute_candidate_cost(
     if (!global_to_host.empty() && global_idx < global_to_host.size()) {
         const int candidate_host = global_to_host[global_idx];
         if (candidate_host >= 0) {
-            for (size_t t = 0; t < mapping.size(); ++t) {
-                const int mapped_global = mapping[t];
+            for (const int mapped_global : mapping) {
                 if (mapped_global >= 0 && static_cast<size_t>(mapped_global) < global_to_host.size() &&
                     global_to_host[static_cast<size_t>(mapped_global)] == candidate_host) {
                     ++host_affinity_score;

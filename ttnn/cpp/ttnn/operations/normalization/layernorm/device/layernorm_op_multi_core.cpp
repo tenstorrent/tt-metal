@@ -316,7 +316,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     uint32_t im6_t = block_size * 2;    // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
     if (b) {
         im6_t = Wt_next_block_up;
-        in0_t = 2 * block_size;
+        // RM TILIZE_IN fills all of dfb_in before pre-add; shrinking in0_t would hang.
+        if (!input_is_row_major) {
+            in0_t = 2 * block_size;
+        }
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice

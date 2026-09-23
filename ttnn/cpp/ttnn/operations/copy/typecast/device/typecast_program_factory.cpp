@@ -48,7 +48,18 @@ ComputeUnpackModes make_unpack_modes(
 //   bfp8_pack_precise -> bfp_pack_precision_mode; math_approx_mode=false -> sfpu_precision_mode.
 // dst_full_sync_en was left at its legacy default (false), which is double_buffer_dest = true (the
 // Metal 2.0 default), so it needs no explicit setting.
-ComputeGen1Config make_compute_config(const TypecastParams& args, ComputeUnpackModes unpack_modes) {
+// Quasar (Gen2) rejects a ComputeGen1Config on a compute KernelSpec; return the Gen2 equivalent there
+// (bfp_pack_precision_mode does not exist on Gen2 — MXFP replaces BFP — so it is simply omitted). WH/BH
+// keep the byte-identical legacy Gen1 config.
+ComputeHardwareConfig make_compute_config(tt::ARCH arch, const TypecastParams& args, ComputeUnpackModes unpack_modes) {
+    if (arch == tt::ARCH::QUASAR) {
+        return ComputeGen2Config{
+            .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+            .enable_32_bit_dest = args.fp32_dest_acc_en,
+            .unpack_modes = std::move(unpack_modes),
+        };
+    }
     return ComputeGen1Config{
         .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
@@ -154,7 +165,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
                  {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
                  {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
             .hw_config =
-                ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format_input))},
+                make_compute_config(device->arch(), args, make_unpack_modes(args, IN_DFB, cb_data_format_input)),
         };
     };
 
@@ -314,7 +325,7 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
              {"per_core_block_dim", 1u},
              {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
              {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
-        .hw_config = ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format))},
+        .hw_config = make_compute_config(device->arch(), args, make_unpack_modes(args, IN_DFB, cb_data_format)),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};
