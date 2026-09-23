@@ -250,6 +250,29 @@
   team: models
   budget_type: unit
 
+- name: Command-R 35B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=0
+    export HF_MODEL=CohereLabs/c4ai-command-r-v01 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/CohereLabs/c4ai-command-r-v01 MESH_DEVICE=P150x4
+    # Only the e2e decode smoke test runs here. The two PCC harnesses
+    # (test_cohere_pcc.py, test_cohere_fullmodel_pcc.py) compare against fp32 CPU
+    # reference dumps produced by models/experimental/cohere/reference/cpu_reference_capture.py,
+    # which needs a ~140 GB-RAM CPU host and is not staged on /mnt/MLPerf. Add them
+    # once those dumps exist and COHERE_REF_DIR can point at them.
+    pytest --timeout 2400 models/experimental/cohere/tests/test_cohere_vllm_e2e.py
+  model: command-r-35b
+  model_family: Cohere
+  skus:
+    bh_quietbox_2:
+      # First run is cold: 70 GB checkpoint off the NAS plus tt_cache generation for
+      # a 35B model. The author measured 230 s warm on this same SKU (VALIDATION.md).
+      timeout: 45
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: unit
+
 - name: Mistral-7B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
