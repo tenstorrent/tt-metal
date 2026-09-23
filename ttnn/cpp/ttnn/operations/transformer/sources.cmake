@@ -35,6 +35,8 @@ set(TTNN_OP_TRANSFORMER_SRCS
     chunk_gated_delta_rule/device/chunk_gated_delta_rule_program_factory.cpp
     chunk_gated_delta_rule/device/chunk_gdn_phased.cpp
     chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp
+    chunk_gated_delta_rule/device/chunk_gdn_fused.cpp
+    chunk_gated_delta_rule/device/chunk_gdn_fused_program_factory.cpp
     chunk_gated_delta_rule/chunk_gated_delta_rule.cpp
 )
 

@@ -114,7 +114,17 @@ struct ChunkGdnScanParams {
     uint32_t val_dim;
     bool has_initial_state;
     bool output_final_state;
+    // Per-head NoC multicast of the shared V-independent scan inputs (kd, q_decay, intra, k_dec_t,
+    // dl, t_inv): the head's v-block-0 core reads them from DRAM once and multicasts into the
+    // sibling V-block cores' CBs, instead of every sibling re-reading identical DRAM pages
+    // (NV-fold read amplification). Bit-exact: identical bytes land in identical CB slots.
+    // Kill switch QWEN_GDN_SCAN_MCAST=0 (read where params are built, NOT in the factory, so the
+    // flag participates in the program-cache key and in-process A/B toggling is safe).
+    // The factory still falls back to the plain reader when NV==1 (nothing to share).
     bool use_mcast = true;
+    // QWEN_GDN_SCAN_SERIAL=1 pins NV=1 (perf A/B only). Hashed here for the same reason as
+    // use_mcast: it changes the placement AND the kernel topology (mcast on/off), so a
+    // factory-local env read would silently serve a stale cached program on in-process toggles.
     bool force_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -149,7 +159,9 @@ struct ChunkGdnScanOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Returns {o [BH,NC,C,V] bf16, final_state [BH,K,V] fp32}.
+// Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32}. o is fp32 — see the scan factory's
+// df_io and ChunkGdnScanOperation::compute_output_specs (a bf16 o degraded full-model quality
+// and was removed).
 std::vector<Tensor> chunk_gdn_scan(
     const Tensor& v_beta,
     const Tensor& kd,
@@ -162,7 +174,6 @@ std::vector<Tensor> chunk_gdn_scan(
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    bool use_mcast = true);
+    const DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::prim
