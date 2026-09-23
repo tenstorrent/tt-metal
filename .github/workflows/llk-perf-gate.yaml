@@ -1,0 +1,50 @@
+name: "LLK perf gate"
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  actions: read
+  contents: read
+  checks: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  measure:
+    name: "Measure the PR (non speed-of-light)"
+    if: >-
+      github.event_name == 'pull_request' && (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+          (github.event.action == 'synchronize'
+           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        )
+      )
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: ${{ inputs.arch || 'wormhole' }}
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      upload-to-warehouse: false
+      pipeline: pr
+    secrets: inherit
+
+  llk-perf-gate:
+    name: "LLK perf regression gate"
+    needs: measure
+    if: >-
+      always() && (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+          (github.event.action == 'synchronize'
+           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        )
+      )
+    uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      fail_on_regression: false
+    secrets: inherit

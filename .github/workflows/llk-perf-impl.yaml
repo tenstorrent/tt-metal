@@ -14,6 +14,22 @@ on:
         required: false
         default: true
         type: boolean
+      pipeline:
+        description: >-
+          Value for the runs' `pipeline` column: nightly, baseline or pr. Empty
+          keeps the old behaviour, which infers "pr" from a pull_request event
+          and "nightly" from anything else. "baseline" is the post-merge run the
+          PR gate compares against — the same L1_TO_L1 non-speed-of-light
+          selection the gate measures, which must stay separable from the
+          nightly full sweep.
+        required: false
+        default: ""
+        type: string
+      perf-run-types:
+        description: "Comma-separated PerfRunType names to measure (blank = all)"
+        required: false
+        default: ""
+        type: string
       upload-to-warehouse:
         description: "Upload the run's Parquet to the perf warehouse over SFTP"
         required: false
@@ -131,6 +147,8 @@ jobs:
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
           TT_LLK_DISABLE_ASSERTS: "1"
+          PIPELINE: ${{ inputs.pipeline }}
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
         run: |
           ${{ matrix.test-group.cmd }}
 
