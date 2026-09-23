@@ -6,6 +6,7 @@
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
+from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_config
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
@@ -80,6 +81,21 @@ class MLP:
             **common,
         )
 
+    def _matmul_config(self, hidden_states, weight, fused_activation=None):
+        """Blocking for one projection, on the widest column count that splits N evenly."""
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
+        grid_x = max(x for x in range(1, grid.x + 1) if n_tiles % x == 0)
+        return prefill_matmul_config(hidden_states, weight, grid_x, grid.y, fused_activation)
+
+    def _matmul_kwargs(self, hidden_states, weight, fused_gelu=False):
+        """Explicit blocking where it fits in L1, otherwise the core-grid path."""
+        gelu = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if fused_gelu else None
+        config = self._matmul_config(hidden_states, weight, fused_activation=gelu)
+        if config is not None:
+            return {"program_config": config}
+        return {"core_grid": self.core_grid, **({"activation": "gelu_tanh"} if fused_gelu else {})}
+
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
         # All three intermediates are short-lived, deallocated in this call, and touch no
@@ -93,16 +109,15 @@ class MLP:
             hidden_states,
             self.gate_proj,
             compute_kernel_config=self.compute_kernel_config,
-            activation="gelu_tanh",
-            core_grid=self.core_grid,
             memory_config=act_mc,
+            **self._matmul_kwargs(hidden_states, self.gate_proj, fused_gelu=True),
         )
         up = ttnn.linear(
             hidden_states,
             self.up_proj,
             compute_kernel_config=self.compute_kernel_config,
-            core_grid=self.core_grid,
             memory_config=act_mc,
+            **self._matmul_kwargs(hidden_states, self.up_proj),
         )
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
@@ -112,8 +127,8 @@ class MLP:
             hidden,
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
-            core_grid=self.core_grid,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._matmul_kwargs(hidden, self.down_proj),
         )
         hidden.deallocate(True)
         if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
