@@ -18,6 +18,7 @@ std::vector<std::optional<Tensor>> rms_norm_post_all_gather_bw(
     const Tensor& bw_stats,
     float epsilon,
     const std::optional<const Tensor>& weight,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     namespace bw = ttnn::operations::normalization::rmsnorm_distributed_bw;
     constexpr std::string_view op_name = "rms_norm_post_all_gather_bw";
@@ -38,11 +39,14 @@ std::vector<std::optional<Tensor>> rms_norm_post_all_gather_bw(
         stats_devices,
         bw_stats_devices);
 
+    const auto out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    bw::validate_output_memory_config(out_memory_config, op_name);
+
     auto kernel_config = bw::resolve_compute_kernel_config(compute_kernel_config, input_tensor);
     const uint32_t local_width = input_tensor.logical_shape()[3];
     auto rms = bw::rms_from_gathered_stats(stats, local_width, epsilon, kernel_config);
     auto scale = bw::mean_from_gathered_stats(bw_stats, local_width, kernel_config);
-    return bw::apply_backward(input_tensor, output_grad, rms, scale, weight, kernel_config);
+    return bw::apply_backward(input_tensor, output_grad, rms, scale, weight, out_memory_config, kernel_config);
 }
 
 }  // namespace ttnn

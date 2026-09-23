@@ -17,11 +17,15 @@ Tensor rms_norm_pre_all_gather_bw(
     const Tensor& stats,
     float epsilon,
     const std::optional<const Tensor>& weight,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     namespace bw = ttnn::operations::normalization::rmsnorm_distributed_bw;
     constexpr std::string_view op_name = "rms_norm_pre_all_gather_bw";
     bw::validate_bw_inputs(input_tensor, output_grad, weight, op_name);
     bw::validate_stats_tensor(stats, input_tensor, "stats", op_name);
+
+    const auto out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    bw::validate_output_memory_config(out_memory_config, op_name);
 
     auto kernel_config = bw::resolve_compute_kernel_config(compute_kernel_config, input_tensor);
     const uint32_t local_width = input_tensor.logical_shape()[3];
@@ -30,7 +34,7 @@ Tensor rms_norm_pre_all_gather_bw(
         bw::x_times_gained(input_tensor, output_grad, rms, weight),
         /*dim_arg=*/3,
         /*keep_dim=*/true,
-        std::nullopt,
+        out_memory_config,
         kernel_config);
     return bw::to_stats_layout(local_sum);
 }

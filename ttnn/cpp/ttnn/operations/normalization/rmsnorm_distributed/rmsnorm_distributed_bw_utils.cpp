@@ -8,13 +8,11 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
-#include "device/rmsnorm_bw_apply_program_factory.hpp"
+#include "device/rmsnorm_bw_apply_device_operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 using namespace tt::tt_metal;
@@ -22,8 +20,9 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::normalization::rmsnorm_distributed_bw {
 namespace {
 
-Tensor cast_if_needed(const Tensor& tensor, DataType dtype) {
-    return tensor.dtype() == dtype ? tensor : ttnn::typecast(tensor, dtype);
+Tensor cast_if_needed(
+    const Tensor& tensor, DataType dtype, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return tensor.dtype() == dtype ? tensor : ttnn::typecast(tensor, dtype, memory_config);
 }
 
 Tensor to_fp32(const Tensor& tensor) { return cast_if_needed(tensor, DataType::FLOAT32); }
@@ -113,6 +112,10 @@ void validate_bw_inputs(
     }
 }
 
+void validate_output_memory_config(const MemoryConfig& memory_config, std::string_view op_name) {
+    TT_FATAL(!memory_config.is_sharded(), "{}: memory_config must be interleaved, got sharded", op_name);
+}
+
 void validate_stats_tensor(
     const Tensor& stats, const Tensor& input, std::string_view tensor_name, std::string_view op_name) {
     validate_bw_tensor(stats, tensor_name, op_name);
@@ -189,43 +192,28 @@ Tensor to_stats_layout(const Tensor& tensor) {
     return ttnn::pad(tensor, padding, 0.0f);
 }
 
-// Fuses the apply step of RMSNorm backward:
-//   dx     = gamma * dy / rms - x * scale / rms^2
-//   dgamma = sum(dy * x / rms) over N, C, H   (only when weight is set)
-// into one reader/compute/writer program so the eltwise chain stays in L1
-// and dgamma is reduced on-chip.
 std::vector<std::optional<Tensor>> apply_backward(
     const Tensor& input,
     const Tensor& output_grad,
     const Tensor& rms,
     const Tensor& scale,
     const std::optional<const Tensor>& weight,
-    const DeviceComputeKernelConfig& /*compute_kernel_config*/) {
+    const MemoryConfig& memory_config,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     auto x = to_fp32(input);
     auto dy = to_fp32(output_grad);
     auto inv_rms = ttnn::reciprocal(to_fp32(rms));
     auto d = ttnn::multiply(to_fp32(scale), ttnn::square(inv_rms));
-
-    auto dx_fp32 =
-        ttnn::empty(x.logical_shape(), DataType::FLOAT32, Layout::TILE, x.device(), ttnn::DRAM_MEMORY_CONFIG);
-    const bool with_weight = weight.has_value();
-    Tensor gamma = with_weight ? to_fp32(weight.value()) : x;
-    std::optional<Tensor> dgamma_fp32;
-    if (with_weight) {
-        dgamma_fp32 =
-            ttnn::empty(weight->logical_shape(), DataType::FLOAT32, Layout::TILE, x.device(), ttnn::DRAM_MEMORY_CONFIG);
+    std::optional<Tensor> gamma;
+    if (weight.has_value()) {
+        gamma = to_fp32(weight.value());
     }
 
-    auto desc = create_rmsnorm_bw_apply_program_descriptor(x, dy, gamma, inv_rms, d, dx_fp32, dgamma_fp32);
-    std::vector<Tensor> io{x, dy, gamma, inv_rms, d, dx_fp32};
-    if (dgamma_fp32.has_value()) {
-        io.push_back(dgamma_fp32.value());
-    }
-    ttnn::generic_op(io, desc);
+    auto outputs = ttnn::prim::rmsnorm_bw_apply(x, dy, gamma, inv_rms, d, memory_config, compute_kernel_config);
 
-    std::vector<std::optional<Tensor>> grads{cast_if_needed(dx_fp32, input.dtype()), std::nullopt};
-    if (dgamma_fp32.has_value()) {
-        grads[1] = cast_if_needed(dgamma_fp32.value(), weight->dtype());
+    std::vector<std::optional<Tensor>> grads{cast_if_needed(*outputs[0], input.dtype(), memory_config), std::nullopt};
+    if (outputs[1].has_value()) {
+        grads[1] = cast_if_needed(*outputs[1], weight->dtype(), weight->memory_config());
     }
     return grads;
 }

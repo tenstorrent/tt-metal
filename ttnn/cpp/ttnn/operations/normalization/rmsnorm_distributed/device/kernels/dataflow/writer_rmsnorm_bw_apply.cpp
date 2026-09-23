@@ -46,8 +46,7 @@ void kernel_main() {
     const uint32_t root_vy = get_arg_val<uint32_t>(12);
     const uint32_t row_cols = get_arg_val<uint32_t>(13);
     const uint32_t n_leaders = get_arg_val<uint32_t>(14);
-    const uint32_t ntab = get_arg_val<uint32_t>(15);
-    constexpr uint32_t TAB = 16;
+    constexpr uint32_t TAB = 15;
 
     const auto out_acc = TensorAccessor(out_args, out_addr, page);
     const auto dg_acc = TensorAccessor(dg_args, dg_addr, page);
@@ -118,6 +117,12 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_part, Wt);
         }
-        (void)ntab;
+
+        // Program-cache hits (and trace replay) reuse this program without re-running host
+        // semaphore init. wait_min does not decrement, so leave these at 0 for the next launch.
+        ready1.set(0);
+        arrive1.set(0);
+        ready2.set(0);
+        arrive2.set(0);
     }
 }

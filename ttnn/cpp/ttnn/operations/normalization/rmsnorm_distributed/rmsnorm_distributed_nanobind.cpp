@@ -198,6 +198,8 @@ void bind_normalization_rms_norm_distributed(nb::module_& mod) {
               Keyword args:
                 epsilon (float, optional): Defaults to `1e-12`.
                 weight (ttnn.Tensor, optional): gamma shard. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): output memory config. Defaults to the
+                  input's.
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
 
               Returns:
@@ -207,8 +209,10 @@ void bind_normalization_rms_norm_distributed(nb::module_& mod) {
                 - Rank-4 interleaved TILE tensors on-device, BFLOAT16 or FLOAT32.
                 - :attr:`weight` must be a ``[1, 1, 1, W]`` TILE row matching the shard's last dim.
                 - All shards must have the same width.
-                - Composite of eltwise / reduction ops with FP32 accumulation. The output follows
-                  the input's memory config; there is no :attr:`memory_config` argument.
+                - :attr:`memory_config` must be interleaved.
+                - Composite of eltwise / reduction ops. The last-dim reduction runs in FP32 on the
+                  SFPU; Quasar has no SFPU reduce and falls back to the FPU, which truncates its
+                  inputs to TF32.
         )doc",
         &ttnn::rms_norm_pre_all_gather_bw,
         nb::arg("input_tensor"),
@@ -217,6 +221,7 @@ void bind_normalization_rms_norm_distributed(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("epsilon") = 1e-12,
         nb::arg("weight") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 
     ttnn::bind_function<"rms_norm_post_all_gather_bw">(
@@ -239,6 +244,8 @@ void bind_normalization_rms_norm_distributed(nb::module_& mod) {
               Keyword args:
                 epsilon (float, optional): Defaults to `1e-12`.
                 weight (ttnn.Tensor, optional): gamma shard. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): memory config for ``input_grad``.
+                  Defaults to the input's. ``weight_grad`` follows :attr:`weight`'s own config.
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
 
               Returns:
@@ -251,8 +258,11 @@ void bind_normalization_rms_norm_distributed(nb::module_& mod) {
                   ``weight_grad`` comes back in that same shape.
                 - :attr:`stats` and :attr:`bw_stats` must be all-gathered over the same devices.
                 - All shards must have the same width.
-                - Composite of eltwise / reduction ops with FP32 accumulation. The outputs follow
-                  the input's memory config; there is no :attr:`memory_config` argument.
+                - :attr:`memory_config` must be interleaved.
+                - The apply step is a single fused kernel whose circular buffers are sized for a
+                  whole row, so the local last dim is bounded by L1. It always accumulates in FP32;
+                  :attr:`compute_kernel_config` selects math fidelity, approx mode and dest sync,
+                  and ``fp32_dest_acc_en=False`` is rejected.
         )doc",
         &ttnn::rms_norm_post_all_gather_bw,
         nb::arg("input_tensor"),
@@ -262,6 +272,7 @@ void bind_normalization_rms_norm_distributed(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("epsilon") = 1e-12,
         nb::arg("weight") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }
 
