@@ -90,6 +90,7 @@ class PrefillHostTests(unittest.TestCase):
             multi_modal_kwargs={},
             intermediate_prefill_mask=None,
             max_num_logprobs=[None],
+            grammar_bitmask=[None],
             tt_sampling_params=TTSamplingParams(
                 temperature=torch.zeros(n),
                 top_k=torch.ones(n, dtype=torch.int32),
@@ -107,6 +108,8 @@ class PrefillHostTests(unittest.TestCase):
         req_ids = ["request_b", "request_a"][:n]
         runner = SimpleNamespace(
             model=self.adapter,
+            async_decode=SimpleNamespace(note_prefill_submitted=lambda: None),
+            _output_tokens_per_step=1,
             trace_mode="decode_only",
             kv_caches=self.gen.cache,
             request_specific_rope=True,

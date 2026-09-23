@@ -79,6 +79,7 @@ class QwenModel:
         # which has the same compact physical row layout as logical [B,H].
         # Set QWEN_COMPACT_DECODE_RESIDUAL=0 for an immediate rollback.
         self.compact_decode_residual = os.getenv("QWEN_COMPACT_DECODE_RESIDUAL", "1") == "1"
+        self.decode_buckets = os.getenv("QWEN_DECODE_BUCKETS", "0") == "1"
         prefill_layout = os.getenv("QWEN_PREFILL_RESIDUAL_LAYOUT", "replicated")
         if prefill_layout not in ("replicated", "sharded", "sharded_replicated_norm"):
             raise ValueError("Unknown QWEN_PREFILL_RESIDUAL_LAYOUT")
@@ -381,6 +382,90 @@ class QwenModel:
         return [self.logits(x[row : row + 1, length - 1 : length, :], decode=True) for row in range(batch)]
 
     def decode(self, tokens, positions, *, cache, page_table, rope_indices=None, active_slots=None):
+        if getattr(self, "decode_buckets", False):
+            slots = tuple(range(cache.batch_size)) if active_slots is None else tuple(active_slots)
+            if not slots or len(set(slots)) != len(slots) or any(i < 0 or i >= cache.batch_size for i in slots):
+                raise ValueError("Decode buckets require unique active slots inside the cache")
+            if cache.batch_size not in (1, 8, 16):
+                raise ValueError("Decode buckets require serving capacity 1, 8, or 16")
+            bucket = next(b for b in (1, 8, 16) if b >= len(slots))
+            if bucket != cache.batch_size or slots != tuple(range(cache.batch_size)):
+                return self._decode_bucket(tokens, positions, cache, page_table, rope_indices, slots, bucket)
+        return self._decode_fixed(
+            tokens, positions, cache=cache, page_table=page_table, rope_indices=rope_indices, active_slots=active_slots
+        )
+
+    def _decode_bucket(self, tokens, positions, cache, page_table, rope_indices, slots, bucket):
+        """Pack active rows on device, execute one fixed bucket, restore scheduler rows.
+
+        Page IDs keep their original ownership in the shared KV pool. Linear
+        state is gathered/scattered within the trace, so prefill, slot remapping,
+        and warmup backups always see the authoritative full-capacity state.
+        Sampling stays in scheduler order, preserving per-request RNG streams.
+        """
+
+        def pack(tensor, *, fill=0):
+            contiguous = slots == tuple(range(slots[0], slots[0] + len(slots)))
+            rows = [tensor[slots[0] : slots[-1] + 1]] if contiguous else [tensor[i : i + 1] for i in slots]
+            packed = ttnn.concat(rows, dim=0) if len(rows) > 1 else rows[0]
+            if len(slots) < bucket:
+                # Device pad is traceable. full_like on row-major integers
+                # uploads host data and is forbidden during trace capture.
+                packed = ttnn.pad(packed, [(0, bucket - len(slots))] + [(0, 0)] * (len(packed.shape) - 1), value=fill)
+            return packed
+
+        ids = pack(ttnn.reshape(tokens, [32, 1]))
+        ids = ttnn.reshape(ids, [1, 1, 1, bucket])
+        ids = ttnn.pad(ids, [(0, 0), (0, 0), (0, 0), (0, 32 - bucket)], value=0)
+        packed_positions = ttnn.reshape(pack(ttnn.reshape(positions, [cache.batch_size, 1]), fill=-1), [bucket])
+        packed_rope = None
+        if rope_indices is not None:
+            packed_rope = ttnn.reshape(pack(ttnn.reshape(rope_indices, [cache.batch_size, 1])), [bucket])
+        packed_table = pack(page_table)
+        layers = []
+        for state in cache.layers:
+            layers.append(
+                DecoderState(
+                    key=state.key,
+                    value=state.value,
+                    conv=pack(state.conv) if state.conv is not None else None,
+                    recurrent=pack(state.recurrent) if state.recurrent is not None else None,
+                )
+            )
+        packed_cache = ModelCache(layers, bucket, cache.capacity, cache.num_pages)
+        logits = self._decode_fixed(
+            ids,
+            packed_positions,
+            cache=packed_cache,
+            page_table=packed_table,
+            rope_indices=packed_rope,
+            # Padding state is disposable; only live rows are scattered below.
+        )
+        inverse = {slot: row for row, slot in enumerate(slots)}
+        for original, packed in zip(cache.layers, layers):
+            for name in ("conv", "recurrent"):
+                target, source = getattr(original, name), getattr(packed, name)
+                if target is None:
+                    continue
+                # Coalesce adjacent scheduler rows instead of copying each
+                # inactive row separately (the usual mapping is a prefix).
+                rows = []
+                start = 0
+                while start < cache.batch_size:
+                    live = start in inverse
+                    end = start + 1
+                    while end < cache.batch_size and (end in inverse) == live:
+                        if live and inverse[end] != inverse[start] + end - start:
+                            break
+                        end += 1
+                    rows.append(source[inverse[start] : inverse[start] + end - start] if live else target[start:end])
+                    start = end
+                ttnn.copy(ttnn.concat(rows, dim=0) if len(rows) > 1 else rows[0], target)
+        zero = ttnn.zeros_like(logits[:, :, :1, :])
+        rows = [logits[:, :, inverse[i] : inverse[i] + 1, :] if i in inverse else zero for i in range(cache.batch_size)]
+        return ttnn.concat(rows, dim=2) if len(rows) > 1 else rows[0]
+
+    def _decode_fixed(self, tokens, positions, *, cache, page_table, rope_indices=None, active_slots=None):
         b = cache.batch_size
         ids = ttnn.reshape(tokens, [1, 32])[:, :b]
         x = self.embed(ids, batch=b, length=1, compact=self.compact_decode_residual and b > 1)

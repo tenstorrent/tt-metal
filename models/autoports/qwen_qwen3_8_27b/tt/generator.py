@@ -686,6 +686,14 @@ class QwenGenerator(Generator):
                 raise ValueError("Active slots require positions inside the cache")
             self._release_traces(keep_prefill=True)
             self.active_slots = proposed
+            if getattr(self.model, "decode_buckets", False) and proposed:
+                bucket = next((size for size in (1, 8, 16) if size >= len(proposed)), None)
+                if bucket is None:
+                    raise ValueError("Bucketed decode supports at most 16 active requests")
+                print(
+                    f"QWEN_DECODE_BUCKET active={len(proposed)} shape={bucket} capacity={kv_cache.batch_size}",
+                    flush=True,
+                )
         if not enable_trace:
             raise ValueError("Optimized decode requires tracing")
         self._refresh_table(page_table)

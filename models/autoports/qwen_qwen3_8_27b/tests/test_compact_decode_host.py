@@ -46,7 +46,7 @@ class CompactDecodeHostTests(unittest.TestCase):
             reshape=torch.reshape,
             typecast=lambda tensor, _dtype: tensor,
         )
-        decode = load_methods("model.py", "QwenModel", ["decode"], ops)["decode"]
+        decode = load_methods("model.py", "QwenModel", ["_decode_fixed"], ops)["_decode_fixed"]
         calls = []
 
         def embed(_tokens, **kwargs):
@@ -79,7 +79,7 @@ class CompactDecodeHostTests(unittest.TestCase):
             reshape=torch.reshape,
             typecast=lambda tensor, _dtype: tensor,
         )
-        decode = load_methods("model.py", "QwenModel", ["decode"], ops)["decode"]
+        decode = load_methods("model.py", "QwenModel", ["_decode_fixed"], ops)["_decode_fixed"]
         calls = []
 
         def embed(_tokens, **kwargs):

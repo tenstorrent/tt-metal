@@ -36,6 +36,8 @@ class Qwen38ForCausalLM:
             raise ValueError("Qwen3.8 autoport requires a TP4 MeshShape(1,4)")
         if not 1 <= max_batch_size <= 32 or not 1 <= max_seq_len <= cls._MAX_CONTEXT:
             raise ValueError("Serving dimensions exceed the validated model contract")
+        if os.getenv("QWEN_DECODE_BUCKETS", "0") == "1" and max_batch_size not in (1, 8, 16):
+            raise ValueError("Bucketed decode requires max_num_seqs of 1, 8, or 16; capacity above 16 is unsupported")
         layer_indices = os.environ.get("QWEN_VLLM_TEST_LAYERS")
         indices = [int(i) for i in layer_indices.split(",")] if layer_indices else None
         root = Path(__file__).parents[1]
