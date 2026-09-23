@@ -213,4 +213,38 @@ TEST(SlidingWindowWorkPlan, PinnedDevice0Geometry) {
     EXPECT_EQ(unbounded.source_ranges[1].first_global_k_chunk, 32u);
 }
 
+// Multi-hop halo geometry, hand-computed. A halo wider than one Q slab is split across cyclic
+// predecessors: hop d carries the tail of the slab d positions back, oldest block first in the compact
+// buffer, and the farthest hop carries only the remainder.
+TEST(SlidingWindowWorkPlan, MultiHopGeometry) {
+    // 10-tile halo over 4-tile slabs: 3 hops of 4, 4 and 2 rows, landing at rows 6, 2 and 0.
+    static_assert(chunked_sliding_halo_hop_count(10, 4) == 3);
+    EXPECT_EQ(chunked_sliding_halo_hop_rows(10, 4, 0), 0u);
+    EXPECT_EQ(chunked_sliding_halo_hop_rows(10, 4, 1), 4u);
+    EXPECT_EQ(chunked_sliding_halo_hop_rows(10, 4, 3), 2u);
+    EXPECT_EQ(chunked_sliding_halo_hop_rows(10, 4, 4), 0u);
+    EXPECT_EQ(chunked_sliding_halo_hop_dest_row(10, 4, 1), 6u);
+    EXPECT_EQ(chunked_sliding_halo_hop_dest_row(10, 4, 2), 2u);
+    EXPECT_EQ(chunked_sliding_halo_hop_dest_row(10, 4, 3), 0u);
+
+    // Gemma4 at CP8, 1024-token window (32 tiles): chunk 2048 gives 8-tile slabs and 4 full hops;
+    // chunk 4096 gives 16-tile slabs and 2.
+    static_assert(chunked_sliding_halo_hop_count(32, 8) == 4);
+    EXPECT_EQ(chunked_sliding_halo_hop_dest_row(32, 8, 1), 24u);
+    EXPECT_EQ(chunked_sliding_halo_hop_dest_row(32, 8, 4), 0u);
+    EXPECT_EQ(chunked_sliding_halo_remote_hop_count(32, 8, 8), 4u);
+    static_assert(chunked_sliding_halo_hop_count(32, 16) == 2);
+    EXPECT_EQ(chunked_sliding_halo_hop_dest_row(32, 16, 1), 16u);
+
+    // A halo reaching all the way round the ring wraps onto this device's own earlier slab, which is a
+    // local read, so only ring_size - 1 hops cross the fabric.
+    EXPECT_EQ(chunked_sliding_halo_remote_hop_count(16, 4, 4), 3u);
+
+    // Source tail for the 2-row remainder hop (ring 4, 4-tile slabs, second chunk group). Device 1's
+    // hop 3 lands past the end of the ring, so it ships from the previous group's slab.
+    EXPECT_EQ(chunked_sliding_halo_source_start_tile(1, 4, 4, 32, 10, 0, 3), 2u);
+    // In the first group there is no previous group, so that wrapped hop sends from tile 0.
+    EXPECT_EQ(chunked_sliding_halo_source_start_tile(1, 4, 4, 16, 10, 0, 3), 0u);
+}
+
 }  // namespace

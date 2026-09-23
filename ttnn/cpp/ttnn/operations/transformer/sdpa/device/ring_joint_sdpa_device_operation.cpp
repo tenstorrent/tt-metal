@@ -609,8 +609,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const uint32_t window_size = args.sliding_window_size.value();
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
-        // These are the only ring sizes exercised by the current one-hop compact-halo deployment.
-        // Extend the test matrix before widening this allowlist.
+        // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
+        // (and SlidingQWorkPlan::max_halo_hops) before widening this allowlist.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
             "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
