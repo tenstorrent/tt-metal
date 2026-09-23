@@ -30,8 +30,10 @@ void QB2_ENTRY() {
 #endif
     // Reduction packing writes only the statistic column. Clear masked lanes
     // before publishing input so later full-row reduction cannot see old L1.
-    for (uint32_t cb : {7u, 8u, 11u}) {
-        zero_l1<4096>(get_write_ptr(cb));
+    if (initialize_layer_scratch(2)) {
+        for (uint32_t cb : {7u, 8u, 11u}) {
+            zero_l1<4096>(get_write_ptr(cb));
+        }
     }
     const auto input=TensorAccessor(input_args,get_arg_val<uint32_t>(1),2048);
     cb_reserve_back(0,16);
@@ -68,12 +70,20 @@ void QB2_ENTRY() {
     prefetch_projection_weights();
 #endif
 #else
-    dataflow_kernel_lib::prepare_reduce_scaler<2,ckernel::PoolType::SUM,ckernel::ReduceDim::REDUCE_ROW>(1.0f/512.0f);
-    zero_l1<2048>(get_write_ptr(3));
-    DataflowBuffer epsilon(3);
-    generate_bcast_col_scalar(epsilon,get_arg_val<uint32_t>(3));
-    if(rank==0) {
-        dataflow_kernel_lib::prepare_reduce_scaler<4,ckernel::PoolType::AVG,ckernel::ReduceDim::REDUCE_ROW>(1.0f/8.0f);
+    if (initialize_layer_scratch(2)) {
+        dataflow_kernel_lib::prepare_reduce_scaler<2,ckernel::PoolType::SUM,ckernel::ReduceDim::REDUCE_ROW>(1.0f/512.0f);
+        zero_l1<2048>(get_write_ptr(3));
+        DataflowBuffer epsilon(3);
+        generate_bcast_col_scalar(epsilon,get_arg_val<uint32_t>(3));
+        if(rank==0) {
+            dataflow_kernel_lib::prepare_reduce_scaler<4,ckernel::PoolType::AVG,ckernel::ReduceDim::REDUCE_ROW>(1.0f/8.0f);
+        }
+    } else {
+        // These one-tile rings contain layer-invariant constants and are
+        // read-only to compute. Reset metadata, then republish their contents.
+        cb_reserve_back(2, 1); cb_push_back(2, 1);
+        cb_reserve_back(3, 1); cb_push_back(3, 1);
+        if (rank == 0) { cb_reserve_back(4, 1); cb_push_back(4, 1); }
     }
     cb_wait_front(16,16);
     const auto output=TensorAccessor(output_args,get_arg_val<uint32_t>(2),2048);

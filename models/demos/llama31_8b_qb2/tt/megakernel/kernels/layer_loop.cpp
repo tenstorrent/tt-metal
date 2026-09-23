@@ -121,6 +121,11 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
         state[300] = 0;
         state[301] = 0;
+#if SCRATCH_INIT_ONCE
+        // Published through the following local/global start boundary. The
+        // selected scratch remains physically stable across this layer loop.
+        state[483] = layer;
+#endif
         if (layer > 0) {
             uint32_t mask = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 3);
             for (uint32_t semaphore = 0; mask; ++semaphore, mask >>= 1) {

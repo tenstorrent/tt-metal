@@ -21,14 +21,17 @@ class ProjectionTuning:
     head_prefetch_targets: str = "both"
     projection_placement: str = "row"
     coalesce_input: bool = False
+    scratch_init_once: str = "off"
     early_weight_blocks: int = 0
     early_weight_phases: int = 15
     share_qkv_workers: bool = False
 
     def __post_init__(self):
+        if self.scratch_init_once not in ("off", "padding", "norm", "all"):
+            raise ValueError("Scratch initialization must be off, padding, norm or all")
         if self.early_weight_blocks not in (0, 2, 3) or self.early_weight_blocks > self.buffer_count:
             raise ValueError("Early weight prefix must be0/2/3 blocks and fit its ring")
-        if self.early_weight_phases not in (1, 2, 4, 8, 15):
+        if self.early_weight_phases not in (1, 2, 4, 7, 8, 15):
             raise ValueError("Early weight phases must select QKV, O, GU, down or all")
         if self.early_weight_blocks and (self.reader == "original" or not self.alias_projection_cbs or self.share_qkv_workers or self.prefetch_head_workers or self.prefetch_gu_blocks or self.prefetch_down_blocks):
             raise ValueError("Early local reads currently require aliased separate-QKV workers without helper prefetch")

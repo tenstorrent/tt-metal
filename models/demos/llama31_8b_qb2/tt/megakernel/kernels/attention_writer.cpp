@@ -31,7 +31,7 @@ void QB2_ENTRY() {
     const auto target = TensorAccessor(target_args, get_arg_val<uint32_t>(CONCAT_RT_OFFSET), 2048);
     cb_reserve_back(32, 32);
     const uint32_t scratch = get_write_ptr(32);
-    zero_l1<32 * 2048>(scratch);
+    if (initialize_layer_scratch(1)) { zero_l1<32 * 2048>(scratch); }
     for (uint32_t head = 0; !inactive && head < 8; ++head) {
         for (uint32_t column = 0; column < 4; ++column) {
             const uint32_t destination = scratch + (head * 4 + column) * 2048;

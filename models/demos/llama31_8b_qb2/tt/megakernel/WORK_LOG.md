@@ -135,3 +135,13 @@ Next design preloads a2/3-block prefix into each projection's own existing weigh
 ## 11:43 UTC — local early-weight prefix focused gate passes
 
 Three-block early prefixes for QKV/O/GU/down passed exact focused real-layer/page/inactive/replay gate under all4chip worker Watcher (early-local3-loop-watcher). Each prefix completes before its activation wait; normal block streaming publishes the same bytes and skips its original DRAM read. Existing weight rings hold the prefix, so no L1-capacity increase and no duplicated weight traffic. GU/down joins wait only for the preceding local output writer to establish aliased-weight storage is free. Prefix staging is within every layer/token and is not amortized. Full128 per-phase/depth isolation next. Extra profiling zones need selective capture to avoid optional-marker truncation; no profile timing claimed for this candidate yet.
+
+## 11:53 UTC — early local-prefetch full isolation
+
+Sourcecca5f7e8 context128/32 five-trial medians, all strict exact: all phases/3blocks8.439294355ms; all/2blocks8.407293838; QKV3 alone8.472632966; O3 alone8.480771775; GU3 alone8.472652550; down3 alone8.574672224. Versusoff8.504–8.506, local prefetch helps modestly; three-block down prefetch independently loses. Add QKV+O+GU-only selection to test that interaction. Strongest128 is provisional8.407294; other contexts not yet tested for this feature.
+
+Prepared scratch-init-once flag: selected norm constants/statistic padding and RoPE/V-cache/attention-concat padding are initialized at layer zero of EVERY invocation, then only their defined data lanes are overwritten during the remaining layers. The selected buffers have stable, disjoint storage and no other writer to their padding/constant lanes. Layer ordinal is published through existing start synchronization in state[483]. No inter-invocation/prefill residency assumed. Test norm and padding separately as well as together; full original clear path remains default.
+
+## 11:54 UTC — once-per-token scratch initialization gate passes
+
+The combined padding/norm scratch-init-once configuration passed exact focused layer0/31 output/allKV, inactive(-1), page migration/boundaries and replay under worker-only Watcher onall4chips. No extra scratch storage is allocated. Norm constant rings are republished after metadata reset; selected statistic padding and RoPE/V-cache/concat padding keep initialized lanes within one invocation. Full128 all/padding/norm isolation next, plus early-prefix2/3 excluding down.

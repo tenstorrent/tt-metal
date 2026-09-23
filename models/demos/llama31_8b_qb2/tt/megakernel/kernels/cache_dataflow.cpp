@@ -36,7 +36,7 @@ void QB2_ENTRY() {
     if (pos == UINT32_MAX) { return; }
     cb_reserve_back(1, 4);
 #ifdef VALUE
-    zero_l1<4 * 2048>(get_write_ptr(1));
+    if (initialize_layer_scratch(1)) { zero_l1<4 * 2048>(get_write_ptr(1)); }
     for (uint32_t h = 0; h < 2; ++h) {
         for (uint32_t t = 0; t < 4; ++t) {
             const uint64_t source = input.get_noc_addr(40 + h * 4 + t);

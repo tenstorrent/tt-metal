@@ -27,8 +27,10 @@ void QB2_ENTRY() {
     const uint32_t sine_scratch = aligned_read_destination(meta + 512, sine_row);
     noc_async_read(cosine_row, cosine_scratch, 256);
     noc_async_read(sine_row, sine_scratch, 256);
-    for (uint32_t cb : {0u, 1u, 2u}) {
-        zero_l1<4 * 2048>(get_write_ptr(cb));
+    if (initialize_layer_scratch(1)) {
+        for (uint32_t cb : {0u, 1u, 2u}) {
+            zero_l1<4 * 2048>(get_write_ptr(cb));
+        }
     }
 #ifdef QUERY
     constexpr uint32_t heads = 8, first_tile = 0;

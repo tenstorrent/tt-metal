@@ -229,6 +229,7 @@ class DecoderLoop:
                 ("LOOP_SOURCE", '"' + original + '"'),
                 ("LOOP_PATCH", str(patch)),
                 ("BOUNDED_LAYER_BARRIER", str(int(self.body.tuning.bounded_barrier))),
+                ("SCRATCH_INIT_ONCE", str({"off":0, "padding":1, "norm":2, "all":3}[self.body.tuning.scratch_init_once])),
                 ("LOOP_RT_OFFSET", str(offset)),
                 ("LOOP_CT_OFFSET", str(len(kernel.compile_time_args))),
                 ("LOOP_CACHE_COLUMN", "5" if "VALUE" in defines else "4"),
