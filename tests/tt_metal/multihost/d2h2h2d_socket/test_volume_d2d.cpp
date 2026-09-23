@@ -135,6 +135,9 @@ int main(int argc, char** argv) {
     // so the rate covers steady state rather than the ramp.
     const uint64_t measured = std::max<uint64_t>(1, o.volume / (static_cast<uint64_t>(kCores) * o.payload));
     const uint32_t iters = static_cast<uint32_t>(measured + measured * o.pct_steady / 100);
+    // Per core: the kernel stamps steady state at its own count, so the host cannot round
+    // this differently without dividing the wrong frame count by that window.
+    const uint32_t warmup_iters = static_cast<uint32_t>(iters - measured);
     const uint64_t msgs = static_cast<uint64_t>(kCores) * iters;
     const uint64_t warmup_msgs = static_cast<uint64_t>(kCores) * (iters - measured);
 
@@ -200,8 +203,10 @@ int main(int argc, char** argv) {
                 l1.consumed_addr,
                 l1.l1_base,
                 l1.dest_word_addr,
-                0u,
-                0u}});
+                // Only the sender writes the stamp block; on the receiver the signal kernel
+                // owns that address, so handing it to both would collide.
+                sending ? l1.verify_addr : 0u,
+                warmup_iters}});
     for (uint32_t i = 0; i < kCores; ++i) {
         SetRuntimeArgs(
             program, sender, core_list[i], {send_cfg[i], tt_uva_t6_global_selector(1 - rank, cfg.chip, i, 1), 0u});
