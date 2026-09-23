@@ -260,6 +260,10 @@ public:
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
+    bool uses_per_core_l1_layout() const { return per_core_l1_layout_; }
+    bool uses_per_core_cb_placement() const { return per_core_l1_layout_ || has_uniform_address_groups_; }
+    void set_per_core_l1_layout(bool enabled) { per_core_l1_layout_ = enabled; }
+    void set_has_uniform_address_groups(bool enabled) { has_uniform_address_groups_ = enabled; }
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }
     ProgramBinaryStatus get_program_binary_status(ChipId device_id) const {
@@ -433,6 +437,7 @@ public:
     void apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& overrides);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
+    void validate_program_image_region(const IDevice* device);
     void validate_circular_buffer_region(const IDevice* device);
     void validate_dataflow_buffer_region(const IDevice* device);
     // Ensures that circular buffer core ranges are within the device compute grid
@@ -555,6 +560,11 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool per_core_l1_layout_{false};
+    bool has_uniform_address_groups_{false};
+    // Absolute end of the kernel-config/program image on each active Tensix.
+    // Per-core layout also uses it as the local CB/DFB/scratch lower bound.
+    std::unordered_map<CoreCoord, uint32_t> program_end_by_core_;
     bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
@@ -581,9 +591,9 @@ private:
         // last L1 region
         uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
 
-        // If address is the end of the last L1 region, the last region is extended by size bytes,
-        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
+        // Mark one local allocation. append_only preserves sequential CB
+        // cursor behavior; grouped/per-core placement supports interval holes.
+        void mark_address(uint64_t address, uint64_t size, uint64_t base_address, bool append_only = false);
 
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions.clear(); }
@@ -605,7 +615,7 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
-    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
+    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per participating core.
     std::vector<CircularBufferAllocator> cb_allocators_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
     std::unordered_set<const IDevice*> cb_devices_;

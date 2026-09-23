@@ -561,6 +561,17 @@ void py_module(nb::module_& mod) {
                     CoreCoord: The virtual coordinate of that DRAM bank.
             )doc");
 
+    nb_mesh_device.def(
+        "worker_core_from_logical_core_at",
+        [](MeshDevice& self, const MeshCoordinate& mesh_coordinate, const CoreCoord& logical_core) {
+            auto* device = self.get_device(mesh_coordinate);
+            TT_FATAL(device, "Worker coordinate requested for MeshCoord {} not found.", mesh_coordinate);
+            return device->worker_core_from_logical_core(logical_core);
+        },
+        nb::arg("mesh_coordinate"),
+        nb::arg("logical_core"),
+        R"doc(Convert a logical worker coordinate using one mesh device's harvested-core mapping.)doc");
+
     // Per-device optimal DRAM-bank-to-logical-worker assignment. Bound as an overload of the same
     // Python name; dispatched by argument count (coord present -> this overload).
     nb_mesh_device.def(

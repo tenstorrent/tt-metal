@@ -5,9 +5,12 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>

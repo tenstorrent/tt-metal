@@ -8,6 +8,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
+#include <unordered_map>
+#include <utility>
+
 #include "impl/buffers/semaphore.hpp"
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
@@ -84,6 +87,15 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
         return descriptors[0];
     }
 
+    const ProgramL1Layout program_l1_layout = descriptors.front().program_l1_layout;
+    TT_FATAL(
+        std::ranges::all_of(
+            descriptors,
+            [program_l1_layout](const ProgramDescriptor& descriptor) {
+                return descriptor.program_l1_layout == program_l1_layout;
+            }),
+        "Cannot merge ProgramDescriptors with different ProgramL1Layout contracts");
+
     // Check all pairs of descriptors for overlapping core ranges
     // (different kernels within a single descriptor can share cores, but
     // kernels from different descriptors should not overlap)
@@ -102,10 +114,18 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
 
     // Create the merged descriptor starting from the first one
     ProgramDescriptor result = descriptors[0];
+    uint32_t next_uniform_address_group = 1;
+    for (const auto& cb : result.cbs) {
+        if (cb.uniform_address_group >= next_uniform_address_group) {
+            next_uniform_address_group = cb.uniform_address_group + 1;
+            TT_FATAL(next_uniform_address_group != 0, "CB uniform address group id overflow");
+        }
+    }
 
     // Merge all subsequent descriptors
     for (size_t i = 1; i < descriptors.size(); ++i) {
         const auto& other = descriptors[i];
+        std::unordered_map<uint32_t, uint32_t> uniform_address_group_remap;
 
         // Merge kernels
         for (const auto& kernel : other.kernels) {
@@ -119,7 +139,17 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
 
         // Merge circular buffers
         for (const auto& cb : other.cbs) {
-            result.cbs.push_back(cb);
+            auto merged_cb = cb;
+            if (cb.uniform_address_group != 0) {
+                auto [it, inserted] =
+                    uniform_address_group_remap.try_emplace(cb.uniform_address_group, next_uniform_address_group);
+                if (inserted) {
+                    ++next_uniform_address_group;
+                    TT_FATAL(next_uniform_address_group != 0, "CB uniform address group id overflow");
+                }
+                merged_cb.uniform_address_group = it->second;
+            }
+            result.cbs.push_back(std::move(merged_cb));
         }
 
         // One launch message per merged program, so one reload table; two different ones is an error.
@@ -176,6 +206,9 @@ static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
     }
     ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
     ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
+    if (cb.uniform_address_group != 0) {
+        ttsl::hash::hash_combine(hash, cb.uniform_address_group);
+    }
     return hash;
 }
 
@@ -353,7 +386,11 @@ std::size_t std::hash<tt::tt_metal::FaceGeometry>::operator()(
 std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(
     const tt::tt_metal::ProgramDescriptor& descriptor) const noexcept {
     if (descriptor.custom_program_hash) {
-        return *descriptor.custom_program_hash;
+        std::size_t hash = *descriptor.custom_program_hash;
+        if (descriptor.program_l1_layout == tt::tt_metal::ProgramL1Layout::PER_CORE) {
+            ttsl::hash::hash_combine(hash, descriptor.program_l1_layout);
+        }
+        return hash;
     }
 
     ttsl::hash::hash_t hash = 0;
@@ -365,6 +402,9 @@ std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(
     }
     for (const auto& semaphore : descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, tt::tt_metal::hash_semaphore_descriptor(semaphore));
+    }
+    if (descriptor.program_l1_layout == tt::tt_metal::ProgramL1Layout::PER_CORE) {
+        ttsl::hash::hash_combine(hash, descriptor.program_l1_layout);
     }
     return hash;
 }

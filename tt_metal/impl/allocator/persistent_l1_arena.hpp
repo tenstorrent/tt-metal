@@ -81,6 +81,9 @@ public:
     void deallocate(uint64_t allocation_id);
 
     DeviceAddr high_water_mark(const CoreRangeSet& cores) const;
+    // Return the selected cores' highest persistent end, or ``empty_value``.
+    // This keeps an empty arena from imposing the uniform program frontier.
+    DeviceAddr high_water_mark(const CoreRangeSet& cores, DeviceAddr empty_value) const;
     std::vector<std::pair<DeviceAddr, DeviceAddr>> occupied_ranges() const;
     std::vector<std::pair<DeviceAddr, DeviceAddr>> occupied_ranges(const CoreCoord& core) const;
 

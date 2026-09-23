@@ -66,6 +66,8 @@ struct CBFormatDescriptor {
     uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
     std::optional<FaceGeometry> face_geometry;
+
+    bool operator==(const CBFormatDescriptor& other) const = default;
 };
 
 struct CBDescriptor {
@@ -75,6 +77,10 @@ struct CBDescriptor {
     CoreRangeSet core_ranges;
     FormatDescriptors format_descriptors;
     FormatDescriptors remote_format_descriptors;
+    // Static CB descriptors in one nonzero group are allocated at one uniform
+    // L1 base address. Their core ranges must be disjoint, but their capacities
+    // may differ so each core reserves only the storage it needs.
+    uint32_t uniform_address_group = 0;
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
@@ -215,6 +221,11 @@ struct KernelDescriptor {
     void emplace_common_runtime_args(const RTArgList& args);
 };
 
+enum class ProgramL1Layout : uint8_t {
+    UNIFORM,
+    PER_CORE,
+};
+
 struct ProgramDescriptor {
     using KernelDescriptors = ttsl::SmallVector<KernelDescriptor, 3>;
     using SemaphoreDescriptors = ttsl::SmallVector<SemaphoreDescriptor, 3>;
@@ -223,6 +234,9 @@ struct ProgramDescriptor {
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
+    // PER_CORE stores each worker's image frontier without reserving L1.
+    // Launches revalidate it; TT_METAL_PER_CORE_PROGRAM_SIZE enables support.
+    ProgramL1Layout program_l1_layout = ProgramL1Layout::UNIFORM;
     std::optional<std::uint64_t> custom_program_hash;
     // Blaze-only internal runtime binary reload; std::nullopt when the program does not reload.
     std::optional<internal::ReloadTable> reload_table;
