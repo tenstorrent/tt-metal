@@ -267,7 +267,7 @@ def prefill_runner_scenario():
         "users": users,
         "layers": layers,
         "max_seq_len": capacity,
-        "layer_ack_d2h": "0",
+        "expected_slots": users,
         "env": env,
         "producer": {
             "PREFILL_PRODUCER_CHUNKS": str(capacity // chunk_size),

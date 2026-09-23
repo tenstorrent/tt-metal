@@ -31,7 +31,7 @@ MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
   python3 -m pytest -q --tt-arch blackhole \
     models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py \
     models/demos/llama_3p1_8b_d_p/tests/test_prefill_runtime.py \
-    models/demos/deepseek_v3_d_p/tests/test_prefill_summary_utils.py
+    models/demos/common/prefill/tests/test_ci_summary.py
   python3 models/demos/llama_3p1_8b_d_p/scripts/generate_prefill_trace.py \
     --checkpoint "${PREFILL_HF_MODEL}" \
     --prompt-file models/demos/llama_3p1_8b_d_p/tests/model/fixtures/book/pride_and_prejudice.txt \

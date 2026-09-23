@@ -48,16 +48,17 @@ python3 -m pytest -v --tt-arch blackhole \
   'models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc[llama31_two_slots]'
 ```
 
-Both entry points use the acceptance configuration and trace validation in
-`tests/utils.py`. The direct test starts standalone child processes; the standard
-launcher also exercises tt-run discovery and MPI placement.
+The direct fixture uses the scenario in `tests/utils.py`; the standard launcher
+sources the model's `scripts/ci/runner_config.sh`. Both derive shape defaults from
+the model manifest and use the same reference validator. The direct test starts
+standalone child processes; the standard launcher also exercises tt-run discovery
+and MPI placement. Both use the common completion and teardown behavior.
 
 For a local installation, set `TTRUN_DIR` to the directory containing its MPI
 `hostfile`; the default is `/etc/ttop`. `PREFILL_TCP_INTERFACE` selects the TCP
 interface used by the standard launcher; the default is `ens5f0np0`.
-Set `PREFILL_KEEP_RUN_EVIDENCE=1` to retain the standard launcher's local run
-directory for debugging. Its normal cleanup removes the directory after reporting
-results; retention does not automatically upload raw files as CI artifacts.
+The standard launcher prints verdicts and log summaries, then removes its temporary
+run directory using the shared cleanup path.
 
 In **Blaze Models Prefill tests**, select `llama31_prefill_runner`. This selects
 one SC1 allocation for the complete acceptance stage.

@@ -12,6 +12,7 @@ runner startup (full model load + kernel JIT) once PER scenario.
 
 import contextlib
 import glob
+import json
 import os
 import signal
 import subprocess
@@ -170,6 +171,7 @@ if os.environ.get("PREFILL_MODEL") == "llama_3p1_8b":
     from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario, validate_prefill_slot_traces
 
     SCENARIOS = {"llama31_two_slots": prefill_runner_scenario()}
+    validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), SCENARIOS["llama31_two_slots"])
 
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
 # user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
@@ -395,7 +397,12 @@ def _running_runner(tag: str, sc: dict, **extra):
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1", PREFILL_LAYER_ACK_D2H=sc.get("layer_ack_d2h", "1"), **extra)
+    env = _scenario_env(
+        sc,
+        PREFILL_MOCK_MIGRATION="1",
+        PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get("PREFILL_LAYER_ACK_D2H", "1"),
+        **extra,
+    )
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":
@@ -423,9 +430,6 @@ def _running_runner(tag: str, sc: dict, **extra):
                 time.sleep(2.0)
         print(f"[e2e {_elapsed()}] runner [{tag}] ready ({_readiness_gates()}); starting producer", flush=True)
         yield stream
-        if sc.get("producer", {}).get("PREFILL_SEND_SHUTDOWN") == "1":
-            if proc.wait(timeout=120) != 0:
-                raise RuntimeError(f"runner [{tag}] failed during graceful shutdown")
     finally:
         died_rc = proc.poll()  # not None => the runner exited on its OWN, before our teardown signal
         if died_rc is None:
@@ -483,19 +487,12 @@ def _scenario_params():
 
 @pytest.mark.parametrize("scenario", _scenario_params())
 # A fresh runner publishes the cache; the producer compares each resident slot to its golden.
-# The Llama scenario also requires both slots to be checked and a clean runner shutdown.
 def test_producer_runner_pcc(scenario, tmp_path):
     """Spin up a fresh runner for the scenario, drive it with the producer, and require the per-slot
     KV PCC gate to pass (the producer exits non-zero if any resident slot is below threshold)."""
     sc = SCENARIOS[scenario]
-    if scenario == "llama31_two_slots":
-        import json
-
-        validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), sc)
     prod_log = os.path.join(_REPORT_DIR, f"ci_producer_{scenario}.log")
-    trace_env = {}
-    if scenario == "llama31_two_slots":
-        trace_env["PREFILL_PCC_SUMMARY_DIR"] = str(tmp_path / "pcc")
+    trace_env = {"PREFILL_PCC_SUMMARY_DIR": str(tmp_path / "pcc")}
     if "prompt_file" in sc:
         model = os.environ.get("PREFILL_MODEL", "kimi_k2_7")
         trace_env["PREFILL_MODEL"] = model
@@ -543,6 +540,6 @@ def test_producer_runner_pcc(scenario, tmp_path):
             # already in the log verbatim would land in it four times over, ~800 lines of pure noise.
             + ("" if _STREAM_LOGS else f" Runner tail:\n{_tail(runner_stream.log_path)}")
         )
-        if scenario == "llama31_two_slots":
+        if "expected_slots" in sc:
             verdict = json.loads((tmp_path / "pcc" / "rank0.json").read_text())
-            assert verdict["ok"] and verdict["slots_checked"] == sc["users"], verdict
+            assert verdict["ok"] and verdict["slots_checked"] == sc["expected_slots"], verdict

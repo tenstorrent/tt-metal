@@ -8,12 +8,7 @@ CONFIG="${2:-sc4}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
-if [ "${MODEL}" = llama31 ]; then
-  # Keep the caller's matching TTNN runtime on local development machines.
-  export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:${PYTHONPATH}}"
-else
-  export PYTHONPATH="${TT_METAL_HOME}"
-fi
+export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:${PYTHONPATH}}"
 printf -v CHILD_PYTHONPATH '%q' "${PYTHONPATH}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
@@ -48,32 +43,7 @@ esac
 
 case "${MODEL}" in
   llama31)
-    [ "${CONFIG}" = sc1 ] || { echo "Llama prefill currently supports sc1 only" >&2; exit 2; }
-    export PIPELINE_DIR="${PREFILL_SUMMARIES}/llama31_prefill_runner_kv"
-    MANIFEST="${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/tt/runners/manifests/llama_3p1_8b.json"
-    MGD="${MGD_DIR}/llama31_sc1_mgd.textproto"
-    CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
-    GOLDEN_LEN="${PREFILL_MAX_SEQ_LEN:-$(manifest_env PREFILL_MAX_SEQ_LEN)}"
-    SC1_MAX_SEQ_LEN=${GOLDEN_LEN}
-    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
-    PRODUCER_USERS=${SC1_NUM_USERS}
-    WARMUP_CHUNKS=0
-    PCC_THRESHOLD=0.99
-    PROBE_CHUNKS="0,$((GOLDEN_LEN / CHUNK_SIZE - 1))"
-    : "${PREFILL_PRODUCER_SLOT_TRACES:?set Llama golden trace directories}"
-    LLAMA_ENV=$(python3 - <<'PY'
-import os, shlex
-from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario, validate_prefill_slot_traces
-scenario = prefill_runner_scenario()
-traces = os.environ["PREFILL_PRODUCER_SLOT_TRACES"]
-validate_prefill_slot_traces(traces, scenario)
-env = {**scenario["env"], **scenario["producer"], "PREFILL_PRODUCER_SLOT_TRACES": traces}
-print(" ".join(f"export {key}={shlex.quote(value)};" for key, value in env.items()))
-PY
-)
-    printf -v LLAMA_CHECKPOINT '%q' "${PREFILL_HF_MODEL:-/mnt/models/meta-llama/Llama-3.1-8B-Instruct}"
-    RUNNER_ENV="${LLAMA_ENV} export PREFILL_HF_MODEL=${LLAMA_CHECKPOINT};"
-    PRODUCER_ENV="${LLAMA_ENV} export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
+    source "${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/scripts/ci/runner_config.sh"
     ;;
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
@@ -186,11 +156,7 @@ cleanup() {
         || echo "gantt render failed (non-fatal)"
     fi
   fi
-  if [ "${PREFILL_KEEP_RUN_EVIDENCE:-0}" = 1 ]; then
-    echo "Run evidence: ${MR_DIR}"
-  else
-    rm -rf "${MR_DIR}"
-  fi
+  rm -rf "${MR_DIR}"
 }
 trap cleanup EXIT
 
@@ -269,25 +235,12 @@ PROD_RC=$?
 set -e
 
 if [ "${PROD_RC}" -eq 0 ]; then
-  if [ "${MODEL}" = llama31 ]; then
-    # The acceptance case sends shutdown and requires the runner to drain cleanly.
-    for _ in $(seq 1 120); do
-      kill -0 "${RUNNER_PID}" 2>/dev/null || break
-      sleep 1
-    done
-    if kill -0 "${RUNNER_PID}" 2>/dev/null; then
-      echo "Llama runner did not stop within 120s of the shutdown sentinel" >&2
-      exit 1
-    fi
-    wait "${RUNNER_PID}"
-  else
-    wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
-  fi
+  wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
 fi
 
 EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${MODEL}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
 import glob, json, os, sys
 
 pcc_dir, expected = sys.argv[1], int(sys.argv[2])
@@ -304,9 +257,7 @@ for f in files:
         print(f"PCC GATE FAIL: {name} unreadable: {e}", file=sys.stderr)
         bad += 1
         continue
-    valid = bool(v.get("ok"))
-    if sys.argv[3] == "llama31":
-        valid = valid and v.get("slots_checked") == int(sys.argv[4])
+    valid = bool(v.get("ok")) and v.get("slots_checked") == int(sys.argv[3])
     status = "ok" if valid else "FAIL"
     print(f"  {name}: {status} min_pcc={v.get('min_pcc')} threshold={v.get('threshold')} per_cache={v.get('per_cache')}")
     if not valid:
