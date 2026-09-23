@@ -9,6 +9,12 @@ void head_worker_prefetch() {
     constexpr auto qkv_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto o_args = TensorAccessorArgs<qkv_args.next_compile_time_args_offset()>();
     const uint32_t worker = get_arg_val<uint32_t>(0);
+#if !HEAD_PREFETCH_QKV
+    if (worker < 8) { return; }
+#endif
+#if !HEAD_PREFETCH_O
+    if (worker >= 8) { return; }
+#endif
     const uint32_t bank = worker % 8;
     const uint32_t first = get_arg_val<uint32_t>(HEAD_PREFETCH_HELPER_RT + 1);
     const uint32_t count = get_arg_val<uint32_t>(HEAD_PREFETCH_HELPER_RT + 2);

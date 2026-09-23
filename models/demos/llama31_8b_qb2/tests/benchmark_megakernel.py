@@ -87,6 +87,7 @@ def parse_args():
     parser.add_argument("--coalesce-input", action="store_true")
     parser.add_argument("--projection-placement", choices=("row", "dram"), default="row")
     parser.add_argument("--prefetch-head-workers", action="store_true")
+    parser.add_argument("--head-prefetch-targets", choices=("both", "qkv", "o"), default="both")
     parser.add_argument("--alias-projection-cbs", action="store_true")
     parser.add_argument("--prefetch-gu-blocks", type=int, choices=(0, 2, 4, 6), default=0)
     parser.add_argument("--prefetch-down-blocks", type=int, choices=(0, 2, 4, 6), default=0)
@@ -124,6 +125,7 @@ def run(args):
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
         projection_placement=args.projection_placement, coalesce_input=args.coalesce_input,
+        head_prefetch_targets=args.head_prefetch_targets,
     )
     if args.mode == "baseline" and tuning != ProjectionTuning():
         raise ValueError("Projection tuning applies only to experimental kernels")

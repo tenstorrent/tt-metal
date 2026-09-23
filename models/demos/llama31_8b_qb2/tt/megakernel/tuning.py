@@ -17,10 +17,15 @@ class ProjectionTuning:
     prefetch_down_blocks: int = 0
     alias_projection_cbs: bool = False
     prefetch_head_workers: bool = False
+    head_prefetch_targets: str = "both"
     projection_placement: str = "row"
     coalesce_input: bool = False
 
     def __post_init__(self):
+        if self.head_prefetch_targets not in ("both", "qkv", "o"):
+            raise ValueError("Head staging targets must be both, qkv or o")
+        if self.head_prefetch_targets != "both" and not self.prefetch_head_workers:
+            raise ValueError("Selected head staging targets require prefetch_head_workers")
         if self.prefetch_head_workers and (not self.alias_projection_cbs or self.buffer_count != 3 or self.reader == "original"):
             raise ValueError("Head-worker staging requires aliased three-buffer projection storage and tuned readers")
         if self.coalesce_input and self.reader == "original":

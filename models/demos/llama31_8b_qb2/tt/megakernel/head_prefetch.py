@@ -11,6 +11,8 @@ class HeadPrefetch:
         self.loop = loop
         self.body = loop.body
         self.head = loop.head
+        self.qkv = self.body.tuning.head_prefetch_targets in ("both", "qkv")
+        self.o = self.body.tuning.head_prefetch_targets in ("both", "o")
         self.consumers = self.body.preparation.projection_cores + self.body.projection_cores
         if len(self.consumers) != 16 or len(self.head.cores) != 16:
             raise ValueError("Head staging expects eight QKV, eight O and sixteen helper workers")
@@ -32,9 +34,9 @@ class HeadPrefetch:
             name, defines = Path(kernel.kernel_source).name, dict(kernel.defines)
             if "READER" not in defines:
                 continue
-            if name == "qkv.cpp":
+            if name == "qkv.cpp" and self.qkv:
                 cores, helpers = self.consumers[:8], self.head.cores[:8]
-            elif name == "mlp.cpp" and "PROJECTION" in defines:
+            elif name == "mlp.cpp" and "PROJECTION" in defines and self.o:
                 cores, helpers = self.consumers[8:], self.head.cores[8:]
             else:
                 continue
@@ -48,7 +50,7 @@ class HeadPrefetch:
             kernel.runtime_args = rt
             kernel.defines = [*kernel.defines, ("HEAD_PREFETCH_RECEIVER", "1"),
                               ("HEAD_PREFETCH_CONSUMER_RT", str(offsets.pop()))]
-        assert found == 2
+        assert found == int(self.qkv) + int(self.o)
         program.kernels = kernels
         return program
 
@@ -69,7 +71,9 @@ class HeadPrefetch:
             kernel.runtime_args = rt
             kernel.defines = [*kernel.defines, ("HEAD_PREFETCH_HELPER", "1"),
                               ("HEAD_PREFETCH_HELPER_RT", str(offsets.pop())),
-                              ("HEAD_PREFETCH_HELPER_CT", str(len(kernel.compile_time_args)))]
+                              ("HEAD_PREFETCH_HELPER_CT", str(len(kernel.compile_time_args))),
+                              ("HEAD_PREFETCH_QKV", str(int(self.qkv))),
+                              ("HEAD_PREFETCH_O", str(int(self.o)))]
             kernel.compile_time_args = [*kernel.compile_time_args,
                 *[v for tensor in (self.body.address_table, self.body.layers[0].decode_weights["qkv"],
                                    self.body.layers[0].decode_weights["o"])
