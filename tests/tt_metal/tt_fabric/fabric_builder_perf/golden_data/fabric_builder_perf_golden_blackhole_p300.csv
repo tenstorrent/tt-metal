@@ -1,0 +1,11 @@
+fabric_config,cache,zone,golden_ms,tolerance_percent
+FABRIC_2D,cold,DeviceManager::initialize_fabric_and_dispatch_fw,5954.485,10.0
+FABRIC_2D,cold,FabricFirmwareInitializer::init,2487.287,10.0
+FABRIC_2D,cold,ControlPlane::write_routing_tables_to_all_chips,3.270,10.0
+FABRIC_2D,cold,FabricFirmwareInitializer::compile_and_configure_fabric,2483.966,10.0
+FABRIC_2D,cold,FabricFirmwareInitializer::configure,1.255,10.0
+FABRIC_2D,hot,DeviceManager::initialize_fabric_and_dispatch_fw,97.644,10.0
+FABRIC_2D,hot,FabricFirmwareInitializer::init,5.996,10.0
+FABRIC_2D,hot,ControlPlane::write_routing_tables_to_all_chips,2.718,10.0
+FABRIC_2D,hot,FabricFirmwareInitializer::compile_and_configure_fabric,3.254,10.0
+FABRIC_2D,hot,FabricFirmwareInitializer::configure,1.264,10.0
