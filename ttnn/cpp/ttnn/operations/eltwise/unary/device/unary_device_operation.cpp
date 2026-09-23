@@ -148,13 +148,21 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     // hard-code their op and never expand SFPU_OP_CHAIN_0, while those same ops emit an empty init/func
     // into eltwise_sfpu.cpp. Either way, one of them in a longer chain is silently dropped. MAC_TSS is the
     // exception only in first position: mac_tss_kernel.cpp expands the chain after filling the DST
-    // registers mac_tile reads, which eltwise_sfpu.cpp never fills.
+    // registers mac_tile reads, which eltwise_sfpu.cpp never fills. BITCAST runs on the generic kernel but
+    // emits no init/func: the factory reinterprets the input CB only when it is op_chain[0], while the output
+    // dtype comes from op_chain.back(), so it is only correct on its own.
     if (args.op_chain.size() > 1) {
         for (size_t i = 0; i < args.op_chain.size(); ++i) {
             const auto type = args.op_chain[i].type();
             const bool leading_mac = i == 0 && type == operations::unary::UnaryOpType::MAC_TSS;
+            const bool chainable = type != operations::unary::UnaryOpType::BITCAST &&
+                                   !utils::uses_dedicated_compute_kernel(type, input_tensor.dtype());
             TT_FATAL(
-                leading_mac || !utils::uses_dedicated_compute_kernel(type, input_tensor.dtype()),
+                leading_mac || type != operations::unary::UnaryOpType::BITCAST,
+                "Unary: BITCAST cannot share a chain with other ops (chain has {} ops)",
+                args.op_chain.size());
+            TT_FATAL(
+                leading_mac || chainable,
                 "Unary: {} uses a dedicated compute kernel and must be {} in the chain (chain has {} ops)",
                 type,
                 type == operations::unary::UnaryOpType::MAC_TSS ? "the first op" : "the only op",

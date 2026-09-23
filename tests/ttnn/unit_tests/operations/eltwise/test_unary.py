@@ -2852,3 +2852,15 @@ def test_unary_chain_mac_tss_position(device, expect_error):
     out = ttnn.to_torch(ttnn.unary_chain(tx, [mac, relu])).float()
     expected = torch.relu(x.float() * 2.0 - 1.0)
     assert torch.allclose(out, expected, rtol=1e-2, atol=1e-2), (out - expected).abs().max()
+
+
+# BITCAST emits no init/func, the factory reinterprets the input CB only when it leads the chain, and the
+# output dtype is taken from the chain tail, so it is only correct as the sole op in either position.
+@pytest.mark.parametrize("bitcast_first", [True, False], ids=["bitcast_first", "bitcast_last"])
+def test_unary_chain_rejects_bitcast_with_other_ops(device, bitcast_first, expect_error):
+    x = ttnn.from_torch(torch.randn(1, 1, 32, 32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    bitcast = ttnn.UnaryWithParam(ttnn.UnaryOpType.BITCAST, float(ttnn.float32.value), float(ttnn.int32.value))
+    relu = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+    chain = [bitcast, relu] if bitcast_first else [relu, bitcast]
+    with expect_error(RuntimeError, "BITCAST cannot share a chain with other ops"):
+        ttnn.unary_chain(x, chain)
