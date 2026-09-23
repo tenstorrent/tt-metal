@@ -200,3 +200,7 @@ Source03e3807a (samekernels77a81d2f) full128five-trial medians: Tiny16projection
 
 ## 13:24 UTC — attention reassociation gate
 Tiny16 projection+norm, headselect qualified exact at2048=8.363490485,8192=9.032629291,128/256=7.976935169ms (five warmed trials each), versus128=7.939418936. Still~0.30–0.35ms behind native. Explicit attention worker/chunk knobs preserve native HiFi4/FP32 and full causal/KV work. Secondary policy declared BEFORE tests: per-step/aggregate teacher and all64 KV PCC>=0.9999, relativeL2<0.01, exact teacher top1 and greedy, stable replay.32workers/chunk128 FAILED focused PCC0.999891698; reject under unchanged policy.16workers/chunk256 passed focused WorkerWatcher, full128/8192 screening nowrunning via attention16-screen.sh. Partial/failure evidence retained.
+
+## 13:33 UTC — worker-count bounds and repaired fullDST
+Attention16/chunk256 exact128=7.808543482 (five trials);8192 FAILED numericalpolicy PCC0.990714669,relL2 0.136107370,9.085803323ms. Attention8 exact128=7.894093903,long=7.934810333;2048 FAILED PCC0.999091864,relL2 0.034718525,8.575485163ms. These are context-limited options, not generalreplacements. Headselect alsochangeswhenattentionfreescores, so full-delta iscombineduntilcontrolled.
+Applied chunk-wide-projections.py: FullDST14/16 math/copy/pack operations nowissue twoAPIgroups of7/8tiles withinonefullDSTownership interval. Standalone32-row GU8 component WorkerWatcher passes12EXACTchecks, repairingprior numericalfailure. FocusedTiny16full-loopWatcher next; speednotyetestablished. No tolerancechange.

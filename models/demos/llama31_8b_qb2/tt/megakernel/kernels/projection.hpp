@@ -12,7 +12,8 @@ void projection() {
     // Keep the baseline's BF16 partials and packer-L1 accumulation, including
     // its final reload before the last K block. No FP32 accumulation change.
     constexpr uint32_t blocks = K / KBlock;
-    matmul_block_init(A, B, 0, Subblock, 1, KBlock);
+    constexpr uint32_t math_chunk = Subblock > 8 ? Subblock / 2 : Subblock;
+    matmul_block_init(A, B, 0, math_chunk, 1, KBlock);
     pack_reconfig_data_format(Partial);
     pack_reconfig_l1_acc(0);
     for (uint32_t block = 0; block < blocks; ++block) {
@@ -31,13 +32,17 @@ void projection() {
                 reconfig_data_format_srca(B, Partial);
                 copy_init(Partial);
                 cb_wait_front(Partial, Subblock);
-                copy_block(Partial, 0, 0, Subblock);
+                for (uint32_t chunk = 0; chunk < Subblock; chunk += math_chunk) {
+                    copy_block(Partial, chunk, chunk, math_chunk);
+                }
                 cb_pop_front(Partial, Subblock);
                 reconfig_data_format_srca(Partial, B);
-                matmul_block_init(A, B, 0, Subblock, 1, KBlock);
+                matmul_block_init(A, B, 0, math_chunk, 1, KBlock);
             }
             for (uint32_t k = 0; k < KBlock; ++k) {
-                matmul_block(A, B, k, k * N + n, 0, false, Subblock, 1, KBlock);
+                for (uint32_t chunk = 0; chunk < Subblock; chunk += math_chunk) {
+                    matmul_block(A, B, k, k * N + n + chunk, chunk, false, math_chunk, 1, KBlock);
+                }
             }
             tile_regs_commit();
             const uint32_t destination = last ? Out : Partial;
@@ -47,7 +52,9 @@ void projection() {
             pack_reconfig_data_format(destination);
             pack_reconfig_l1_acc(!last && block > 0);
 #endif
-            pack_block(0, destination, Subblock);
+            for (uint32_t chunk = 0; chunk < Subblock; chunk += math_chunk) {
+                pack_block(chunk, destination, math_chunk);
+            }
             tile_regs_release();
             cb_push_back(destination, Subblock);
         }
