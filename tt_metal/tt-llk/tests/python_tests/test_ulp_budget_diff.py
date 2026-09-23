@@ -395,3 +395,62 @@ def test_this_parse_agrees_with_the_registry_loader_on_the_live_table():
         f"only this parser sees: {sorted(mine - theirs)[:5]}\n"
         f"only the loader sees: {sorted(theirs - mine)[:5]}"
     )
+
+
+def test_a_widened_near_zero_floor_is_a_regression():
+    """The floor rescues lanes the budget would fail, so widening it loosens the gate.
+
+    `ulp_elementwise_valid` accepts a lane inside `near_zero_atol` however many steps
+    out it is. A guard that watched only `max_ulp` would call this table unchanged.
+    """
+    base = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP")
+    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP")
+    (change,) = compare(parse_table(base), parse_table(head))
+    assert change.kind == "floor_widened"
+    assert change.is_regression
+    # And the report has to show it, or both columns read "2" and the row looks inert.
+    text = render_budget_diff([change], "ulp-budget-raise-approved")
+    assert "1e-07" in text and "5e-05" in text
+
+
+def test_introducing_a_floor_where_there_was_none_is_a_regression():
+    base = _head("{in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP")
+    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP")
+    (change,) = compare(parse_table(base), parse_table(head))
+    assert change.kind == "floor_widened"
+
+
+def test_a_tightened_budget_with_a_wider_floor_is_still_a_regression():
+    """The two can move opposite ways, and the floor can more than pay for the budget."""
+    base = _head("{in: Float16_b, out: Float16_b, max_ulp: 8, near_zero_atol: 1.0e-07}  # max 1 ULP")
+    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-02}  # max 1 ULP")
+    (change,) = compare(parse_table(base), parse_table(head))
+    assert change.kind == "floor_widened", "a smaller max_ulp must not mask a wider floor"
+    assert change.is_regression
+
+
+def test_a_narrowed_floor_is_not_a_regression():
+    base = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP")
+    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP")
+    assert [c for c in compare(parse_table(base), parse_table(head)) if c.is_regression] == []
+
+
+def test_a_floor_on_a_tolerance_row_is_not_a_gate_change():
+    """`near_zero_atol` is a ULP-gate floor; on a tolerance row nothing consults it."""
+    base = _head("{in: Float16_b, out: Float16_b, metric: tolerance}  # max 393 ULP")
+    head = _head("{in: Float16_b, out: Float16_b, metric: tolerance, near_zero_atol: 0.5}  # max 393 ULP")
+    assert [c for c in compare(parse_table(base), parse_table(head)) if c.is_regression] == []
+
+
+def test_a_duplicated_cell_is_refused_rather_than_judged():
+    """`_load_table` rejects two rows of equal specificity, so the table cannot load.
+
+    Keeping the last row silently produced a verdict -- a *tightening*, if the second
+    row happened to be smaller -- for a table the registry would not accept at all.
+    """
+    duplicated = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP",
+        "{in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP",
+    )
+    with pytest.raises(ValueError, match="duplicate row"):
+        parse_table(duplicated)

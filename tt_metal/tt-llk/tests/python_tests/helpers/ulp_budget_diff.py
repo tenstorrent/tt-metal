@@ -40,6 +40,7 @@ KEY_FIELDS = ("in", "out", "approx", "dest", "arch")
 #: What a row can say about the gate itself.
 _METRIC = "metric"
 _MAX_ULP = "max_ulp"
+_NEAR_ZERO_ATOL = "near_zero_atol"
 
 #: A cell identity: the op plus whichever key dimensions the row pins.
 Cell = Tuple[str, Tuple[Tuple[str, str], ...]]
@@ -53,11 +54,21 @@ class Row:
     key: Tuple[Tuple[str, str], ...]
     max_ulp: Optional[int]
     provenance: str
+    #: The absolute-error floor under the budget, where the reference crosses zero.
+    #: Part of the contract, not decoration: `ulp_elementwise_valid` accepts a lane
+    #: inside it however many steps out it is, so widening the floor loosens the gate
+    #: exactly as raising `max_ulp` does.
+    near_zero_atol: Optional[float] = None
 
     @property
     def gated(self) -> bool:
         """Whether this row enforces a step budget at all."""
         return self.max_ulp is not None
+
+    @property
+    def floor(self) -> float:
+        """The floor as a number, so an absent one compares as no rescue at all."""
+        return self.near_zero_atol or 0.0
 
     def describe(self) -> str:
         if not self.key:
@@ -75,7 +86,7 @@ class Change:
     after: Optional[Row]
 
     #: The kinds that weaken a gate. Everything else is neutral or an improvement.
-    REGRESSIONS = frozenset({"raised", "ungated", "removed"})
+    REGRESSIONS = frozenset({"raised", "ungated", "removed", "floor_widened"})
 
     @property
     def is_regression(self) -> bool:
@@ -159,13 +170,22 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             max_ulp = fields.get(_MAX_ULP)
             if fields.get(_METRIC) == "tolerance":
                 max_ulp = None
-            # A repeated cell is the loader's error to raise, not this tool's; keep
-            # the last so a report is still produced rather than crashing the check.
+            floor = fields.get(_NEAR_ZERO_ATOL)
+            if (op, key) in rows:
+                # `_load_table` refuses two rows of equal specificity, so a table with
+                # one cannot load at all. Keeping the last silently produced a verdict
+                # -- "tightened", even -- for a table the registry rejects.
+                raise ValueError(
+                    f"{op}: duplicate row for {Row(op, key, None, '').describe()}. "
+                    "The registry refuses two rows of equal specificity, so this "
+                    "table cannot load; no budget verdict is meaningful for it."
+                )
             rows[(op, key)] = Row(
                 op=op,
                 key=key,
                 max_ulp=max_ulp if isinstance(max_ulp, int) else None,
                 provenance=provenance,
+                near_zero_atol=floor if isinstance(floor, (int, float)) else None,
             )
     return rows
 
@@ -186,15 +206,21 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
             changes.append(Change(cell, "gated", was, now))
         elif was.gated and now.gated and now.max_ulp > was.max_ulp:
             changes.append(Change(cell, "raised", was, now))
+        elif now.gated and now.floor > was.floor:
+            # Checked before `tightened`, because the two can move opposite ways: a
+            # smaller `max_ulp` with a wider floor rescues more lanes than it fails,
+            # and reporting only the budget would call that an improvement.
+            changes.append(Change(cell, "floor_widened", was, now))
         elif was.gated and now.gated and now.max_ulp < was.max_ulp:
             changes.append(Change(cell, "tightened", was, now))
     order = {
         "raised": 0,
-        "ungated": 1,
-        "removed": 2,
-        "tightened": 3,
-        "gated": 4,
-        "added": 5,
+        "floor_widened": 1,
+        "ungated": 2,
+        "removed": 3,
+        "tightened": 4,
+        "gated": 5,
+        "added": 6,
     }
     changes.sort(key=lambda c: (order[c.kind], c.cell))
     return changes
@@ -203,11 +229,16 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
 def _budget(row: Optional[Row]) -> str:
     if row is None:
         return "—"
-    return str(row.max_ulp) if row.gated else "tolerance"
+    text = str(row.max_ulp) if row.gated else "tolerance"
+    # Without the floor a widened-floor row shows the same number on both sides.
+    if row.near_zero_atol:
+        text += f" (floor {row.near_zero_atol:g})"
+    return text
 
 
 _KIND_TEXT = {
     "raised": "budget raised",
+    "floor_widened": "near-zero floor widened",
     "ungated": "gating lost (now tolerance)",
     "removed": "row removed",
     "tightened": "budget tightened",

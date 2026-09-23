@@ -36,6 +36,9 @@ on:
       # The kernels whose accuracy the table describes...
       - "tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/sfpu/**"
       - "tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu*"
+      # ...and the shared SFPU dispatch the unary header includes. It is not matched by
+      # the glob above, and a change to it moves every swept op at once.
+      - "tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_sfpu_common.h"
       # ...including the wrapper tree, which is where the 110 ckernel_sfpu_*.h live and
       # which the test compiler puts on the include path (helpers/test_config.py).
       # Without it a change to one of those headers would not trigger the sweep.
