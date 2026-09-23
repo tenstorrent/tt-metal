@@ -8,7 +8,13 @@ CONFIG="${2:-sc4}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
-export PYTHONPATH="${TT_METAL_HOME}"
+if [ "${MODEL}" = llama31 ]; then
+  # Keep the caller's matching TTNN runtime on local development machines.
+  export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:${PYTHONPATH}}"
+else
+  export PYTHONPATH="${TT_METAL_HOME}"
+fi
+printf -v CHILD_PYTHONPATH '%q' "${PYTHONPATH}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
@@ -18,6 +24,8 @@ WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
+PRODUCER_USERS=1
+TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 # Defaults keep every model that does fit unchanged: full 256k context, full manifest depth.
 SC1_MAX_SEQ_LEN=256000
@@ -32,6 +40,46 @@ case "${CONFIG}" in
 esac
 
 case "${MODEL}" in
+  llama31)
+    [ "${CONFIG}" = sc1 ] || { echo "Llama prefill currently supports sc1 only" >&2; exit 2; }
+    export PIPELINE_DIR="${PREFILL_SUMMARIES}/llama31_prefill_runner_kv"
+    MANIFEST="${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/tt/runners/manifests/llama_3p1_8b.json"
+    CHUNK_SIZE=1024
+    GOLDEN_LEN=2048
+    WARMUP_CHUNKS=0
+    PCC_THRESHOLD=0.99
+    PRODUCER_USERS=2
+    LLAMA_NUM_LAYERS=32
+    # Separate passages make a slot-address mixup visible to the PCC check.
+    : "${PREFILL_PRODUCER_SLOT_TRACES:?set two comma-separated Llama golden trace directories}"
+    python3 - "${PREFILL_PRODUCER_SLOT_TRACES}" <<'PY'
+import json, pathlib, sys
+paths = [pathlib.Path(p.strip()) for p in sys.argv[1].split(",")]
+if len(paths) != 2:
+    sys.exit("Llama requires exactly two slot traces")
+ids = [json.loads((p / "metadata.json").read_text())["token_ids"] for p in paths]
+if any(len(tokens) != 2048 for tokens in ids) or ids[0] == ids[1]:
+    sys.exit("Llama requires two distinct, complete 2048-token traces")
+for path in paths:
+    for layer in range(32):
+        if not (path / "kv_cache" / f"layer_{layer}.safetensors").is_file():
+            sys.exit(f"missing layer {layer} under {path}")
+PY
+    printf -v LLAMA_SLOT_TRACES '%q' "${PREFILL_PRODUCER_SLOT_TRACES}"
+    printf -v LLAMA_CHECKPOINT '%q' "${PREFILL_HF_MODEL:-/mnt/models/meta-llama/Llama-3.1-8B-Instruct}"
+    # The acceptance shape must not inherit partial-layer or alternate-model debug overrides.
+    LLAMA_SHAPE_ENV="export PREFILL_MODEL=llama_3p1_8b; export PREFILL_SP=4; export PREFILL_TP=8; \
+        export PREFILL_NUM_LAYERS=${LLAMA_NUM_LAYERS}; export PREFILL_CHUNK_SIZE=1024; \
+        export PREFILL_MAX_SEQ_LEN=2048; export PREFILL_NUM_USERS=2;"
+    RUNNER_ENV="${LLAMA_SHAPE_ENV} export PREFILL_LAYER_ACK_D2H=0; export PREFILL_USE_TRACE=0; \
+        export PREFILL_KV_ONLY_LAST_LAYER=0; export PREFILL_HF_MODEL=${LLAMA_CHECKPOINT};"
+    PRODUCER_ENV="${LLAMA_SHAPE_ENV} export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+        export PREFILL_PRODUCER_SLOT_TRACES=${LLAMA_SLOT_TRACES}; \
+        export PREFILL_PRODUCER_INTERLEAVE=round_robin; \
+        export PREFILL_PRODUCER_MAX_REQUESTS=2; \
+        export PREFILL_PRODUCER_DURATION_S=inf; export PREFILL_PRODUCER_MULTI_TURN_PROB=0; \
+        export PREFILL_PRODUCER_P_GAP=0; export PREFILL_PRODUCER_P_BURST=0;"
+    ;;
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
@@ -65,6 +113,9 @@ case "${MODEL}" in
 esac
 
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
+if [ "${MODEL}" = llama31 ]; then
+  MGD="${MGD_DIR}/llama31_sc1_mgd.textproto"
+fi
 [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
 
 manifest_env() {
@@ -76,7 +127,7 @@ NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
 RUNNER_OVERRIDES=""
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
 NUM_LAYERS_ENV=""
-if [ "${CONFIG}" = sc1 ]; then
+if [ "${CONFIG}" = sc1 ] && [ "${MODEL}" != llama31 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
   NUM_USERS=1
   RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; export PREFILL_NUM_USERS=${NUM_USERS};"
@@ -95,6 +146,12 @@ REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
 PROBE_CHUNKS="0,$((50000 / CHUNK_SIZE)),$((SC1_CHUNKS / 2 - 1)),$((SC1_CHUNKS - 1)),$((SC4_CHUNKS / 2 - 1)),$((SC4_CHUNKS - 1))"
+if [ "${MODEL}" = llama31 ]; then
+  [ "${NUM_USERS}" = 2 ] && [ "${MAX_SEQ_LEN}" = 2048 ] || {
+    echo "Llama acceptance requires two slots with 2048-token capacity" >&2; exit 2;
+  }
+  PROBE_CHUNKS="0,1"
+fi
 
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
@@ -146,7 +203,11 @@ cleanup() {
         || echo "gantt render failed (non-fatal)"
     fi
   fi
-  rm -rf "${MR_DIR}"
+  if [ "${MODEL}" = llama31 ]; then
+    echo "Run evidence: ${MR_DIR}"
+  else
+    rm -rf "${MR_DIR}"
+  fi
 }
 trap cleanup EXIT
 
@@ -154,12 +215,12 @@ cd "${TTRUN_CWD}"
 python3 "${TTRUN_PY}" \
   --skip-executable-check \
   --force-rediscovery \
-  --tcp-interface ens5f0np0 \
+  --tcp-interface "${TCP_INTERFACE}" \
   --mesh-graph-descriptor "${MGD}" \
   --hosts "${RESOLVED_HOSTS}" \
   --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
-    export PYTHONPATH='${TT_METAL_HOME}'; \
+    export PYTHONPATH=${CHILD_PYTHONPATH}; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_SYNC_PER_CHUNK=1; \
@@ -201,13 +262,13 @@ set +e
 "${MPIRUN}" \
   --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
-  --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
+  --mca btl self,tcp --mca btl_tcp_if_include "${TCP_INTERFACE}" \
   -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
-    export PYTHONPATH='${TT_METAL_HOME}'; \
+    export PYTHONPATH=${CHILD_PYTHONPATH}; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=1; \
+    export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
@@ -225,12 +286,25 @@ PROD_RC=$?
 set -e
 
 if [ "${PROD_RC}" -eq 0 ]; then
-  wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
+  if [ "${MODEL}" = llama31 ]; then
+    # The acceptance case sends shutdown and requires the runner to drain cleanly.
+    for _ in $(seq 1 120); do
+      kill -0 "${RUNNER_PID}" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "${RUNNER_PID}" 2>/dev/null; then
+      echo "Llama runner did not stop within 120s of the shutdown sentinel" >&2
+      exit 1
+    fi
+    wait "${RUNNER_PID}"
+  else
+    wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
+  fi
 fi
 
 EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" <<'PY' || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${MODEL}" "${PRODUCER_USERS}" "${REAL_CHUNKS}" "${LLAMA_NUM_LAYERS:-0}" <<'PY' || PCC_GATE_RC=$?
 import glob, json, os, sys
 
 pcc_dir, expected = sys.argv[1], int(sys.argv[2])
@@ -247,9 +321,27 @@ for f in files:
         print(f"PCC GATE FAIL: {name} unreadable: {e}", file=sys.stderr)
         bad += 1
         continue
-    status = "ok" if v.get("ok") else "FAIL"
+    valid = bool(v.get("ok"))
+    if sys.argv[3] == "llama31":
+        chunks = int(sys.argv[4]) * int(sys.argv[5])
+        layers = int(sys.argv[6])
+        expected_acks = {
+            "ok": True,
+            "expected": chunks * layers,
+            "received": chunks * layers,
+            "layers_per_chunk": layers,
+            "chunks": chunks,
+            "expected_request_id_start": 0,
+            "expected_request_id_end": chunks - 1,
+        }
+        ack_ok = v.get("layer_acks") == expected_acks
+        valid = valid and v.get("slots_checked") == 2 and ack_ok
+        print(f"  {name}: layer_acks={v.get('layer_acks')}")
+        if not ack_ok:
+            print(f"LAYER ACK GATE FAIL: expected {expected_acks}", file=sys.stderr)
+    status = "ok" if valid else "FAIL"
     print(f"  {name}: {status} min_pcc={v.get('min_pcc')} threshold={v.get('threshold')} per_cache={v.get('per_cache')}")
-    if not v.get("ok"):
+    if not valid:
         bad += 1
 if bad:
     print(f"PCC GATE FAIL: {bad}/{len(files)} rank(s) below threshold or unvalidated", file=sys.stderr)
