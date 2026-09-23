@@ -345,6 +345,21 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
         cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(pack_dst_format) && !IS_INTEGER_FORMAT(pack_dst_format));
     }
 
+    // Tiles shorter than 32 rows pack BFP through packer 0 alone (see _llk_pack_mop_config_),
+    // so the per-packer selectors above cannot separate faces; select the row table per face instead.
+    if (pack_mode == PackMode::Default && IS_BFP_FORMAT(pack_dst_format) && tensor_shape.num_faces_r_dim == 1)
+    {
+        // 2-bit row-table selectors repeated across all face-table entries: 0x55555555 = [1], 0x11111111 = [1,0].
+        const std::uint32_t face_set_mapping = (tensor_shape.num_faces_c_dim == 1 || dim == ReduceDim::REDUCE_COL) ? 0x55555555 : 0x11111111;
+        cfg_reg_rmw_tensix<TILE_FACE_SET_MAPPING_0_face_set_mapping_0_ADDR32, 0, 0xffffffff>(face_set_mapping);
+        // Select face table 0 for packer 0 and enable the face -> row -> column-mask lookup.
+        cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0, 0x1ff>(0x100);
+    }
+    else
+    {
+        cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_enable_RMW>(0);
+    }
+
     TTI_NOP;
     TTI_NOP;
 }
@@ -375,6 +390,7 @@ inline void _llk_pack_reduce_mask_clear_()
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC1_pack_reads_per_xy_plane_RMW>(1);
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_RMW>(1);
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC3_pack_reads_per_xy_plane_RMW>(1);
+    cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_enable_RMW>(0);
 
     // Clear out packer configuration for reduce
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
