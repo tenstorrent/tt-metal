@@ -403,8 +403,12 @@ def test_a_widened_near_zero_floor_is_a_regression():
     `ulp_elementwise_valid` accepts a lane inside `near_zero_atol` however many steps
     out it is. A guard that watched only `max_ulp` would call this table unchanged.
     """
-    base = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP")
-    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP")
+    base = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP"
+    )
+    head = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP"
+    )
     (change,) = compare(parse_table(base), parse_table(head))
     assert change.kind == "floor_widened"
     assert change.is_regression
@@ -415,31 +419,49 @@ def test_a_widened_near_zero_floor_is_a_regression():
 
 def test_introducing_a_floor_where_there_was_none_is_a_regression():
     base = _head("{in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP")
-    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP")
+    head = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP"
+    )
     (change,) = compare(parse_table(base), parse_table(head))
     assert change.kind == "floor_widened"
 
 
 def test_a_tightened_budget_with_a_wider_floor_is_still_a_regression():
     """The two can move opposite ways, and the floor can more than pay for the budget."""
-    base = _head("{in: Float16_b, out: Float16_b, max_ulp: 8, near_zero_atol: 1.0e-07}  # max 1 ULP")
-    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-02}  # max 1 ULP")
+    base = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 8, near_zero_atol: 1.0e-07}  # max 1 ULP"
+    )
+    head = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-02}  # max 1 ULP"
+    )
     (change,) = compare(parse_table(base), parse_table(head))
-    assert change.kind == "floor_widened", "a smaller max_ulp must not mask a wider floor"
+    assert (
+        change.kind == "floor_widened"
+    ), "a smaller max_ulp must not mask a wider floor"
     assert change.is_regression
 
 
 def test_a_narrowed_floor_is_not_a_regression():
-    base = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP")
-    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP")
-    assert [c for c in compare(parse_table(base), parse_table(head)) if c.is_regression] == []
+    base = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP"
+    )
+    head = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP"
+    )
+    assert [
+        c for c in compare(parse_table(base), parse_table(head)) if c.is_regression
+    ] == []
 
 
 def test_a_floor_on_a_tolerance_row_is_not_a_gate_change():
     """`near_zero_atol` is a ULP-gate floor; on a tolerance row nothing consults it."""
     base = _head("{in: Float16_b, out: Float16_b, metric: tolerance}  # max 393 ULP")
-    head = _head("{in: Float16_b, out: Float16_b, metric: tolerance, near_zero_atol: 0.5}  # max 393 ULP")
-    assert [c for c in compare(parse_table(base), parse_table(head)) if c.is_regression] == []
+    head = _head(
+        "{in: Float16_b, out: Float16_b, metric: tolerance, near_zero_atol: 0.5}  # max 393 ULP"
+    )
+    assert [
+        c for c in compare(parse_table(base), parse_table(head)) if c.is_regression
+    ] == []
 
 
 def test_a_duplicated_cell_is_refused_rather_than_judged():
