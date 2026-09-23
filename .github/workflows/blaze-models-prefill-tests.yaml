@@ -90,6 +90,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
 
   Kimi-Weka-Storage-Comparison:
+    name: Kimi Weka Storage Comparison (${{ matrix.sku }})
     needs: [build-artifact]
     permissions:
       contents: read
@@ -102,7 +103,15 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-    runs-on: exabox-multihost-ci-sc1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sku: SC1
+            runner: exabox-multihost-ci-sc1
+          - sku: SC4
+            runner: exabox-multihost-ci-sc4
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
