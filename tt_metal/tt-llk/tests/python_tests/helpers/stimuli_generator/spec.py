@@ -207,6 +207,12 @@ class StimuliSpec:
         For "ulp_sweep" only: skip the first *offset* in-range values before
         filling the tensor.  This lets a range too large for one run be swept
         in batches (offset = 0, N, 2N, …). Defaults to 0.
+    stride: int
+        For "ulp_sweep" only: take every *stride*-th representable value rather
+        than consecutive ones.  A range with more values than one tensor can hold
+        is otherwise covered only at its start; striding the total order instead
+        spreads the sample evenly over every binade, because each binade holds the
+        same number of representable values.  Defaults to 1 (consecutive).
     """
 
     distribution: Union[DistributionKind, Callable] = DistributionKind.UNIFORM
@@ -221,6 +227,7 @@ class StimuliSpec:
     masked_faces: Optional[Set[int]] = None
     intervals: Optional[List[Tuple[float, float]]] = None
     offset: int = 0
+    stride: int = 1
 
     def __post_init__(self) -> None:
         if not (

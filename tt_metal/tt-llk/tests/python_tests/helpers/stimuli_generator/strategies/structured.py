@@ -153,7 +153,7 @@ class IdentityStrategy:
 
 
 def _enumerate_fp32_in_range(
-    low: float, high: float, max_elements: int, offset: int = 0
+    low: float, high: float, max_elements: int, offset: int = 0, stride: int = 1
 ) -> torch.Tensor:
     """Give back the float32 numbers in [low, high], smallest to largest — up to
     max_elements of them, skipping the first `offset`.
@@ -183,9 +183,13 @@ def _enumerate_fp32_in_range(
     lo_key = base_lo + offset
     if lo_key > base_hi:
         return torch.empty(0, dtype=torch.float32)  # offset past the range end
-    hi_key = min(base_hi, lo_key + max_elements - 1)
+    # `stride` spreads the sample over the whole range instead of taking the first
+    # max_elements consecutive values, which for float32 is a microscopic slice of one
+    # binade. Every binade holds the same number of representable values, so striding
+    # the total order gives each one an equal share of the sample.
+    hi_key = min(base_hi, lo_key + (max_elements - 1) * stride)
 
-    keys = torch.arange(lo_key, hi_key + 1, dtype=torch.int64)
+    keys = torch.arange(lo_key, hi_key + 1, stride, dtype=torch.int64)
     bits = torch.where(keys < 0, INT_MIN - keys, keys).to(torch.int32)
     return bits.view(torch.float32)
 
@@ -195,6 +199,7 @@ def _enumerate_representable(
     low: float,
     high: float,
     max_elements: int = 2**16,
+    stride: int = 1,
     offset: int = 0,
 ) -> torch.Tensor:
     """Return the numbers a float format can represent in [low, high] — sorted,
@@ -206,11 +211,16 @@ def _enumerate_representable(
 
     `offset` lets a big range be covered in chunks across several calls
     (offset = 0, max_elements, 2*max_elements, ...).
+
+    `stride` takes every stride-th value instead of consecutive ones, so a range
+    with more values than one tensor holds is sampled across its whole width
+    rather than only at its start.
     """
     if stimuli_format in (DataFormat.Float16_b, DataFormat.Float16):
         dtype = (
             torch.bfloat16 if stimuli_format == DataFormat.Float16_b else torch.float16
         )
+        strided_in_walk = False
         all_bits = torch.arange(0, 2**16, dtype=torch.int16)
         all_vals = all_bits.view(dtype).to(torch.float32)
         # 16-bit enumerates the whole domain up front, so the offset is applied
@@ -220,7 +230,8 @@ def _enumerate_representable(
         dtype = torch.float32
         # float32 applies the offset inside the walk (jumps straight to it), so
         # the slice below starts at 0.
-        all_vals = _enumerate_fp32_in_range(low, high, max_elements, offset)
+        strided_in_walk = stride > 1
+        all_vals = _enumerate_fp32_in_range(low, high, max_elements, offset, stride)
         slice_start = 0
     else:
         raise ValueError(
@@ -237,6 +248,10 @@ def _enumerate_representable(
         unique_mask = torch.cat([torch.tensor([True]), vals[1:] != vals[:-1]])
         vals = vals[unique_mask]
 
+    if stride > 1 and not strided_in_walk:
+        # The 16-bit formats enumerate their whole domain first, so they stride here;
+        # float32 has already strided inside the walk above and must not do it twice.
+        vals = vals[::stride]
     vals = vals[slice_start : slice_start + max_elements]
 
     return vals.to(dtype)
@@ -297,7 +312,12 @@ class UlpSweepStrategy:
         # Grab exactly num_elements values, starting spec.offset into the range
         # (this is how a big range gets swept in batches).
         vals = _enumerate_representable(
-            stimuli_format, spec.low, spec.high, num_elements, spec.offset
+            stimuli_format,
+            spec.low,
+            spec.high,
+            num_elements,
+            getattr(spec, "stride", 1),
+            spec.offset,
         )
         n = vals.numel()
         if n >= num_elements:
