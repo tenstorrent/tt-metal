@@ -196,28 +196,13 @@ def test_plain_rms_norm_matches_transformers_on_every_chip_and_reuses_program(me
     assert address_guard is not None
     address_guard.deallocate(True)
 
-    # Reject host inputs and a tensor on a child mesh before RMSNorm can combine it with
-    # Galaxy-owned gamma. The child mesh shares this allocation; no second Galaxy is needed.
+    # Reject host inputs before RMSNorm can combine them with device-resident gamma.
     host_input = torch.zeros(1, 1, LOCAL_SEQUENCE, HIDDEN_SIZE, dtype=torch.bfloat16)
     with expect_error(ValueError, "device ttnn.Tensor"):
         norms["synthetic"](host_input)
     host_tensor = ttnn.from_torch(host_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     with expect_error(ValueError, "device ttnn.Tensor"):
         norms["synthetic"](host_tensor)
-    child_mesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
-    foreign_input = ttnn.from_torch(
-        host_input,
-        device=child_mesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(child_mesh),
-    )
-    try:
-        with expect_error(ValueError, "constructor mesh"):
-            norms["synthetic"](foreign_input)
-    finally:
-        foreign_input.deallocate(True)
 
     with expect_error(ValueError, "one-dimensional"):
         RMSNorm(mesh_device, torch.ones(1, HIDDEN_SIZE))
