@@ -2945,14 +2945,11 @@ bool SatPlacementEnumerationSession::exclude_mapping(const AssignedMeshes& assig
     if (!ready_ || assigned.empty()) {
         return false;
     }
-    for (const PlacedMesh& placed : assigned) {
-        if (placed.placement.asics.empty()) {
-            continue;
-        }
-        if (!add_forbidden_constraint(placed)) {
-            return false;
-        }
-    }
+    // Exclude the *combination* (this exact set of mesh footprints), not each mesh placement independently.
+    // Forbidding each footprint on its own would also rule out other valid mappings that happen to reuse one
+    // of these footprints. remember_yielded() records the combination so the next solve excludes just it,
+    // matching excluded_seat_maps() semantics.
+    remember_yielded(assigned);
     return true;
 }
 
@@ -3022,6 +3019,12 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
             }
         }
             break;
+    }
+
+    // The loop can grow the pools (or inject fallbacks) and then exit on the cap without ever solving at
+    // those newly-grown columns. Make one final attempt so the last growth is actually tried before giving up.
+    if (results.empty()) {
+        try_solve();
     }
 
     // 4. Decode SAT placements. Leave solved_ false so a later next() re-solves with
