@@ -1077,7 +1077,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
     // Inter-mesh routers never enable deadlock avoidance, whichever direction: both ends of an inter-mesh
-    // link must agree on DA/FLA polarity and the far end may be a plain Mesh (FABRIC_2D) rank. Intra-mesh
+    // link must agree on Deadlock avoidance polarity and the far end may be a plain Mesh (FABRIC_2D) rank. Intra-mesh
     // routers follow the direction-based policy, unchanged. See #56298.
     const bool base_enable_deadlock_avoidance =
         !this->is_inter_mesh && fabric_context.need_deadlock_avoidance_support(this->direction_);
