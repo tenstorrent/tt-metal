@@ -126,7 +126,7 @@ class Optimizations:
                 data_parallel=data_parallel,
                 quality_mode=quality_mode,
             ),
-            output_memcfg=_linear_activation_memory_config(max_seq_len, max_batch),
+            output_memcfg=_layernorm_output_memory_config(max_seq_len, max_batch, mesh_device),
             program_config=norm_prg,
             sharded_memcfg=norm_sharded_mem,
         )
@@ -291,13 +291,24 @@ def _attention_output_memory_config(max_seq_len, max_batch_size, mesh_device):
 
 
 def _qkv_nomask_output_memory_config(max_seq_len, max_batch_size, mesh_device):
-    # B32 writes the fused QKV output to L1 when SDPA takes no mask: sustained
-    # 52.884 ms to 49.830 ms. The masked SDPA circular buffers overlap it by 243 KB,
-    # so the masked path keeps it in DRAM. Placement does not change the result.
+    # B8, B16 and B32 write the fused QKV output to L1 when SDPA takes no mask.
+    # Burst: B8 12.699 to 11.497 ms, B16 23.695 to 21.305 ms; B32 sustained 52.884
+    # to 50.130 ms. At B32 the masked SDPA circular buffers overlap it by 243 KB, so
+    # the masked path keeps it in DRAM. Placement does not change the result.
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return None
+
+
+def _layernorm_output_memory_config(max_seq_len, max_batch_size, mesh_device):
+    # B8 and B16 keep the LayerNorm output (the residual stream) in L1; LayerNorm is
+    # DRAM-bound otherwise. Burst: B8 11.497 to 10.986 ms, B16 21.305 to 20.460 ms.
+    # At B32 it overlaps the QKV circular buffers by 111 KB with the L1 QKV output.
+    max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    if max_seq_len == 512 and max_batch in (8, 16) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        return ttnn.L1_MEMORY_CONFIG
+    return _linear_activation_memory_config(max_seq_len, max_batch)
 
 
 def _create_heads_output_memory_config(max_seq_len, max_batch_size, mesh_device):
