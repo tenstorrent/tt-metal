@@ -68,12 +68,12 @@ jobs:
         run: pip3 install PyYAML
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml \
-            --event "${{ github.event_name }}"
+        uses: ./.github/actions/prepare-test-matrix
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
 
   # Fetch ttsim simulator binaries once; only needed when the matrix has sim_* SKUs.
   fetch-ttsim:
