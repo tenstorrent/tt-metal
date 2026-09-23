@@ -254,7 +254,7 @@ class RunSpec:
             pcc_threshold=float(thr) if thr is not None else None,
             capacity=int(cap) if (cap := os.environ.get("PREFILL_MAX_SEQ_LEN")) else None,
             isl=int(isl) if (isl := os.environ.get("PREFILL_ISL")) else None,
-        )
+        ).validated()
 
     @classmethod
     def parse(cls, line: str, golden_root: str | None) -> "RunSpec":
@@ -293,13 +293,17 @@ class RunSpec:
                 spec.label = v
             else:
                 raise ValueError(f"unknown key {k!r}")
-        if spec.tps_iters < 1:
-            raise ValueError(f"iters={spec.tps_iters}: need >= 1")
-        if spec.isl is not None and spec.isl < 1:
-            raise ValueError(f"isl={spec.isl}: need >= 1")
-        if spec.capacity is not None and spec.capacity < 1:
-            raise ValueError(f"capacity={spec.capacity}: need >= 1")
-        return spec
+        return spec.validated()
+
+    def validated(self) -> "RunSpec":
+        """Reject values that would otherwise be silently reinterpreted (0 is not "unset")."""
+        if self.tps_iters < 1:
+            raise ValueError(f"iters={self.tps_iters}: need >= 1")
+        if self.isl is not None and self.isl < 1:
+            raise ValueError(f"isl={self.isl}: need >= 1")
+        if self.capacity is not None and self.capacity < 1:
+            raise ValueError(f"capacity={self.capacity}: need >= 1")
+        return self
 
     @property
     def name(self) -> str:
@@ -385,12 +389,12 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
     chunk = runtime.config.chunk_size
     trace_ids = load_trace_tokens(spec.trace_dir)
     n_trace = len(trace_ids)
-    n_tokens = spec.isl or n_trace  # tokens actually prefilled (the "isl")
+    n_tokens = spec.isl if spec.isl is not None else n_trace  # tokens actually prefilled (the "isl")
     token_ids = tile_tokens(trace_ids, n_tokens) if n_tokens != n_trace else trace_ids
     n_pcc = min(n_tokens, n_trace)  # golden covers the trace only; causality keeps the tiled tail off it
     n_chunks = max(1, math.ceil(n_tokens / chunk))
     total = n_chunks * chunk
-    capacity = math.ceil((spec.capacity or total) / chunk) * chunk
+    capacity = math.ceil((spec.capacity if spec.capacity is not None else total) / chunk) * chunk
     if total > capacity:
         raise GateFailure(
             f"trace {spec.trace_dir} pads to {total} tokens ({n_chunks} x {chunk}) but the requested capacity "
@@ -646,7 +650,7 @@ def main():
                     print(f"ERROR: PREFILL_RUNS line {line!r}: {item}", file=sys.stderr)
                     return 1
                 batch_specs.append(item)
-                fit = plan(item.isl or len(load_trace_tokens(item.trace_dir)), chunk, True)[2]
+                fit = plan(item.isl if item.isl is not None else len(load_trace_tokens(item.trace_dir)), chunk, True)[2]
                 known_totals.append(max(fit, math.ceil(item.capacity / chunk) * chunk) if item.capacity else fit)
             if not batch_specs:
                 print(f"ERROR: no run specs in {runs_source}", file=sys.stderr)
