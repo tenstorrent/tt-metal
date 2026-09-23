@@ -20,6 +20,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 
 import torch
 
@@ -136,7 +137,9 @@ def run(args):
             l1_small_size=16384,
             **build_trace_device_params("llama3.1-8b-qb2-decoder"),
         )
+        load_start = time.perf_counter()
         generator = LlamaGenerator(mesh, max_batch_size=1, trace_prefill=False, record_token_history=True)
+        result["model_load_seconds"] = time.perf_counter() - load_start
         if args.mode != "baseline":
             enable_experimental_decode(
                 generator.model,
@@ -164,8 +167,12 @@ def run(args):
         settings = {**result["sampling"], "stop_on_eos": False, "host_sampling": False}
 
         # A full generation compiles and captures before the measurement window.
+        warmup_start = time.perf_counter()
         warmup = generator.generate(prompt, args.tokens, **settings)
         ttnn.synchronize_device(mesh)
+        result["warmup_capture_generation_seconds"] = time.perf_counter() - warmup_start
+        result["warmup_perf"] = deepcopy(generator.last_perf)
+        result["timing_denominator"] = args.tokens - 1
         evidence["warmup_tokens"] = warmup
         # Allocator metadata only, outside every measurement window. Static
         # program CBs/code are additional; this is not an execution peak.
