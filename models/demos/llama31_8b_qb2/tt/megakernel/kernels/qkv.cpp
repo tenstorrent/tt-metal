@@ -8,6 +8,9 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #ifdef READER
 #include "projection_reader.hpp"
+#ifdef HEAD_PREFETCH_RECEIVER
+#include "prefetch_receiver.hpp"
+#endif
 #endif
 constexpr auto input_args = TensorAccessorArgs<0>();
 constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -32,7 +35,13 @@ void QB2_ENTRY() {
     const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(1), 2048);
     const auto weight = TensorAccessor(weight_args, weight_address, 1088);
 #if PROJECTION_READER > 0
+#ifdef HEAD_PREFETCH_RECEIVER
+    const uint64_t staging = wait_head_prefetch(bank);
+    tuned_stream_projection<0, 1, 16, 6, 128, 8, 1088>(input, weight, bank, staging, 8);
+    finish_head_prefetch(bank);
+#else
     tuned_stream_projection<0, 1, 16, 6, 128, 8, 1088>(input, weight, bank);
+#endif
 #else
     for (uint32_t block = 0; block < 128; block += 16) {
         cb_reserve_back(0, 16);

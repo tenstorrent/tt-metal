@@ -5,6 +5,9 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #ifdef READER
 #include "projection_reader.hpp"
+#ifdef HEAD_PREFETCH_HELPER
+#include "head_prefetch.hpp"
+#endif
 #endif
 constexpr auto input_args = TensorAccessorArgs<0>();
 constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -13,6 +16,9 @@ constexpr auto output_args = TensorAccessorArgs<weight_args.next_compile_time_ar
 void kernel_main() {
     const uint32_t worker = get_arg_val<uint32_t>(0);
 #ifdef READER
+#ifdef HEAD_PREFETCH_HELPER
+    head_worker_prefetch();
+#endif
     if (worker == 0) {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(6)), 8);
         for (uint32_t i = 0; i < 16; ++i) {

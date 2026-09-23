@@ -81,12 +81,20 @@ class DecoderLoop:
         )
         if head is not None and any(c in self.cores for c in (*head.cores, *head.norm.cores)):
             raise ValueError("Terminal head and norm workers must be disjoint from the layer loop")
+        self.head_prefetch = None
+        if body.tuning.prefetch_head_workers:
+            if head is None:
+                raise ValueError("Head-worker staging requires the terminal head in the resident program")
+            from .head_prefetch import HeadPrefetch
+            self.head_prefetch = HeadPrefetch(self)
         ttnn.synchronize_device(body.mesh)
 
     def append(self, program, tokens=None):
         if self.body.tuning.prefetch_gu_blocks or self.body.tuning.prefetch_down_blocks:
             from .prefetch import append_prefetch
             program = append_prefetch(self.body, program)
+        if self.head_prefetch is not None:
+            program = self.head_prefetch.append_consumers(program)
         if self.embedding_weight is not None:
             from math import prod
 
@@ -235,6 +243,8 @@ class DecoderLoop:
         program.kernels = kernels
         if self.head is not None:
             program = self.head.append(program, self.body.gather_output, wait_for_gather=True)
+            if self.head_prefetch is not None:
+                program = self.head_prefetch.append_helpers(program)
         return program
 
     def tensors(self):

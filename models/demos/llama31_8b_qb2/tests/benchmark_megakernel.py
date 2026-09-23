@@ -81,10 +81,12 @@ def parse_args():
         help="Optional HF accuracy gate; otherwise report BF16-reference drift separately from matched TT checks",
     )
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--require-exact", action="store_true", help="Require exact teacher logits, touched KV and greedy output against reference")
     parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined", "pipelined_rows"), default="original")
     parser.add_argument("--projection-buffers", type=int, choices=(2, 3), default=2)
     parser.add_argument("--coalesce-input", action="store_true")
     parser.add_argument("--projection-placement", choices=("row", "dram"), default="row")
+    parser.add_argument("--prefetch-head-workers", action="store_true")
     parser.add_argument("--alias-projection-cbs", action="store_true")
     parser.add_argument("--prefetch-gu-blocks", type=int, choices=(0, 2, 4, 6), default=0)
     parser.add_argument("--prefetch-down-blocks", type=int, choices=(0, 2, 4, 6), default=0)
@@ -115,7 +117,14 @@ def run(args):
     from models.demos.llama31_8b_qb2.tt.generator_vllm import LlamaForCausalLM
     from models.demos.utils.trace_region_sizes import build_trace_device_params
 
-    tuning = ProjectionTuning(args.projection_reader, args.wide_subblocks, args.bounded_layer_barrier, args.projection_buffers, args.hoist_pack_config, args.bank_vc, args.prefetch_gu_blocks, args.prefetch_down_blocks, args.alias_projection_cbs, args.projection_placement, args.coalesce_input)
+    tuning = ProjectionTuning(
+        reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
+        bounded_barrier=args.bounded_layer_barrier, buffer_count=args.projection_buffers,
+        hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
+        prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
+        alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
+        projection_placement=args.projection_placement, coalesce_input=args.coalesce_input,
+    )
     if args.mode == "baseline" and tuning != ProjectionTuning():
         raise ValueError("Projection tuning applies only to experimental kernels")
     torch.set_num_threads(8)
@@ -343,6 +352,11 @@ def run(args):
                 ]
                 for pair, expected in zip(cache_evidence, hf_reference["teacher_cache"])
             ]
+        if args.require_exact:
+            assert reference is not None, "--require-exact requires --reference"
+            assert result["teacher_logits"]["exact"], "Teacher logits differ from reference"
+            assert all(m["exact"] for pair in result["teacher_cache_metrics"] for m in pair), "Touched KV differs"
+            assert output == reference["generated_tokens"], "Greedy outputs differ"
         torch.save(evidence, args.output / "evidence.pt")
         result["comparison_checks_passed"] = True
         if args.require_hf_pcc is not None:

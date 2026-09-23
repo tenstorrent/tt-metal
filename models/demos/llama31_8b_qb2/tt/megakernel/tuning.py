@@ -16,10 +16,13 @@ class ProjectionTuning:
     prefetch_gu_blocks: int = 0
     prefetch_down_blocks: int = 0
     alias_projection_cbs: bool = False
+    prefetch_head_workers: bool = False
     projection_placement: str = "row"
     coalesce_input: bool = False
 
     def __post_init__(self):
+        if self.prefetch_head_workers and (not self.alias_projection_cbs or self.buffer_count != 3 or self.reader == "original"):
+            raise ValueError("Head-worker staging requires aliased three-buffer projection storage and tuned readers")
         if self.coalesce_input and self.reader == "original":
             raise ValueError("Contiguous activation reads require a tuned reader")
         if self.projection_placement not in ("row", "dram"):

@@ -55,6 +55,9 @@ void release_workers(uint32_t id, uint32_t begin, uint32_t end) {
 
 #if defined(PROJECTION) && defined(READER)
 #include "projection_reader.hpp"
+#ifdef HEAD_PREFETCH_RECEIVER
+#include "prefetch_receiver.hpp"
+#endif
 template <uint32_t A, uint32_t B, uint32_t KBlock, uint32_t N, uint32_t K, uint32_t Workers, typename Input, typename Weight>
 void stream_projection(const Input& input, const Weight& weight, uint32_t bank) {
 #if PROJECTION_READER > 0
@@ -71,8 +74,18 @@ void stream_projection(const Input& input, const Weight& weight, uint32_t bank) 
             get_arg_val<uint32_t>(PREFETCH_COORD_OFFSET + role * 16 + 2 * bank + 1), state[300 + role]);
     }
 #endif
-    tuned_stream_projection<A, B, KBlock, N, K, Workers, B == 1 ? 576 : 1088>(
-        input, weight, bank, prefetched_base, prefetched_blocks);
+#ifdef HEAD_PREFETCH_RECEIVER
+    if constexpr (B == 7) {
+        prefetched_base = wait_head_prefetch(bank);
+        tuned_stream_projection<A, B, KBlock, N, K, Workers, 1088>(
+            input, weight, bank, prefetched_base, K / KBlock);
+        finish_head_prefetch(bank);
+    } else
+#endif
+    {
+        tuned_stream_projection<A, B, KBlock, N, K, Workers, B == 1 ? 576 : 1088>(
+            input, weight, bank, prefetched_base, prefetched_blocks);
+    }
 #else
     for (uint32_t k = 0; k < K; k += KBlock) {
         cb_reserve_back(A, KBlock);
@@ -104,7 +117,10 @@ void QB2_ENTRY() {
     if (bank < 8) {
 #ifdef FUSE_ATTENTION
         {
-            DeviceZoneScopedN("MLP-WAIT-ATTENTION");
+    #ifndef LOOP_RT_OFFSET
+        // Keep all32 layer read/math/barrier phases within the marker buffer.
+        DeviceZoneScopedN("MLP-WAIT-ATTENTION");
+#endif
             wait_phase(14);
         }
 #endif
@@ -116,7 +132,10 @@ void QB2_ENTRY() {
 #endif
 #ifdef FUSE_NORM
     {
+#ifndef LOOP_RT_OFFSET
+        // Keep all32 layer read/math/barrier phases within the marker buffer.
         DeviceZoneScopedN("MLP-WAIT-NORM");
+#endif
         if (bank == 0) {
             noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(6)), 8);
             release_workers(7, 0, GU_WORKERS);
@@ -134,7 +153,10 @@ void QB2_ENTRY() {
         stream_projection<0, 1, 8, gu_width, 128, GU_WORKERS>(input, gu, gu_column);
     }
     {
+#ifndef LOOP_RT_OFFSET
+        // Keep all32 layer read/math/barrier phases within the marker buffer.
         DeviceZoneScopedN("MLP-WAIT-PRODUCT");
+#endif
         wait_phase(3);
     }
     if (bank >= 8) { return; }
@@ -148,7 +170,10 @@ void QB2_ENTRY() {
     const uint32_t bank = get_arg_val<uint32_t>(0);
 #ifdef FUSE_OUTPUT
     if (bank < 8) {
+#ifndef LOOP_RT_OFFSET
+        // Keep all32 layer read/math/barrier phases within the marker buffer.
         DeviceZoneScopedN("MLP-O-WRITE");
+#endif
         cb_wait_front(17, 16);
         const auto output = TensorAccessor(output_args, get_arg_val<uint32_t>(4), 2048);
         for (uint32_t tile = 0; tile < 16; ++tile) {
@@ -193,7 +218,10 @@ void QB2_ENTRY() {
     const auto output = TensorAccessor(output_args, get_arg_val<uint32_t>(4), 2048);
     cb_wait_front(17, 16);
     {
+#ifndef LOOP_RT_OFFSET
+        // Keep all32 layer read/math/barrier phases within the marker buffer.
         DeviceZoneScopedN("MLP-OUTPUT-WRITE");
+#endif
         for (uint32_t tile = 0; tile < 16; ++tile) {
             noc_async_write_page(bank * 16 + tile, output, get_read_ptr(17) + tile * 2048);
         }
