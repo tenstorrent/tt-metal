@@ -33,6 +33,7 @@
 #include "experimental/gddr_dma.h"
 #include "hostdev/remote_dfb_config_layout.h"
 #include "internal/dram_sender_credit_counters.h"
+#include "api/dataflow/prefetcher_pipe.h"
 #include "internal/prefetcher_pipe_dram_sender.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
@@ -422,20 +423,24 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint8_t*>(g) + sizeof(TensorPrefetcherTensorLayout));
 
             if (is_pipe) {
-                // Snap every receiver's stored write cursor onto this tensor's entry grid before
-                // rebuilding the interface, publishing the skipped bytes as pad credits. The
-                // consumer's PrefetcherPipe constructor runs the matching snap when its Attach
-                // entry size differs from the one last applied and blocks on exactly these credits,
-                // so a tensor whose per-receiver block size differs from the previous one still
-                // starts every entry on an entry boundary. Idempotent when the cursors already sit
-                // on the grid, which is every tensor in a same-block-size run.
+                // Apply this tensor's block size to the pipe before rebuilding the interface. When it
+                // differs from the size the pipe last applied, the PrefetcherPipe constructor snaps
+                // every receiver's stored write cursor onto the new entry grid and publishes the
+                // skipped bytes as pad credits. The consumer's PrefetcherPipe constructor runs the
+                // matching snap when its Attach entry size differs from the one last applied and
+                // blocks on exactly these credits, so a tensor whose per-receiver block size differs
+                // from the previous one still starts every entry on an entry boundary. A tensor with
+                // the size already applied changes nothing.
+                {
+                    experimental::PrefetcherPipe pipe(
+                        experimental::DramSenderConfigPage{target_state_addr}, t_page_bytes_per_recv);
+                }
+                // Rebuild the interface from the PrefetcherPipe config page each tensor. The write
+                // cursors come out of that page, which is what makes them resume correctly across
+                // requests and across programs, and the snap above left this tensor's entry size
+                // there too.
                 experimental::PipeSenderCtx pipe_ctx;
                 experimental::pipe_load_sender_ctx(pipe_ctx, target_state_addr);
-                experimental::pipe_set_entry_size(pipe_ctx, t_page_bytes_per_recv, noc_index);
-                // Rebuild the interface from the PrefetcherPipe config page each tensor. The write
-                // cursor comes out of that page, which is what makes it resume correctly across
-                // requests and across programs. pipe_set_entry_size above put this tensor's entry
-                // size in the context, so the interface follows from the context alone.
                 load_pipe_sender_state(pipe_ctx, iface);
             } else {
                 // Set the sender fifo page size to one full per-receiver page. When resize skips
