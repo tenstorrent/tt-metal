@@ -1,125 +1,185 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
-// One process, two full opens. No device-opening test fixture precedes cold.
+
+// Opens the full mesh twice in one process, first with an empty kernel cache (cold) and then with
+// the cache the first open left behind (hot). Each open runs inside a Tracy zone so the fabric
+// builder zones can be attributed to a phase. Results are written as JSON for
+// test_fabric_builder_perf.py, which performs validation and golden comparison.
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
+#include <functional>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
-#include <unistd.h>
+
+#include <enchantum/enchantum.hpp>
 #include <nlohmann/json.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/cluster.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "jit_build/build_cache_telemetry.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt_stl/assert.hpp>
+
+#include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/profiler/tracy_debug_zones.hpp"
 
-using json = nlohmann::json;
+namespace {
+
+namespace fs = std::filesystem;
+using tt::tt_fabric::FabricConfig;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
-namespace fs = std::filesystem;
 
-static size_t artifact_count(const fs::path& root) {
-    size_t n = 0;
-    if (fs::exists(root)) {
-        for (const auto& e : fs::recursive_directory_iterator(root)) {
-            if (e.is_regular_file() && (e.path().extension() == ".o" || e.path().extension() == ".elf")) ++n;
-        }
+constexpr auto TRACY_CONNECT_TIMEOUT = std::chrono::seconds(60);
+
+struct BenchmarkArgs {
+    fs::path output;
+    FabricConfig fabric_config;
+};
+
+// Arg parsing.
+BenchmarkArgs parse_args(int argc, char** argv) {
+    std::vector<std::string> input_args(argv, argv + argc);
+    TT_FATAL(
+        test_args::has_command_option(input_args, "--output") &&
+            test_args::has_command_option(input_args, "--fabric-config"),
+        "Usage: {} --output FILE --fabric-config NAME",
+        argv[0]);
+
+    std::string output;
+    std::string fabric_config_name;
+    std::tie(output, input_args) = test_args::get_command_option_and_remaining_args(input_args, "--output");
+    std::tie(fabric_config_name, input_args) =
+        test_args::get_command_option_and_remaining_args(input_args, "--fabric-config");
+    test_args::validate_remaining_args(input_args);
+
+    const auto fabric_config = enchantum::cast<FabricConfig>(fabric_config_name);
+    TT_FATAL(fabric_config.has_value(), "Unknown --fabric-config {}", fabric_config_name);
+    return {output, fabric_config.value()};
+}
+
+// Kernel cache directory that we expect to be empty. 
+// For cold cache profiling, an empty directory is expected. Hot cache
+// profiling uses the same cache directory, except it will be populated with
+// artifacts from the cold cache profiling.
+fs::path get_kernel_cache_dir() {
+    const char* cache_dir = std::getenv("TT_METAL_CACHE");
+    TT_FATAL(cache_dir != nullptr, "TT_METAL_CACHE must be set to a fresh directory");
+    TT_FATAL(
+        fs::is_directory(cache_dir) && fs::is_empty(cache_dir),
+        "TT_METAL_CACHE {} must be an empty directory",
+        cache_dir);
+    return cache_dir;
+}
+
+size_t count_cache_artifacts(const fs::path& cache_dir) {
+    return std::count_if(
+        fs::recursive_directory_iterator(cache_dir), fs::recursive_directory_iterator(), [](const auto& entry) {
+            const auto extension = entry.path().extension();
+            return entry.is_regular_file() && (extension == ".o" || extension == ".elf");
+        });
+}
+
+// Returns after Tracy capture connects, or errors after timeout.
+void wait_for_tracy_connection() {
+    const auto deadline = std::chrono::steady_clock::now() + TRACY_CONNECT_TIMEOUT;
+    while (!TracyIsConnected) {
+        TT_FATAL(
+            std::chrono::steady_clock::now() < deadline,
+            "Tracy capture did not connect within {}s",
+            TRACY_CONNECT_TIMEOUT.count());
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    return n;
 }
-static void save(const std::string& path, const json& result) {
-    std::ofstream f(path);
-    if (!f) throw std::runtime_error("Cannot write metadata: " + path);
-    f << result.dump(2) << '\n';
-    if (!f) throw std::runtime_error("Metadata write failed");
+
+// Cold cache profiling.
+std::shared_ptr<MeshDevice> open_cold() {
+    TTZoneScopedDN(FABRIC_BUILDER, "FabricBuilderBenchmark::cold");
+    return MeshDevice::create(MeshDeviceConfig(std::nullopt));
 }
+
+// Hot cache profiling.
+std::shared_ptr<MeshDevice> open_hot() {
+    TTZoneScopedDN(FABRIC_BUILDER, "FabricBuilderBenchmark::hot");
+    return MeshDevice::create(MeshDeviceConfig(std::nullopt));
+}
+
+struct PhaseResult {
+    size_t num_devices;
+    // Store artifacts before and after for cache condition validation
+    size_t artifacts_before;
+    size_t artifacts_after;
+};
+
+// Runs a phase of the benchmark. Opens and closes a mesh device.
+PhaseResult run_phase(const fs::path& cache_dir, const std::function<std::shared_ptr<MeshDevice>()>& open_mesh) {
+    const size_t artifacts_before = count_cache_artifacts(cache_dir);
+    auto mesh = open_mesh();
+    const size_t num_devices = mesh->num_devices();
+    TT_FATAL(mesh->close(), "Mesh teardown failed");
+    return {num_devices, artifacts_before, count_cache_artifacts(cache_dir)};
+}
+
+// Jsonification.
+nlohmann::json to_json(const PhaseResult& phase) {
+    return {{"artifacts_before", phase.artifacts_before}, {"artifacts_after", phase.artifacts_after}};
+}
+
+// Cluster discovery.
+std::string get_cluster_type_name() {
+    std::string name(enchantum::to_string(tt::tt_metal::GetClusterType()));
+    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+    return name;
+}
+
+// Writes the collected results from the benchmark to a json file.
+void write_results(const fs::path& output, const nlohmann::json& results) {
+    std::ofstream file(output);
+    TT_FATAL(file.is_open(), "Cannot open {} for writing", output.string());
+    file << results.dump(2) << '\n';
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
-    // Runner owns the arguments and supplies a fresh empty cache directory.
-    std::string output, expected_arch;
-    std::optional<size_t> expected_devices;
-    try {
-        for (int i = 1; i < argc; ++i) {
-            const std::string arg = argv[i];
-            if ((arg == "--output" || arg == "--arch" || arg == "--devices") && i + 1 < argc) {
-                const std::string value = argv[++i];
-                if (arg == "--output") output = value;
-                else if (arg == "--arch") expected_arch = value;
-                else expected_devices = std::stoul(value);
-            } else throw std::runtime_error("Unknown/incomplete argument: " + arg);
-        }
-        if (output.empty() || !expected_devices || (expected_arch != "wormhole_b0" && expected_arch != "blackhole"))
-            throw std::runtime_error("Required: --output FILE --arch wormhole_b0|blackhole --devices N");
-        const char* cache_env = std::getenv("TT_METAL_CACHE");
-        if (!cache_env || !fs::is_directory(cache_env) || !fs::is_empty(cache_env))
-            throw std::runtime_error("TT_METAL_CACHE must identify an existing empty job-owned directory");
-        if (std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT"))
-            throw std::runtime_error("Unset TT_METAL_CCACHE_KERNEL_SUPPORT; setting it to 0 still enables it");
-#ifndef TRACY_ENABLE
-        throw std::runtime_error("This benchmark requires a Tracy-enabled build");
-#else
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-        while (!TracyIsConnected) {
-            if (std::chrono::steady_clock::now() >= deadline)
-                throw std::runtime_error("Tracy capture did not connect within 60 seconds");
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-#endif
-        // JIT telemetry is off for the measured opens. Cache validity is the artifact count.
-        BuildCacheTelemetry::inst().disable();
-        json result = {{"schema_version", 1}, {"pid", getpid()},
-                       {"fabric_mode", "FABRIC_2D"}, {"build_type", FABRIC_INIT_BUILD_TYPE},
-                       {"phases", json::object()}};
-        save(output, result);
-        // Set fabric once, before either open. Do not toggle the mode between phases.
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
-        for (const std::string phase : {"cold", "hot"}) {
-            const size_t artifacts_before = artifact_count(cache_env);
-            if (phase == "hot" && artifacts_before == 0)
-                throw std::runtime_error("Cold run left no .o/.elf cache artifacts for hot run");
-            std::shared_ptr<MeshDevice> mesh;
-            const auto start = std::chrono::steady_clock::now();
-            if (phase == "cold") {
-                TTZoneScopedDN(FABRIC_BUILDER, "FabricBuilderBenchmark::cold");
-                mesh = MeshDevice::create(MeshDeviceConfig(std::nullopt));
-            } else {
-                TTZoneScopedDN(FABRIC_BUILDER, "FabricBuilderBenchmark::hot");
-                mesh = MeshDevice::create(MeshDeviceConfig(std::nullopt));
-            }
-            const auto end = std::chrono::steady_clock::now();
-            if (!mesh) throw std::runtime_error("Mesh creation returned null");
-            const auto count = mesh->num_devices();
-            const auto mesh_shape = mesh->shape();
-            const auto dims = mesh_shape.dims();
-            const std::vector<uint32_t> shape(dims.begin(), dims.end());
-            auto device_ids = mesh->get_device_ids();
-            std::sort(device_ids.begin(), device_ids.end());
-            const auto arch = mesh->arch();
-            const bool arch_ok = (expected_arch == "wormhole_b0" && arch == tt::ARCH::WORMHOLE_B0) ||
-                                 (expected_arch == "blackhole" && arch == tt::ARCH::BLACKHOLE);
-            json entry = {{"open_elapsed_ns", std::chrono::duration_cast<std::chrono::nanoseconds>(end-start).count()},
-                          {"devices", count}, {"device_ids", device_ids}, {"shape", shape}, {"arch", expected_arch},
-                          {"artifacts_before", artifacts_before}, {"artifacts_after", artifact_count(cache_env)}};
-            // Close outside both phase marker zones; preserve caches, destroy handles.
-            if (!mesh->close()) throw std::runtime_error("Mesh teardown reported failure");
-            mesh.reset();
-            entry["teardown_complete"] = true;
-            result["phases"][phase] = entry;
-            save(output, result);
-            if (!arch_ok || count != *expected_devices)
-                throw std::runtime_error("Unexpected architecture/device count; refusing partial/wrong-hardware benchmark");
-        }
-        result["completed"] = true;
-        save(output, result);
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "fabric-builder benchmark failed: " << e.what() << '\n';
-        return 2;
-    }
+    // Setup
+    const auto args = parse_args(argc, argv);
+    const auto cache_dir = get_kernel_cache_dir();
+    wait_for_tracy_connection();
+    tt::tt_fabric::SetFabricConfig(args.fabric_config);
+
+    // Run the benchmark
+    const PhaseResult cold = run_phase(cache_dir, open_cold);
+    const PhaseResult hot = run_phase(cache_dir, open_hot);
+
+    // Verify that the number of devices opened is the same for both phases
+    TT_FATAL(
+        cold.num_devices == hot.num_devices,
+        "Cold opened {} devices but hot opened {}",
+        cold.num_devices,
+        hot.num_devices);
+
+    // Write the results to a json file
+    const nlohmann::json context = {
+        {"arch", tt::tt_metal::hal::get_arch_name()},
+        {"cluster_type", get_cluster_type_name()},
+        {"num_devices", cold.num_devices},
+        {"fabric_config", std::string(enchantum::to_string(args.fabric_config))},
+    };
+    const nlohmann::json phases = {{"cold", to_json(cold)}, {"hot", to_json(hot)}};
+    write_results(args.output, {{"context", context}, {"phases", phases}});
+    log_info(tt::LogTest, "Wrote fabric builder benchmark results to {}", args.output.string());
+
+    // Teardown (each phase already closes the mesh device)
+    tt::tt_fabric::SetFabricConfig(FabricConfig::DISABLED);
+    return 0;
 }
