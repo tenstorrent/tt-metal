@@ -108,6 +108,19 @@ void kernel_main() {
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
     const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
 
+#ifdef WEIGHTS_DIAG_UNIFIED
+    // Diagonal weight senders: this kernel runs on every core and the weights role is a runtime arg (is_sender_core
+    // above is the activation role). A weights receiver follows the protocol of the mcast receiver writer kernel.
+    const bool weights_sender_role = get_arg_val<uint32_t>(i++) > 0;
+    const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
+    const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
+    auto receive_weights_mcast = [&]() {
+        weights_mcast_receiver_sem.set(INVALID);
+        weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
+        weights_mcast_receiver_sem.wait(VALID);
+    };
+#endif
+
     if (skip_work && !split_reader_enabled) {
         return;
     }
@@ -227,6 +240,14 @@ void kernel_main() {
                      weight_tile_h_outer_i++) {
                     dfb_weight_obj.reserve_back(weight_block_num_tiles);
 
+#ifdef WEIGHTS_DIAG_UNIFIED
+                    if (!weights_sender_role) {
+                        receive_weights_mcast();
+                        dfb_weight_obj.push_back(weight_block_num_tiles);
+                        continue;
+                    }
+#endif
+
                     const uint32_t outer_block_offset = weight_tile_h_outer_i * tiles_per_full_block;
                     uint32_t tile_id = weight_start_tile_id + height_block_offset + outer_block_offset;
                     uint32_t weight_write_offset = 0;
@@ -294,6 +315,14 @@ void kernel_main() {
                 }
             }
             if constexpr (fuse_bias) {
+#ifdef WEIGHTS_DIAG_UNIFIED
+                if (load_bias && !weights_sender_role) {
+                    dfb_bias_obj.reserve_back(bias_ntiles);
+                    receive_weights_mcast();
+                    dfb_bias_obj.push_back(bias_ntiles);
+                    load_bias = false;
+                }
+#endif
                 if (load_bias) {
                     dfb_bias_obj.reserve_back(bias_ntiles);
 

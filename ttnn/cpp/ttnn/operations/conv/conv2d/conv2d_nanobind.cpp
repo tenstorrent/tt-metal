@@ -259,7 +259,8 @@ void bind_conv2d(nb::module_& mod) {
             bool,
             std::optional<bool>,
             bool,
-            ttnn::operations::sliding_window::PaddingMode>(),
+            ttnn::operations::sliding_window::PaddingMode,
+            bool>(),
         nb::kw_only(),
         nb::arg("weights_dtype") = nb::none(),
         nb::arg("activation") = nb::none(),
@@ -281,7 +282,8 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("enable_activation_reuse") = false,
         nb::arg("force_split_reader") = nb::none(),
         nb::arg("override_output_sharding_config") = false,
-        nb::arg("padding_mode") = nb::cast(ttnn::operations::sliding_window::PaddingMode::Zeros));
+        nb::arg("padding_mode") = nb::cast(ttnn::operations::sliding_window::PaddingMode::Zeros),
+        nb::arg("diagonal_weight_senders") = false);
 
     py_conv_config.def_rw("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
@@ -474,6 +476,13 @@ void bind_conv2d(nb::module_& mod) {
         Additionally, NHW number of cores must match between input and output tensors
 
         ===============================================================
+    )doc");
+
+    py_conv_config.def_rw("diagonal_weight_senders", &Conv2dConfig::diagonal_weight_senders, R"doc(
+        BLOCK_SHARDED only: place the weight multicast senders on a diagonal of the grid instead of one row
+        (one column under transpose_shards), with a single writer kernel for senders and receivers.
+        Spreads the interleaved-DRAM weight reads over the NoC; applies when the input and output grids are the
+        same single rectangle, otherwise ignored. Defaults to False.
     )doc");
 
     py_conv_config.def_rw("padding_mode", &Conv2dConfig::padding_mode, R"doc(

@@ -714,6 +714,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const bool populate_skipped_work_cores =
         enable_split_reader && block_sharded && input_cores.num_cores() > output_cores.num_cores();
 
+    // Diagonal weight senders (Conv2dConfig::diagonal_weight_senders): only for the plain 2D block-sharded case where
+    // the whole grid is one rectangle of working cores; other shapes keep the line-sender layout.
+    const bool diag_weight_senders = block_sharded && !skip_weights_mcast && !populate_skipped_work_cores &&
+                                     input_cores == output_cores && all_cores.ranges().size() == 1 &&
+                                     operation_attributes.diagonal_weight_senders;
+
     const bool overlap_act_cb =
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).overlapped_by_cb.has_value();
     // When split reader is enabled with overlapped CBs, both readers write to the same circular buffer.
@@ -748,6 +754,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
         if (populate_skipped_work_cores) {
             mcast_sender_cores = input_cores.subtract(mcast_receiver_cores);
+        }
+        if (diag_weight_senders) {
+            // Each weight-slice line gets its sender at a different position (transpose: row y -> x = y % num_cores_x,
+            // otherwise column x -> y = x % num_cores_y), so the interleaved-DRAM weight reads do not share one line
+            // of NoC links. Every core runs the sender kernel with the weights role as a runtime arg
+            // (WEIGHTS_DIAG_UNIFIED): a separate receiver kernel on the grid minus a diagonal would fragment dispatch.
+            mcast_sender_cores = all_cores;
+            mcast_receiver_cores = CoreRangeSet();
         }
         act_mcast_sender_semaphore_id = push_semaphore(all_cores);
         act_mcast_receiver_semaphore_id = push_semaphore(all_cores);
@@ -915,6 +929,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     }
     if (skip_weights_mcast) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
+    }
+    if (diag_weight_senders) {
+        writer_mcast_sender_defines["WEIGHTS_DIAG_UNIFIED"] = "1";
     }
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
     if (fused_activation.has_value() && !pack_relu) {
@@ -1168,7 +1185,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     // Optional writer_mcast_receiver kernel (created only when weights mcast is not skipped).
     KernelDescriptor writer_mcast_receiver_desc;
-    const bool create_writer_mcast_receiver = !skip_weights_mcast;
+    const bool create_writer_mcast_receiver = !skip_weights_mcast && !diag_weight_senders;
     if (create_writer_mcast_receiver) {
         writer_mcast_receiver_desc.kernel_source = writer_mcast_receiver_kernel;
         writer_mcast_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -1346,7 +1363,47 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             if (block_sharded) {
                 const bool is_sender_core = input_cores.contains(core);
                 // 2D multicast setup
-                if (transpose_mcast) {
+                if (diag_weight_senders) {
+                    // The weight-slice line of this core is its row (transpose) or its column; the line's sender is
+                    // its diagonal core. The multicast covers the whole line (the NoC skips the source core), so
+                    // num_dests stays line_len - 1.
+                    const CoreCoord core_physical = device->worker_core_from_logical_core(core);
+                    CoreCoord sender_logical;
+                    std::vector<uint32_t> mcast_coords;
+                    uint32_t line_len;
+                    if (transpose_mcast) {
+                        sender_logical = {(std::size_t)(core.y % num_cores_x), (std::size_t)core.y};
+                        mcast_coords = setup_mcast_args(
+                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                            top_left_core_physical.x,
+                            core_physical.y,
+                            bottom_right_core_physical.x,
+                            core_physical.y);
+                        line_len = num_cores_x;
+                    } else {
+                        sender_logical = {(std::size_t)core.x, (std::size_t)(core.x % num_cores_y)};
+                        mcast_coords = setup_mcast_args(
+                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                            core_physical.x,
+                            top_left_core_physical.y,
+                            core_physical.x,
+                            bottom_right_core_physical.y);
+                        line_len = num_cores_y;
+                    }
+                    const CoreCoord sender_physical = device->worker_core_from_logical_core(sender_logical);
+                    sender_rt_args.append(mcast_coords);
+                    sender_rt_args.push_back(line_len - 1);  // mcast_num_dests
+                    sender_rt_args.push_back(line_len - 1);  // mcast_num_cores
+                    sender_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                    sender_rt_args.push_back(weights_mcast_receiver_semaphore_id);
+                    sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
+                    sender_rt_args.push_back(uint32_t{0});  // skip_work
+                    // WEIGHTS_DIAG_UNIFIED extra args: role, sender noc x, sender noc y
+                    sender_rt_args.push_back(static_cast<uint32_t>(core == sender_logical));
+                    sender_rt_args.push_back(sender_physical.x);
+                    sender_rt_args.push_back(sender_physical.y);
+                    writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
+                } else if (transpose_mcast) {
                     CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
                     CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
                     TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");

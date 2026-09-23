@@ -129,6 +129,11 @@ struct Conv2dConfig {
     // Replicate: pads by replicating the nearest edge pixel.
     sliding_window::PaddingMode padding_mode = sliding_window::PaddingMode::Zeros;
 
+    // BLOCK_SHARDED only: place the weight multicast senders on a diagonal of the grid instead of one row / column,
+    // with one writer kernel for senders and receivers. Applies when input and output grids are the same single
+    // rectangle; otherwise ignored.
+    bool diagonal_weight_senders = false;
+
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
         "activation",
@@ -150,7 +155,8 @@ struct Conv2dConfig {
         "enable_activation_reuse",
         "force_split_reader",
         "override_output_sharding_config",
-        "padding_mode");
+        "padding_mode",
+        "diagonal_weight_senders");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -173,7 +179,8 @@ struct Conv2dConfig {
             std::cref(this->enable_activation_reuse),
             std::cref(this->force_split_reader),
             std::cref(this->override_output_sharding_config),
-            std::cref(this->padding_mode));
+            std::cref(this->padding_mode),
+            std::cref(this->diagonal_weight_senders));
     }
 };
 
@@ -218,6 +225,7 @@ struct Conv2dParams {
     bool config_tensors_in_dram = false;
     uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
+    bool diagonal_weight_senders = false;
 
     static constexpr auto attribute_names = std::make_tuple(
         "sliding_window_config",
@@ -237,7 +245,8 @@ struct Conv2dParams {
         "full_inner_dim",
         "enable_activation_reuse",
         "config_tensors_in_dram",
-        "force_split_reader");
+        "force_split_reader",
+        "diagonal_weight_senders");
 
     auto attribute_values() const {
         return std::make_tuple(
@@ -258,7 +267,8 @@ struct Conv2dParams {
             this->full_inner_dim,
             this->enable_activation_reuse,
             this->config_tensors_in_dram,
-            this->force_split_reader);
+            this->force_split_reader,
+            this->diagonal_weight_senders);
     }
 };
 
