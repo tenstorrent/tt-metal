@@ -1,0 +1,72 @@
+name: "Prepare test matrix"
+description: >-
+  Runs .github/scripts/utils/prepare_test_matrix.py in place, pinned to
+  whatever ref the caller's own @ref resolves to. Callers currently use a
+  local path (./...) since this action does not exist on main yet; once this
+  PR merges, every caller should switch to @main so a pipeline always builds
+  its matrix with the current script rather than whatever copy (or lack of
+  one) its own branch carries.
+
+inputs:
+  tests-yaml:
+    description: "Path to the tests yaml (tests_yaml_path positional)"
+    required: true
+  enabled-skus:
+    description: "Comma-separated SKUs, or ALL_SKUS_IN_TESTS (enabled_skus positional)"
+    required: true
+  sku-config:
+    description: "Path to sku_config.yaml (sku_config_yaml_path positional)"
+    required: true
+  event:
+    description: "--event value, e.g. pull_request or merge_group. Omit to skip the flag."
+    required: false
+    default: ""
+  sku-allowlist:
+    description: >-
+      --sku-allowlist value. '*' (the default) omits the flag entirely (no
+      filter); an empty string means skip all tests -- a real, distinct value
+      from omitting the flag, so this is a dedicated input rather than folded
+      into a generic args string that would lose it to word-splitting;
+      anything else is a comma-separated SKU list.
+    required: false
+    default: "*"
+  allow-missing-cmd:
+    description: "Set to 'true' to pass --allow-missing-cmd"
+    required: false
+    default: "false"
+
+outputs:
+  matrix:
+    description: "JSON array of matrix rows"
+    value: ${{ steps.build.outputs.matrix }}
+  sim-libs:
+    description: "JSON array of ttsim libs the matrix needs fetched"
+    value: ${{ steps.build.outputs.sim-libs }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Build test matrix
+      id: build
+      shell: bash
+      run: |
+        # A bash array, not a whitespace-joined string: --sku-allowlist "" (skip
+        # all tests) is a real, distinct value from omitting the flag, and an
+        # unquoted string passthrough loses that empty element to word-splitting.
+        args=("${{ inputs.tests-yaml }}" "${{ inputs.enabled-skus }}" "${{ inputs.sku-config }}")
+        if [[ -n "${{ inputs.event }}" ]]; then
+          args+=(--event "${{ inputs.event }}")
+        fi
+        if [[ "${{ inputs.sku-allowlist }}" != '*' ]]; then
+          args+=(--sku-allowlist "${{ inputs.sku-allowlist }}")
+        fi
+        if [[ "${{ inputs.allow-missing-cmd }}" == "true" ]]; then
+          args+=(--allow-missing-cmd)
+        fi
+        # GITHUB_ACTION_PATH is this action's directory inside the checkout of
+        # this repo at the ref the caller's `uses:` line resolved (@main, once
+        # callers are updated post-merge). The script two levels up from there
+        # is that same checkout's copy, so running it in place -- rather than a
+        # copy bundled into this action -- is what makes pinning this action
+        # pin the script.
+        python3 "${GITHUB_ACTION_PATH}/../../scripts/utils/prepare_test_matrix.py" "${args[@]}"
