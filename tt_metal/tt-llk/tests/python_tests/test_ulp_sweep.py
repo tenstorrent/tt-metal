@@ -13,6 +13,7 @@ import math
 import pytest
 import torch
 from helpers.format_config import DataFormat
+from helpers.llk_params import MathOperation
 from helpers.ulp_sweep import (
     EMIT_HEADROOM,
     MEASURED,
@@ -21,6 +22,10 @@ from helpers.ulp_sweep import (
     record,
     write_table,
 )
+
+#: An op whose registered domain is wide, so the non-finite tests below turn on the
+#: exclusion they mean to test rather than on the domain.
+_OP = MathOperation.Abs
 
 #: One op block with a row of each kind write_table has to tell apart.
 _TABLE = """Gelu:  # header provenance, ungeneratable
@@ -146,7 +151,11 @@ def test_a_nonfinite_disagreement_is_reported_rather_than_only_masked_out():
 
     measurable = measurable_mask(src, golden, result, fmt)
     assert measurable.tolist() == [True, False, True]
-    assert nonfinite_failures(src, golden, result, fmt).tolist() == [False, True, False]
+    assert nonfinite_failures(_OP, src, golden, result, fmt, fmt).tolist() == [
+        False,
+        True,
+        False,
+    ]
 
 
 def test_a_flushed_subnormal_input_is_not_a_nonfinite_failure():
@@ -156,4 +165,51 @@ def test_a_flushed_subnormal_input_is_not_a_nonfinite_failure():
     src = torch.tensor([tiny], dtype=torch.bfloat16)
     golden = torch.tensor([1.0], dtype=torch.bfloat16)
     result = torch.tensor([float("inf")], dtype=torch.bfloat16)
-    assert not nonfinite_failures(src, golden, result, DataFormat.Float16_b).any()
+    assert not nonfinite_failures(
+        _OP, src, golden, result, DataFormat.Float16_b, DataFormat.Float16_b
+    ).any()
+
+
+def test_a_golden_past_the_output_range_is_not_a_nonfinite_failure():
+    """A full-range sweep of a bf16 input reaches magnitudes a Float16 output cannot
+    hold, and `relu_min` passes most of them straight through -- 14,334 lanes of it.
+    Saturating there is the store doing what it must, not the kernel being wrong."""
+    src = torch.tensor([1e5], dtype=torch.bfloat16)
+    golden = torch.tensor([1e5], dtype=torch.bfloat16)
+    result = torch.tensor([float("nan")], dtype=torch.bfloat16)
+    assert not nonfinite_failures(
+        _OP, src, golden, result, DataFormat.Float16_b, DataFormat.Float16
+    ).any()
+    # ...but a golden the output can hold, from an input the op is defined at, is.
+    assert nonfinite_failures(
+        _OP,
+        torch.tensor([1.0], dtype=torch.bfloat16),
+        torch.tensor([1.0], dtype=torch.bfloat16),
+        result,
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+    ).any()
+
+
+def test_an_input_outside_the_ops_domain_is_not_a_nonfinite_failure():
+    """The sweep runs the whole format, far outside what an op registers. `Sin` and
+    `Cos` are registered over [-pi, pi] and disagree on ~21,000 bf16 lanes past it --
+    an argument reduction giving up, not a regression, and the case
+    `measurable_mask`'s own docstring cites. The budget is still measured everywhere;
+    only the non-finite answer needs the op to have been claiming something."""
+    fmt = DataFormat.Float16_b
+    far = torch.tensor([2.6e28], dtype=torch.bfloat16)
+    golden = torch.tensor([-1.0], dtype=torch.bfloat16)
+    result = torch.tensor([float("inf")], dtype=torch.bfloat16)
+    assert not nonfinite_failures(
+        MathOperation.Sin, far, golden, result, fmt, fmt
+    ).any()
+    # Inside [-pi, pi] the same disagreement is a failure.
+    assert nonfinite_failures(
+        MathOperation.Sin,
+        torch.tensor([1.0], dtype=torch.bfloat16),
+        golden,
+        result,
+        fmt,
+        fmt,
+    ).any()

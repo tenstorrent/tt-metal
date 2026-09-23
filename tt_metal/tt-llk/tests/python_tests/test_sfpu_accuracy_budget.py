@@ -479,8 +479,9 @@ def test_a_variant_specific_tolerance_needs_no_driver_override():
 
 
 #: The ops enrolled from the accuracy sweep: 19 transcendentals in P3, and the exact and
-#: predicate ops here take it to 45. Their keys all pin ``input_format``, which is what
-#: makes them the witnesses for the resolution regression below.
+#: predicate ops here, plus ReluMax, SqrtCustom and ReciprocalCompat re-measured in
+#: review, take it to 48. Their keys all pin ``input_format``, which is what makes them
+#: the witnesses for the resolution regression below.
 _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT = frozenset(
     op
     for op, table in _SFPU_ACCURACY_BUDGET.items()
@@ -519,12 +520,12 @@ def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
     ``TOLERANCE_CONTRACT`` and the ULP branch below never ran for any — a test named
     "every enrolled op" exercising only the nine that predate them.
     """
-    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 45, sorted(
+    assert len(_TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT) == 48, sorted(
         op.name for op in _TRANSCENDENTALS_ENROLLED_WITH_AN_INPUT_FORMAT
     )
     saw_ulp = set()
     for op in enrolled_ops():
-        for fmt, contract in _every_variant(op):
+        for _, fmt, contract in _every_variant(op):
             assert contract.metric in (Metric.ULP, Metric.TOLERANCE)
             if contract.metric == Metric.ULP:
                 assert contract.max_ulp is not None and contract.max_ulp >= 0
@@ -561,6 +562,21 @@ def test_enrolled_ops_is_sorted_and_stable():
 # picks it up, but a literal list here would not -- and then every guard in this file
 # quietly stops covering it, which is where a too-wide budget would hide.
 ULP_CAPABLE_FORMATS = list(ULP_FORMATS) + list(_ULP_PROXY_DTYPES)
+
+#: The input axis the guards sweep. Wider than the output axis, and derived from the
+#: table rather than from ``ULP_CAPABLE_FORMATS``: an input format only has to be
+#: *unpackable*, not gateable, so a `{in: Bfp4_b, out: Bfp8_b}` row was invisible to
+#: every guard here while resolving perfectly well for a driver.
+_QUERYABLE_INPUT_FORMATS = sorted(
+    {
+        key.input_format
+        for table in _SFPU_ACCURACY_BUDGET.values()
+        for key in table
+        if key.input_format is not None
+    }
+    | set(ULP_CAPABLE_FORMATS),
+    key=lambda f: f.name,
+) + [None]
 
 #: Every op whose result is exact by construction — sign-bit manipulation, a copy, or an
 #: integer-valued result. None of these can legitimately need a wide budget, so a large
@@ -616,24 +632,84 @@ EXACT_ZERO_BY_CONSTRUCTION = (
 _PACK_PATH_STEPS = 2
 
 
+def _mantissa_bits(fmt):
+    """From the metric's own table, so a format added there is covered here.
+
+    ``0`` for a format with no per-element ULP: the coarser block floats appear on the
+    *input* axis only, where all that matters is that nothing downstream is narrower
+    than they are.
+    """
+    from helpers.ulp import _ULP_DTYPES, has_ulp_gate
+
+    if not has_ulp_gate(fmt):
+        return 0
+    return _ULP_DTYPES[ulp_dtype(fmt)].mantissa_bits
+
+
+def _exact_allowance(op, input_format, output_format):
+    """How much slack an exactly-rounded *op* may carry on one cell, and why.
+
+    Per cell, not per op: the allowance is the cost of the output *pack*, and granting
+    it unconditionally let a row that cannot pay it widen from 0 to 2 with this guard
+    still green.
+
+    Two rules, because the two lists differ in what the pack can move:
+
+    * a value-passing op -- ``Abs``, ``Neg``, ``Identity`` -- pays it on every cell,
+      same-format included. Dest holds fp32 and the pack back to a 16-bit output rounds,
+      which is exactly the single step the table records for all three on bf16->bf16.
+    * an op in ``EXACT_ZERO_BY_CONSTRUCTION`` writes 1.0/0.0, a constant, or an integer,
+      and those survive a pack the output format can represent. It pays only where the
+      output has *fewer* mantissa bits than the input: bf16 cannot hold every integer
+      fp16 can, which is the 1 step Floor/Ceil/Trunc/Threshold measure on
+      ``Float16 -> Float16_b`` and nowhere else.
+
+    An unset *input_format* resolves the row that wildcards ``in:``, which covers the
+    narrowing cells too, so it gets the allowance.
+    """
+    if output_format in _ULP_PROXY_DTYPES:
+        # Not skipped, as it used to be. A block float's spacing is the block's rather
+        # than the op's, which is why the exhaustive rows that measured 2-3 steps into
+        # Bfp8_b are parked on `metric: tolerance` -- so any Bfp8_b row that *is* on the
+        # ULP metric here is the 0-step enrolment, and the only other magnitude bound
+        # left for it is the 25.6-step usable ceiling. A regenerated 20 would have
+        # passed every host guard in this file.
+        return 0, "a Bfp8_b ULP row here is the 0-step enrolment or nothing"
+    if op not in EXACT_ZERO_BY_CONSTRUCTION:
+        return (
+            _PACK_PATH_STEPS,
+            "the value passes through an fp32 Dest and is packed back",
+        )
+    if input_format is None:
+        return (
+            _PACK_PATH_STEPS,
+            "the row wildcards `in:`, so it covers a narrowing cell",
+        )
+    if _mantissa_bits(output_format) < _mantissa_bits(input_format):
+        return _PACK_PATH_STEPS, "the output has fewer mantissa bits than the input"
+    return 0, "the output can represent every value this op produces from that input"
+
+
 @pytest.mark.parametrize("op", EXACT_ZERO_BY_CONSTRUCTION, ids=lambda op: op.name)
 def test_an_exactly_rounded_op_carries_a_zero_budget(op):
     """ "Any drift at all is a regression" is this stack's claim for these ops, and a
     budget of 1 would retire it silently -- the provenance guard permits a measured 0 to
-    be written as 1, so nothing else here would notice."""
+    be written as 1, so nothing else here would notice.
+
+    The pack-path allowance is per *cell*, not per op: a same-format row performs no
+    output conversion, and a predicate's 1.0/0.0 is exact everywhere, so both are held
+    at 0 while a converting cell may carry ``_PACK_PATH_STEPS``.
+    """
     seen = False
-    for fmt, contract in _every_variant(op):
-        if fmt in _ULP_PROXY_DTYPES:
-            # A block float's spacing comes from an exponent shared across 16 elements,
-            # so what it costs an exact op is the block's, not the op's. The table keeps
-            # every other Bfp8_b judgement on that footing too.
-            continue
+    for in_fmt, fmt, contract in _every_variant(op):
         if contract.metric == Metric.ULP:
             seen = True
-            assert contract.max_ulp <= _PACK_PATH_STEPS, (
-                f"{op.name} on {fmt.name} carries max_ulp={contract.max_ulp}. This op "
-                "is exactly rounded by construction; anything past the pack path is the "
-                "contract going away. Re-measure before widening it."
+            allowance, why = _exact_allowance(op, in_fmt, fmt)
+            assert contract.max_ulp <= allowance, (
+                f"{op.name} on {in_fmt and in_fmt.name}->{fmt.name} carries "
+                f"max_ulp={contract.max_ulp}, past the {allowance} it may have because "
+                f"{why}. This op is exactly rounded by construction; anything more is "
+                "the contract going away. Re-measure before widening it."
             )
     assert seen, f"{op.name} resolves to no ULP contract at all; the row was dropped"
 
@@ -646,6 +722,10 @@ def _refuses(match, kind=ValueError):
 def _every_variant(op):
     """Every contract an op can resolve to, across the whole keyed variant space.
 
+    Yields ``(input_format, output_format, contract)``: the input is part of the answer,
+    not only part of the query, because whether a cell *converts* is what decides how
+    much slack an exactly-rounded op may carry.
+
     Passing only ``output_format`` is not enough: by the ``matches()`` rule an unset
     caller dimension cannot match a key that sets one, so any ``BudgetKey(arch=...)``,
     ``BudgetKey(dest_acc=...)`` or ``BudgetKey(input_format=...)`` entry is invisible to
@@ -655,12 +735,12 @@ def _every_variant(op):
     ``test_no_budget_exceeds_its_formats_meaningful_ceiling`` covering 9 ops instead of 28.
     """
     for fmt in ULP_CAPABLE_FORMATS:
-        for input_format in list(ULP_CAPABLE_FORMATS) + [None]:
+        for input_format in _QUERYABLE_INPUT_FORMATS:
             for approx_mode in list(ApproximationMode) + [None]:
                 for dest_acc in list(DestAccumulation) + [None]:
                     # arch is required; None is unrepresentable.
                     for arch in ChipArchitecture:
-                        yield fmt, accuracy_contract(
+                        yield input_format, fmt, accuracy_contract(
                             op,
                             output_format=fmt,
                             input_format=input_format,
@@ -676,15 +756,17 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
     slack they may carry; more than that is not the op, and a budget hiding it defeats
     the point of having these enrolled as the canaries. The allowance is two steps rather
     than one because the exhaustive sweep reaches the magnitudes where a cross-format
-    output actually rounds -- a sampled domain measured those cells at 0."""
-    for fmt, contract in _every_variant(op):
-        if fmt in _ULP_PROXY_DTYPES:
-            continue  # a block float's spacing is the block's, not the op's
+    output actually rounds -- a sampled domain measured those cells at 0. Per cell, not
+    per op: a same-format cell converts nothing, so it gets no allowance at all."""
+    for in_fmt, fmt, contract in _every_variant(op):
         if contract.metric == Metric.ULP:
-            assert contract.max_ulp <= _PACK_PATH_STEPS, (
-                f"{op.name} on {fmt.name} carries max_ulp={contract.max_ulp}. These "
-                "ops are exact by construction; a budget this wide means the number was "
-                "fitted to a failure. Investigate the datapath or the golden instead."
+            allowance, why = _exact_allowance(op, in_fmt, fmt)
+            assert contract.max_ulp <= allowance, (
+                f"{op.name} on {in_fmt and in_fmt.name}->{fmt.name} carries "
+                f"max_ulp={contract.max_ulp}, past the {allowance} it may have because "
+                f"{why}. These ops are exact by construction; a budget this wide means "
+                "the number was fitted to a failure. Investigate the datapath or the "
+                "golden instead."
             )
 
 
@@ -707,7 +789,7 @@ def test_no_budget_exceeds_its_formats_usable_ceiling():
     15616".
     """
     for op in enrolled_ops():
-        for fmt, contract in _every_variant(op):
+        for _, fmt, contract in _every_variant(op):
             if contract.metric != Metric.ULP:
                 continue
             ceiling = usable_budget_ceiling(fmt)
@@ -740,25 +822,29 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
 
     The exhaustive sweep does not enrol a block float at all, whatever it measures: it
     enumerates a format in value order, so sixteen adjacent values share a block and the
-    exponent fits all of them. `Abs` reads 393 steps there from random mixed-magnitude
-    blocks and 3 from the sorted sweep, and the second number would gate nothing. Every
-    op in this set is enrolled from a row measured the other way.
+    exponent fits all of them -- the best case for quantization, not a representative
+    one. `Abs` and `Neg` read 393 steps that way and their rows are parked on
+    `metric: tolerance` because of it, not because of the number. Every op still
+    enrolled here is enrolled from a row measured the other way.
     """
     enrolled_on_bfp8 = {
         op
         for op in enrolled_ops()
-        for fmt, contract in _every_variant(op)
+        for _, fmt, contract in _every_variant(op)
         if fmt is DataFormat.Bfp8_b and contract.metric == Metric.ULP
     }
     assert enrolled_on_bfp8 == {
         MathOperation.Floor,
         MathOperation.Ceil,
         MathOperation.Trunc,
-        # A constant fill and a clamp are block-friendly for the same reason an integer
-        # is: the value the block exponent has to represent is one the input already
-        # had, so the shared exponent is the one bf16 would have picked.
+        # Fill is block-friendly by a different mechanism from the three above, and a
+        # stronger one: its output is a single constant, so every block is uniform
+        # whatever the input held and the shared exponent is exact by construction.
+        # Threshold is *not* here. Its sampled 0 came from uniform(-5, 5) against
+        # THRESHOLD_T=5.0, where the pass-through branch never fires and the output is
+        # likewise the constant 10.0 -- but the exhaustive sweep, whose domain reaches
+        # past the threshold, reads 16545, so that 0 described the domain and not the op.
         MathOperation.Fill,
-        MathOperation.Threshold,
     }
 
 
@@ -798,6 +884,12 @@ def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format(
     three specs are static ``uniform(-10, 10)`` today, but `_OP_DOMAIN_REGISTRY` entries
     may be callables of `data_format` -- `_reciprocal_spec` already is -- so a
     format-sensitive spec here could push one input pipeline past the bound.
+
+    Floor/Ceil/Trunc only, though five ops are enrolled on Bfp8_b. This bounds the
+    *input* spec, and the fifth -- ``Fill`` -- produces a constant outside its input
+    range, so including it would pass without testing anything. Its enrolment rests on
+    the block being uniform rather than on the domain, which
+    ``test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b`` states instead.
     """
     spec = exclude_undefined(
         op, for_op_pipeline(op, input_format, DataFormat.Bfp8_b).spec_A

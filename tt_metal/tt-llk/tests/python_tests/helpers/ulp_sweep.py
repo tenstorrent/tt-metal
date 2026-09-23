@@ -118,22 +118,71 @@ def measurable_mask(
     return both_measurable & ~nonfinite_mismatches(golden, result) & normal_input
 
 
+def _within_safe_domain(
+    op, src: torch.Tensor, input_format: DataFormat
+) -> torch.Tensor:
+    """Lanes whose input is inside the domain ``sfpu_domains`` registers for *op*.
+
+    The sweep deliberately runs outside it -- that is the whole point, and the budget is
+    measured over everything. This is used only to judge *non-finite* answers, where the
+    distinction matters: outside the registered domain an op is not claiming anything,
+    and ``sin(2.6e28)`` returning ``inf`` against a golden of ``-1`` is an argument
+    reduction giving up, not a regression.
+    """
+    from helpers.sfpu_domains import exclude_undefined, for_op
+
+    spec = exclude_undefined(op, for_op(op, input_format).spec_A)
+    magnitude = src.detach().to(torch.float32)
+    inside = torch.ones_like(magnitude, dtype=torch.bool)
+    if spec.low is not None:
+        inside &= magnitude >= spec.low
+    if spec.high is not None:
+        inside &= magnitude <= spec.high
+    intervals = getattr(spec, "intervals", None)
+    if intervals:
+        covered = torch.zeros_like(inside)
+        for low, high in intervals:
+            covered |= (magnitude >= low) & (magnitude <= high)
+        inside &= covered
+    return inside
+
+
 def nonfinite_failures(
+    op,
     src: torch.Tensor,
     golden: torch.Tensor,
     result: torch.Tensor,
     input_format: DataFormat,
+    output_format: DataFormat,
 ) -> torch.Tensor:
     """The lanes :func:`measurable_mask` drops that are a *failure* rather than a
-    non-question: the two sides disagreeing about being non-finite, on a normal input.
+    non-question: the two sides disagreeing about being non-finite where the output
+    format could have held the answer.
 
     ``passed_test`` rejects these positionally whatever the budget says, but the sweep
     driver ranks a distance rather than calling it, so it has to ask separately -- a
     hardware overflow or an unexpected NaN would otherwise leave the statistics clean
     and both emit and gate would pass.
 
-    Subnormal inputs are excluded on the same grounds as in the mask: the unpack path
-    flushes them and the golden does not, so a disagreement there is the flush.
+    Three exclusions, all of them the sweep's own doing rather than the op's:
+
+    * **subnormal inputs**, on the same grounds as in the mask -- the unpack path
+      flushes them and the golden does not, so a disagreement there is the flush.
+    * **a golden past the output format's finite range.** A full-range sweep feeds
+      every value of a 16-bit input, and ``relu_min`` passes most of them straight
+      through, so a bf16 input against a Float16 output reaches magnitudes fp16 cannot
+      represent -- 14,334 lanes of it. Saturating there is the store doing what it must
+      (on WH an fp16 destination overflow packs NaN, not Inf), not the kernel being
+      wrong, and no budget on any op could be met.
+    * **an input outside the op's registered safe domain.** ``Sin`` and ``Cos`` are
+      registered over ``[-pi, pi]`` and disagree on ~21,000 bf16 lanes far outside it,
+      which is the case ``measurable_mask``'s own docstring cites. The budget is still
+      measured over the whole format; it is only the *non-finite* answer that needs the
+      op to have been claiming something.
+
+    What is left is the case the mask would otherwise hide: an op returning ``inf`` or
+    ``NaN`` where it is defined, the input is normal, and the output could have held
+    the answer.
     """
     from helpers.llk_params import format_dict
 
@@ -144,7 +193,14 @@ def nonfinite_failures(
     normal_input = (magnitude >= torch.finfo(stimuli_dtype).smallest_normal) | (
         magnitude == 0
     )
-    return nonfinite_mismatches(golden, result) & normal_input
+    output_max = torch.finfo(format_dict[stimuli_format_for(output_format)]).max
+    in_range = golden.detach().to(torch.float32).abs() <= output_max
+    return (
+        nonfinite_mismatches(golden, result)
+        & normal_input
+        & in_range
+        & _within_safe_domain(op, src, input_format)
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
