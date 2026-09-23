@@ -109,6 +109,34 @@ Caveat: this comes from grepping for the usual spellings of the flag, so a compi
 externally supplied `CMAKE_CXX_FLAGS` could still introduce it, and it says nothing about how
 consumers outside this repo build.
 
+### Empty-call behaviour
+
+All contenders are configured to **throw**, matching `std::function`. Note this is one place the
+alias deliberately does not match its eventual replacement: calling an empty `std::move_only_function`
+is UB, whereas these throw.
+
+fu2 can abort instead, via its `IsThrowing` template parameter. zoo cannot — `Executor::DefaultExecutor`
+is a `constexpr static`, not a policy affordance. Keeping both throwing is what makes the comparison
+symmetric; it also keeps behaviour identical to the `std::function` call sites being migrated, so
+anything catching `bad_function_call` keeps working.
+
+**Neither choice touches the hot path.** Both libraries put the empty case in the erased slot rather
+than branching per call: zoo's `operator()` is an unconditional `executor_(args..., this)`, where an
+empty object simply holds a throwing `DefaultExecutor`, and fu2's vtable holds `empty_invoker::invoke`.
+There is no `if (empty)` in a normal invocation, so there is no call-time cost to buy back.
+
+Nor is there much size in it. Measured on the same TU with fu2 at `IsThrowing` true vs false:
+
+| Compiler | `.o` | `.text` | `.eh_frame` + `.gcc_except_table` |
+| --- | --- | --- | --- |
+| g++-12 | 99,656 → 99,352 (−304) | 12,298 → 12,261 | 2,660 → **2,660** |
+| clang++-20 | 54,096 → 53,752 (−344) | 5,659 → 5,618 | 1,928 → **1,928** |
+
+The exception-handling sections are byte-identical, because `throw` appears once per signature in
+`empty_invoker`, not once per erased callable. Dropping it removes that single thunk and the
+`bad_function_call` RTTI, ~0.3-0.6% of the object. So abort-vs-throw is a behaviour decision, not a
+size optimisation.
+
 ### Release tagging
 
 `fu2` publishes release tags (latest **4.2.5**). `zoo` publishes **no tags at all**, only branches,
