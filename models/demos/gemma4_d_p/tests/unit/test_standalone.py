@@ -35,11 +35,16 @@ def test_smaller_or_multiple_galaxies_are_rejected(shape, expect_error):
         MeshConfig(SimpleNamespace(shape=shape))
 
 
-# At CP8 a 512-token chunk leaves a 64-token Q slab, so the 1024-token window needs 16 halo hops > 8.
-@pytest.mark.parametrize("chunk_size", [0, -8192, 512, 8193])
-def test_invalid_chunk_geometry_fails_before_weight_loading(chunk_size, expect_error):
-    with expect_error(ValueError, "positive|whole CP-local tiles|halo hops"):
-        create_tt_model(MeshConfig(SimpleNamespace(shape=(8, 4))), max_seq_len=32768, prefill_chunk_size=chunk_size)
+# At CP8, 512 and 1536 leave 64- and 192-token Q slabs, neither a multiple of the 128-token sliding K chunk;
+# 1536 divides its 15360-token context, so only the K-chunk rule rejects it.
+@pytest.mark.parametrize(
+    "chunk_size, max_seq_len", [(0, 32768), (-8192, 32768), (512, 32768), (8193, 32768), (1536, 15360)]
+)
+def test_invalid_chunk_geometry_fails_before_weight_loading(chunk_size, max_seq_len, expect_error):
+    with expect_error(ValueError, "positive|whole CP-local tiles|sliding K chunk|halo hops"):
+        create_tt_model(
+            MeshConfig(SimpleNamespace(shape=(8, 4))), max_seq_len=max_seq_len, prefill_chunk_size=chunk_size
+        )
 
 
 @pytest.mark.parametrize("cp,chunk_size", [(8, 8192), (4, 4096), (8, 16384), (8, 32768)])

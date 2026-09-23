@@ -17,6 +17,9 @@ import ttnn
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM, GLOBAL_ROTARY_DIM
 
+# Sliding layers' K chunk. ring_joint requires it to divide the per-rank Q slab (chunk / CP).
+SLIDING_K_CHUNK_SIZE = 128
+
 TILE_HEIGHT = 32
 
 
@@ -365,7 +368,7 @@ def _ring_prefill_attention(
         # at 32k, per-chunk device time at ring depth 7: k=256 gives 197.8 ms against 201.2 at
         # k=128. q stays 64: it is a true optimum, worse in both directions (214.8 ms at q=32,
         # 221.7 at q=128), and q>=256 overflows L1.
-        _k_chunk = 128 if sliding_window_size else 256
+        _k_chunk = SLIDING_K_CHUNK_SIZE if sliding_window_size else 256
         program_config = ring_prefill_program_config(mesh_device, ccl_manager, head_dim, k_chunk_size=_k_chunk)
     cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
