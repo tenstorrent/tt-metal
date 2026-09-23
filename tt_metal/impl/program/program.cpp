@@ -1724,8 +1724,9 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
         relay_dfb->config.num_entries,
         slot.ring_size / relay_dfb->config.entry_size);
     TT_FATAL(
-        relay_dfb->config.entry_size == slot.entry_size,
-        "PrefetcherPipe relay entry size {} must match the slot entry_size {}",
+        slot.entry_size % relay_dfb->config.entry_size == 0,
+        "PrefetcherPipe relay entry size {} must divide the slot entry_size {}: a relay pages each pipe entry as a "
+        "whole number of its own entries",
         relay_dfb->config.entry_size,
         slot.entry_size);
     const CoreRangeSet& relay_cores = relay_dfb->core_ranges;

@@ -55,7 +55,8 @@
 
 #ifdef ENABLE_PREFETCHER_PIPE
 #ifdef ARCH_QUASAR
-#error "PrefetcherPipe weight delivery into this matmul needs matmul_block_in1_at, which Quasar lacks"
+#error \
+    "PrefetcherPipe weight delivery into this matmul pages the relay finer than the pipe, which Quasar relays do not support"
 #endif
 #include "api/dataflow/prefetcher_pipe.h"
 #endif
@@ -219,8 +220,9 @@ void kernel_main() {
 //  READER
 #if defined(ENABLE_PREFETCHER_PIPE)
     // in1 is a relay laid over this worker's PrefetcherPipe ring, so the prefetcher's K-blocks arrive
-    // already in place: this kernel only turns a delivered entry into in1 credit for compute and, once
-    // compute is done with it, that entry's credit back into an ack to the sender. One accessor names
+    // already in place: this kernel only turns a delivered entry (one K-block) into in1 credit for
+    // compute (its tiles, one relay page each) and, once compute is done with it, that entry's credit
+    // back into an ack to the sender. One accessor names
     // every pipe; the one present on this worker is the one bound here. bind_relay() aligns in1 to the
     // pipe's durable cursor (firmware resets it at launch) and makes pop_front wait for compute. The
     // pipe lives to the end of kernel_main; its destructor stores the cursor back.
@@ -328,8 +330,8 @@ void kernel_main() {
 #if defined(ENABLE_PREFETCHER_PIPE)
                         // One K-block of lookahead over the pipe: publish this block to compute, then
                         // hand the previous block's entry back to the sender once compute has drained
-                        // it. One in1 entry is one K-block, which is also one pipe entry.
-                        in1_relay.reserve_back(1);
+                        // it. One pipe entry is one K-block, published as its in1_block_num_tiles tiles.
+                        in1_relay.reserve_back(in1_block_num_tiles);
                         pipe.wait_front(block == 0 ? 1u : 2u);
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
@@ -407,10 +409,10 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
 #if defined(ENABLE_PREFETCHER_PIPE)
-                        // pop_front waits for compute to have popped that block out of in1 before
-                        // acking it, so no free-space spin is needed. Publish only through the relay
+                        // pop_front waits for compute to have popped that block's tiles out of in1
+                        // before acking it, so no free-space spin is needed. Publish only through the relay
                         // view: pushing dfb_in1 as well would double the credit compute sees.
-                        in1_relay.push_back(1);
+                        in1_relay.push_back(in1_block_num_tiles);
                         if (block >= 1) {
                             pipe.pop_front(1, noc);
                         }

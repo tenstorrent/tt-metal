@@ -1721,10 +1721,23 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
     }
 
     {
-        // Relay entry size must match the pipe parameter's.
+        // A relay may page each pipe entry as a whole number of its own entries (two here), except
+        // on Quasar, where a relay pages exactly like the pipe.
         m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 256, .with_relay = true});
         spec.dataflow_buffers[0].entry_size = 128;
         spec.dataflow_buffers[0].num_entries = 8;
+        if (is_quasar_arch()) {
+            EXPECT_THROW(m2::MakeProgramFromSpec(*mesh_device, spec), std::exception);
+        } else {
+            EXPECT_NO_THROW(m2::MakeProgramFromSpec(*mesh_device, spec));
+        }
+    }
+
+    {
+        // A relay entry coarser than the pipe entry is rejected; the ring stays exactly covered.
+        m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 256, .with_relay = true});
+        spec.dataflow_buffers[0].entry_size = 512;
+        spec.dataflow_buffers[0].num_entries = 2;
         EXPECT_THROW(m2::MakeProgramFromSpec(*mesh_device, spec), std::exception);
     }
 

@@ -3682,10 +3682,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         dataflow_buffers.size(),
         dataflow_buffers.front().unique_id.get());
 
-    // in1. Under PrefetcherPipe delivery it is a relay over the pipes' rings, one entry per K-block:
-    // the prefetcher writes whole K-blocks, and compute addresses the tiles inside one
-    // (matmul_block_in1_at). Every pipe is declared as a parameter and bound by the in1 reader under
-    // one accessor; each worker holds exactly one pipe's receiver.
+    // in1. Under PrefetcherPipe delivery it is a relay over the pipes' rings. The pipes carry one
+    // K-block per entry, which is what the prefetcher writes; the relay pages each entry as its
+    // tiles, so compute consumes in1 exactly as it does from DRAM. The ring is a whole number of
+    // K-blocks, so a block's tiles never wrap. Every pipe is declared as a parameter and bound by the
+    // in1 reader under one accessor; each worker holds exactly one pipe's receiver.
     Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
     Group<PrefetcherPipeParamName> prefetcher_pipe_names;
     const uint32_t in1_pipe_entry_size = in1_block_tiles * in1_single_tile_size;
@@ -3715,8 +3716,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         }
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN1_DFB,
-            .entry_size = in1_pipe_entry_size,
-            .num_entries = ring_size / in1_pipe_entry_size,
+            .entry_size = in1_single_tile_size,
+            .num_entries = ring_size / in1_single_tile_size,
             .data_format_metadata = in1_data_format,
             .tile_format_metadata = in1_tile,
             .advanced_options = {.prefetcher_pipe_relays = prefetcher_pipe_names},
