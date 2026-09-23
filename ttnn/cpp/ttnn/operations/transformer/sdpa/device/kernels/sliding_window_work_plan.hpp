@@ -125,8 +125,10 @@ constexpr uint32_t chunked_sliding_halo_source_start_tile(
 // chunked_sliding_halo_hop_count). Sized for a full ring of predecessors plus the local slab so the
 // fixed array covers every legal chunked layout without a dynamic container.
 struct SlidingQWorkPlan {
-    // One range per halo hop plus this device's own slab. build_sliding_q_work_plan returns an EMPTY
-    // plan on overflow, so validate_on_program_cache_miss rejects deeper halos up front.
+    // One range per halo hop plus this device's own slab. A halo never needs more hops than the ring
+    // has devices, and chunked sliding attention accepts rings of at most 8 (SP8, validated in
+    // ring_joint_sdpa_device_operation.cpp), so 8 covers every legal layout. build_sliding_q_work_plan
+    // returns an EMPTY plan on overflow, so validate_on_program_cache_miss rejects deeper halos up front.
     static constexpr uint32_t max_halo_hops = 8;
     static constexpr uint32_t max_source_ranges = max_halo_hops + 1;
 
