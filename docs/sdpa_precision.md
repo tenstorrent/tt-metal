@@ -79,7 +79,9 @@ so they need a multiple of 64 rows. Ring recipes also need a multiple of 64 so
 that every raw state plane stays a whole transfer page. The host rejects a
 layout that exceeds unreserved L1 before dispatch; at K512, Q320 fits FAST and
 the BFP8/BFP4 LOW_PRECISION storage choices but not B, C, D or BF16 E. Q224
-runs FAST, BALANCED and ACCURATE; Q288 runs only FAST (C/D exceed L1).
+runs FAST, BALANCED and ACCURATE; Q288 runs only FAST (C/D exceed L1). Ring adds its own
+buffers to the recipe layout, so ring Q320 fits only the BFP8/BFP4
+LOW_PRECISION choices (and FAST with one Q block per worker).
 
 Q256 remains the frozen, bit-for-bit qualified geometry. Other Q chunks keep
 each recipe's arithmetic but are **not bit-identical** to Q256: Phase 2

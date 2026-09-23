@@ -2005,6 +2005,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     .format_descriptors = {{CBFormatDescriptor{
                         .buffer_index = index, .data_format = tt::DataFormat::UInt32, .page_size = 4096}}}});
         }
+        // Every recipe and ring CB spans the whole worker grid; reject before program creation.
+        uint64_t cb_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            cb_bytes += cb.total_size;
+        }
+        auto* device = input_tensor_q.device();
+        const uint64_t available =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        TT_FATAL(
+            cb_bytes <= available,
+            "Named ring SDPA recipe needs {} bytes of L1 per core at Q{}/K512, but only {} are available; use a smaller "
+            "Q chunk",
+            cb_bytes,
+            Sq_chunk_t * tt::constants::TILE_HEIGHT,
+            available);
     }
 
     const std::vector<uint32_t> cb_compile_time_args = {
