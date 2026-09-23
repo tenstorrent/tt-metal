@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 
+from ..geometry_cache import GeometryWeightCache
 from .conv import (
     AGREEMENT_TOLERANCE,
     accurate_compute_config,
@@ -62,7 +63,10 @@ class TtConvTranspose1d:
         self.dtype = dtype
 
         self.weight = ttnn.from_torch(weight.unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self._prep_cache: dict = {}
+        # Per-geometry caches, threshold-evicted on real DRAM pressure -- see
+        # geometry_cache.py and TtConv1d's identical pattern (same class, same
+        # ownership-transfer reasoning applies here unchanged).
+        self._prep_cache = GeometryWeightCache(device)
         # Host copies, used only as the tie-break reference in `_verify_and_resolve`.
         self._host_weight = weight.detach().float().clone()
         self._host_bias = bias.detach().float().clone() if bias is not None else None
@@ -90,7 +94,7 @@ class TtConvTranspose1d:
         # checks both axes together regardless, same as TtConv1d.
         # Maps (length, batch_size) -> the (weight, bias, compute_config) triple
         # that measured correct.
-        self._verified_config: dict = {}
+        self._verified_config = GeometryWeightCache(device)
 
     @classmethod
     def from_module(cls, device, module, **kw):
@@ -111,8 +115,9 @@ class TtConvTranspose1d:
 
     def _prepared(self, nhwc, length: int, batch_size: int):
         key = (length, batch_size)
-        if key in self._prep_cache:
-            return self._prep_cache[key]
+        cached = self._prep_cache.get(key)
+        if cached is not None:
+            return cached
         kw = dict(
             input_memory_config=nhwc.memory_config(),
             input_layout=nhwc.layout,
@@ -140,7 +145,8 @@ class TtConvTranspose1d:
                 TtConvTranspose1d._warned = True
                 logger.warning(f"prepare_conv_transpose2d_weights unavailable, stays untraceable: {str(e)[:200]}")
             w, b = self.weight, self.bias
-        self._prep_cache[key] = (w, b)
+        owned = [t for t in (w, b) if t is not None and t is not self.weight and t is not self.bias]
+        self._prep_cache.put(key, owned, (w, b))
         return w, b
 
     def _conv_transpose(self, nhwc, weight, bias, length: int, batch_size: int, compute_config):
@@ -198,7 +204,7 @@ class TtConvTranspose1d:
         ref_host = self._to_host(ref, batch_size, lo)
         if relative_error(fast_host, ref_host) <= AGREEMENT_TOLERANCE:
             ttnn.deallocate(ref)
-            self._verified_config[key] = (weight, bias, self.compute_config)
+            self._resolve(key, (weight, bias, self.compute_config))
             return out
 
         raw_accurate = self._conv_transpose(nhwc, self.weight, self.bias, length, batch_size, self.compute_config)
@@ -220,21 +226,37 @@ class TtConvTranspose1d:
             + ", ".join(f"{n} {e:.4g}" for n, e in errors.items())
             + f" -> using {best}"
         )
-        chosen_tensor, self._verified_config[key] = candidates[best]
+        chosen_tensor, resolved = candidates[best]
+        self._resolve(key, resolved)
         for name, (t, _) in candidates.items():
             if name != best:
                 ttnn.deallocate(t)
         return chosen_tensor
 
+    def _resolve(self, key, resolved: tuple) -> None:
+        """See TtConv1d._resolve -- identical ownership-transfer reasoning: if the
+        winning weight/bias are `_prep_cache[key]`'s prepared tensors, ownership moves to
+        `_verified_config` (`discard`); otherwise any prepared tensors for this key are
+        now unused and `pop` frees them for real."""
+        weight, bias, _ = resolved
+        prepared = self._prep_cache.get(key)
+        if prepared is not None and prepared[0] is weight and prepared[1] is bias:
+            self._prep_cache.discard(key)
+        else:
+            self._prep_cache.pop(key)
+        owned = [t for t in (weight, bias) if t is not None and t is not self.weight and t is not self.bias]
+        self._verified_config.put(key, owned, resolved)
+
     def __call__(self, x, length: int, batch_size: int = 1):
         """x: ttnn [B, L, C_in] -> (ttnn [B, L_out, C_out], L_out)."""
         nhwc = ttnn.reshape(x, (batch_size, 1, length, self.in_channels))
         key = (length, batch_size)
+        verified = None if self.compute_config is None else self._verified_config.get(key)
         if self.compute_config is None:
             weight, bias = self._prepared(nhwc, length, batch_size)
             out = self._conv_transpose(nhwc, weight, bias, length, batch_size, None)
-        elif key in self._verified_config:
-            weight, bias, compute_config = self._verified_config[key]
+        elif verified is not None:
+            weight, bias, compute_config = verified
             out = self._conv_transpose(nhwc, weight, bias, length, batch_size, compute_config)
         else:
             weight, bias = self._prepared(nhwc, length, batch_size)
@@ -242,3 +264,9 @@ class TtConvTranspose1d:
             out = self._verify_and_resolve(nhwc, weight, bias, length, batch_size, out, key)
         lo = self.out_length(length)
         return ttnn.reshape(out, (batch_size, lo, self.out_channels)), lo
+
+    def release_caches(self) -> None:
+        """See TtConv1d.release_caches -- same purpose, same "not needed for normal
+        per-utterance operation" note."""
+        self._prep_cache.clear()
+        self._verified_config.clear()

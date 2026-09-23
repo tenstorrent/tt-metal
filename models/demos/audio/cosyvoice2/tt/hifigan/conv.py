@@ -26,6 +26,8 @@ from loguru import logger
 
 import ttnn
 
+from ..geometry_cache import GeometryWeightCache
+
 
 def config_tensors_in_dram() -> bool:
     """Whether conv/halo config tensors go to DRAM instead of the L1_SMALL bank.
@@ -186,7 +188,11 @@ class TtConv1d:
         # OIHW with H=1, which is what prepare_conv_weights wants for a 1-D conv.
         self._weight_4d = ttnn.from_torch(weight.unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.weight = ttnn.from_torch(weight, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self._prep_cache: dict = {}
+        # Per-geometry prepared-weight cache, threshold-evicted on real DRAM pressure --
+        # see geometry_cache.py's module docstring for why (this is what was silently
+        # unbounded before, and streaming will need the identical mechanism for its own
+        # chunk-shape churn).
+        self._prep_cache = GeometryWeightCache(device)
         # Host copies, used only as the tie-break reference in `_verify_and_resolve`.
         self._host_weight = weight.detach().float().clone()
         self._host_bias = bias.detach().float().clone() if bias is not None else None
@@ -207,8 +213,11 @@ class TtConv1d:
         # defects this catches. Maps (input_length, batch_size) -> the
         # (weight, bias, compute_config) triple that measured correct for
         # that geometry, so a disagreement is resolved once, not re-checked
-        # (and not silently re-broken) on every subsequent call.
-        self._verified_config: dict = {}
+        # (and not silently re-broken) on every subsequent call. Same
+        # threshold-evicted cache class as `_prep_cache`, but a SEPARATE
+        # instance: the two can have different lifetimes for the same key
+        # (see `_verify_and_resolve`'s ownership-transfer note).
+        self._verified_config = GeometryWeightCache(device)
 
     @classmethod
     def from_module(cls, device, module, **kw):
@@ -236,8 +245,9 @@ class TtConv1d:
         and slower) if unavailable on this build.
         """
         key = (input_length, batch_size)
-        if key in self._prep_cache:
-            return self._prep_cache[key]
+        cached = self._prep_cache.get(key)
+        if cached is not None:
+            return cached
         # `prepare_conv_weights`/`prepare_conv_bias` are conv2d-level ops, so unlike `ttnn.conv1d` itself
         # (which accepts a conv1d-shaped `int` or `(pad_left, pad_right)` and does this translation
         # internally -- see `conv1d.cpp`) they need the conv2d padding spelled out: `(pad_height, pad_width)`
@@ -271,7 +281,12 @@ class TtConv1d:
                 TtConv1d._warned = True
                 logger.warning(f"prepare_conv_weights unavailable, convs stay untraceable: {str(e)[:200]}")
             w, b = self.weight, self.bias
-        self._prep_cache[key] = (w, b)
+        # Only tensors genuinely prepared FOR THIS GEOMETRY are this cache slot's to free --
+        # the fallback (w, b) = (self.weight, self.bias) are the conv's own permanent raw
+        # weights, shared across every geometry, and must never be deallocated by a
+        # per-geometry eviction.
+        owned = [t for t in (w, b) if t is not None and t is not self.weight and t is not self.bias]
+        self._prep_cache.put(key, owned, (w, b))
         return w, b
 
     def _conv(self, x, weight, bias, input_length: int, batch_size: int, compute_config):
@@ -379,7 +394,7 @@ class TtConv1d:
         ref_host = self._to_host(ref, batch_size, out_length)
         if relative_error(fast_host, ref_host) <= AGREEMENT_TOLERANCE:
             ttnn.deallocate(ref)
-            self._verified_config[key] = (weight, bias, self.compute_config)
+            self._resolve(key, (weight, bias, self.compute_config))
             return out
 
         raw_accurate, _ = self._conv(x, self.weight, self.bias, input_length, batch_size, self.compute_config)
@@ -401,19 +416,42 @@ class TtConv1d:
             + ", ".join(f"{n} {e:.4g}" for n, e in errors.items())
             + f" -> using {best}"
         )
-        chosen_tensor, self._verified_config[key] = candidates[best]
+        chosen_tensor, resolved = candidates[best]
+        self._resolve(key, resolved)
         for name, (t, _) in candidates.items():
             if name != best:
                 ttnn.deallocate(t)
         return chosen_tensor
 
+    def _resolve(self, key, resolved: tuple) -> None:
+        """Records the winning (weight, bias, compute_config) for `key` in
+        `_verified_config`, and settles `_prep_cache`'s bookkeeping for the same key:
+        if the winning weight/bias ARE `_prep_cache[key]`'s prepared tensors, ownership
+        transfers to `_verified_config` (`discard`, not `pop` -- a `pop` here would
+        deallocate tensors `_verified_config` is about to reference, a double-free the
+        moment ITS entry is later evicted). Otherwise (raw weight won, or nothing was
+        ever prepared) any prepared tensors for this key are now unused -- `pop` frees
+        them for real."""
+        weight, bias, _ = resolved
+        prepared = self._prep_cache.get(key)
+        # Identity, not equality: ttnn.Tensor's `==` is elementwise (matching torch's own
+        # tensor semantics), not a single bool -- `is` is the only correct way to ask "is
+        # this the SAME tensor _prep_cache already owns," which is all that matters here.
+        if prepared is not None and prepared[0] is weight and prepared[1] is bias:
+            self._prep_cache.discard(key)
+        else:
+            self._prep_cache.pop(key)
+        owned = [t for t in (weight, bias) if t is not None and t is not self.weight and t is not self.bias]
+        self._verified_config.put(key, owned, resolved)
+
     def __call__(self, x, input_length: int, batch_size: int = 1):
         key = (input_length, batch_size)
+        verified = None if self.compute_config is None else self._verified_config.get(key)
         if self.compute_config is None:
             weight, bias = self._prepared(x, input_length, batch_size)
             out, out_length = self._conv(x, weight, bias, input_length, batch_size, None)
-        elif key in self._verified_config:
-            weight, bias, compute_config = self._verified_config[key]
+        elif verified is not None:
+            weight, bias, compute_config = verified
             out, out_length = self._conv(x, weight, bias, input_length, batch_size, compute_config)
         else:
             weight, bias = self._prepared(x, input_length, batch_size)
@@ -424,6 +462,15 @@ class TtConv1d:
         # residual adds and permutes downstream legal.
         out = ttnn.reshape(out, (batch_size, out_length, self.out_channels))
         return out, out_length
+
+    def release_caches(self) -> None:
+        """Explicitly frees every geometry this instance has prepared/verified, all at
+        once -- the threshold-based eviction in `GeometryWeightCache` already keeps DRAM
+        bounded automatically, so this is for a natural session boundary (e.g. between
+        sessions, not between utterances), not something normal per-utterance operation
+        needs to call."""
+        self._prep_cache.clear()
+        self._verified_config.clear()
 
     @staticmethod
     def out_length(length: int, kernel_size: int, stride: int, padding: int, dilation: int) -> int:
