@@ -100,24 +100,29 @@ def _strip_comment(line: str) -> Tuple[str, str]:
     return body, comment.strip() if sep else ""
 
 
-def _provenance_by_op(text: str) -> Dict[str, List[str]]:
-    """Each op's row comments, in file order.
+def _provenance_by_op(text: str) -> Dict[str, Tuple[str, List[str]]]:
+    """Each op's header comment and its row comments, in file order.
 
     The comments are the half PyYAML throws away, and they are what says whether a
     raised budget was re-measured. Scanned positionally and zipped with the loaded
     rows below, which is sound only while every row is a single inline mapping --
     checked, not assumed.
+
+    The header is returned too because the table puts the run identity there, once per
+    op, and 42 gated rows carry no inline comment at all. Their provenance would
+    otherwise be permanently empty, so a raise on one could never register as
+    re-measured and the audit would report `no` whatever the author did.
     """
-    by_op: Dict[str, List[str]] = {}
+    by_op: Dict[str, Tuple[str, List[str]]] = {}
     op: Optional[str] = None
     for line in text.splitlines():
         head = re.match(r"^([A-Za-z_]\w*):", line)
         if head:
             op = head.group(1)
-            by_op.setdefault(op, [])
+            by_op.setdefault(op, (_strip_comment(line)[1], []))
             continue
         if op is not None and line.strip().startswith("- "):
-            by_op[op].append(_strip_comment(line)[1])
+            by_op[op][1].append(_strip_comment(line)[1])
     return by_op
 
 
@@ -135,10 +140,14 @@ def parse_table(text: str) -> Dict[Cell, Row]:
     for op, entries in loaded.items():
         if not isinstance(entries, list):
             continue
-        found = comments.get(op, [])
+        header, found = comments.get(op, ("", []))
         # A row split over several lines would slide every comment after it by one.
         # Rather than mislabel provenance, drop it for that op and keep the budgets.
         aligned = found if len(found) == len(entries) else [""] * len(entries)
+        # The op header is the default; a row's own comment overrides it. So a row with
+        # no comment inherits the run identity that governs it, and updating either one
+        # registers as a re-measurement.
+        aligned = [row_comment or header for row_comment in aligned]
         for fields, provenance in zip(entries, aligned):
             if not isinstance(fields, dict):
                 continue
@@ -397,10 +406,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         regressions = [c for c in changes if c.is_regression]
         status = 0 if (not regressions or args.allow_raises) else 1
         if regressions and args.allow_raises:
+            # The label is the single override, deliberately: one visible act by a
+            # second person, which removing re-runs the check. What it must not do is
+            # hide *which* rows it admitted without a fresh measurement, so those are
+            # named here and the workflow raises a warning annotation for them.
+            unmeasured = [c for c in regressions if not c.remeasured]
             report += (
                 f"\n_Allowed: the `{args.label_hint}` label is set on this pull "
-                "request._\n"
+                f"request, admitting {len(regressions)} loosened gate(s)._\n"
             )
+            if unmeasured:
+                report += (
+                    f"\n**{len(unmeasured)} of them carry no fresh measurement** -- "
+                    "the row's provenance comment is unchanged, so the budget was "
+                    "edited rather than re-measured:\n\n"
+                    + "".join(
+                        f"- `{(c.after or c.before).describe()}`\n"
+                        for c in unmeasured[:_MAX_ROWS]
+                    )
+                )
+                if len(unmeasured) > _MAX_ROWS:
+                    report += f"- _… {len(unmeasured) - _MAX_ROWS} more_\n"
     else:
         table = parse_table(args.table.read_text(encoding="utf-8"))
         rows = [

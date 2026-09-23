@@ -138,6 +138,46 @@ def test_an_anchor_and_its_alias_are_both_real_rows():
     assert table[("SigmoidAppx", ())].provenance == "same cause, same number"
 
 
+def test_a_row_without_a_comment_inherits_its_op_header():
+    """The table puts the run identity on the op header, once, and 42 gated rows carry
+    no inline comment at all. Without the fallback their provenance is permanently
+    empty, so a raise on one could never register as re-measured and the audit would
+    report `no` whatever the author did.
+
+    A row's own comment still wins, so a per-row measurement is not masked by the
+    header.
+    """
+    base = parse_table(
+        "Abs:  # measured by: sweep A, wormhole, 2026-01-01\n"
+        "  - {out: Float32, max_ulp: 1}\n"
+        "  - {out: Float16_b, max_ulp: 1}  # max 0 ULP, its own row\n"
+    )
+    assert base[("Abs", (("out", "Float32"),))].provenance.startswith(
+        "measured by: sweep A"
+    )
+    assert base[("Abs", (("out", "Float16_b"),))].provenance == "max 0 ULP, its own row"
+
+    # Raising the comment-less row and re-measuring shows up through the header.
+    head = parse_table(
+        "Abs:  # measured by: sweep B, wormhole, 2026-02-02\n"
+        "  - {out: Float32, max_ulp: 4}\n"
+        "  - {out: Float16_b, max_ulp: 1}  # max 0 ULP, its own row\n"
+    )
+    raised = [c for c in compare(base, head) if c.is_regression]
+    assert [c.kind for c in raised] == ["raised"]
+    assert raised[0].remeasured, "a header-only re-measurement must count"
+
+    # And a raise with the header untouched still reports as not re-measured.
+    stale = parse_table(
+        "Abs:  # measured by: sweep A, wormhole, 2026-01-01\n"
+        "  - {out: Float32, max_ulp: 4}\n"
+        "  - {out: Float16_b, max_ulp: 1}  # max 0 ULP, its own row\n"
+    )
+    raised = [c for c in compare(base, stale) if c.is_regression]
+    assert [c.kind for c in raised] == ["raised"]
+    assert not raised[0].remeasured
+
+
 def test_a_merge_key_row_is_read_through():
     """`yaml_table` gained `<<` support, so the table may use it; values come from
     PyYAML here for exactly that reason."""
@@ -261,51 +301,58 @@ def test_a_measurement_resolves_against_the_most_specific_row():
     assert over == 1  # 50 is inside the broad 100 but past the specific 1
 
 
-def test_the_tool_runs_with_nothing_but_pyyaml(tmp_path):
+def test_the_tool_imports_nothing_but_the_standard_library_and_yaml():
     """The PR check runs on a slim runner: no torch, no ttexalens, no LLK venv.
 
-    Two things have to hold and neither is obvious. The module must not reach into
-    `helpers.ulp` or anything that imports torch — and it must be invoked as a *file*
-    rather than `-m helpers.ulp_budget_diff`, because `helpers/__init__.py` imports
-    ttexalens and a module invocation would drag that in. The workflow calls it by
-    path for exactly this reason.
+    Read off the module's own AST rather than by launching an interpreter. A subprocess
+    proves it for one environment and trips the repo's command-injection scanner; the
+    import list is the actual property, and checking it is exact.
+
+    The other half is that the workflow must invoke the tool as a *file*, not
+    `-m helpers.ulp_budget_diff`: `helpers/__init__.py` imports ttexalens, so a module
+    invocation would drag it in whatever this module imports. That is asserted below.
     """
-    import subprocess
+    import ast
     import sys
-    import textwrap
     from pathlib import Path
 
     tool = Path(__file__).parent / "helpers" / "ulp_budget_diff.py"
-    probe = tmp_path / "probe.py"
-    probe.write_text(
-        textwrap.dedent(
-            f"""
-            import runpy, sys
-            class Blocker:
-                def find_module(self, name, path=None):
-                    if name.split(".")[0] in ("torch", "ttexalens"):
-                        raise AssertionError("pulled in " + name)
-                    return None
-            sys.meta_path.insert(0, Blocker())
-            sys.argv = ["ulp_budget_diff", "diff",
-                        "--base", {str(tmp_path / 'a.yaml')!r},
-                        "--head", {str(tmp_path / 'a.yaml')!r}]
-            try:
-                runpy.run_path({str(tool)!r}, run_name="__main__")
-            except SystemExit as exc:
-                sys.exit(exc.code or 0)
-            """
-        )
-    )
-    (tmp_path / "a.yaml").write_text(
-        "Abs:\n  - {out: Float32, max_ulp: 1}  # max 0 ULP\n"
-    )
+    tree = ast.parse(tool.read_text(encoding="utf-8"))
+    roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            # A relative import would reach back into `helpers`, which is the thing
+            # this module must not do.
+            assert node.level == 0, f"relative import of {node.module!r}"
+            if node.module:
+                roots.add(node.module.split(".")[0])
 
-    done = subprocess.run(
-        [sys.executable, str(probe)], capture_output=True, text=True, timeout=120
+    allowed = set(sys.stdlib_module_names) | {"yaml"}
+    assert roots <= allowed, f"imports outside stdlib + yaml: {sorted(roots - allowed)}"
+    assert "helpers" not in roots and "torch" not in roots
+
+
+def test_the_workflow_invokes_the_tool_by_path_not_as_a_module():
+    """`helpers/__init__.py` imports ttexalens, which the slim runner does not have, so
+    `-m helpers.ulp_budget_diff` would fail there however clean this module's own
+    imports are."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[4]
+    workflow = repo / ".github/workflows/llk-sfpu-ulp-budget-guard.yaml"
+    if not workflow.exists():  # pragma: no cover - the guard ships with the workflow
+        pytest.skip("workflow not in this checkout")
+    # Comments stripped: the workflow explains in prose why it does *not* use `-m`,
+    # and that sentence is not an invocation.
+    body = "\n".join(
+        line
+        for line in workflow.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
     )
-    assert done.returncode == 0, done.stderr
-    assert "No budget changed" in done.stdout
+    assert "helpers/ulp_budget_diff.py diff" in body
+    assert "-m helpers.ulp_budget_diff" not in body
 
 
 # ─────────────────────────────────────────────────────────────────────────────

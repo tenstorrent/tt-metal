@@ -27,13 +27,19 @@ name: "LLK SFPU accuracy sweep"
 
 on:
   schedule:
-    # 03:00 UTC, clear of the 01:00 e2e run so they are not competing for cards.
-    - cron: "0 3 * * *"
+    # 05:30 UTC. Not 01:00 (llk-e2e) and not 03:00, which llk-bit-exact and llk-perf
+    # both hold with 90- and 150-minute budgets on the same wh_n150_civ2 pool -- a third
+    # 45-minute reservation on that minute would queue all three.
+    - cron: "30 5 * * *"
   pull_request:
     paths:
       # The kernels whose accuracy the table describes...
       - "tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/sfpu/**"
       - "tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu*"
+      # ...including the wrapper tree, which is where the 110 ckernel_sfpu_*.h live and
+      # which the test compiler puts on the include path (helpers/test_config.py).
+      # Without it a change to one of those headers would not trigger the sweep.
+      - "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/**"
       # ...the table itself, and the machinery that measures and judges it.
       - "tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.*"
       - "tt_metal/tt-llk/tests/python_tests/helpers/ulp*.py"
@@ -70,7 +76,7 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: Check sweep results
-        uses: re-actors/alls-green@release/v1
+        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # release/v1
         with:
           jobs: ${{ toJSON(needs) }}
 

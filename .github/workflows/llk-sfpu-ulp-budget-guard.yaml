@@ -132,6 +132,19 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
 
+      - name: Warn when the label admitted a gate
+        # Green is not silent: an override still annotates the run, and the report
+        # names any row it admitted without a fresh measurement.
+        if: ${{ steps.compare.outputs.status == '0' && env.OVERRIDDEN == 'true' }}
+        env:
+          OVERRIDDEN: ${{ contains(github.event.pull_request.labels.*.name, 'ulp-budget-raise-approved') }}
+        run: |
+          if grep -q "loosen a gate" ulp_budget_report.md; then
+            echo "::warning title=SFPU ULP budget loosened under label::A gate was \
+            loosened and the '$OVERRIDE_LABEL' label admitted it. See the job summary \
+            for which rows, and whether each was re-measured."
+          fi
+
       - name: Fail if a gate was loosened
         if: steps.compare.outputs.status != '0'
         run: |
