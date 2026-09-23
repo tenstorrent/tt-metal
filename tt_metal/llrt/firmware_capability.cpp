@@ -20,7 +20,9 @@ void compare_requested_and_actual_capabilities(
     // DRAM programmable cores are a Blackhole-only feature; off unless the BLACKHOLE case below
     // confirms the firmware supports them.
     resolved.dram_programmable_cores = false;
-    resolved.eth_ptp_trace = false;
+    // Only Blackhole's HAL acts on this, but it feeds the build key, so clearing it off-Blackhole would
+    // desync from the offline-compiled build key and miss every precompiled binary.
+    resolved.eth_ptp_trace = requested.eth_ptp_trace;
 
     switch (arch) {
         case tt::ARCH::BLACKHOLE: {
@@ -48,10 +50,20 @@ void compare_requested_and_actual_capabilities(
             resolved.dram_programmable_cores = requested.dram_programmable_cores && bundle_fw_ok;
 
             // debug_buf_t gained its scratchpad in 1.8.0; stamping into older firmware would land on
-            // live syseng state. As above, an unknown version is treated as NOT ok.
+            // live syseng state. Unlike the bundle version, an unknown eth version is ok: it is only
+            // unset when discovery inspected no ethernet core, and a core metal never sees is a core
+            // we never stamp.
             constexpr tt::umd::SemVer k_min_eth_ptp_trace_version(1, 8, 0);
             const bool ptp_trace_fw_ok =
-                fw_versions.eth_fw && (fw_versions.eth_fw.value() >= k_min_eth_ptp_trace_version);
+                !fw_versions.eth_fw || (fw_versions.eth_fw.value() >= k_min_eth_ptp_trace_version);
+            if (requested.eth_ptp_trace && !ptp_trace_fw_ok) {
+                log_warning(
+                    tt::LogLLRuntime,
+                    "Blackhole PTP trace stamping requires ethernet firmware version {} or higher, but detected "
+                    "version {}. Disabling PTP trace stamping.",
+                    k_min_eth_ptp_trace_version.to_string(),
+                    fw_versions.eth_fw ? fw_versions.eth_fw->to_string() : "unknown");
+            }
             resolved.eth_ptp_trace = requested.eth_ptp_trace && ptp_trace_fw_ok;
             break;
         }

@@ -341,7 +341,7 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
 
-    // Requested on Blackhole; resolved down when base FW predates debug_buf_t::scratchpad.
+    // Only Blackhole acts on this; resolved down when base FW predates debug_buf_t::scratchpad.
     bool eth_ptp_trace = true;
 
     // Tri-state override for Blackhole DRAM programmable cores in the HAL:
