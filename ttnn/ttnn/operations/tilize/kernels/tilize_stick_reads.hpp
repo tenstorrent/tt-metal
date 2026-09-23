@@ -201,6 +201,75 @@ struct NoPadFill {
     FORCE_INLINE void complete() {}
 };
 
+// Bytes [offset, offset + bytes) of logical stick `stick` on a paged input (a WIDTH / BLOCK /
+// ND-sharded Layout::ROW_MAJOR tensor cuts every stick into pages of the shard width), one NoC
+// read per page the range overlaps.
+template <uint32_t page_bytes, uint32_t pages_per_stick, typename Accessor>
+FORCE_INLINE void read_paged_segment(
+    const Accessor& accessor, uint32_t stick, uint32_t offset, uint32_t l1_dst, uint32_t bytes) {
+    uint32_t page = stick * pages_per_stick + offset / page_bytes;
+    uint32_t in_page = offset % page_bytes;
+    while (bytes > 0) {
+        const uint32_t chunk = bytes < page_bytes - in_page ? bytes : page_bytes - in_page;
+        noc_async_read(accessor.get_noc_addr(page, in_page), l1_dst, chunk);
+        l1_dst += chunk;
+        bytes -= chunk;
+        ++page;
+        in_page = 0;
+    }
+}
+
+// The stick-segment reads of ONE tile-row, sequence steps s in [s_begin, s_end) of its tile_h
+// sticks: step s reads stick (s + stick_rotation) mod tile_h (the per-core rotated order) into
+// its tilize position l1_base + stick * block_stick_bytes. The single source of a tile-row's
+// stick reads for both of its producers: StickProducer (NCRISC, steps [0, tile_h - co_read)) and,
+// in the co-read regime, the writer (BRISC, steps [tile_h - co_read, tile_h)).
+template <
+    uint32_t tile_h,
+    uint32_t block_stick_bytes,
+    uint32_t page_bytes,
+    uint32_t pages_per_stick,
+    uint32_t noc_split = 0,
+    typename Accessor>
+FORCE_INLINE void read_tile_row_sticks(
+    const Accessor& accessor,
+    uint32_t first_stick,
+    uint32_t l1_base,
+    uint32_t segment_offset,
+    uint32_t segment_bytes,
+    uint32_t stick_rotation,
+    uint32_t s_begin,
+    uint32_t s_end) {
+    for (uint32_t s = s_begin; s < s_end; ++s) {
+        const uint32_t stick = (s + stick_rotation) & (tile_h - 1);
+        const uint32_t l1_dst = l1_base + stick * block_stick_bytes;
+        if constexpr (pages_per_stick == 1) {
+            const uint8_t noc = (noc_split != 0 && (s % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
+            noc_async_read(accessor.get_noc_addr(first_stick + stick, segment_offset, noc), l1_dst, segment_bytes, noc);
+        } else {
+            read_paged_segment<page_bytes, pages_per_stick>(
+                accessor, first_stick + stick, segment_offset, l1_dst, segment_bytes);
+        }
+    }
+}
+
+// Co-read (Refinement 8, CO_READ_SHARE): on a Tensix core whose whole walk is ONE position, the
+// writer RISC-V (BRISC, NoC1) would sit idle until compute finishes, so it issues the last
+// co_read sticks of the tile-row straight into cb_input_sticks' first slot while NCRISC issues
+// the rest; one read-issuing RISC-V is the latency chain there (~40 cycles per stick read).
+// NCRISC stays the CB's only producer (reserve / push); BRISC only fills bytes of the slot, then
+// raises a local L1 flag (a program semaphore) after its read barrier. This is StickProducer's
+// Fill for that walk: complete() runs before the slot is published, waits for the flag and
+// re-arms it for the next launch.
+struct CoReadLanded {
+    volatile tt_l1_ptr uint32_t* flag;
+    explicit CoReadLanded(uint32_t flag_addr) : flag(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_addr)) {}
+    FORCE_INLINE void complete() {
+        noc_semaphore_wait(flag, 1);
+        noc_semaphore_set(flag, 0);
+    }
+};
+
 // One position of the per-core walk.
 template <uint32_t block_width>
 struct Walker {
@@ -291,7 +360,8 @@ template <
     uint32_t noc_split = 0,
     bool eager_publish = false,
     uint32_t stride_banks = 0,
-    bool bank_major = false>
+    bool bank_major = false,
+    uint32_t co_read = 0>
 struct StickProducer {
     static_assert((tile_h & (tile_h - 1)) == 0, "tile_h must be a power of two");
     static_assert(read_ahead >= 1 && read_ahead <= depth, "read_ahead must be in [1, depth]");
@@ -299,6 +369,7 @@ struct StickProducer {
     static_assert(rows_per_slot >= 1, "a slot holds at least one tile-row");
     static_assert(stride_banks == 0 || pages_per_stick == 1, "bank-stride addressing needs one page per stick");
     static_assert(!bank_major || stride_banks != 0, "bank-major order needs bank-stride addressing");
+    static_assert(co_read < tile_h && (co_read == 0 || stride_banks == 0), "co-read: the plain stick order");
     static constexpr uint32_t in_tile_bytes = tile_h * tile_col_bytes;  // tile-sized page: tile_h stick segments
     static constexpr uint32_t row_pages = block_width;                  // pages per tile-row
     static constexpr uint32_t row_bytes = block_width * in_tile_bytes;
@@ -395,7 +466,8 @@ struct StickProducer {
                     noc_async_read(
                         accessor.get_noc_addr(src.first_stick + stick, segment_offset), l1_dst, src.data_bytes);
                 } else {
-                    read_paged_segment(accessor, src.first_stick + stick, segment_offset, l1_dst, src.data_bytes);
+                    read_paged_segment<page_bytes, pages_per_stick>(
+                        accessor, src.first_stick + stick, segment_offset, l1_dst, src.data_bytes);
                 }
             }
         }
@@ -428,18 +500,8 @@ struct StickProducer {
         if constexpr (stride_banks != 0) {
             issue_row_bank_stride(first_stick, l1_base, segment_offset, segment_bytes);
         } else {
-            for (uint32_t s = 0; s < tile_h; ++s) {
-                const uint32_t stick = (s + stick_rotation) & (tile_h - 1);
-                const uint32_t l1_dst = l1_base + stick * block_stick_bytes;
-                if constexpr (pages_per_stick == 1) {
-                    const uint8_t noc =
-                        (noc_split != 0 && (s % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
-                    noc_async_read(
-                        accessor.get_noc_addr(first_stick + stick, segment_offset, noc), l1_dst, segment_bytes, noc);
-                } else {
-                    read_paged_segment(accessor, first_stick + stick, segment_offset, l1_dst, segment_bytes);
-                }
-            }
+            read_tile_row_sticks<tile_h, block_stick_bytes, page_bytes, pages_per_stick, noc_split>(
+                accessor, first_stick, l1_base, segment_offset, segment_bytes, stick_rotation, 0, tile_h - co_read);
         }
         close_row();
     }
@@ -488,22 +550,6 @@ struct StickProducer {
                     off += stick_stride_bytes;
                 }
             }
-        }
-    }
-
-    // Bytes [offset, offset + bytes) of logical stick `stick`, split at page boundaries.
-    template <typename Accessor>
-    FORCE_INLINE static void read_paged_segment(
-        const Accessor& accessor, uint32_t stick, uint32_t offset, uint32_t l1_dst, uint32_t bytes) {
-        uint32_t page = stick * pages_per_stick + offset / page_bytes;
-        uint32_t in_page = offset % page_bytes;
-        while (bytes > 0) {
-            const uint32_t chunk = bytes < page_bytes - in_page ? bytes : page_bytes - in_page;
-            noc_async_read(accessor.get_noc_addr(page, in_page), l1_dst, chunk);
-            l1_dst += chunk;
-            bytes -= chunk;
-            ++page;
-            in_page = 0;
         }
     }
 

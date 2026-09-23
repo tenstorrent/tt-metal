@@ -27,6 +27,11 @@
 // value (PadFill: fill_l1_range stores for short ranges, NoC loopback copies from a
 // pre-filled source for long ones), all before the slot is pushed.
 //
+// Co-read (CT `co_read`, Refinement 8): when every Tensix core's walk is ONE position, this
+// RISC-V issues the first tile_h - co_read stick reads of the tile-row and the writer RISC-V
+// (BRISC, NoC1) the rest into the same reserved slot; the slot is pushed after this RISC-V's
+// read barrier AND the writer's landed flag (tilize_stick_reads.hpp CoReadLanded).
+//
 // Resident input (CT `input_resident`, sharded_resident regime): cb_input_sticks
 // is backed on this Tensix core's own input shard, which already holds the
 // tilize stick layout, so load_block is a publish of the shard's pages: no NoC
@@ -327,12 +332,15 @@ void kernel_main() {
     constexpr bool w_tail_persist = get_compile_time_arg_val(25) != 0;    // padded: band-fill first pass only
     constexpr uint32_t coalesce_depth = get_compile_time_arg_val(26);     // 0, else bank_coalesced staging units
     constexpr bool coalesce_scatter_write = get_compile_time_arg_val(27) != 0;  // loopback writes, else reads
-    constexpr auto input_args = TensorAccessorArgs<28>();
+    constexpr uint32_t co_read = get_compile_time_arg_val(28);      // 0, else sticks per tile-row BRISC reads
+    constexpr uint32_t co_read_sem = get_compile_time_arg_val(29);  // co-read: the landed flag's semaphore id
+    constexpr auto input_args = TensorAccessorArgs<30>();
     static_assert(!padded || !split_reader, "the split reader has no pad path");
     static_assert(
         coalesce_depth == 0 || (!padded && !split_reader && pages_per_stick == 1),
         "bank_coalesced: whole unpadded sticks");
     static_assert(!padded || depth_in + 1 <= 15, "the fill's transaction id follows the slots' 1..depth_in");
+    static_assert(co_read == 0 || (!padded && !split_reader && coalesce_depth == 0), "co-read: the plain stick walk");
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
@@ -408,7 +416,8 @@ void kernel_main() {
         read_noc_split,
         eager_publish,
         bank_stride ? NUM_DRAM_BANKS : 0,
-        bank_stride == 2>
+        bank_stride == 2,
+        co_read>
         producer(stick_rotation);
     producer.prime(input_accessor, row_start * tile_h, stick_page_bytes);
 
@@ -435,5 +444,12 @@ void kernel_main() {
             producer.issue_row(input_accessor, walk.row(), walk.first_col(), walk.valid_width());
         }
     }
-    producer.complete_all();
+    if constexpr (co_read != 0) {
+        // Co-read (host-gated to a one-position walk): the slot is published only once the
+        // writer's share of its sticks has landed too.
+        tilize_dataflow::CoReadLanded writer_landed(get_semaphore(co_read_sem));
+        producer.complete_all(writer_landed);
+    } else {
+        producer.complete_all();
+    }
 }

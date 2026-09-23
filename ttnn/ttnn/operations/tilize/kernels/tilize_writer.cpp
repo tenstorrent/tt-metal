@@ -24,6 +24,10 @@
 // Tile-rows are walked with the same per-core rotation as the reader
 // (tilize_stick_reads.hpp), so the CB FIFO order agrees.
 //
+// Co-read (CT `co_read`, Refinement 8): on a one-position walk this RISC-V first reads the last
+// co_read sticks of the tile-row into cb_input_sticks' slot (NCRISC reads the rest and stays
+// the CB's only producer), then raises the landed flag NCRISC waits on before its push.
+//
 // Resident output (CT `output_resident`, sharded_resident regime):
 // cb_output_tiles is backed on this Tensix core's own output shard and compute
 // packs straight into it, so store_block issues no NoC write; this kernel only
@@ -52,7 +56,10 @@ void kernel_main() {
     constexpr uint32_t write_noc_split = get_compile_time_arg_val(14);   // parked: 0, else other-NoC write period
     constexpr uint32_t depth_out = get_compile_time_arg_val(15);         // cb_output_tiles slots (quanta)
     constexpr uint32_t write_ahead = get_compile_time_arg_val(16);       // CB quanta of tile writes in flight
-    constexpr auto output_args = TensorAccessorArgs<17>();
+    constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(17);   // co-read: the slot this RISC-V fills
+    constexpr uint32_t co_read = get_compile_time_arg_val(18);           // 0, else sticks per tile-row read here
+    constexpr uint32_t co_read_sem = get_compile_time_arg_val(19);       // co-read: the landed flag's semaphore id
+    constexpr auto output_args = TensorAccessorArgs<20>();
     constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -64,6 +71,26 @@ void kernel_main() {
     const uint32_t row_rotation = get_arg_val<uint32_t>(6);
     const uint32_t src_addr = get_arg_val<uint32_t>(7);  // input stick buffer (split reader only)
     const uint32_t stick_rotation = get_arg_val<uint32_t>(8);
+
+    static_assert(co_read == 0 || !split_reader, "co-read and the split reader are exclusive");
+    if constexpr (co_read != 0) {
+        // Co-read (host-gated to a one-position walk, so the CB is empty and its first slot is
+        // where NCRISC's reserve lands): read the last co_read sticks of the tile-row on this
+        // RISC-V's NoC, then flag them landed. NCRISC stays cb_input_sticks' only producer.
+        tilize_dataflow::Walker<block_width> load_walk(
+            row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+        tilize_dataflow::read_tile_row_sticks<tile_h, block_width * tile_col_bytes, page_bytes, pages_per_stick>(
+            TensorAccessor(input_args, src_addr, stick_page_bytes),
+            load_walk.row() * tile_h,
+            get_write_ptr(cb_input_sticks),
+            load_walk.first_col() * tile_col_bytes,
+            load_walk.valid_width() * tile_col_bytes,
+            stick_rotation & (tile_h - 1),
+            tile_h - co_read,
+            tile_h);
+        noc_async_read_barrier();
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(co_read_sem)), 1);
+    }
 
     if constexpr (output_resident) {
         cb_wait_front(cb_output_tiles, core_row_tiles * block_width);

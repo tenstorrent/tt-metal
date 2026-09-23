@@ -268,6 +268,30 @@ BANK_COALESCE_MAX_STICK_BYTES = 256
 # (scatter-only 8.8 vs 8.1 us; [1,1,16384,32] 14259 vs 13215): parked off, a live knob.
 BANK_COALESCE_SCATTER_WRITE = False
 
+# ---- Refinement 8: co-read (tiny work). When every Tensix core's walk is ONE position (one
+# tile-row of one column block: [1,1,128,64] on 8 cores, [1,1,32,2048] on 64), nothing overlaps
+# across tile-rows and the op is a latency chain: read issue -> read landing -> tilize -> write.
+# Its longest link is the stick-read issue on one RISC-V (~45 cycles per NoC read: five command
+# registers + the ready poll; 32 reads ~1.46 us of a ~3.0 us op), while the writer RISC-V sits
+# idle in cb_wait_front. Co-read hands the last CO_READ_SHARE of every tile-row's stick reads to
+# the writer RISC-V (BRISC, NoC1), which reads them straight into cb_input_sticks' slot and raises
+# a local semaphore NCRISC waits on before its push (NCRISC stays the CB's only producer).
+# 0 = off (NCRISC reads every stick). Only the plain stick walk (not padded / coalesced / split
+# reader / bank-stride / NoC-split) takes it.
+# Measured on WH B0, bf16, device-kernel ns (median of 2-3), off -> on at 0.5:
+#   DRAM  [1,1,128,64] (8 cores, 64 B segments) 2988 -> 2300   [1,1,32,2048] (64, 64 B) 3818 -> 3463
+#         [1,1,2048,32] (64, 64 B; was bank_coalesced) 4318 -> 3405   [1,1,2048,64] (128 B) 5949 -> 5344
+#   share 0.375 / 0.4375 / 0.5 / 0.5625 / 0.625 on [1,1,128,64]: 2591 / 2402 / 2300 / 2521 / 2447
+CO_READ_SHARE = 0.5
+CO_READ_SEM = 0  # semaphore id of the writer's "co-read landed" flag (the op's only semaphore)
+# Where it engages, by the input's BufferType: (min, max) stick-segment bytes, None = unbounded.
+# The writer's share travels on NoC1, which reads DRAM poorly: past ~128 B a DRAM read is no
+# longer issue-bound and the NoC1 half loses (192 B +4.6 %, 256 B +3..6 %, 512 B..2 KiB +26..31 %,
+# medians of 3). An L1 source reads well on both NoCs: interleaved L1 wins at every width
+# ([1,1,2048,W], 64 cores: 128 B -14 %, 512 B -24 %, 1 KiB -17 %, 2 KiB -28 %). A sharded L1 input
+# that streams (i.e. is not consumed resident) reads the same L1 banks through the accessor.
+CO_READ_SEGMENT_BYTES = {ttnn.BufferType.DRAM: (0, 128), ttnn.BufferType.L1: (0, None)}
+
 
 # ---- Numeric formats (Refinement 7). cb_input_sticks carries the input dtype and cb_output_tiles
 # the output dtype; the value-preserving cast happens at pack. A 32-bit page (Float32 / Int32 /
@@ -711,9 +735,26 @@ def create_program_descriptor(
     # input in one column block, and the StickProducer-only levers are at their defaults. Its
     # staging ring holds BANK_COALESCE_STAGE_DEPTH quanta of page-strided sticks.
     in_mc = input_tensor.memory_config()
+    max_positions = core_row_tiles_max * _div_up(core_col_tiles_max, block_width)  # busiest core's walk length
+    # Co-read (CO_READ_SHARE): every core's walk is one position, streamed by the plain stick reader,
+    # with a stick segment inside its input BufferType's CO_READ_SEGMENT_BYTES window.
+    co_read = min(tile_h - 1, int(tile_h * CO_READ_SHARE))
+    co_read_min, co_read_max = CO_READ_SEGMENT_BYTES.get(in_mc.buffer_type, (0, -1))
+    segment_bytes = min(block_width, core_col_tiles_max) * TILE_WIDTH * in_elem_bytes
+    if not (
+        co_read > 0
+        and co_read_min <= segment_bytes
+        and (co_read_max is None or segment_bytes <= co_read_max)
+        and max_positions == 1
+        and not (input_resident or retile or split_reader or padded)
+        and READ_NOC_SPLIT == 0
+        and BANK_STRIDE == 0
+    ):
+        co_read = 0
     coalesce_row_bytes = BANK_COALESCE_STAGE_DEPTH * tile_h * stick_page_bytes  # staging per tile-row
     coalesce = (
         BANK_COALESCE_STAGE_DEPTH > 0
+        and co_read == 0  # a one-position walk has nothing to overlap the coalesced scatter with
         and not (input_resident or retile or split_reader or padded)
         and pages_per_stick == 1
         and in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
@@ -730,7 +771,6 @@ def create_program_descriptor(
     )
     if coalesce:
         per_row_bytes += coalesce_row_bytes
-    max_positions = core_row_tiles_max * _div_up(core_col_tiles_max, block_width)  # busiest core's walk length
     # QUANTUM_MIN_TILES counts full 32-row tiles: a tiny tile carries tile_h / 32 of one
     # tile's bytes and per-quantum costs are per handshake, so the floor scales with 32 / tile_h
     # (at tile_h = 1 one "tile" is a single stick segment).
@@ -949,6 +989,8 @@ def create_program_descriptor(
         int(PAD_W_TAIL_PERSIST),
         BANK_COALESCE_STAGE_DEPTH if coalesce else 0,
         int(BANK_COALESCE_SCATTER_WRITE),
+        co_read,
+        CO_READ_SEM,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     writer_ct_args = [
@@ -969,6 +1011,9 @@ def create_program_descriptor(
         write_noc_split,
         depth_out,
         write_ahead,
+        CB_INPUT_STICKS,
+        co_read,
+        CO_READ_SEM,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -1062,6 +1107,8 @@ def create_program_descriptor(
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
-        semaphores=[],
+        semaphores=(
+            [ttnn.SemaphoreDescriptor(id=CO_READ_SEM, core_ranges=all_cores, initial_value=0)] if co_read else []
+        ),
         cbs=cbs + [cb_output_tiles],
     )
