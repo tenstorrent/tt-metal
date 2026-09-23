@@ -170,7 +170,7 @@ set_target_properties(
 )
 
 # MPI-only: this leg is two ranks talking through an RdmaWindow, with no device in the path.
-# Guarded the same way test_h2h_bw.cpp is, so a non-MPI build simply does not build it.
+# Guarded on the MPI target, so a non-MPI build simply does not build it.
 if(TARGET OpenMPI::MPI)
     add_executable(h2h_leg_benchmark)
     target_sources(h2h_leg_benchmark PRIVATE benchmark_h2h_leg.cpp)
