@@ -18,10 +18,10 @@
 #
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> perf).
 
-- name: T3K fabric builder cold/hot
+- name: T3K fabric builder perf cold & hot benchmarks
   cmd: pytest -svv tests/tt_metal/tt_fabric/fabric_builder_perf/test_fabric_builder_perf.py
   skus:
-    wh_llmbox_perf:
+    bh_p300:
       timeout: 5
   team: scaleout
   budget_type: perf
