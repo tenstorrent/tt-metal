@@ -1241,7 +1241,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, input_tensor_k.dtype())),
             core_grid_set,
             1,
-            Sq_chunk_t);
+            Sq_chunk_t,
+            Sk_chunk_t);
         desc.cbs = recipe_program->cbs;
     }
     uint32_t num_cores = grid_size.x * grid_size.y;
@@ -2015,10 +2016,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         TT_FATAL(
             cb_bytes <= available,
-            "Named ring SDPA recipe needs {} bytes of L1 per core at Q{}/K512, but only {} are available; use a smaller "
-            "Q chunk",
+            "Named ring SDPA recipe needs {} bytes of L1 per core at Q{}/K{}, but only {} are available; use a smaller "
+            "Q or K chunk",
             cb_bytes,
             Sq_chunk_t * tt::constants::TILE_HEIGHT,
+            Sk_chunk_t * tt::constants::TILE_HEIGHT,
             available);
     }
 

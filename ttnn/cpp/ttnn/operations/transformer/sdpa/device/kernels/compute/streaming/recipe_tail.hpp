@@ -23,6 +23,8 @@ inline void mask_recipe_columns(uint32_t valid_columns) {
 static uint32_t recipe_k_tile_offset;
 #ifdef SDPA_RECIPE_RING
 static uint32_t recipe_k_valid_rows;
+// Rows in one full K chunk; the ring hook masks only chunks with fewer valid rows.
+static uint32_t recipe_k_chunk_rows = 512;
 #endif
 
 ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {

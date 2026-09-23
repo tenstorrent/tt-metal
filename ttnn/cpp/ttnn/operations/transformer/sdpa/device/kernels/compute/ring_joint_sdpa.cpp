@@ -473,11 +473,11 @@ void kernel_main() {
                 Sq_chunk_t,
                 scale_fp32,
 #ifdef SDPA_RECIPE_FP32
-                1
+                1,
 #else
-                2
+                2,
 #endif
-                >(
+                Sk_chunk_t>(
                 acc_state,
                 global_q_start,
                 global_q_end,

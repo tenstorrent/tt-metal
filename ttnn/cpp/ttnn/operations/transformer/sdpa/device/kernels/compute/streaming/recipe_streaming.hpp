@@ -319,7 +319,7 @@ void blocked_matmul_and_pack(
 #if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
     if constexpr (transpose) {
 #ifdef SDPA_RECIPE_RING
-        if (recipe_k_valid_rows < 512)
+        if (recipe_k_valid_rows < recipe_k_chunk_rows)
 #endif
             mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
     }
