@@ -19,13 +19,11 @@ Phase 0 regime: `row_split_interleaved` (op_design.md -> Blocking Model).
 
 from __future__ import annotations
 
-import math
-
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .tilize_program_descriptor import create_program_descriptor
+from .tilize_program_descriptor import TILE_WIDTH, _tile_grid, create_program_descriptor
 
 
 def _dominant():
@@ -47,7 +45,6 @@ def _dominant():
 
 _DOMINANT = None
 
-TILE_WIDTH = 32  # a tile's width is always 32 elements
 LEGAL_TILE_HEIGHTS = (32, 16, 8, 4, 2, 1)
 
 
@@ -131,22 +128,12 @@ def tag_in_tile_height(inputs, axes):
     return "none" if v is None else v
 
 
-def _tile_grid_dims(shape, tile_height):
-    """(R, C): output tile-rows (leading dims folded, per-image ceil) and tile-columns."""
-    leading = 1
-    for d in shape[:-2]:
-        leading *= int(d)
-    rows = leading * math.ceil(int(shape[-2]) / int(tile_height))
-    cols = math.ceil(int(shape[-1]) / TILE_WIDTH)
-    return rows, cols
-
-
 def tag_tile_grid(inputs, axes):
     shape = list(inputs[0]["input_shape"])
     if len(shape) < 2:
         return "single_tile"
     tile_height = axes.get("tile_height", inputs[0].get("tile_height", 32))
-    rows, cols = _tile_grid_dims(shape, tile_height)
+    rows, cols = _tile_grid(shape, int(tile_height))  # the same (R, C) the program descriptor splits
     dominant = _dominant()
     if rows == 1 and cols == 1:
         return "single_tile"
@@ -235,7 +222,7 @@ EXCLUSIONS = []
 PROPERTIES = {
     # split_work_to_cores over device.compute_with_storage_grid_size(): min(R, N) Tensix cores.
     "multi_core": {"value": True, "source": "declared"},
-    # Every CB is block_width * per_col_tile_bytes <= CB_BUDGET_BYTES[low_l1] (l1_ledger.md).
+    # CB total = rows_per_quantum * block_width * per_col_tile_bytes <= CB_BUDGET_BYTES[low_l1] (l1_ledger.md).
     "bounded_cb": {"value": True, "source": "declared"},
 }
 
@@ -251,13 +238,25 @@ _SHARDED_LAYOUTS = (
 )
 
 
+def _created_with_nd_shard_spec(mem_config):
+    """True iff the caller built this MemoryConfig from an NdShardSpec.
+
+    `nd_shard_spec` alone cannot tell: once a legacy 2-D sharded tensor is
+    allocated, its memory_config() carries a derived nd_shard_spec too (and an
+    ND spec with a 2-D equivalent reports a legacy memory_layout + shard_spec).
+    The C++ `created_with_nd_shard_spec` flag is only exposed through to_json.
+    """
+    return '"created_with_nd_shard_spec":true' in mem_config.to_json().replace(" ", "")
+
+
 def _side_spec(mem_config):
     """Scenario-dict side spec ({kind, buffer, orientation, scheme}) from a live MemoryConfig.
 
-    Mirrors eval/golden_tests/tilize/axes.py:_spec_of so the two agree.
+    Same classification as eval/golden_tests/tilize/axes.py:_spec_of, except that
+    legacy-vs-ND is read from `created_with_nd_shard_spec` (see above).
     """
     nd_spec = getattr(mem_config, "nd_shard_spec", None)
-    if nd_spec is not None:
+    if nd_spec is not None and (mem_config.shard_spec is None or _created_with_nd_shard_spec(mem_config)):
         return {"kind": "sharded", "buffer": mem_config.buffer_type, "orientation": nd_spec.orientation, "scheme": None}
     if mem_config.memory_layout in _SHARDED_LAYOUTS:
         shard_spec = mem_config.shard_spec

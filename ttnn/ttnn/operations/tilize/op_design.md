@@ -264,11 +264,13 @@ This is a logical schedule. The three kernels run asynchronously, pipelined at t
 
 | Block operation | Block shape it acts on | Resident across it | Intended fixed-cost frequency |
 |-----------------|------------------------|--------------------|-------------------------------|
-| `load_block` | `block_height` tile-rows × `block_width` tile-columns. Each tile-row = `tile_h` stick segments of `valid_width * 32` elements, landed at the nominal L1 stride `block_width * 32 * in_elem_bytes` | nothing across blocks; within a block, one tile-row at a time in `cb_input_sticks` | one `cb_reserve_back(block_width)` + `tile_h` async reads + **one read barrier** + one `cb_push_back(block_width)` **per tile-row**. `TensorAccessor` constructed once per kernel |
+| `load_block` | `block_height` tile-rows × `block_width` tile-columns. Each tile-row = `tile_h` stick segments of `valid_width * 32` elements, landed at the nominal L1 stride `block_width * 32 * in_elem_bytes` | nothing across blocks; within a block, one quantum of `rows_per_quantum` tile-rows at a time in `cb_input_sticks` | one `cb_reserve_back` + `rows_per_quantum * tile_h` async reads + **one read barrier** + one `cb_push_back(rows_per_quantum * block_width)` **per quantum**. `TensorAccessor` constructed once per kernel |
 | `tilize_block` | same rectangle; the helper processes it as `block_height` helper-blocks of `block_width` tiles | the tilize LLK configuration (unpack/pack formats, fast-tilize mode) stays resident across **all** blocks of the core | **tilize init + reconfig + uninit once per kernel**: realized as ONE `compute_kernel_lib::tilize<block_width, …>(core_row_tiles * num_col_blocks_this_core)` call. Compute cannot tell which column block a tile-row belongs to, and every quantum is the nominal `block_width` |
-| `store_block` | same rectangle; per tile-row, `valid_width` output tile pages at tile indices `r * C + col` | nothing | one `cb_wait_front(block_width)` + `valid_width` tile writes + **one write barrier** + one `cb_pop_front(block_width)` **per tile-row** |
+| `store_block` | same rectangle; per tile-row, `valid_width` output tile pages at tile indices `r * C + col` | nothing | one `cb_wait_front(rows_per_quantum * block_width)` + `valid_width` tile writes per tile-row + **one write flush** + one `cb_pop_front` **per quantum** |
 
 `valid_width = block_width` except on the ragged last column block (`last_block_width`). Only NoC transfers narrow; push/pop counts stay nominal (Mechanism caps, ring-wrap row).
+
+> **Verifier update (Phase 0 review).** The `tile_row` streaming window is now a knob. `rows_per_quantum = min(ceil(QUANTUM_MIN_TILES / block_width), max_positions // depth_in, budget cap)`, floored at 1, sets how many consecutive walk positions share one CB push / pop, one read barrier and one write flush. Before, the window was hard-wired to one tile-row, which is only 2 tiles on the perf-focus shape. Compute is unchanged: one `block_width` tile-row per helper block, one helper call per kernel. Only the kernel's final quantum can be partial. Ledger: `l1_ledger.md`.
 
 ### Perf lamps
 

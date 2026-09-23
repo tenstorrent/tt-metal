@@ -7,6 +7,7 @@ Blocking knobs, each defined ONCE here and passed to the kernels as a single CT
 or RT arg (every dependent quantity derives from it):
 
   tile_row  axis  ->  block_height = core_row_tiles   (RT, from split_work_to_cores)
+                      rows_per_quantum = streaming window along tile_row (CT; from QUANTUM_MIN_TILES)
   tile_col  axis  ->  block_width  = balanced_width(core_col_tiles_max, block_width_cap)   (CT)
                       num_col_groups = 1 (Phase 0; grid_2d_split refinement turns it)
   depth knobs     ->  DEPTH_IN, DEPTH_OUT   (CB total_size and per_col_tile_bytes only)
@@ -14,8 +15,9 @@ or RT arg (every dependent quantity derives from it):
 
 Per Tensix core the kernels process the output-tile rectangle
 [row_start, row_start + core_row_tiles) x [col_start, col_start + core_col_tiles),
-cut into ceil(core_col_tiles / block_width) column blocks; each column block is
-streamed one tile-row (block_width tiles) at a time through two depth-2 CBs.
+cut into ceil(core_col_tiles / block_width) column blocks; the walk over them is
+streamed rows_per_quantum tile-rows (rows_per_quantum * block_width tiles) per CB
+quantum through two depth-2 CBs.
 """
 
 from __future__ import annotations
@@ -33,17 +35,35 @@ CB_INPUT_STICKS = 0  # reader -> compute: tile_h stick segments per tile-row, bl
 CB_OUTPUT_TILES = 1  # compute -> writer: block_width TILE pages per tile-row
 CB_INPUT_STICKS_ODD = 2  # split reader only: BRISC -> compute, the odd tile-rows (one producer per CB)
 
-# Buffer-depth knobs, counted in helper quanta (one tile-row = block_width pages).
+# Buffer-depth knobs, counted in CB quanta (one quantum = rows_per_quantum tile-rows
+# of block_width pages each).
 DEPTH_IN = 2
 DEPTH_OUT = 2
 
-# Tile-rows of stick reads a producer keeps in flight before it waits on the oldest
+# CB quanta of stick reads a producer keeps in flight before it waits on the oldest
 # one's (transaction-id) barrier (op_design.md perf lamp "Read in-flight depth").
-# 1 = barrier every tile-row before issuing the next. Must be <= DEPTH_IN.
+# 1 = barrier every quantum before issuing the next. Must be <= DEPTH_IN.
 # Measured flat on WH 64 cores (2 vs 1: 26.5 vs 26.9 us on [1,1,16384,64], 20.2 vs
 # 19.8 us on [1,1,16384,32]): the pipeline is DRAM-traffic-bound there, not
 # barrier-bound. Parked at the trivial value; the knob stays live.
 READ_AHEAD = 1
+
+# Minimum CB quantum in tiles along the tile_row streaming window. The reader's read
+# barrier + CB push and the writer's flush + CB pop happen once per quantum of
+# rows_per_quantum tile-rows (compute still tilizes one block_width tile-row per helper
+# block). rows_per_quantum = ceil(QUANTUM_MIN_TILES / block_width), then capped by the
+# busiest core's walk length // DEPTH_IN (so the double buffer still has quanta to
+# overlap: one quantum per core serializes read -> tilize -> write) and by what the CB
+# budget leaves after block_width is chosen. It never shrinks block_width, and it only
+# engages where one tile-row is narrower than QUANTUM_MIN_TILES tiles. 1 = one
+# handshake per tile-row everywhere.
+# Measured on WH B0, 64 Tensix cores, bf16 (median device-kernel ns, 10 reps), by the
+# tile-rows per quantum it yields:
+#   [1,1,16384,64] (block_width 2)  1: 26651  2: 26468  4: 25590  8 (uncapped): 28724
+#   [1,1,16384,32] (block_width 1)  1: 19155  2: 19656  4: 18212  8 (uncapped): 20531
+# Wider tile-rows (block_width >= 8, e.g. [1,1,8192,256]) measured flat-to-worse when
+# coarsened, hence the floor is in tiles, not in tile-rows.
+QUANTUM_MIN_TILES = 8
 
 # Per-core CB budget in bytes; the only thing low_l1 changes (l1_ledger.md -> Footprint).
 CB_BUDGET_BYTES = {False: 524288, True: 65536}
@@ -148,11 +168,14 @@ def create_program_descriptor(
     # The split reader decision needs the segment width, which needs block_width, which
     # needs the CB count: resolve it for the split configuration first (the tighter
     # budget), and keep the split only if its segments are small enough.
+    def _per_col_tile_bytes(num_input_cbs):
+        """CB bytes per tile-column of one tile-row, over every CB and its depth."""
+        return num_input_cbs * DEPTH_IN * in_tile_bytes + DEPTH_OUT * out_tile_bytes
+
     def _block_width_for(num_input_cbs):
-        per_col_tile_bytes = num_input_cbs * DEPTH_IN * in_tile_bytes + DEPTH_OUT * out_tile_bytes
         return balanced_width(
             core_col_tiles_max,
-            per_col_tile_bytes=per_col_tile_bytes,
+            per_col_tile_bytes=_per_col_tile_bytes(num_input_cbs),
             low_l1=low_l1,
             col_align_tiles=col_align_tiles,
         )
@@ -184,10 +207,29 @@ def create_program_descriptor(
     num_input_cbs = 2 if split_reader else 1
     block_width = block_width_split if split_reader else _block_width_for(1)
 
+    # Streaming window along tile_row: fill what the budget leaves after block_width, but
+    # keep at least DEPTH_IN quanta per core so the double buffer still overlaps (one
+    # quantum per core serializes read -> tilize -> write). The split reader alternates
+    # CBs per tile-row, so it keeps one tile-row per quantum.
+    per_row_bytes = block_width * _per_col_tile_bytes(num_input_cbs)
+    max_positions = rows_g1 * _div_up(core_col_tiles_max, block_width)  # busiest core's walk length
+    if split_reader:
+        rows_per_quantum = 1
+    else:
+        rows_per_quantum = max(
+            1,
+            min(
+                _div_up(QUANTUM_MIN_TILES, block_width),
+                max_positions // DEPTH_IN,
+                CB_BUDGET_BYTES[low_l1] // per_row_bytes,
+            ),
+        )
+
     # ---------------- circular buffers ----------------
     tile_desc = ttnn.TileDescriptor(tile_h, TILE_WIDTH)
+    quantum_tiles = rows_per_quantum * block_width  # pages per CB push / pop
     cb_input_sticks = ttnn.CBDescriptor(
-        total_size=DEPTH_IN * block_width * in_tile_bytes,
+        total_size=DEPTH_IN * quantum_tiles * in_tile_bytes,
         core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -202,7 +244,7 @@ def create_program_descriptor(
     if split_reader:
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=DEPTH_IN * block_width * in_tile_bytes,
+                total_size=DEPTH_IN * quantum_tiles * in_tile_bytes,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
@@ -216,7 +258,7 @@ def create_program_descriptor(
         )
     assert len(cbs) == num_input_cbs
     cb_output_tiles = ttnn.CBDescriptor(
-        total_size=DEPTH_OUT * block_width * out_tile_bytes,
+        total_size=DEPTH_OUT * quantum_tiles * out_tile_bytes,
         core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -241,7 +283,7 @@ def create_program_descriptor(
         int(split_reader),
         DEPTH_IN,
         READ_AHEAD,
-        in_tile_bytes,
+        rows_per_quantum,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     writer_ct_args = [
@@ -255,7 +297,7 @@ def create_program_descriptor(
         stick_page_bytes,
         DEPTH_IN,
         READ_AHEAD,
-        in_tile_bytes,
+        rows_per_quantum,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())

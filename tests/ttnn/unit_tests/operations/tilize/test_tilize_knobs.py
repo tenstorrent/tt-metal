@@ -22,6 +22,7 @@ SHAPES = [
     (2, 3, 64, 96),  # leading-dim fold
     (1, 1, 1600, 96),  # R=50 uneven row split
     (1, 1, 16384, 64),  # 8 tile-rows per core
+    (1, 1, 4320, 160),  # R=135, C=5: 3 or 2 tile-rows per core (partial final quantum), ragged column block
 ]
 
 CONFIGS = {
@@ -35,6 +36,19 @@ CONFIGS = {
         READ_AHEAD=2,
     ),
     "depth3_ra3": dict(DEPTH_IN=3, READ_AHEAD=3),
+    # tile_row streaming window: several tile-rows per CB quantum, incl. a partial
+    # final quantum (odd walk lengths) and a quantum spanning column blocks.
+    # QUANTUM_MIN_TILES=1 -> one tile-row per quantum everywhere (the pre-knob schedule)
+    "quantum1": dict(QUANTUM_MIN_TILES=1),
+    "quantum_large": dict(QUANTUM_MIN_TILES=64),
+    "quantum_large_ra2": dict(QUANTUM_MIN_TILES=48, READ_AHEAD=2),
+    "quantum_tiny_budget": dict(QUANTUM_MIN_TILES=64, CB_BUDGET_BYTES={False: 3 * 8192, True: 3 * 8192}),
+    # block_width capped at 2 with budget to spare: C=5 -> 3 column blocks, and the
+    # multi-tile-row quanta straddle column-block boundaries in the walk.
+    "quantum_narrow_blocks": dict(QUANTUM_MIN_TILES=8, FAST_TILIZE_MAX_BLOCK_WIDTH=2),
+    "quantum_depth3_ra3": dict(QUANTUM_MIN_TILES=64, DEPTH_IN=3, READ_AHEAD=3),
+    # split reader must pin the quantum to one tile-row
+    "quantum_split": dict(QUANTUM_MIN_TILES=64, SPLIT_READER_MAX_SEGMENT_BYTES=1 << 20),
 }
 
 

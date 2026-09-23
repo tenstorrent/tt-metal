@@ -67,17 +67,23 @@ struct Walker {
     }
 };
 
-// Pipelined producer of tile-row slots in one input CB.
+// Pipelined producer of CB slots in one input CB. A slot holds `rows_per_slot`
+// consecutive walk positions (tile-rows of block_width pages each), so the read
+// barrier and the CB push happen once per slot, not once per tile-row
+// (`rows_per_slot` = the host-derived rows_per_quantum, see QUANTUM_MIN_TILES).
 //
-// issue(): reserve room for (outstanding + 1) tile-rows, then issue the tile_h
-//          stick-segment reads of one tile-row into the next slot under that slot's
-//          NoC transaction id. If `read_ahead` tile-rows are already outstanding,
-//          the oldest is completed first.
-// complete_oldest(): barrier on the oldest slot's transaction id, push block_width.
+// issue_row(): opening a slot reserves room for (outstanding + 1) slots and tags
+//              the slot's reads with its NoC transaction id; if `read_ahead` slots
+//              are already outstanding, the oldest is completed first. Then the
+//              tile_h stick-segment reads of one tile-row land in the open slot.
+// complete_oldest(): barrier on the oldest slot's transaction id, push its pages.
 //
-// Every push is the nominal block_width pages, so the CB write pointer after n
-// pushes is base + (n % depth) * slot_bytes; slot addresses are derived from that
-// instead of CB internals. Requires read_ahead <= depth and depth <= 15 (trids).
+// Every push is the nominal rows_per_slot * block_width pages except the very
+// last one of the kernel (a partial final slot), so the CB write pointer after
+// n full pushes is base + (n % depth) * slot_bytes; slot addresses are derived
+// from that instead of CB internals. Nothing is pushed after the partial slot,
+// so it cannot break the ring-wrap invariant. Requires read_ahead <= depth and
+// depth <= 15 (one trid per slot).
 template <
     uint32_t cb,
     uint32_t block_width,
@@ -85,34 +91,49 @@ template <
     uint32_t read_ahead,
     uint32_t tile_h,
     uint32_t tile_col_bytes,
-    uint32_t in_tile_bytes>
+    uint32_t rows_per_slot>
 struct StickProducer {
     static_assert((tile_h & (tile_h - 1)) == 0, "tile_h must be a power of two");
     static_assert(read_ahead >= 1 && read_ahead <= depth, "read_ahead must be in [1, depth]");
     static_assert(depth <= 15, "one NoC transaction id per CB slot");
-    static constexpr uint32_t slot_bytes = block_width * in_tile_bytes;
+    static_assert(rows_per_slot >= 1, "a slot holds at least one tile-row");
+    static constexpr uint32_t in_tile_bytes = tile_h * tile_col_bytes;  // tile-sized page: tile_h stick segments
+    static constexpr uint32_t row_pages = block_width;                  // pages per tile-row
+    static constexpr uint32_t row_bytes = block_width * in_tile_bytes;
+    static constexpr uint32_t slot_pages = rows_per_slot * row_pages;
+    static constexpr uint32_t slot_bytes = rows_per_slot * row_bytes;
     static constexpr uint32_t block_stick_bytes = block_width * tile_col_bytes;  // nominal L1 stride per stick
 
     uint32_t base_addr;
     uint32_t stick_rotation;
-    uint32_t next_slot = 0;    // slot index of the next issue (monotonic)
-    uint32_t outstanding = 0;  // issued, not yet pushed
+    uint32_t next_slot = 0;    // slot index of the next slot to open (monotonic)
+    uint32_t outstanding = 0;  // opened, not yet pushed
+    uint32_t open_rows = 0;    // tile-rows already issued into the newest slot (0 = no slot open)
+    uint32_t open_base = 0;    // L1 address of the newest slot
 
     explicit StickProducer(uint32_t rotation) : base_addr(get_write_ptr(cb)), stick_rotation(rotation & (tile_h - 1)) {}
 
     static uint32_t trid_of(uint32_t slot) { return 1 + (slot % depth); }
 
+    // Tile-rows fully published (pushed) so far.
+    uint32_t rows_pushed() const { return (next_slot - outstanding) * rows_per_slot; }
+
     template <typename Accessor>
-    FORCE_INLINE void issue(const Accessor& accessor, uint32_t row, uint32_t first_col, uint32_t valid_width) {
-        if (outstanding == read_ahead) {
-            complete_oldest();
+    FORCE_INLINE void issue_row(const Accessor& accessor, uint32_t row, uint32_t first_col, uint32_t valid_width) {
+        if (open_rows == 0) {
+            if (outstanding == read_ahead) {
+                complete_oldest();
+            }
+            cb_reserve_back(cb, slot_pages * (outstanding + 1));
+            open_base = base_addr + (next_slot % depth) * slot_bytes;
+            noc_async_read_set_trid(trid_of(next_slot));
+            ++next_slot;
+            ++outstanding;
         }
-        cb_reserve_back(cb, block_width * (outstanding + 1));
-        const uint32_t l1_base = base_addr + (next_slot % depth) * slot_bytes;
+        const uint32_t l1_base = open_base + open_rows * row_bytes;
         const uint32_t segment_bytes = valid_width * tile_col_bytes;
         const uint32_t segment_offset = first_col * tile_col_bytes;
         const uint32_t first_stick = row * tile_h;
-        noc_async_read_set_trid(trid_of(next_slot));
         for (uint32_t s = 0; s < tile_h; ++s) {
             const uint32_t stick = (s + stick_rotation) & (tile_h - 1);
             noc_async_read(
@@ -120,14 +141,20 @@ struct StickProducer {
                 l1_base + stick * block_stick_bytes,
                 segment_bytes);
         }
-        ++next_slot;
-        ++outstanding;
+        if (++open_rows == rows_per_slot) {
+            open_rows = 0;  // slot sealed; it completes lazily
+        }
     }
 
     FORCE_INLINE void complete_oldest() {
         const uint32_t oldest = next_slot - outstanding;
+        // Only the newest slot can be partial, and only at kernel end (complete_all).
+        const bool partial = outstanding == 1 && open_rows != 0;
         noc_async_read_barrier_with_trid(trid_of(oldest));
-        cb_push_back(cb, block_width);
+        cb_push_back(cb, partial ? open_rows * row_pages : slot_pages);
+        if (partial) {
+            open_rows = 0;
+        }
         --outstanding;
     }
 
@@ -139,20 +166,27 @@ struct StickProducer {
     }
 };
 
-// store_block for one tile-row: wait block_width pages, valid_width tile-page writes
-// in flight, one flush (L1 source reads done), pop block_width.
-template <uint32_t cb_output_tiles, uint32_t block_width, uint32_t out_tile_bytes, typename Accessor>
-FORCE_INLINE void store_tile_row(const Accessor& accessor, uint32_t first_tile_idx, uint32_t valid_width) {
-    cb_wait_front(cb_output_tiles, block_width);
-    uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
-    uint32_t tile_idx = first_tile_idx;
-    for (uint32_t t = 0; t < valid_width; ++t) {
-        noc_async_write(l1_read_addr, accessor.get_noc_addr(tile_idx), out_tile_bytes);
-        l1_read_addr += out_tile_bytes;
-        ++tile_idx;
+// store_block for `num_rows` consecutive walk positions (one CB quantum): wait
+// num_rows * block_width pages, valid_width tile-page writes per tile-row in
+// flight, one flush (L1 source reads done), pop. `walk` is advanced past them.
+template <uint32_t cb_output_tiles, uint32_t block_width, uint32_t out_tile_bytes, typename Accessor, typename Walk>
+FORCE_INLINE void store_rows(const Accessor& accessor, Walk& walk, uint32_t tiles_per_row, uint32_t num_rows) {
+    const uint32_t pages = num_rows * block_width;
+    cb_wait_front(cb_output_tiles, pages);
+    uint32_t l1_row_addr = get_read_ptr(cb_output_tiles);
+    for (uint32_t j = 0; j < num_rows; ++j, walk.advance()) {
+        uint32_t l1_read_addr = l1_row_addr;
+        uint32_t tile_idx = walk.row() * tiles_per_row + walk.first_col();
+        const uint32_t valid_width = walk.valid_width();
+        for (uint32_t t = 0; t < valid_width; ++t) {
+            noc_async_write(l1_read_addr, accessor.get_noc_addr(tile_idx), out_tile_bytes);
+            l1_read_addr += out_tile_bytes;
+            ++tile_idx;
+        }
+        l1_row_addr += block_width * out_tile_bytes;
     }
     noc_async_writes_flushed();
-    cb_pop_front(cb_output_tiles, block_width);
+    cb_pop_front(cb_output_tiles, pages);
 }
 
 }  // namespace tilize_dataflow

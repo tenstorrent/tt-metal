@@ -1,0 +1,25 @@
+{
+  "summary": {
+    "total": 4390,
+    "supported_pass": 30,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 1746,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 2310,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 304
+  },
+  "by_category_counts": {
+    "supported_pass": 30,
+    "xfail_expected": 1746,
+    "invalid_skipped": 2310,
+    "no_axes_found": 304
+  },
+  "note": "Trimmed for the repo (full per-test report: 3.3 MB). Produced by `python3 -m eval.verify_supported <results_dir> ttnn.operations.tilize` on the Phase 0 verification run (WH B0); regenerate with eval/eval_test_runner.sh eval/golden_tests/tilize/ <results_dir>."
+}

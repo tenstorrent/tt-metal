@@ -7,10 +7,11 @@
 // No kernel_lib dataflow helper writes TILE pages (write_sticks_after_untilize
 // writes ROW_MAJOR sticks), so this is a custom block operation.
 //
-// store_block, per tile-row: wait block_width pages -> valid_width tile-page
-// writes in flight -> one flush (L1 source reads done) -> pop block_width. The
-// flush, rather than a full write barrier, is enough to release the CB slots;
-// one write barrier at kernel end guarantees the data has landed.
+// store_block, per CB quantum of rows_per_quantum tile-rows: wait the quantum's
+// pages -> valid_width tile-page writes per tile-row in flight -> one flush (L1
+// source reads done) -> pop the quantum. The flush, rather than a full write
+// barrier, is enough to release the CB slots; one write barrier at kernel end
+// guarantees the data has landed. Only the kernel's final quantum may be partial.
 //
 // Split reader (CT `split_reader`): this RISC-V also produces the ODD walk
 // positions into cb_input_sticks_odd (its own CB, single producer). At odd
@@ -39,7 +40,7 @@ void kernel_main() {
     constexpr uint32_t stick_page_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t depth_in = get_compile_time_arg_val(8);
     constexpr uint32_t read_ahead = get_compile_time_arg_val(9);
-    constexpr uint32_t in_tile_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t rows_per_quantum = get_compile_time_arg_val(10);  // tile-rows per CB quantum
     constexpr auto output_args = TensorAccessorArgs<11>();
     constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
@@ -58,18 +59,19 @@ void kernel_main() {
         row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
     const uint32_t num_positions = store_walk.num_positions();
 
+    // Split reader runs one tile-row per quantum (host-enforced), so this stores one position.
     auto store_next = [&]() {
-        tilize_dataflow::store_tile_row<cb_output_tiles, block_width, out_tile_bytes>(
-            output_accessor, store_walk.row() * tiles_per_row + store_walk.first_col(), store_walk.valid_width());
-        store_walk.advance();
+        tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes>(
+            output_accessor, store_walk, tiles_per_row, 1);
     };
 
+    static_assert(!split_reader || rows_per_quantum == 1, "the split reader alternates CBs per tile-row");
     if constexpr (split_reader) {
         const auto input_accessor = TensorAccessor(input_args, src_addr, stick_page_bytes);
         tilize_dataflow::Walker<block_width> load_walk(
             row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
         tilize_dataflow::
-            StickProducer<cb_input_sticks_odd, block_width, depth_in, read_ahead, tile_h, tile_col_bytes, in_tile_bytes>
+            StickProducer<cb_input_sticks_odd, block_width, depth_in, read_ahead, tile_h, tile_col_bytes, 1>
                 producer(traversal_rotation);
 
         uint32_t stored = 0;     // positions [0, stored) are written
@@ -78,9 +80,9 @@ void kernel_main() {
             if ((seq & 1) == 0) {
                 continue;
             }
-            const uint32_t pushed_before = producer.next_slot - producer.outstanding;  // odd items pushed
-            producer.issue(input_accessor, load_walk.row(), load_walk.first_col(), load_walk.valid_width());
-            const uint32_t pushed_after = producer.next_slot - producer.outstanding;
+            const uint32_t pushed_before = producer.rows_pushed();  // odd items pushed
+            producer.issue_row(input_accessor, load_walk.row(), load_walk.first_col(), load_walk.valid_width());
+            const uint32_t pushed_after = producer.rows_pushed();
             if (pushed_after != pushed_before) {
                 // The k-th odd item (k = pushed_after - 1) is position 2k + 1: all positions <= it are publishable.
                 published = 2 * pushed_after;
@@ -96,8 +98,13 @@ void kernel_main() {
             ++stored;
         }
     } else {
-        for (uint32_t seq = 0; seq < num_positions; ++seq) {
-            store_next();
+        for (uint32_t done = 0; done < num_positions; done += rows_per_quantum) {
+            const uint32_t remaining = num_positions - done;
+            tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes>(
+                output_accessor,
+                store_walk,
+                tiles_per_row,
+                remaining < rows_per_quantum ? remaining : rows_per_quantum);
         }
     }
     noc_async_write_barrier();

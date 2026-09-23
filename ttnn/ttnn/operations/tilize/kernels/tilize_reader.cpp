@@ -11,11 +11,12 @@
 //
 // Per Tensix core: output-tile rectangle [row_start, row_start + core_row_tiles)
 // x [col_start, col_start + core_col_tiles), cut into column blocks of
-// block_width tiles. Per tile-row: tile_h stick-segment reads in flight, one
-// barrier, one push of the nominal block_width pages (only the NoC transfer
-// narrows on the ragged last column block). With read_ahead > 1 the next
-// tile-row's reads are issued before the previous tile-row's (transaction-id)
-// barrier, so the NoC never drains between tile-rows.
+// block_width tiles. Per CB quantum of rows_per_quantum walk positions (tile-rows):
+// rows_per_quantum * tile_h stick-segment reads in flight, one barrier, one push
+// of the nominal rows_per_quantum * block_width pages (only the NoC transfer
+// narrows on the ragged last column block; only the kernel's final quantum may
+// hold fewer tile-rows). With read_ahead > 1 the next quantum's reads are issued
+// before the previous quantum's (transaction-id) barrier.
 //
 // Split reader (CT `split_reader`): this RISC-V produces only the EVEN walk
 // positions; the BRISC writer produces the odd ones into its own CB.
@@ -32,9 +33,9 @@ void kernel_main() {
     constexpr uint32_t tile_col_bytes = get_compile_time_arg_val(3);    // bytes of one stick per tile-column
     constexpr uint32_t stick_page_bytes = get_compile_time_arg_val(4);  // aligned interleaved stick page
     constexpr bool split_reader = get_compile_time_arg_val(5) != 0;
-    constexpr uint32_t depth_in = get_compile_time_arg_val(6);    // CB slots (tile-rows)
-    constexpr uint32_t read_ahead = get_compile_time_arg_val(7);  // tile-rows of reads in flight
-    constexpr uint32_t in_tile_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t depth_in = get_compile_time_arg_val(6);          // CB slots (quanta)
+    constexpr uint32_t read_ahead = get_compile_time_arg_val(7);        // quanta of reads in flight
+    constexpr uint32_t rows_per_quantum = get_compile_time_arg_val(8);  // tile-rows per CB quantum
     constexpr auto input_args = TensorAccessorArgs<9>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -48,13 +49,13 @@ void kernel_main() {
 
     tilize_dataflow::Walker<block_width> walk(row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
     tilize_dataflow::
-        StickProducer<cb_input_sticks, block_width, depth_in, read_ahead, tile_h, tile_col_bytes, in_tile_bytes>
+        StickProducer<cb_input_sticks, block_width, depth_in, read_ahead, tile_h, tile_col_bytes, rows_per_quantum>
             producer(traversal_rotation);
 
     const uint32_t num_positions = walk.num_positions();
     for (uint32_t seq = 0; seq < num_positions; ++seq, walk.advance()) {
         if (!split_reader || (seq & 1) == 0) {
-            producer.issue(input_accessor, walk.row(), walk.first_col(), walk.valid_width());
+            producer.issue_row(input_accessor, walk.row(), walk.first_col(), walk.valid_width());
         }
     }
     producer.complete_all();
