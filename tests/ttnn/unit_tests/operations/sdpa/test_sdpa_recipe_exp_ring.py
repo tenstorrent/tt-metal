@@ -381,7 +381,7 @@ def test_recipe_exp_ring_rejection(exp_ring_mesh, case):
         "scale": "default D128 scale",
         "prepared": "LOW_PRECISION requires inputs_prepared",
         "unprepared": "LOW_PRECISION requires inputs_prepared",
-        "q512": "Q chunks of 128, 192, 256 or 320",
+        "q512": "Q chunks from 128 to 320 rows",
         "k256": "K512/D128",
         "l1_q320": "needs .* B of L1 per core at Q320",
     }
