@@ -15,6 +15,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
+#include "ttnn/operations/matmul/device/config/matmul_registry_dispatch.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -218,7 +219,8 @@ static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    ttnn::prim::MatmulParams& parameters,
+    const registry::CallSemantics call_semantics,
+    const ttnn::prim::MatmulParams& legacy_parameters,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
@@ -227,10 +229,19 @@ static ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
+    // Registry dispatch owns all inspection and resolution mechanics. Work on
+    // a local copy so fallback and the legacy body always share one parameter
+    // object, while the wrapper-owned input remains untouched.
+    auto parameters = legacy_parameters;
+    const bool registry_selected = registry::try_apply_registry_parameters(
+        input_tensor_a, input_tensor_b, bias.has_value(), call_semantics, parameters, optional_output_tensor);
+    registry::SelectedExecutionGuard registry_execution_guard(call_semantics.domain, registry_selected);
+
     if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
         TT_FATAL(
             !parameters.user_fused_activation.has_value(),
-            "Sharded matmul run with {} activation: this should be placed in the program config's fused_activation "
+            "Sharded matmul run with {} activation: this should be placed in the program config's "
+            "fused_activation "
             "field",
             parameters.user_fused_activation.value().op_type);
     }
@@ -407,6 +418,7 @@ Tensor matmul(
         input_tensor_a,
         input_tensor_b,
         /*bias=*/std::nullopt,
+        registry::dense_matmul_call_semantics(),
         matmul_params,
         optional_output_tensor);
 }
@@ -448,7 +460,8 @@ Tensor linear(
         output_tile,
         global_cb,
         sub_device_id};
-    return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
+    return bound_matmul(
+        input_tensor_a, input_tensor_b, bias, registry::linear_call_semantics(), matmul_params, optional_output_tensor);
 }
 
 std::vector<Tensor> matmul_batched_weights(
@@ -569,7 +582,13 @@ Tensor addmm(
         output_tile,
         /*global_cb=*/std::nullopt,
         /*sub_device_id=*/std::nullopt};
-    auto out_tensor = bound_matmul(mat1_tensor, mat2_tensor, std::nullopt, matmul_params, optional_output_tensor);
+    auto out_tensor = bound_matmul(
+        mat1_tensor,
+        mat2_tensor,
+        std::nullopt,
+        registry::addmm_call_semantics(alpha, beta),
+        matmul_params,
+        optional_output_tensor);
 
     if (alpha != 1.0) {
         multiply_(out_tensor, alpha);
