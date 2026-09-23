@@ -31,6 +31,8 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         std::vector<CoreCoord> cores;
     };
 
+    // This method is the cache-hit hook for the CCL fused ops
+    // (all_gather_matmul_async, matmul_reduce_scatter_async) which call it directly.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const shared_variables_t& shared_variables,
@@ -38,11 +40,10 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value,
-        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+        std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>

@@ -31,7 +31,7 @@ uint32_t reduce_scatter_default_workers(
     const ttnn::MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     ttnn::ccl::Topology topology,
-    uint32_t input_data_size_bytes,
+    uint64_t input_data_size_bytes,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
