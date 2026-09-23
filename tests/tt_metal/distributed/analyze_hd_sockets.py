@@ -53,6 +53,7 @@ _GBENCH_BENCH_ARGS = {
     "BM_H2DSocketPing": ["tray_id", "asic_location", "page_size", "fifo_size", "mode_index"],
     "BM_D2HSocketMultiChipThroughput": ["chip_index", "fifo_size", "page_size", "total_data"],
     "BM_D2HLegBandwidth": ["page_size", "cores", "ring_pages", "iters", "warmup_pct", "verify"],
+    "BM_H2DLegBandwidth": ["page_size", "cores", "ring_pages", "iters", "warmup_pct", "verify"],
     "BM_H2DSocketMultiChipThroughput": ["chip_index", "fifo_size", "page_size", "total_data"],
 }
 
