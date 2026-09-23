@@ -40,9 +40,6 @@ def _emit_configure(
     unpack_to_dest = compute_node.unpack_to_dest.value
 
     code = ""
-    if unpack_to_dest:
-        code += f"_llk_math_upk_to_dest_hw_configure_<false, {dest_acc}, false>();\n"
-
     if is_unary and ((dest_acc == "true" and not unpack_to_dest) or has_reuse_dest):
         code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}), static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}));\n"
     elif is_unary:

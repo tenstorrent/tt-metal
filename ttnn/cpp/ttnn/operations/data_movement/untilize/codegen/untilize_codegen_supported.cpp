@@ -11,6 +11,10 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "untilize_codegen_cb_plan.hpp"
+#include "untilize_codegen_device_operation.hpp"
+
 namespace ttnn::operations::data_movement::untilize_codegen {
 
 uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device) {
@@ -61,7 +65,7 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     // slot per tile each) cannot fit even an empty core's L1 is out of scope for every codegen
     // builder no matter what else is resident, so reject it here and let "auto" pick native.
     // This is a static bound only -- whether the plan fits the L1 that is actually free right now
-    // is decided once, inside the program factory (see UntilizeCodegenProgramFactory).
+    // is codegen_cb_plan_fits_live_l1's business (routing) and the program factory's (CB tier).
     auto column_parallel_plan_fits = [&](uint32_t wt) {
         auto* device = input.device();
         auto grid = device->compute_with_storage_grid_size();
@@ -115,6 +119,36 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     }
 
     return true;
+}
+
+bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using tt::tt_metal::Layout;
+    namespace plan = ttnn::prim::untilize_codegen_detail;
+
+    if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
+        return true;
+    }
+
+    const ttnn::prim::UntilizeCodegenOperationAttributes attrs{.output_mem_config = output_mem_config};
+    const ttnn::prim::UntilizeCodegenTensorArgs tensor_args{.input = input};
+
+    // The codegen op allocates its output (create_output_tensors) before it samples live L1 for
+    // the hash and the program; routing runs before that allocation, so reserve the output's
+    // per-core L1 footprint here to see the budget those two will (issue #21358 for the native op).
+    const auto out_spec = ttnn::prim::UntilizeCodegenDeviceOperation::compute_output_specs(attrs, tensor_args);
+    // require_constructible: the spec was just built from these same (shape, dtype, layout, mem_config) by
+    // compute_output_specs, so a construction failure here is a bug, not a case to wave through with a 0 B
+    // reservation that would make this gate more permissive than the program factory it predicts.
+    const uint32_t pending_l1_output_bytes = get_pending_l1_output_reservation(
+        input,
+        out_spec.padded_shape(),
+        output_mem_config,
+        out_spec.data_type(),
+        Layout::ROW_MAJOR,
+        /*require_constructible=*/true);
+
+    return plan::choose_codegen_cb_plan(attrs, tensor_args, pending_l1_output_bytes).tier !=
+           plan::CodegenCbPlan::Native;
 }
 
 bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids) {
