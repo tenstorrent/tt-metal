@@ -517,6 +517,80 @@ never clear, and the chain sat deadlocked on itself for 35 min. The replacement 
 open `/dev/tenstorrent` file descriptors, which is the actual busy signal and is what revealed
 the device was free.
 
+## Per-layer cost, prefill and decode (measured 2026-09-23)
+
+Tracy device profile, filtered to the `start`..`stop` signpost window and bucketed by the
+per-layer signposts inside it, using the CSV's `DEVICE ID` column. Per-layer figure is the
+**slowest device** in that layer; median over layer instances.
+
+**Method note.** An earlier pass reported ~470 ms/die and blamed profiler inflation. That was
+wrong: the capture contained the warm-up pass *and* the measured pass (48 signposts for 24
+layers) and was never filtered to `start`..`stop`. Filtered correctly the profile reconciles
+with the traced wall clock to within 6%, so **the profiler does not inflate** -- always filter
+to the signpost window first. Reference pattern: `arg/pplx-embed-upstream`,
+`models/demos/blackhole/pplx_embed_0_6b/tests/perf/new_perf_bs1_isl512.py`.
+
+### Prefill -- SP=4 x TP=8, 32 chips, span 1024
+
+| | Now (measured) | Then (projected) |
+|---|---|---|
+| GDN layer (x18) | **1.245 ms** | ~0.90 |
+| FA layer (x6) | **1.524 ms** | ~1.25 |
+| 18xGDN + 6xFA | 31.55 ms | 23.7 |
+| wavefront tail (3 SP hops) | 3.80 ms | ~3.0 |
+| **TTFT wavefront** | **37.43 ms** | **~27 ms** |
+
+`18*1.245 + 6*1.524 = 31.55` vs die-0's measured own work of 33.63 ms -- 94% attributed, the
+remainder being gaps between signposted regions.
+
+| GDN layer 1.245 ms | ms | | FA layer 1.524 ms | ms |
+|---|---|---|---|---|
+| ReduceScatter | 0.316 | | SDPA | 0.408 |
+| AllGather | 0.233 | | AllGather | 0.245 |
+| Matmul | 0.154 | | ReduceScatter | 0.241 |
+| **ChunkGdnScan** (8/120 cores) | 0.146 | | Matmul | 0.136 |
+| LayerNorm | 0.075 | | LayerNorm | 0.079 |
+| ChunkGdnPrep | 0.067 | | BinaryNg | 0.059 |
+| BinaryNg | 0.057 | | Slice | 0.031 |
+| QkvCausalConv1dSilu (KDA) | 0.043 | | PagedFillCache | 0.016 |
+| **collectives subtotal** | **0.549 (45%)** | | **collectives subtotal** | **0.486 (38%)** |
+
+### Decode -- TP=8, device time only
+
+| | Now (measured) | Then (projected) |
+|---|---|---|
+| GDN layer (x18) | **0.300 ms** | ~0.24 |
+| FA layer (x6) | **0.263 ms** | ~0.21 |
+| **TPOT** | **6.99 ms** | **~5.6 ms** |
+
+192 layer instances in the window = 24 layers x 8 steps, so the bucketing is exact. GDN decode
+op mix (ms/layer, per-device): Matmul 0.054, ReduceScatter 0.050, AllGather 0.050, BinaryNg
+0.042, ReshapeView 0.025, LayerNorm 0.022 -- collectives 0.099, **33%**. Decode is
+dispatch/latency-bound: the matmuls are single-tile.
+
+**Caveats.** TPOT is device time only: it excludes the host round-trip in `sp_handoff.py` and
+any sampling. It was measured at TP=8 on 8 chips; the production decode path in
+`model.decode_tp` is TP=4.
+
+### Where the "Then" numbers come from
+
+Not a target -- a sum of specific, identified cuts:
+
+| cut | basis | GDN prefill | FA prefill |
+|---|---|---|---|
+| collectives 4/layer -> 3 (fused `ttnn.all_reduce`) + narrower TP | fused op measured 223 us isolated vs 240 for RS+AG; hangs in-model, unexplained | -0.22 | -0.20 |
+| `ChunkGdnScan` 8 -> 64+ cores | 8 of 120 cores is the worst occupancy in the model | -0.10 | -- |
+| fuse GDN plumbing (prep / BinaryNg / Slice) | ~35k op invocations per capture | -0.04 | -- |
+| SDPA further tuning | already -1.64 ms from Aniruddha's config; little left | -- | -0.05 |
+
+Confidence: the `ChunkGdnScan` cut is the best-founded (pure occupancy). The collectives cut is
+the least -- it assumes the fused all-reduce is made to work in-model AND that a narrower TP
+reduces per-collective cost, and the TP=4 collective benchmark has never completed. If only the
+fused op lands and TP stays at 8, TTFT is ~31 ms rather than 27.
+
+**~27 ms is a defensible projection; the ~11 ms floor in the next section needs collectives
+essentially eliminated, which at TP=8 there is no measured path to.**
+
 ## Path to ~11 ms: measured costs, estimated cuts, zero verified so far
 
 Per-iteration device time from the Tracy capture (capture totals / 64 iterations). The **now**
