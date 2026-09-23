@@ -91,7 +91,8 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
 
     const uint32_t group_id = overlay::fds_signalling::go_group_from_plic_source(claimed_source);
     if (overlay::fds_signalling::sub_device_from_go_group(group_id) >= fds_num_go_groups) {
-        overlay::quasar::plic_complete(claimed_source);
+        ASSERT(0);
+        // Not completing the claim stops the PLIC from delivering this source again.
         return;
     }
     uint32_t dispatch_lanes = overlay::fds_signalling::worker_read_group_status(group_id);
@@ -154,8 +155,10 @@ inline void init_go_signalling() {
          ++go_group_id) {
         const uint32_t plic_source = overlay::fds_signalling::plic_source_for_go_group(go_group_id);
         overlay::quasar::plic_set_priority(plic_source, overlay::fds_signalling::plic_fds_priority);
-        overlay::quasar::plic_enable_source(plic_source, /*enable=*/true);
     }
+    overlay::quasar::plic_enable_only_sources(
+        overlay::fds_signalling::plic_source_for_go_group(overlay::fds_signalling::idle_group_id + 1),
+        overlay::fds_signalling::plic_source_for_go_group(overlay::fds_signalling::idle_group_id + fds_num_go_groups));
     overlay::quasar::plic_drain_pendings();
     // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
     overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);

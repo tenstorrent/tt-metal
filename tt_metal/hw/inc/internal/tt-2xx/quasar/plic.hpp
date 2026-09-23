@@ -21,6 +21,7 @@ constexpr uint32_t plic_threshold_allow_all = 0;
 
 // Source enables are packed one bit per source across a run of 32-bit words.
 constexpr uint32_t plic_bits_per_enable_word = 32;
+constexpr uint32_t plic_num_enable_words = 3;
 
 // Only DM0 takes PLIC interrupts, so every access below targets PLIC context 0.
 constexpr uint32_t plic_priority_register_address(uint32_t source) {
@@ -39,11 +40,18 @@ inline uint32_t plic_claim() { return plic_read32(TT_CLUSTER_PLIC_CORE0_CLAIM_CO
 
 inline void plic_complete(uint32_t source) { plic_write32(TT_CLUSTER_PLIC_CORE0_CLAIM_COMPLETE_REG_ADDR, source); }
 
-inline void plic_enable_source(uint32_t source, bool enable) {
-    const uint32_t enable_bit = uint32_t{1} << (source % plic_bits_per_enable_word);
-    const uint32_t address = plic_enable_register_address(source / plic_bits_per_enable_word);
-    const uint32_t current_value = plic_read32(address);
-    plic_write32(address, enable ? (current_value | enable_bit) : (current_value & ~enable_bit));
+// The enable registers have no reset, so every word is written to leave no other source enabled.
+inline void plic_enable_only_sources(uint32_t first_source, uint32_t last_source) {
+    for (uint32_t enable_word = 0; enable_word < plic_num_enable_words; ++enable_word) {
+        uint32_t enable_bits = 0;
+        for (uint32_t bit = 0; bit < plic_bits_per_enable_word; ++bit) {
+            const uint32_t source = enable_word * plic_bits_per_enable_word + bit;
+            if (source >= first_source && source <= last_source) {
+                enable_bits |= uint32_t{1} << bit;
+            }
+        }
+        plic_write32(plic_enable_register_address(enable_word), enable_bits);
+    }
 }
 
 inline void plic_set_priority(uint32_t source, uint32_t priority) {
