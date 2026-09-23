@@ -8,8 +8,8 @@
 
 namespace ttml::ops {
 
-// Fused implementation using custom sdpa_fw and sdpa_bw kernels (default)
-// When no mask is provided, uses on-device causal mask generation
+// Uses fused sdpa_fw/sdpa_bw kernels for square attention. Rectangular attention requires an explicit mask and uses
+// the composite fallback. For square attention with no mask, the fused kernels generate a causal mask on-device.
 autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
