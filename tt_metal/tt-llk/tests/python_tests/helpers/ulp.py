@@ -42,8 +42,8 @@ from .logger import logger
 
 #: The formats with a *native* per-element ULP. Ask :func:`has_ulp_gate` rather than
 #: testing membership here -- this is only the native half, and misses the proxy table
-#: below. The coarser block floats and the MX formats share a block exponent across 16
-#: elements, so a per-element count is not a property of the element and they keep the
+#: below. The coarser block floats and the MX formats share a block exponent across the
+#: block, so a per-element count is not a property of the element and they keep the
 #: block-aware lattice compares in utils.py; integers want bit equality.
 ULP_FORMATS: Tuple[DataFormat, ...] = (
     DataFormat.Float16_b,
@@ -184,7 +184,9 @@ def ulp_dtype(fmt: DataFormat) -> torch.dtype:
         f"{', '.join(f.name for f in ULP_FORMATS)}, and for "
         f"{', '.join(f.name for f in _ULP_PROXY_DTYPES)} in a proxy format's space; the "
         "coarser block floats and the MX formats share a block exponent and keep their "
-        "lattice compare in utils.py, and the integer formats want bit equality."
+        "lattice compare in utils.py, the integer formats want bit equality, and Tf32 "
+        "collapses onto torch.float32 in format_dict, so it would be counted on a "
+        "lattice that is not its own."
     )
 
 
@@ -366,6 +368,13 @@ def ulp_elementwise_valid(
                 f"near_zero_atol must not be negative, got {near_zero_atol}; "
                 "0.0 is the no-floor value, and None is the default"
             )
+        if not near_zero_fraction > 0.0:
+            # It is a divisor here and the relative bound there, so 0.0 raises a bare
+            # ZeroDivisionError and a negative makes both cuts false on every lane --
+            # the same silently inert floor a negative atol would give.
+            raise ValueError(
+                f"near_zero_fraction must be positive, got {near_zero_fraction}"
+            )
         absolute_cut = near_zero_atol / near_zero_fraction
         # In float32, like the error compare below: both cuts are Python floats, so a
         # 16-bit `golden.abs()` would promote them onto the tensor's own lattice and round
@@ -433,12 +442,12 @@ def ulp_stats(
         "max": worst,
         "mean": float(as_float.mean()),
         "p95": (
-            float(torch.quantile(as_float, 0.95))
+            float(torch.quantile(as_float, q=0.95))
             if lanes >= _MIN_LANES_FOR_P95
             else float(worst)
         ),
         "p99": (
-            float(torch.quantile(as_float, 0.99))
+            float(torch.quantile(as_float, q=0.99))
             if lanes >= _MIN_LANES_FOR_P99
             else float(worst)
         ),
@@ -613,9 +622,12 @@ def ulp_failure_message(
         flush_subnormals=flush_subnormals,
     )
     budget = "" if max_ulp is None else f" (budget {max_ulp})"
+    # A non-finite golden has no step, and `local_step` says so with NaN; printing it
+    # would read "1 ULP = nan" on a lane both sides agree on.
+    sized = f"1 ULP = {step:.6e}" if math.isfinite(step) else "no step at a non-finite"
     return (
         f"max {stats['max']} ULP @ [{index}]{budget}: result {result_value!r} vs golden "
-        f"{golden_value!r} (1 ULP = {step:.6e}, {label})\n"
+        f"{golden_value!r} ({sized}, {label})\n"
         f"  over {stats['lanes']} lanes: mean {stats['mean']:.3f}, p95 {stats['p95']:.1f}, "
         f"p99 {stats['p99']:.1f}, {100.0 * stats['exact_frac']:.1f}% exact, "
         f"{stats['unmeasurable']} unmeasurable{floor}"
@@ -679,6 +691,13 @@ def within_ulp(
                 f"within_ulp: {fmt.name} is measured in {expected}, but the tensors are "
                 f"{golden.dtype}; cast both to the output format's dtype first"
             )
+    if golden.dtype != result.dtype:
+        # Before the non-finite short-circuit: an uncast golden reads there as a kernel
+        # overflow, and labels it with the wrong dtype.
+        raise ValueError(
+            f"within_ulp: golden is {golden.dtype} but result is {result.dtype}; a ULP "
+            "distance is a rank on one lattice, so cast both to the same dtype first"
+        )
     warn_if_threshold_unmeaningful(max_ulp, golden.dtype)
 
     selected = _selection(mask, golden, "within_ulp")
