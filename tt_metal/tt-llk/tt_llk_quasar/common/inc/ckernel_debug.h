@@ -111,15 +111,20 @@ inline void dbg_read_dest_row_32b(std::uint32_t logical_row, std::uint32_t rd[16
     }
 }
 
-// Read one DEST row of sixteen 8-bit datums (Int8) into 4 packed uint32 words, element i in byte i.
+// Read one DEST row of sixteen 8-bit datums (Int8) into 4 uint32 words, element i in byte i % 4 of word
+// i / 4. The 8-bit view returns one element per access whatever its width -- a 32-bit load at element i
+// yields element i replicated into all four bytes -- so the row has to be read a byte at a time.
 inline void dbg_read_dest_row_8b(std::uint32_t logical_row, std::uint32_t rd[4])
 {
     volatile std::uint8_t* addr = reinterpret_cast<volatile std::uint8_t*>(RISCV_DEST_START_ADDR);
     const std::uint32_t base    = logical_row * 16;
     for (int i = 0; i < 4; ++i)
     {
-        rd[i] =
-            addr[base + 4 * i] | (addr[base + 4 * i + 1] << 8) | (addr[base + 4 * i + 2] << 16) | (static_cast<std::uint32_t>(addr[base + 4 * i + 3]) << 24);
+        rd[i] = 0;
+    }
+    for (int i = 0; i < 16; ++i)
+    {
+        rd[i / 4] |= static_cast<std::uint32_t>(addr[base + i]) << (8 * (i % 4));
     }
 }
 

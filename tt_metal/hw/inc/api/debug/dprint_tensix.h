@@ -260,6 +260,52 @@ inline uint32_t dest_order_from_ieee_float16(uint32_t ieee) {
     return (ieee & 0x8000u) | ((ieee & 0x3FFu) << 5) | ((ieee >> 10) & 0x1Fu);
 }
 
+// Applies a 16-bit field-order swap (one of the two above) to both datums of a word, low half first.
+inline uint32_t dest_order_from_ieee_pair(uint32_t word, uint32_t (*to_dest_order)(uint32_t)) {
+    return to_dest_order(word & 0xFFFFu) | (to_dest_order(word >> 16) << 16);
+}
+
+// Recovers the tile's bits for four Int8 datums (one byte each) read through the signed Int8 view.
+// The unpacker decodes an Int8 tile as sign-magnitude -- bit 7 the sign, bits 6:0 the magnitude m --
+// and the signed view returns that value in two's complement, so a negative datum comes back as
+// 0x100 - m. Re-encoding it as 0x80 | m gives back the tile's byte, which the host then prints as two's
+// complement, as on WH/BH.
+inline uint32_t int8_tile_bits_from_dest_view(uint32_t word) {
+    uint32_t out = 0;
+    for (int b = 0; b < 4; ++b) {
+        const uint32_t byte = (word >> (8 * b)) & 0xFFu;
+        const uint32_t tile_byte = (byte & 0x80u) ? 0x80u | ((0x100u - byte) & 0x7Fu) : byte;
+        out |= tile_byte << (8 * b);
+    }
+    return out;
+}
+
+// Prints one DEST row -- 16 datums -- as a typed array: 4 words of 8-bit, 8 words of 16-bit or 16 words
+// of 32-bit datums. The Math section must already be programmed for data_format's read view.
+inline void dprint_tensix_dest_row(DataFormat data_format, uint32_t row) {
+    if (data_format == DataFormat::Int8) {
+        uint32_t rd_data[4];
+        ckernel::dbg_read_dest_row_8b(row, rd_data);
+        for (uint32_t& word : rd_data) {
+            word = int8_tile_bits_from_dest_view(word);
+        }
+        dprint_array_with_data_type<4>((uint32_t)data_format, rd_data);
+    } else if (data_format == DataFormat::Float32 || data_format == DataFormat::Int32) {
+        uint32_t rd_data[16];
+        ckernel::dbg_read_dest_row_32b(row, rd_data);
+        dprint_array_with_data_type<16>((uint32_t)data_format, rd_data);
+    } else {
+        uint32_t rd_data[8];
+        ckernel::dbg_read_dest_row_16b(row, rd_data);
+        const auto to_dest_order =
+            data_format == DataFormat::Float16 ? dest_order_from_ieee_float16 : dest_order_from_ieee_float16_b;
+        for (uint32_t& word : rd_data) {
+            word = dest_order_from_ieee_pair(word, to_dest_order);
+        }
+        dprint_array_with_data_type<8>((uint32_t)data_format, rd_data);
+    }
+}
+
 // Prints the contents of tile tile_id within the destination register, row by row, in the same typed
 // array form the other architectures emit -- the host print parser decodes it, so the rendered text is
 // identical everywhere. The DEST data format is passed in rather than recovered from config, because
@@ -293,7 +339,6 @@ inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
             // is right for tensors the host wrote and a datacopy moved into DEST; sign-magnitude results of
             // the FPU (e.g. integer matmul) print their negatives wrong, as they do on WH/BH. Int32 is read
             // through the window's Float32 leg, which returns each 32-bit word unchanged.
-            const bool is_32b = data_format == DataFormat::Float32 || data_format == DataFormat::Int32;
             const DataFormat read_format = data_format == DataFormat::Int32 ? DataFormat::Float32 : data_format;
             // Program Math's section for MMIO DEST reads. configure_dest_access issues RMWCIB config writes,
             // so wait for the config unit before the first read.
@@ -301,41 +346,8 @@ inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
             ckernel::wait_cfg_idle();
 
             DPRINT("Tile ID = {}\n", tile_id);
-            uint32_t row = tile_id * NUM_ROWS_PER_TILE;
-            for (uint32_t i = 0; i < NUM_ROWS_PER_TILE; ++i, ++row) {
-                if (data_format == DataFormat::Int8) {
-                    constexpr int ARRAY_LEN = 4;
-                    uint32_t rd_data[ARRAY_LEN];
-                    ckernel::dbg_read_dest_row_8b(row, rd_data);
-                    // The unpacker decodes an Int8 tile as sign-magnitude, and the signed Int8 leg returns that
-                    // value in two's complement. Re-encode each byte as sign-magnitude to get back the bits the
-                    // tile held, which are then printed as two's complement like on WH/BH.
-                    for (int w = 0; w < ARRAY_LEN; ++w) {
-                        uint32_t out = 0;
-                        for (int b = 0; b < 4; ++b) {
-                            const uint32_t byte = (rd_data[w] >> (8 * b)) & 0xFFu;
-                            const uint32_t raw = (byte & 0x80u) ? 0x80u | ((0x100u - byte) & 0x7Fu) : byte;
-                            out |= raw << (8 * b);
-                        }
-                        rd_data[w] = out;
-                    }
-                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
-                } else if (is_32b) {
-                    constexpr int ARRAY_LEN = 16;
-                    uint32_t rd_data[ARRAY_LEN];
-                    ckernel::dbg_read_dest_row_32b(row, rd_data);
-                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
-                } else {
-                    constexpr int ARRAY_LEN = 8;
-                    uint32_t rd_data[ARRAY_LEN];
-                    ckernel::dbg_read_dest_row_16b(row, rd_data);
-                    const auto to_dest_order = data_format == DataFormat::Float16 ? dest_order_from_ieee_float16
-                                                                                  : dest_order_from_ieee_float16_b;
-                    for (int w = 0; w < ARRAY_LEN; ++w) {
-                        rd_data[w] = to_dest_order(rd_data[w] & 0xFFFFu) | (to_dest_order(rd_data[w] >> 16) << 16);
-                    }
-                    dprint_array_with_data_type<ARRAY_LEN>((uint32_t)data_format, rd_data);
-                }
+            for (uint32_t i = 0; i < NUM_ROWS_PER_TILE; ++i) {
+                dprint_tensix_dest_row(data_format, tile_id * NUM_ROWS_PER_TILE + i);
             }
         }
     })
