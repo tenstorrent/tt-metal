@@ -1497,7 +1497,18 @@ class ModelArgs:
 
     def _prefill_op_mem_config(self, seq_len: int = None, knob: str = None):
         """L1 for a transient prefill op-output when intermediate-L1 is enabled,
-        else the default residual/activation placement."""
+        else the default residual/activation placement.
+
+        An explicit ``<knob>=0`` forces DRAM. Without this, "0" only skipped the
+        intermediate-L1 branch and fell through to the activation placement,
+        which is itself L1 under TT_BATCHED_L1_PREFILL -- so the knob could move
+        an op output into L1 but never out of it. Spilling just the 9728-wide MLP
+        intermediate (353 KB/core at bs8, 1.4 MB/core at bs32) while the 2560-dim
+        residual stays resident is the only way batched L1-resident prefill fits.
+        Identical behaviour in the DRAM-activation regime, where the fallback was
+        DRAM already."""
+        if knob and os.getenv(knob) == "0":
+            return ttnn.DRAM_MEMORY_CONFIG
         if self._use_prefill_intermediate_l1(seq_len, knob):
             return ttnn.L1_MEMORY_CONFIG
         return self.get_prefill_activation_mem_config(seq_len=seq_len)
