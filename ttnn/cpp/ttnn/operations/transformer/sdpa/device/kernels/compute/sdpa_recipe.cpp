@@ -35,9 +35,14 @@ void kernel_main() {
     static_assert(k_tiles == 8 || k_tiles == 12 || k_tiles == 16, "Named recipes support K256/K384/K512");
     const uint32_t jobs = get_arg_val<uint32_t>(0);
     static_assert(q_tiles >= 4 && q_tiles <= 10, "Named recipes support Q128-Q320");
-    // Odd Q chunks use single-row QK/PV subblocks for FAST; subblock height only
+#ifdef SDPA_RECIPE_BASELINE
+    // FAST uses single-row QK/PV subblocks for odd Q chunks; subblock height only
     // changes which rows share a dest pass, not any element's accumulation.
     constexpr uint32_t bf16_subblock_h = q_tiles % 2 == 0 ? 2 : 1;
+#else
+    // Paired BF16 recipes keep two-row groups and end an odd chunk with a one-row group.
+    constexpr uint32_t bf16_subblock_h = 2;
+#endif
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 16);
     matmul_init(0, 1);
     cb_wait_front(0, q_tiles * 4);
