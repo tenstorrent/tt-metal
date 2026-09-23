@@ -320,17 +320,38 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
+#: What a key line says about the run every emitted row below it came from. The sweep
+#: identity is identical on every one of them -- ~63 characters times ~2,000 rows, a
+#: quarter of the file -- so it is stated once per op instead. "except where a row says
+#: otherwise" is not hedging: rows this run did not supersede keep their own suffix.
+_MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
+
+#: The same clause, for stripping a previous run's before writing this one's. Without
+#: it a second `--ulp-emit` appends rather than replaces, and the key line accumulates
+#: one stale run identity per regeneration.
+_MEASURED_BY_RE = re.compile(
+    r";?\s*measured by: .*?, except where a row says otherwise"
+)
+
+
 def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     """One op's block: each row with its verdict, and the measurement behind it.
 
-    *key_line* is passed through verbatim. Several ops carry their measurement as a
+    *key_line* keeps whatever it already said. Several ops carry their measurement as a
     header comment on that line -- `Fill:  # 0 ULP, 115 variants` -- and it is the
     provenance for every row of theirs this sweep does not reach. Rewriting the key as
     a bare `Fill:` dropped it, and the guard that every budget names its measurement
-    then failed on rows that had one all along.
+    then failed on rows that had one all along. The run identity is *appended* to it.
+
+    Each row still carries its own number, which is what the provenance audit reads and
+    what a budget may only be raised against. What moves to the key line is the part
+    that is the same on every row: which sweep, on which arch, on which day.
     """
     order = ("in", "out", "approx", "dest")
-    out = [key_line]
+    head, sep, comment = key_line.rstrip("\n").partition("#")
+    measured_by = _MEASURED_BY.format(suffix=suffix)
+    existing = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
+    out = [f"{head.rstrip()}  # {existing + '; ' if existing else ''}{measured_by}\n"]
     for row in rows:
         metric, value = row["verdict"]
         body = ", ".join(
@@ -356,7 +377,7 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
             note += f", budget would be {value} > {ceiling:.0f}-step ceiling"
         elif metric == "block":
             note += ", block-quantized, so tolerance"
-        out.append(f"  - {{{pairs}}}  # {note}, {suffix}\n")
+        out.append(f"  - {{{pairs}}}  # {note}\n")
     return out
 
 
