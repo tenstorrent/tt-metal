@@ -346,8 +346,9 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.explicit_untilize_geometry) {
+        const auto num_faces = test_config.tile_shape_in_faces_r * test_config.tile_shape_in_faces_c;
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
-        compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(test_config.num_faces_per_tile));
+        compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(num_faces));
         compute_defines.emplace("EXPLICIT_NARROW_ROW", test_config.explicit_untilize_narrow_row ? "1" : "0");
     }
     if (test_config.fp32_dest_acc_en) {
@@ -1659,6 +1660,9 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
         // copy_tile populates full 16x16 face slots. One/two-face tiny tiles
         // select their leading rows; the four-face case uses the full shape.
         // Short four-face SDPA layouts require a different DEST producer.
+        // One face is 1x1, two faces are 1x2, four faces are 2x2.
+        const std::uint32_t faces_r = num_faces > 2 ? 2 : 1;
+        const std::uint32_t faces_c = num_faces == 1 ? 1 : 2;
         const auto face_heights = num_faces == 4 ? vector<std::uint32_t>{16} : vector<std::uint32_t>{1, 8, 16};
         const auto narrow_modes = num_faces == 1 ? vector<bool>{false, true} : vector<bool>{false};
         for (const auto face_rows : face_heights) {
@@ -1680,7 +1684,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
                             .output_single_tile_size = 2 * num_faces * face_rows * 16,
                             .num_tiles_r = 3,
                             .num_tiles_c = width,
-                            .num_faces_per_tile = num_faces,
+                            .tile_shape_in_faces_r = faces_r,
+                            .tile_shape_in_faces_c = faces_c,
                             .face_r_dim = face_rows,
                             .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
                             .golden_function = ::unit_tests::compute::gold_standard_untilize};
