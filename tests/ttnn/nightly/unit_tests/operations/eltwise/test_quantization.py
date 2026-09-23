@@ -1303,3 +1303,14 @@ def test_uint8_composite_matches_scalar_path(device):
         composite[positive], scalar[positive]
     ), f"{composite[0, :n].tolist()} vs {scalar[0, :n].tolist()}"
     assert torch.equal(composite[~positive], torch.zeros_like(composite[~positive]))
+
+
+# The caller's memory_config governs only the uint8 output; the fp32 clamp intermediate stays in the
+# default config instead of taking a 4x-sized buffer in L1.
+def test_uint8_composite_l1_output(device):
+    x = torch.nn.functional.pad(torch.tensor([_UINT8_ROW] * 32, dtype=torch.float32), (0, 32 - len(_UINT8_ROW)))
+    as_tt = lambda t, dtype: ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    zero_point = as_tt(torch.zeros(1, dtype=torch.int32), ttnn.int32)
+    out = ttnn.quantize(as_tt(x, ttnn.float32), 0.5, zero_point, dtype=ttnn.uint8, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert out.memory_config() == ttnn.L1_MEMORY_CONFIG
+    assert torch.equal(ttnn.to_torch(out), torch.clamp(torch.round(x / 0.5), 0, 255).to(torch.uint8))
