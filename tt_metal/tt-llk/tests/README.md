@@ -75,3 +75,13 @@ and `test_errors.log` (persistent, ERROR+ only).
 
 See [LOGGING.md](LOGGING.md) for the
 full guide including log levels, output destinations, and pytest-xdist behaviour.
+
+## SFPU accuracy
+
+Each SFPU op declares how closely its output must match its golden, in
+`python_tests/helpers/sfpu_accuracy_budget.yaml`. The ops enrolled on the ULP metric
+are gated against every value their input format can take, by
+`python_tests/test_unary_sfpu_ulp.py`.
+
+See [SFPU_ULP.md](SFPU_ULP.md) for how to enrol an op, what the sweep feeds and
+masks, and the rules the table enforces.
