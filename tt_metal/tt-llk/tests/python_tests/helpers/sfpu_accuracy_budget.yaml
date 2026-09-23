@@ -5758,5 +5758,3 @@ Xielu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Floa
   - {in: Float32, out: Float16_b, dest: "Yes", metric: tolerance}  # max 13575 ULP, budget 14933 > ceiling 6
   - {in: Float32, out: Float32, dest: "No", metric: tolerance}  # max 889585665 ULP, budget 978544232 > ceiling 419430
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # max 889599930 ULP, budget 978559924 > ceiling 419430
-
-
