@@ -29,3 +29,17 @@ def test_recipe_sdpa_kwargs_ignore_compute_config():
     attention.sdpa_recipe_kwargs = {"precision": "recipe", "inputs_prepared": False}
     attention.sdpa_compute_kernel_config = "quantized"
     assert attention._self_sdpa_kwargs() == {"precision": "recipe", "inputs_prepared": False}
+
+
+def test_recipe_q_chunk_keeps_supported_tuned_chunks():
+    import ttnn
+
+    choose = WanAttention._recipe_q_chunk
+    accurate, compensated = ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.COMPENSATED
+    # Tuned Blackhole ring chunks: (2,2)->128, (8,4)->288, (32,4)->224, default 256.
+    assert choose(128, accurate, ring=True) == 128
+    assert choose(288, accurate, ring=True) == 256  # ring checkpoints need an even tile count
+    assert choose(224, accurate, ring=False) == 224  # dense FP32 recipes accept odd tiles
+    assert choose(224, compensated, ring=False) == 256  # compensated state pairs tile rows
+    assert choose(64, accurate, ring=False) == 256
+    assert choose(352, accurate, ring=False) == 256

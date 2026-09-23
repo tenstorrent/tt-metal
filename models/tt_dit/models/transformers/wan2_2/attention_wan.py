@@ -62,11 +62,8 @@ class WanAttention(Module):
         self.is_self = is_self
         self.sdpa_precision = sdpa_precision
         self.sdpa_kv_dtype = sdpa_kv_dtype or ttnn.bfloat16
-        if sdpa_precision is not None:
-            if not is_self or not is_blackhole() or self.head_dim != 128:
-                raise ValueError("Named Wan recipes require Blackhole D128 self-attention")
-            if sdpa_chunk_size_overrides:
-                raise ValueError("Named recipes own Q256/K512 blocking")
+        if sdpa_precision is not None and (not is_blackhole() or self.head_dim != 128):
+            raise ValueError("Named Wan recipes require Blackhole D128 attention")
         if self.sdpa_kv_dtype != ttnn.bfloat16 and sdpa_precision != ttnn.SDPAPrecision.LOW_PRECISION:
             raise ValueError("Low-precision KV requires the LOW_PRECISION recipe")
         if self.sdpa_kv_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
@@ -175,12 +172,18 @@ class WanAttention(Module):
         )
         self.sdpa_recipe_kwargs = None
         if sdpa_precision is not None:
+            # exp_ring recipes are not integrated yet; the recipe uses ring_joint on every SP mesh.
             self.use_exp_ring_sdpa = False
             self.sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=full_grid, q_chunk_size=256, k_chunk_size=512
+                compute_with_storage_grid_size=full_grid,
+                q_chunk_size=self._recipe_q_chunk(256, sdpa_precision, ring=False),
+                k_chunk_size=512,
             )
+            # Keep the mesh-tuned Q chunk where the recipe supports it; K blocking is fixed at 512.
             self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.sdpa_worker_grid, q_chunk_size=256, k_chunk_size=512
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=self._recipe_q_chunk(ring_sdpa_chunk_size[0], sdpa_precision, ring=True),
+                k_chunk_size=512,
             )
             self.sdpa_recipe_kwargs = {
                 "precision": sdpa_precision,
@@ -334,6 +337,14 @@ class WanAttention(Module):
             )
         return output
 
+    @staticmethod
+    def _recipe_q_chunk(q_chunk: int, precision: ttnn.SDPAPrecision, *, ring: bool) -> int:
+        """Largest-fidelity reuse of a tuned Q chunk that the recipe supports, else Q256."""
+        tiles = q_chunk // 32
+        paired = precision in (ttnn.SDPAPrecision.COMPENSATED, ttnn.SDPAPrecision.LOW_PRECISION)
+        supported = q_chunk % 32 == 0 and 128 <= q_chunk <= 320 and (tiles % 2 == 0 or not (paired or ring))
+        return q_chunk if supported else 256
+
     def _self_sdpa_kwargs(self) -> dict:
         # Read the compute config at call time: apply_quant_config replaces it after construction.
         if self.sdpa_recipe_kwargs is not None:
@@ -374,8 +385,8 @@ class WanAttention(Module):
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
-        if self.sdpa_precision is not None and (prompt_1BLP is not None or cross_attn_mask is not None):
-            raise ValueError("Named Wan recipes support unmasked self-attention only")
+        if self.sdpa_precision is not None and cross_attn_mask is not None:
+            raise ValueError("Named Wan recipes support unmasked attention only")
         if rope_cos is not None:
             # If ROPE is given, this is self-attention
             assert rope_sin is not None
@@ -530,14 +541,18 @@ class WanAttention(Module):
                 )
         else:
             # Cross attention
+            cross_kwargs = (
+                self.sdpa_recipe_kwargs
+                if self.sdpa_recipe_kwargs is not None
+                else {"attn_mask": cross_attn_mask, "compute_kernel_config": self.sdpa_compute_kernel_config}
+            )
             spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
                 is_causal=False,
-                attn_mask=cross_attn_mask,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                **cross_kwargs,
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
