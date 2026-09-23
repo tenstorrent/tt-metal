@@ -37,6 +37,7 @@ class ProjectionTuning:
     norm_full_dst: bool = False
     norm_tile_height: int = 32
     projection_tile_height: int = 32
+    custom_down: bool = False
     custom_o: bool = False
     custom_gu: bool = False
     qkv_custom_mm: bool = False
@@ -49,11 +50,13 @@ class ProjectionTuning:
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.custom_down and (self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
+            raise ValueError("Custom down padding excludes helper prefetch")
         if self.norm_stats_face and (self.norm_tile_height != 16 or self.scratch_init_once != "all"):
             raise ValueError("Short norm statistics require16-row norms and per-invocation scratch initialization")
         if self.cache_layer_table and (self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
             raise ValueError("Layer-table caching currently excludes helper prefetch")
-        if (self.custom_gu or self.custom_o) and (self.projection_tile_height != 16 or self.reader != "pipelined" or not self.wide_subblocks or self.projection_full_dst != "off" or self.compact_activations != "off" or self.share_qkv_workers):
+        if (self.custom_gu or self.custom_o or self.custom_down) and (self.projection_tile_height != 16 or self.reader != "pipelined" or not self.wide_subblocks or self.projection_full_dst != "off" or self.compact_activations != "off" or self.share_qkv_workers):
             raise ValueError("Custom GU requires tiny16 wide ordinary pipelined projections")
         if self.qkv_custom_mm and (self.projection_tile_height != 16 or self.reader != "pipelined" or self.share_qkv_workers or self.compact_activations != "off" or self.prefetch_head_workers):
             raise ValueError("Custom QKV requires tiny16 ordinary separate-QKV pipelined readers")
@@ -128,6 +131,7 @@ class ProjectionTuning:
     def defines(self):
         return [
             ("CACHE_LAYER_TABLE", str(int(self.cache_layer_table))),
+            ("CUSTOM_DOWN", str(int(self.custom_down))),
             ("CUSTOM_O", str(int(self.custom_o))),
             ("CUSTOM_GU", str(int(self.custom_gu))),
             ("INLINE_CB_RESET", str(int(self.inline_cb_reset))),

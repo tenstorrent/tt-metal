@@ -89,6 +89,7 @@ def parse_args():
     parser.add_argument("--projection-buffers", type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument("--compact-activations", choices=("off", "norm", "all"), default="off")
     parser.add_argument("--custom-o", action="store_true")
+    parser.add_argument("--custom-down", action="store_true")
     parser.add_argument("--custom-gu", action="store_true")
     parser.add_argument("--qkv-custom-mm", action="store_true")
     parser.add_argument("--qkv-buffers", type=int, choices=(0, 3, 4, 5, 6), default=0)
@@ -152,7 +153,7 @@ def run(args):
         profiler_phase={"main":0, "o":1, "gu":2, "down":3}[args.profiler_phase],
         compact_activations=args.compact_activations,
         head_placement=args.head_placement, head_early_blocks=args.head_early_blocks,
-        custom_o=args.custom_o, custom_gu=args.custom_gu, qkv_custom_mm=args.qkv_custom_mm, qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
+        custom_o=args.custom_o, custom_down=args.custom_down, custom_gu=args.custom_gu, qkv_custom_mm=args.qkv_custom_mm, qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
         attention_workers=args.attention_workers, attention_chunk=args.attention_chunk,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
         bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, inline_cb_reset=args.inline_cb_reset, cache_layer_table=args.cache_layer_table, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,

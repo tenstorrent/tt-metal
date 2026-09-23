@@ -57,6 +57,8 @@ class FusedMLP:
         self.tuning = tuning or ProjectionTuning()
         if self.tuning.compact_activations != "off" and not fuse_prepare:
             raise ValueError("Compact transport requires the complete decoder body")
+        if self.tuning.custom_down and reuse_scratch:
+            raise ValueError("Custom down needs padded phase buffers")
         if self.tuning.split_gu_bank_rows and gu_workers != 16:
             raise ValueError("Split GU bank rows currently require sixteen compute workers")
         if reuse_scratch and (self.tuning.reader != "original" or self.tuning.buffers != 2):
@@ -349,8 +351,8 @@ class FusedMLP:
         for index, tiles, dtype in (
             (0, 8 * self.tuning.buffers, ttnn.bfloat16),
             (1, (224 if self.reuse_scratch else 224 * self.tuning.buffers) * 8 // self.gu_workers, ttnn.bfloat4_b),
-            (3, 112 if self.reuse_scratch else 112 * self.tuning.buffers, ttnn.bfloat8_b),
-            (4, 7 * self.tuning.buffers, ttnn.bfloat16),
+            (3, 112 if self.reuse_scratch else (128 if self.tuning.custom_down else 112) * self.tuning.buffers, ttnn.bfloat8_b),
+            (4, (8 if self.tuning.custom_down else 7) * self.tuning.buffers, ttnn.bfloat16),
             (17, 16, ttnn.bfloat16),
             (24, 224 // self.gu_workers, ttnn.bfloat16),
             (25, 16, ttnn.bfloat16),
@@ -398,7 +400,7 @@ class FusedMLP:
                     formats = list(item.format_descriptors)
                     for fmt in formats:
                         if fmt.buffer_index in (0, 4, 6, 16, 17, 24, 25):
-                            fmt.tile = ttnn.TileDescriptor(8 if (self.tuning.custom_gu and fmt.buffer_index == 0) or (self.tuning.custom_o and fmt.buffer_index == 6) else 16, 32)
+                            fmt.tile = ttnn.TileDescriptor(8 if (self.tuning.custom_gu and fmt.buffer_index == 0) or (self.tuning.custom_o and fmt.buffer_index == 6) or (self.tuning.custom_down and fmt.buffer_index == 4) else 16, 32)
                     item.format_descriptors = formats
         semaphores = [
             ttnn.SemaphoreDescriptor(

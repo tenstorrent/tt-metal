@@ -6,7 +6,7 @@
 #include "compact_rows.hpp"
 #endif
 
-#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O
+#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O || CUSTOM_DOWN
 // Custom unpack walks K faces contiguously, independent of CB page stride.
 // Compact each unpublished block to512-byte8-row tiles; ring blocks retain
 // original2048-byte page spacing. All non-row-zero lanes were zero upstream.
@@ -49,17 +49,37 @@ void read_projection_weights(const Weight& weight, uint32_t worker, uint32_t k, 
     }
 }
 
+// Pad only the odd seven-tile down block. Reinitialize every down phase,
+// because the same physical ring previously held GU weights. Zero mantissas
+// and exponents produce exact zero BFP8 tiles; DRAM weight bytes are unchanged.
+template <uint32_t B, uint32_t KBlock, uint32_t N, uint32_t WeightBytes>
+void zero_projection_weight_padding() {
+    if constexpr (CUSTOM_DOWN && B == 3 && KBlock == 7) {
+        const uint32_t base = get_write_ptr(B);
+        static_assert((N * WeightBytes) % MEM_ZEROS_SIZE == 0);
+        for (uint32_t slot = 0; slot < PROJECTION_BUFFERS; ++slot) {
+            const uint32_t pad = base + (slot * (KBlock + 1) + KBlock) * N * WeightBytes;
+            for (uint32_t offset = 0; offset < N * WeightBytes; offset += MEM_ZEROS_SIZE) {
+                noc_async_read(get_noc_addr(MEM_ZEROS_BASE), pad + offset, MEM_ZEROS_SIZE);
+            }
+        }
+        noc_async_read_barrier();
+    }
+}
+
 // Fill an unpublished prefix of the phase's own weight ring while its
 // activation is unavailable. No extra copy or DRAM bytes; the normal stream
 // publishes each block with its activation and skips this prefix's DRAM read.
 template <uint32_t B, uint32_t KBlock, uint32_t N, uint32_t Workers, uint32_t WeightBytes, typename Weight>
 void prefetch_local_projection_weights(const Weight& weight, uint32_t worker) {
     static_assert(EARLY_WEIGHT_BLOCKS <= PROJECTION_BUFFERS);
-    cb_reserve_back(B, EARLY_WEIGHT_BLOCKS * KBlock * N);
+    constexpr uint32_t StoredK = KBlock + (CUSTOM_DOWN && B == 3 && KBlock == 7);
+    zero_projection_weight_padding<B, KBlock, N, WeightBytes>();
+    cb_reserve_back(B, EARLY_WEIGHT_BLOCKS * StoredK * N);
     const uint32_t base = get_write_ptr(B);
     for (uint32_t block = 0; block < EARLY_WEIGHT_BLOCKS; ++block) {
         read_projection_weights<KBlock, N, Workers, WeightBytes>(weight, worker, block * KBlock,
-            base + block * KBlock * N * WeightBytes);
+            base + block * StoredK * N * WeightBytes);
     }
     // This join is before the activation wait. It makes prefix readiness
     // explicit and keeps transaction bookkeeping bounded, including TRID0.
@@ -71,6 +91,8 @@ template <uint32_t A, uint32_t B, uint32_t KBlock, uint32_t N, uint32_t K, uint3
 void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t worker,
                              uint64_t prefetched_base = 0, uint32_t prefetched_blocks = 0, uint32_t local_prefetched_blocks = 0) {
     constexpr uint32_t blocks = K / KBlock;
+    constexpr uint32_t StoredK = KBlock + (CUSTOM_DOWN && B == 3 && KBlock == 7);
+    if (local_prefetched_blocks == 0) { zero_projection_weight_padding<B, KBlock, N, WeightBytes>(); }
 #if COMPACT_ACTIVATIONS
     constexpr bool compact = (COMPACT_ACTIVATIONS & 2) || K == 128;
     constexpr uint32_t shard_tiles = K == 32 ? 4 : K == 112 ? 7 : 16;
@@ -91,8 +113,8 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
     // bounded independently of the number of layers or trace replays.
     constexpr uint32_t inflight = PROJECTION_LOOKAHEAD;
     static_assert(inflight >= 2 && inflight <= PROJECTION_BUFFERS && blocks >= inflight);
-    cb_reserve_back(A, inflight * KBlock);
-    cb_reserve_back(B, inflight * KBlock * N);
+    cb_reserve_back(A, inflight * StoredK);
+    cb_reserve_back(B, inflight * StoredK * N);
     const uint32_t a_start = get_write_ptr(A);
     const uint32_t b_start = get_write_ptr(B);
 #endif
@@ -104,11 +126,11 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         // Each block has fewer than half the available transaction credits,
         // including packetization of a contiguous weight read.
         while (noc_available_transactions(noc_index, trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2)) {}
-        const uint32_t a = a_start + slot * KBlock * 2048;
-        const uint32_t b = b_start + slot * KBlock * N * WeightBytes;
+        const uint32_t a = a_start + slot * StoredK * 2048;
+        const uint32_t b = b_start + slot * StoredK * N * WeightBytes;
 #else
-        cb_reserve_back(A, KBlock);
-        cb_reserve_back(B, KBlock * N);
+        cb_reserve_back(A, StoredK);
+        cb_reserve_back(B, StoredK * N);
         const uint32_t a = get_write_ptr(A);
         const uint32_t b = get_write_ptr(B);
 #endif
@@ -133,7 +155,7 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         }
         if (block < prefetched_blocks) {
             noc_async_read<KBlock * N * WeightBytes>(
-                prefetched_base + block * KBlock * N * WeightBytes, b, KBlock * N * WeightBytes);
+                prefetched_base + block * StoredK * N * WeightBytes, b, KBlock * N * WeightBytes);
         } else if (block >= local_prefetched_blocks) {
             read_projection_weights<KBlock, N, Workers, WeightBytes>(weight, worker, block * KBlock, b);
         }
@@ -147,22 +169,26 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
                     a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
             }
 #endif
-#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O
-            if constexpr ((CUSTOM_O && A == 6 && B == 7 && K == 32) || (QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
-                compact_custom_input<KBlock>(a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
+#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O || CUSTOM_DOWN
+            if constexpr ((CUSTOM_DOWN && A == 4 && B == 3 && K == 112) || (CUSTOM_O && A == 6 && B == 7 && K == 32) || (QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
+                compact_custom_input<KBlock>(a_start + (completed % PROJECTION_BUFFERS) * StoredK * 2048);
+                if constexpr (StoredK > KBlock) {
+                    auto* zero = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a_start + (completed % PROJECTION_BUFFERS) * StoredK * 2048 + KBlock * 512);
+                    for (uint32_t i = 0; i < 128; ++i) { zero[i] = 0; }
+                }
             }
 #endif
-            cb_push_back(A, KBlock);
-            cb_push_back(B, KBlock * N);
+            cb_push_back(A, StoredK);
+            cb_push_back(B, StoredK * N);
             if (block + 1 < blocks) {
-                cb_reserve_back(A, inflight * KBlock);
-                cb_reserve_back(B, inflight * KBlock * N);
+                cb_reserve_back(A, inflight * StoredK);
+                cb_reserve_back(B, inflight * StoredK * N);
             }
         }
 #else
         noc_async_read_barrier();
-        cb_push_back(A, KBlock);
-        cb_push_back(B, KBlock * N);
+        cb_push_back(A, StoredK);
+        cb_push_back(B, StoredK * N);
 #endif
     }
 #if PROJECTION_READER >= 2
@@ -174,13 +200,17 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
                 a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
         }
 #endif
-#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O
-        if constexpr ((CUSTOM_O && A == 6 && B == 7 && K == 32) || (QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
-            compact_custom_input<KBlock>(a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
+#if QKV_CUSTOM_MM || CUSTOM_GU || CUSTOM_O || CUSTOM_DOWN
+        if constexpr ((CUSTOM_DOWN && A == 4 && B == 3 && K == 112) || (CUSTOM_O && A == 6 && B == 7 && K == 32) || (QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
+            compact_custom_input<KBlock>(a_start + (block % PROJECTION_BUFFERS) * StoredK * 2048);
+                if constexpr (StoredK > KBlock) {
+                    auto* zero = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a_start + (block % PROJECTION_BUFFERS) * StoredK * 2048 + KBlock * 512);
+                    for (uint32_t i = 0; i < 128; ++i) { zero[i] = 0; }
+                }
         }
 #endif
-        cb_push_back(A, KBlock);
-        cb_push_back(B, KBlock * N);
+        cb_push_back(A, StoredK);
+        cb_push_back(B, StoredK * N);
     }
     noc_async_read_set_trid(0);
 #endif

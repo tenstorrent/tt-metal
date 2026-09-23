@@ -142,10 +142,10 @@ void kernel_main() {
         state[4 * cb + 2] = pages;
     };
     capacity(0, 8 * PROJECTION_BUFFERS);
-    capacity(4, 7 * PROJECTION_BUFFERS);
+    capacity(4, (CUSTOM_DOWN ? 8 : 7) * PROJECTION_BUFFERS);
     capacity(6, 4 * PROJECTION_BUFFERS);
     capacity(1, 224 * PROJECTION_BUFFERS);
-    capacity(3, 112 * PROJECTION_BUFFERS);
+    capacity(3, (CUSTOM_DOWN ? 128 : 112) * PROJECTION_BUFFERS);
     capacity(7, 64 * PROJECTION_BUFFERS);
     capacity(24, 28);
     capacity(25, 16);

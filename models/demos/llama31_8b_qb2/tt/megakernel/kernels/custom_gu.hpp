@@ -26,13 +26,13 @@ void custom_projection() {
     // A is 8 rows; partial/output stay 16 rows to retain face1 at DST row16.
     // Preserve original K blocks, BF16 L1 partials, LoFi, no split accumulation.
     constexpr uint32_t blocks = K / KBlock;
-    static_assert(KBlock % 2 == 0);
+    constexpr uint32_t StoredK = KBlock + KBlock % 2;
     custom_mm_block_init_short<false, false, false>(A, B, Partial, Subblock);
     pack_reconfig_data_format(Partial);
     pack_reconfig_l1_acc(0);
     for (uint32_t block = 0; block < blocks; ++block) {
-        cb_wait_front(A, KBlock);
-        cb_wait_front(B, KBlock * Width);
+        cb_wait_front(A, StoredK);
+        cb_wait_front(B, StoredK * Width);
         const bool last = block == blocks - 1;
 #if PROJECTION_HOIST_PACK
         if (block == 1 || last) { pack_reconfig_l1_acc(!last); }
@@ -51,8 +51,8 @@ void custom_projection() {
             }
             UNPACK((tensix_sync()));
             MATH((tensix_sync()));
-            UNPACK((custom_projection_unpack<A, B, Width, Subblock, KBlock>(column)));
-            MATH((llk_math_custom_mm<false>(A, B, 0, KBlock, Subblock)));
+            UNPACK((custom_projection_unpack<A, B, Width, Subblock, StoredK>(column)));
+            MATH((llk_math_custom_mm<false>(A, B, 0, StoredK, Subblock)));
             tile_regs_commit();
             const uint32_t destination = last ? Out : Partial;
             cb_reserve_back(destination, Subblock);
@@ -71,8 +71,8 @@ void custom_projection() {
                 cb_pop_front(Partial, Subblock);
             }
         }
-        cb_pop_front(A, KBlock);
-        cb_pop_front(B, KBlock * Width);
+        cb_pop_front(A, StoredK);
+        cb_pop_front(B, StoredK * Width);
     }
     pack_reconfig_l1_acc(0);
     custom_mm_block_uninit<false>();
