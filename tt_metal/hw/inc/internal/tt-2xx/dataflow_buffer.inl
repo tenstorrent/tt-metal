@@ -353,7 +353,7 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 
 #ifndef COMPILE_FOR_TRISC
 template <bool is_producer>
-inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index) {
+inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, uint8_t txn_id_index) {
     // Determine the txn_id for the last batch. If transactions_issued lands exactly on
     // a boundary, txn_id_index has already wrapped past it, so step back one slot.
     uint8_t tail_txn_idx = (transactions_issued % local_dfb_interface_.num_entries_per_txn_id == 0)
@@ -363,7 +363,8 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    uint16_t expected_slot0 = transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u);
+    uint16_t expected_slot0 =
+        static_cast<uint16_t>(transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u));
 
     auto read_actual_slot0 = [&]() -> uint16_t {
         if constexpr (is_producer) {
@@ -543,7 +544,14 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
         static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    // HW free space only discounts reads that have already reached POSTED, so a
+    // read this kernel issued but that has not posted yet still looks like a
+    // free slot. Track it instead as "reservations this kernel has made on this
+    // TC that the consumer has not acked", and require room for one more.
+    const uint16_t capacity = static_cast<uint16_t>(overlay::fast_llk_intf_get_capacity(tensix_id, tc_id));
+    const uint16_t reserved = static_cast<uint16_t>(
+        local_dfb_interface_.broadcast_tc ? ptiles_read_ : ptiles_read_ / local_dfb_interface_.num_tcs_to_rr);
+    while (static_cast<uint16_t>(reserved - overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) >= capacity);
     WAYPOINT("PIRD");
     return txn_id;
 }
@@ -577,7 +585,12 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) -
         static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    // HW occupancy still counts entries this kernel has claimed but whose ACK is
+    // batched and pending, so it can hand the same posted entry out twice. Count
+    // instead the posted entries on this TC that the kernel has not claimed yet
+    // and require at least one.
+    const uint16_t claimed = static_cast<uint16_t>(ctiles_written_ / local_dfb_interface_.num_tcs_to_rr);
+    while (static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id) - claimed) == 0);
     WAYPOINT("PIWD");
     return txn_id;
 }
