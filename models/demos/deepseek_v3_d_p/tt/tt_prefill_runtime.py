@@ -1140,8 +1140,13 @@ class TtPrefillRuntime:
         they ack as layers past the verifier's last one. Every rank must agree on the GLOBAL count — the
         master router's reorder buffer keys on ``chunk * global + layer`` and demands a dense sequence — but
         only the KV-tail rank writes those layers, so only its LOCAL count grows.
+
+        MTP widens it the same way: ``kv_migration_stages`` puts its K slots in the last rank's stage, so
+        the consumer needs an ack for each of them too.
         """
-        extra = self.drafter.config.num_hidden_layers if self.config.dflash_enabled else 0
+        extra = self.config.mtp_levels
+        if self.config.dflash_enabled:
+            extra += self.drafter.config.num_hidden_layers
         return global_ack_layers + extra, local_ack_layers + (extra if self.config.is_last_rank else 0)
 
     def kv_migration_stages(self, kv_caches: MlaKvCaches, first_layer_idx=None, num_my_layers=None):

@@ -661,8 +661,8 @@ class TtPrefillTransformer(LightweightModule):
                 "MTP needs actual_start on the host to place the rows it generates; the on-device "
                 "metadata path keeps actual_start on device and cannot answer that here"
             )
-            # The ack and layer-tap kwargs are deliberately not forwarded: the layer-ack protocol
-            # counts trunk layers, and MTP's product is the KV it writes, not an ack.
+            # The MTP slots are in this rank's migration stage, so they ack like any other layer. One
+            # replayed module would ack them all under the same id, hence the explicit base.
             mtp_out, mtp_generated = self.run_mtp(
                 h,
                 kvpe_cache,
@@ -676,6 +676,10 @@ class TtPrefillTransformer(LightweightModule):
                 padding_side=self.padding_side,
                 index_kv_cache=index_kv_cache,
                 metadata=metadata,
+                d2h_service=d2h_service,
+                metadata_msg=metadata_msg,
+                on_layer_complete=on_layer_complete,
+                layer_ack_base=self.first_layer_idx + self.mtp_predictor.first_cache_slot,
             )
             if on_mtp_complete is not None:
                 on_mtp_complete(mtp_out, mtp_generated)

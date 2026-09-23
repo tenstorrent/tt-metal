@@ -284,11 +284,12 @@ def _ack_layers_per_chunk(kv_table) -> int:
     axis the acks are numbered on, and the table is the only thing this device-less process and the
     runner both see.
     """
+    base = NUM_ACK_LAYERS + MTP_LEVELS
     if kv_table is None:
-        return NUM_ACK_LAYERS
+        return base
     dflash = [name for name in _config_names(kv_table) if name.startswith("dflash_")]
     if not dflash:
-        return NUM_ACK_LAYERS
+        return base
     return kv_table.config(kv_table.config_id_of(dflash[0])).num_layers
 
 

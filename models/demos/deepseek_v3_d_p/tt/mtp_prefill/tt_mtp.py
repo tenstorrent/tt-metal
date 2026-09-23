@@ -327,6 +327,7 @@ _RESERVED_FWD_KWARGS = (
     "return_indexer_indices",  # promoted to a named argument
     "return_kv_cache",  # promoted to a named argument
     "return_kv_intermediates",  # would change TtPrefillBlock's return arity
+    "ack_layer_idx",  # renumbered per level off layer_ack_base
 )
 
 
@@ -404,12 +405,14 @@ class TtMTPPredictor(LightweightModule):
         index_share: Optional[bool] = None,
         return_kv_cache: bool = False,
         return_indexer_indices: bool = False,
+        layer_ack_base: Optional[int] = None,
         **fwd_kwargs,
     ) -> MTPPredictorOutput:
         """Run every level, chaining each level's normed output into the next.
 
         ``get_embed(k, hidden)`` supplies level k's embedding lazily. Each embedding is deallocated
-        once its level has run.
+        once its level has run. ``layer_ack_base`` numbers level k's migration ack ``base + k``: one
+        replayed module would otherwise ack every level under the same layer.
         """
         for name in _RESERVED_FWD_KWARGS:
             if name in fwd_kwargs:
@@ -429,6 +432,8 @@ class TtMTPPredictor(LightweightModule):
             want_indices = return_indexer_indices or (share and k == 0)
             kwargs = dict(fwd_kwargs)
             kwargs["cache_layer_idx"] = self.first_cache_slot + k
+            if layer_ack_base is not None:
+                kwargs["ack_layer_idx"] = layer_ack_base + k
             if share and k > 0:
                 kwargs["indexer_indices"] = shared_indices
             if want_indices:

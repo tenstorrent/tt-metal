@@ -570,6 +570,7 @@ class TtPrefillBlock(LightweightModule):
         return_indexer_indices: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
+        ack_layer_idx: Optional[int] = None,
     ):
         """
         Args:
@@ -591,6 +592,8 @@ class TtPrefillBlock(LightweightModule):
                 after MLA writes the chunk this block zeros the pad window past actual_end, flushes, then
                 fires this. Used by pipelined prefill (the layer-completion router), which the device-side
                 d2h_service path does not cover.
+            ack_layer_idx: global layer id this block acks under, overriding its own. MTP replays one
+                block per level, so each level needs a distinct id on the host-callback path.
             on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
                 residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
                 matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
@@ -663,7 +666,7 @@ class TtPrefillBlock(LightweightModule):
             layer_num=self.mla.layer_num,
             sp_factor=self.mla.sp_factor,
             sp_axis=self.mla.sp_axis,
-            global_layer_idx=self.mla.layer_idx,
+            global_layer_idx=self.mla.layer_idx if ack_layer_idx is None else ack_layer_idx,
             seq_len_local=seq_len_local,
             actual_end=actual_end,
             metadata=metadata,
