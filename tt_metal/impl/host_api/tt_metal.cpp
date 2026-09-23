@@ -15,6 +15,7 @@
 #include "host_api/helpers.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
+#include "impl/buffers/global_semaphore_impl.hpp"
 #include <host_api.hpp>
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
@@ -1279,25 +1280,11 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     TT_FATAL(
                         prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE,
                         "PrefetcherPipe participants present but prefetcher_pipe_offset is NONE");
-                    const uint8_t num_program_slots = program.impl().num_prefetcher_pipe_slots();
-                    const uint32_t payload_words = remote_dfb_config_region_words(num_program_slots);
-                    std::vector<uint32_t> prefetcher_pipe_vec(payload_words, 0u);
-                    prefetcher_pipe_vec[0] = num_program_slots;
-                    for (const auto& participant : persistent_it->second) {
-                        TT_FATAL(
-                            participant.prefetcher_pipe_id < num_program_slots,
-                            "PrefetcherPipe sparse participant prefetcher_pipe_id {} exceeds program slot count {}",
-                            participant.prefetcher_pipe_id,
-                            num_program_slots);
-                        const uint32_t base = REMOTE_DFB_REGION_HEADER_WORDS +
-                                              participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
-                        prefetcher_pipe_vec[base + 0] = participant.config_page_addr;
-                        prefetcher_pipe_vec[base + 1] = participant.entry_size;
-                        prefetcher_pipe_vec[base + 2] = participant.relay_dfb_id;
-                    }
+                    // Same encoding as fast dispatch (relay word carries the active lane count).
+                    std::vector<uint32_t> prefetcher_pipe_vec =
+                        program_dispatch::build_prefetcher_pipe_config_payload(program.impl(), persistent_it->second);
                     uint64_t addr = kernel_config_base + prefetcher_pipe_offset;
-                    metal_ctx.get_cluster().write_core(
-                        device_id, physical_core, prefetcher_pipe_vec, addr);
+                    metal_ctx.get_cluster().write_core(device_id, physical_core, prefetcher_pipe_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
@@ -1872,17 +1859,7 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config) {
@@ -2063,22 +2040,6 @@ uint8_t GetCurrentCommandQueueIdForThread() {
 }
 
 namespace experimental {
-
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    distributed::MeshDevice& device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
-
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
 
 CBHandle CreateCircularBuffer(
     Program& program,

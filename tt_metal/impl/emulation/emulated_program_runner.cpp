@@ -43,6 +43,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <future>
 #include <thread>
 #include <unordered_map>
@@ -293,13 +294,14 @@ extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yie
 extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
 extern "C" void __emule_fiber_note_publish(unsigned pages) { efib::FiberScheduler::instance().note_publish(pages); }
 
-// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 2 MB), so masking the low
+// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (below the pool's slot
+// stride), so masking the low
 // bits is an idempotent guard. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
 // per-resolver comments). Used by every NOC-address resolver.
 // Taken FROM the pool rather than restated: the mask is only an idempotent guard while it matches the
 // allocator's actual stride, and a peer rank resolves into the same segment using the same constant.
 static constexpr uint32_t L1_SLOT_SIZE = static_cast<uint32_t>(tt_emule::L1Pool::SLOT_SIZE);
-static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
+static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // shared pool geometry
 
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
@@ -592,6 +594,8 @@ struct Metal2BindingsSnapshot {
     std::map<std::string, SemaphoreBindingHandle> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
+    // PrefetcherPipe accessor -> program slot id (sorted by name, matches genfiles.cpp).
+    std::map<std::string, uint8_t> pipe_accessors;
 
     // Distinguishes kernels that share source/CTAs/defines but bind different
     // IDs — without this they collide on cache key and the second silently
@@ -616,6 +620,9 @@ struct Metal2BindingsSnapshot {
         }
         for (const auto& sp : scratch_accessors) {
             s += ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word);
+        }
+        for (const auto& [name, id] : pipe_accessors) {
+            s += ":pipe:" + name + "=" + std::to_string(id);
         }
         for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
@@ -858,6 +865,8 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
         [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
             s.scratch_accessors.push_back({name, size_bytes, addr_crta_word});
         });
+    kernel.process_prefetcher_pipe_binding_handles(
+        [&s](const std::string& name, uint8_t prefetcher_pipe_id) { s.pipe_accessors[name] = prefetcher_pipe_id; });
     return s;
 }
 
@@ -887,6 +896,9 @@ static void emit_metal2_namespaces(
     }
     if (!s.scratch_accessors.empty()) {
         f << "#include \"api/scratchpad.h\"\n";
+    }
+    if (!s.pipe_accessors.empty()) {
+        f << "#include \"api/dataflow/prefetcher_pipe_binding_token.h\"\n";
     }
 
     if (has_args) {
@@ -952,6 +964,13 @@ static void emit_metal2_namespaces(
               << "u};\n";
         }
         f << "}  // namespace scratch\n";
+    }
+    if (!s.pipe_accessors.empty()) {
+        f << "namespace pipe {\n";
+        for (const auto& [name, id] : s.pipe_accessors) {
+            f << "constexpr PrefetcherPipeBindingToken " << name << "{" << static_cast<uint32_t>(id) << "};\n";
+        }
+        f << "}  // namespace pipe\n";
     }
 
     // Vararg helpers — always emitted for Metal 2.0 kernels (mirrors
@@ -1167,7 +1186,14 @@ static std::function<void()> jit_compile_kernel(
 
     // 10. Clean up temp directory (wrapper.cpp etc.) — always safe since .so is
     // either in the disk cache dir or mmap'd into memory from the temp dir.
-    std::filesystem::remove_all(dir);
+    // TT_EMULE_KEEP_JIT_SRC keeps patched_kernel.cpp / wrapper.cpp for inspection: the
+    // documented first step when a kernel fails to JIT-compile. log_info, not fprintf —
+    // stderr from this path is not visible in a test run.
+    if (std::getenv("TT_EMULE_KEEP_JIT_SRC")) {
+        log_info(tt::LogMetal, "TT_EMULE_KEEP_JIT_SRC: kept JIT src dir {}", dir);
+    } else {
+        std::filesystem::remove_all(dir);
+    }
 
     // 11. Wrap in shared_ptr for lifetime management (dlclose on destruction).
     auto shared_handle = std::shared_ptr<void>(handle, [](void* h) { dlclose(h); });
@@ -1688,11 +1714,26 @@ static std::map<std::string, std::string> build_kernel_defines(
     // the compute TU falls back to the jit_kernel_stubs defaults (bf16/SyncFull
     // → 16) instead of the program's real mode, scrambling the chunked reduce.
     if (kernel.get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        // Metal's generated prelude normally supplies MATH_FIDELITY. Keeping it in the
+        // defines map is what gives differing fidelities distinct JIT cache keys.
+        const auto compute_scalars = [&defines](MathFidelity fidelity, bool fp32_dest_acc_en, bool dst_full_sync_en) {
+            switch (fidelity) {
+                case MathFidelity::LoFi: defines["MATH_FIDELITY"] = "::ckernel::MathFidelity::LoFi"; break;
+                case MathFidelity::HiFi2: defines["MATH_FIDELITY"] = "::ckernel::MathFidelity::HiFi2"; break;
+                case MathFidelity::HiFi3: defines["MATH_FIDELITY"] = "::ckernel::MathFidelity::HiFi3"; break;
+                case MathFidelity::HiFi4: defines["MATH_FIDELITY"] = "::ckernel::MathFidelity::HiFi4"; break;
+                default: throw std::runtime_error("emule: unsupported compute math fidelity");
+            }
+            defines["DST_ACCUM_MODE"] = fp32_dest_acc_en ? "1" : "0";
+            defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+            defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
+        };
         const auto kernel_config = kernel.config();
         if (const auto* cc = std::get_if<ComputeConfig>(&kernel_config)) {
-            defines["DST_ACCUM_MODE"] = cc->fp32_dest_acc_en ? "1" : "0";
-            defines["ENABLE_FP32_DEST_ACC"] = cc->fp32_dest_acc_en ? "1" : "0";
-            defines["DST_SYNC_FULL"] = cc->dst_full_sync_en ? "1" : "0";
+            compute_scalars(cc->math_fidelity, cc->fp32_dest_acc_en, cc->dst_full_sync_en);
+        } else if (const auto* qc = std::get_if<experimental::quasar::QuasarComputeConfig>(&kernel_config)) {
+            // Quasar carries the same three scalars on its own config type.
+            compute_scalars(qc->math_fidelity, qc->fp32_dest_acc_en, qc->dst_full_sync_en);
         }
     }
     return defines;
@@ -1763,6 +1804,17 @@ static TriscMode detect_quasar_trisc_mode(bool is_quasar_compute, const std::str
         mode.needs_runtime_trisc = true;
     }
     return mode;
+}
+
+// Quasar's public headers spell the same hardware phase `UCK_CHLKC_<PHASE>` where the legacy
+// TRISC variants spell it `TRISC_<PHASE>`; map one to the other by name rather than by offset.
+static std::string uck_define_for(std::string_view trisc_define_name) {
+    constexpr std::string_view kTriscPrefix = "TRISC_";
+    TT_FATAL(
+        trisc_define_name.substr(0, kTriscPrefix.size()) == kTriscPrefix,
+        "emule: expected a TRISC_ define name, got {}",
+        trisc_define_name);
+    return std::string("UCK_CHLKC_") + std::string(trisc_define_name.substr(kTriscPrefix.size()));
 }
 
 static void collect_kernels(
@@ -2012,12 +2064,23 @@ static void collect_kernels(
                 for (int t = 0; t < 4; t++) {
                     auto trisc_defs = defines;
                     trisc_defs[trisc_define_names[t]] = "1";
+                    // Quasar's public headers and kernels use the UCK spelling
+                    // for the same hardware phase selected by this variant.
+                    trisc_defs[uck_define_for(trisc_define_names[t])] = "1";
                     std::string key = compute_cache_key(trisc_defs);
                     register_cache_key(key, trisc_defs);
                     variant_cache_keys.push_back(std::move(key));
                 }
                 run_all_variants = true;
             } else {
+                if (is_quasar_compute) {
+                    // DFB bridge kernels execute once on a unified compute fiber.
+                    // Enable phase-local scalar work (e.g. UNPACK-side digests)
+                    // without running shared wait/pop/reserve/push loops four times.
+                    for (const char* phase : trisc_define_names) {
+                        defines[uck_define_for(phase)] = "1";
+                    }
+                }
                 std::string key = compute_cache_key(defines);
                 register_cache_key(key, defines);
                 if (trisc.needs_runtime_trisc) {
@@ -2600,7 +2663,7 @@ static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // payloads to the wrong chip. Per-worker keying also removes the cross-thread append race, since one
 // worker's connections are recorded by one thread in order.
 static std::unordered_map<uint64_t, std::vector<ConnRoute>> g_worker_conns;
-// Physical ring adjacency. Multi-rank seeding fills edges whose far endpoint is owned by another rank.
+// Collective edges must not be mixed across axes. Multi-rank seeding includes peer-owned edges.
 static std::unordered_map<uint32_t, std::set<uint32_t>> g_ring_adj;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
 // orientation can't corrupt the src-keyed, direction-deduped table. See tt-emule docs/fabric-ccl-emulation.md.
@@ -2669,7 +2732,7 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // connection is per-hop, so for CCL that destination IS the adjacent chip and the two agree —
     // but a MeshSocket opens one connection straight to a peer that may be several hops away along
     // a line (1D requires only same row/column, not adjacency). Recording that distant chip as a
-    // ring neighbor inserts a phantom edge into the persistent g_ring_adj, whose degree then
+    // ring neighbor inserts a phantom edge into g_ring_adj, whose degree then
     // exceeds 2 and makes walk_ring TT_FATAL with "ambiguous ring continuation". Resolve the true
     // immediate neighbor from (src, dir) instead; when the destination really is adjacent this is
     // identity, so CCL topology is unchanged.
@@ -2683,6 +2746,9 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     }
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
     if (g_conn_route_dirty.exchange(false)) {
+        // A new collective must not inherit ring edges from an earlier operation's axis.
+        g_ring_adj.clear();
+        g_ring_adj_seeded = false;
         g_conn_route.clear();
         g_worker_conns.clear();
         g_worker_dir.clear();
@@ -2691,7 +2757,7 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // Record the connection-owner core's (the mux core, on the MUX path) direction, keyed by its LOGICAL
     // coords — before the per-direction dedup below, which is for the src-keyed g_conn_route only.
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
-    // Accumulate the undirected ring edge (persistent; unaffected by the per-op reset above).
+    // Peer-owned edges are needed even when this rank opens no connection to them.
     __emule_seed_global_ring_adj();  // multi-rank only; adds the edges this rank never opens
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);

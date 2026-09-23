@@ -28,7 +28,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/remote_circular_buffer.h"
 #include "api/socket_api.h"
-#include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
@@ -244,7 +243,6 @@ void kernel_main() {
     SocketReceiverInterface socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(socket, socket_page_size);
 
-    experimental::drisc_set_stream_mode();
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
     bool has_loaded_sender_state = false;
 
@@ -267,9 +265,9 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherRequestHeader*>(socket.read_ptr);
         const uint8_t cmd_id = req->base.cmd_id;
         if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_STOP) {
-            // Stop sentinel. Receiver pages_acked atomics target DRISC L1 while
-            // stream mode is active; wait for the last loaded GCB to drain before
-            // exiting the request loop and restoring NoC2AXI mode.
+            // Stop sentinel. The kernel returns right after this loop, so drain the
+            // last loaded GCB here: receivers ack into counters in this DRISC's L1,
+            // which the next program is free to reuse.
             if (has_loaded_sender_state) {
                 experimental::remote_cb_sender_barrier(remote_cb_id);
             }
@@ -802,15 +800,4 @@ void kernel_main() {
         socket_pop_pages(socket, 1);
         socket_notify_sender(socket);
     }
-
-    // Restore NoC2AXI mode. No NoC drain is needed here: the stream is already
-    // flushed end-to-end by the remote_cb_sender_barrier at the stop sentinel, which
-    // spins until every receiver's pages_acked == pages_sent -- and the receiver can
-    // only ack pages whose posted pages_sent atomics and data writes have already
-    // landed. The pages_sent increments are posted (noc_semaphore_inc<skip_ptr_update=
-    // true>), so a noc_async_atomic_barrier would do nothing anyway: it waits on
-    // non-posted atomics, of which this kernel issues none. (Cross-request fifo_wr_ptr
-    // persistence is handled per-request by store_sender_state, not by a config
-    // writeback here.)
-    experimental::drisc_set_noc2axi_mode();
 }

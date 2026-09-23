@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -109,10 +111,7 @@ protected:
 
         // Limit to 2 chips for CI throughput; same rationale as MeshDeviceFixture.
         // Use MMIO (host) chips only — same id source as the single-card LLK fixture.
-        size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices > 2) {
-            num_devices = 2;
-        }
+        size_t num_devices = std::min<size_t>(tt::tt_metal::GetNumAvailableDevices(), 2);
         const auto& mmio = tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids();
         std::vector<ChipId> ids(mmio.begin(), mmio.end());
         if (ids.size() > num_devices) {

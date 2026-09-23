@@ -18,7 +18,7 @@
  *  - DM_LOCAL_CACHED: Stored in a dedicated L1 pool and accessed through the DM cache via
  *                     RISC-V AMO. Picked only when all binders are DMs on the same node where
  *                     the semaphore exists. The pool is separate so a cached AMO's cache-line
- *                     write-back cannot clobber NoC-written data: see MEM_DM_CACHED_SEM_BASE
+ *                     write-back cannot clobber NoC-written data: see MEM_SEM_CACHED_POOL_BASE
  *                     in dev_mem_map.h.
  *  - EXTERNAL:        Stored in L1 and accessed through atomic operations via the NOC. Picked
  *                     whenever the semaphore is reachable beyond a single node.

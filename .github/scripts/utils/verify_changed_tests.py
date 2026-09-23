@@ -13,19 +13,20 @@ run green, and nothing more. One invocation does three things:
      exactly those legs, so the dispatched matrix is the touched work and nothing
      else.
 
-  3. Requires an approving review on the current head for any blocked leg, and
-     exits non-zero without one. Who may approve is already decided by
-     CODEOWNERS, which the main ruleset enforces via require_code_owner_review.
+  3. Reports whether every blocked leg carries a code owner's approval, as the
+     `review-met` output. It does not fail on a missing one: the approval is
+     already required to merge, since CODEOWNERS plus the main ruleset's
+     require_code_owner_review block the PR by themselves.
 
 With --event merge_group only step 1 runs: those legs already ran on the PR head,
 and the queue only needs the scope to resolve.
 
 Design notes
 ------------
-Entries with an `id` are keyed by it. Legacy entries without one are keyed on
-(name, arch, gtest_shard_index). `name` alone is not unique:
-llk_merge_gate_tests.yaml has four "LLK FD wormhole" entries differing only by
-shard, and vllm_model_tests.yaml has entries differing only by arch.
+Entries are keyed on (name, gtest_shard_index) within the yaml they came from, and
+matrix rows on that pair plus the SKU. The source yaml is part of the identity because
+the same test is deliberately mirrored between pipelines at different gate tiers.
+prepare_test_matrix.py and verify_time_budget.py both reject a yaml that reuses a pair.
 
 Edits that cannot change how a test executes do not need hardware:
 
@@ -338,40 +339,45 @@ def parse_entries(text):
 
 
 def entry_key(entry):
-    entry_id = str(entry.get("id", ""))
-    if entry_id:
-        return ("id", entry_id)
+    """Identity of a test entry within its own yaml: name plus gtest shard.
+
+    Callers supply the yaml half -- entries are indexed per file. Shard counts because
+    llk_merge_gate_tests.yaml runs four "LLK FD wormhole" entries differing only by it.
+    """
     return (
-        "legacy",
         str(entry.get("name", "")),
-        str(entry.get("arch", "")),
         str(entry.get("gtest_shard_index", "")),
     )
 
 
 def key_str(key):
-    if key[0] == "id":
-        return f"id={key[1]}"
-    _, name, arch, shard = key
-    parts = [name]
-    if arch:
-        parts.append(f"arch={arch}")
-    if shard:
-        parts.append(f"shard={shard}")
-    return " | ".join(parts)
+    name, shard = key
+    return f"{name} | shard={shard}" if shard else name
 
 
-def index_entries(entries, path):
-    """Map composite key -> entry, rejecting collisions rather than guessing."""
+def index_entries(entries, path, strict=True):
+    """Map composite key -> entry, rejecting collisions rather than guessing.
+
+    The base revision is indexed with strict=False. It predates this guard, so it can
+    still hold the duplicates a PR is removing -- erroring there would fail the very PR
+    that fixes them. A duplicated key is dropped from the base index instead, which
+    reads the head entry as added and runs its legs: the same answer the gate already
+    gives when it cannot match an entry to a previous one.
+    """
     index = {}
+    ambiguous = set()
     for entry in entries:
         key = entry_key(entry)
-        if key in index:
-            raise GateError(
-                f"{path}: two entries share the key '{key_str(key)}'. "
-                "The gate cannot tell which one an edit touched -- give them "
-                "distinguishing id/name/arch/gtest_shard_index values."
-            )
+        if key in index or key in ambiguous:
+            if strict:
+                raise GateError(
+                    f"{path}: two entries share the key '{key_str(key)}'. "
+                    "The gate cannot tell which one an edit touched -- names must be unique "
+                    "within one yaml, with gtest_shard_index counting as part of the name."
+                )
+            index.pop(key, None)
+            ambiguous.add(key)
+            continue
         index[key] = entry
     return index
 
@@ -455,7 +461,7 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
                 ".github/workflows/verify-changed-tests.yaml; otherwise fix the file."
             )
 
-    old_index = index_entries(old_entries, f"{old_path}@{base}")
+    old_index = index_entries(old_entries, f"{old_path}@{base}", strict=False)
     new_index = index_entries(new_entries, path)
 
     touched, metadata_only = [], []
@@ -479,7 +485,6 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
             leg = {
                 "file": path,
                 "name": entry.get("name"),
-                "arch": entry.get("arch"),
                 "gtest_shard_index": entry.get("gtest_shard_index"),
                 "sku": sku,
                 "team": team,
@@ -564,20 +569,20 @@ def row_key(row):
     """
     Key a matrix row the same way an entry in the source yaml is keyed.
 
-    build_test_matrix() always appends " [<concrete sku>]" to the name, and sets
-    logical_sku when the concrete SKU differs from the one the yaml names. Both
-    are undone here so rows line up with the legs scope produced.
+    entry_key()'s pair plus the SKU, since one entry expands to one row per SKU.
+    build_test_matrix() appends " [<concrete sku>]" to the name and sets logical_sku
+    when the concrete SKU differs; both are undone here so rows line up with the legs.
     """
     sku = str(row.get("sku", ""))
     name = str(row.get("name", ""))
     suffix = f" [{sku}]"
     if name.endswith(suffix):
         name = name[: -len(suffix)]
+    logical_sku = str(row.get("logical_sku") or sku)
     return (
         name,
-        str(row.get("arch", "")),
         str(row.get("gtest_shard_index", "")),
-        str(row.get("logical_sku") or sku),
+        logical_sku,
     )
 
 
@@ -585,17 +590,14 @@ def leg_row_key(leg):
     shard = leg.get("gtest_shard_index")
     return (
         str(leg.get("name") or ""),
-        str(leg.get("arch") or ""),
         "" if shard is None else str(shard),
         str(leg.get("sku") or ""),
     )
 
 
 def describe_row(key):
-    name, arch, shard, sku = key
+    name, shard, sku = key
     parts = [name, f"sku={sku}"]
-    if arch:
-        parts.append(f"arch={arch}")
     if shard:
         parts.append(f"shard={shard}")
     return " | ".join(parts)
@@ -628,13 +630,16 @@ def build_matrices(scope, prepare_script, sku_config, work_dir):
     """
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
-    skipped = set(scope.get("skipped_files") or [])
+
+    # Only yamls a run leg came from. A fully blocked one has no row to resolve, and
+    # building it anyway fails the gate -- vllm entries carry no `cmd`.
+    needed = {Path(leg["file"]).stem for leg in scope["run_legs"]}
 
     matrices = {}
     for path in scope["changed_files"]:
-        if path in skipped:
-            continue
         stem = Path(path).stem
+        if stem not in needed:
+            continue
         capture = work_dir / f"{stem}.github-output"
         capture.write_text("")
 
@@ -832,7 +837,7 @@ def approving_logins(reviews):
     return {login for login, state in verdicts.items() if state == "APPROVED"}
 
 
-def check_reviews(review_legs, repo, pr, head_sha, codeowners_path):
+def check_reviews(review_legs, repo, pr, codeowners_path):
     """
     Require an approving review from the edited yaml's own code owners.
 
@@ -982,7 +987,7 @@ def run(args):
     # unmet review into the gate failure at the end, once the runnable legs are in.
     review_met = True
     if dispatching and scope["review_legs"]:
-        review_met = check_reviews(scope["review_legs"], args.repo, args.pr, args.head_sha, args.codeowners) == 0
+        review_met = check_reviews(scope["review_legs"], args.repo, args.pr, args.codeowners) == 0
 
     write_github_output([("review-met", str(review_met).lower())])
     return 0
@@ -1033,7 +1038,6 @@ def main(argv=None):
     parser.add_argument("--matrix-dir", default=None, help="Pre-built matrices; omit to run prepare_test_matrix.py")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""), help="owner/repo")
     parser.add_argument("--pr", default="")
-    parser.add_argument("--head-sha", default="")
     parser.add_argument("--output", default=None, help="Also write the JSON result here")
 
     args = parser.parse_args(argv)

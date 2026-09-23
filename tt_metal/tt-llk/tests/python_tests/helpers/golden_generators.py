@@ -110,6 +110,26 @@ def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
     ).to(result.dtype)
 
 
+def _flush_product_underflow(t1, t2, result, exponent_bias):
+    """Zero the products the FPU lane drops before it renormalises them.
+
+    The lane adds the two Src exponents and rebiases into Dest's range; a term
+    whose exponent is at or below zero there is flushed whole. That decision is
+    taken before the mantissa product can carry into the next binade, so it is
+    one binade coarser than "the result is subnormal in Dest".
+    """
+    a = t1.to(torch.float32).abs()
+    b = t2.to(torch.float32).abs()
+    live = (a > 0) & (b > 0)
+    ones = torch.ones_like(a)
+    exp_sum = torch.floor(torch.log2(torch.where(live, a, ones))) + torch.floor(
+        torch.log2(torch.where(live, b, ones))
+    )
+    return torch.where(
+        live & (exp_sum + exponent_bias <= 0), torch.zeros_like(result), result
+    )
+
+
 def _flush_subnormals_of_dtype(result: torch.Tensor) -> torch.Tensor:
     """Flush values that are subnormal in *result*'s own floating-point dtype to zero.
 
@@ -3146,15 +3166,22 @@ class UnarySFPUGolden:
         return 1.0 - t * t
 
     def _tanh_derivative_lut(self, x):
-        # The legacy kernel computes 1 - tanh(x)^2 from the raw 3-region SFPLUT rather than
-        # from an accurate tanh, so the golden models that same piecewise-linear LUT
-        # (breakpoints at 1.0 and 2.0). Validating it against an accurate tanh would fail by
-        # design.
+        # The legacy kernel computes 1 - tanh(x)^2 from the raw SFPLUT rather than from an
+        # accurate tanh, so the golden models that same piecewise-linear LUT. Validating it
+        # against an accurate tanh would fail by design.
+        # These six segments must match tanh_derivative_init's 6-entry SFPLUTFP32 table
+        # exactly (TABLE1 breakpoints). It is fitted for sech^2 and is not tanh_init's table.
         a = abs(x)
-        if a < 1.0:
-            t = 0.90625 * a
+        if a < 0.5:
+            t = 0.93701171875 * a
+        elif a < 1.0:
+            t = 0.5869140625 * a + 0.183837890625
+        elif a < 1.5:
+            t = 0.277099609375 * a + 0.49365234375
         elif a < 2.0:
-            t = 0.09375 * a + 0.8125
+            t = 0.11181640625 * a + 0.74169921875
+        elif a < 3.0:
+            t = 0.03070068359375 * a + 0.90625
         else:
             t = 1.0
         return 1.0 - t * t
@@ -3426,7 +3453,14 @@ class EltwiseBinaryGolden(FidelityMasking):
     _UNSET = object()
 
     def _compute_eltwise(
-        self, op, t1, t2, math_format_for_fidelity, math_fidelity, keep_float32=False
+        self,
+        op,
+        t1,
+        t2,
+        math_format_for_fidelity,
+        math_fidelity,
+        keep_float32=False,
+        exponent_bias=127,
     ):
         """Compute a single eltwise operation with fidelity masking.
 
@@ -3462,6 +3496,9 @@ class EltwiseBinaryGolden(FidelityMasking):
                     result += phase_result
         else:
             result = self.ops[op](t1, t2)
+
+        if op == MathOperation.Elwmul:
+            result = _flush_product_underflow(t1, t2, result, exponent_bias)
 
         return result
 
@@ -3614,6 +3651,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                         math_format_for_fidelity,
                         math_fidelity,
                         keep_float32=True,
+                        exponent_bias=15 if hw_dest_dtype is torch.float16 else 127,
                     )
                     if block_acc is None:
                         block_acc = tile_result_f32.to(hw_dest_dtype)
@@ -3632,6 +3670,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                 t2,
                 math_format_for_fidelity,
                 math_fidelity,
+                exponent_bias=15 if hw_dest_dtype is torch.float16 else 127,
             )
 
         # Quantize output to match what hardware packs back into L1.
@@ -3680,6 +3719,10 @@ class EltwiseBinaryGolden(FidelityMasking):
     def _mul(self, t1, t2):
         wide = self._wide_dtype(t1)
         return (t1.to(wide) * t2.to(wide)).to(t1.dtype)
+
+    def _copy_dest(self, t1, t2):
+        # Dest-to-Dest copy of the first operand; the second is unused.
+        return t1
 
     def _div(self, t1, t2):
         # Compute in float32 to match the SFPU divide path, with the final cast modelling the
@@ -3742,6 +3785,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuRsubInt32: self._rsub_int32,
                 MathOperation.SfpuMask: self._mask,
                 MathOperation.SfpuAtan2: self._atan2,
+                MathOperation.SfpuCopyDest: self._copy_dest,
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
                 MathOperation.SfpuLogsigmoid: self._logsigmoid,

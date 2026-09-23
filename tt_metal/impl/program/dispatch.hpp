@@ -153,11 +153,15 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
         per_core_cross_node_dfbs,
     uint8_t num_program_slots);
 
+// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the
+// pipe's active credit lane count, resolved from the program's attachment at build time so a
+// relay / Attach that armed lanes after this core's participant record was added is picked up.
+std::vector<uint32_t> build_prefetcher_pipe_config_payload(
+    const detail::ProgramImpl& program,
+    const std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>& sparse_participants);
+
 std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
-    const CoreRangeSet& kernel_group_cores,
-    const std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>>&
-        per_core_prefetcher_pipes,
-    uint8_t num_program_slots);
+    const detail::ProgramImpl& program, const CoreRangeSet& kernel_group_cores);
 
 uint32_t finalize_kernel_bins(
     IDevice* device,
@@ -240,7 +244,8 @@ void reset_worker_dispatch_state_on_device(
     uint8_t cq_id,
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    bool reset_launch_msg_state);
+    bool reset_launch_msg_state,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
 void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
@@ -262,11 +267,14 @@ void reset_expected_num_workers_completed_on_device(
 ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
     uint32_t num_workers, uint32_t num_additional_workers);
 
-void set_core_go_message_mapping_on_device(
+// Immutable setup batches, each bounded by the device's maximum fetch size.
+std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
+    uint8_t cq_id,
+    ttsl::Span<const uint32_t> workers_per_sub_device,
+    const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
-    SystemMemoryManager& manager,
-    uint8_t cq_id);
+    bool reset_launch_msg_state);
 
 // ProgramImpl version - does not support CQs
 uint32_t program_base_addr_on_core(detail::ProgramImpl& program, IDevice* device, HalProgrammableCoreType core_type);

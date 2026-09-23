@@ -38,7 +38,9 @@ struct TopkLargeIndicesDeviceOperation {
         uint32_t k,
         std::optional<uint32_t> valid_length,
         const std::optional<Tensor>& valid_length_tensor = std::nullopt,
-        uint32_t valid_length_offset = 0);
+        uint32_t valid_length_offset = 0,
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
@@ -52,6 +54,8 @@ Tensor topk_large_indices(
     uint32_t k,
     std::optional<uint32_t> valid_length = std::nullopt,
     const std::optional<Tensor>& valid_length_tensor = std::nullopt,
-    uint32_t valid_length_offset = 0);
+    uint32_t valid_length_offset = 0,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 }  // namespace ttnn::experimental

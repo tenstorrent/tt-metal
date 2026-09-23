@@ -57,7 +57,7 @@ class MyModelAdapter(PrefillModelAdapter):
     l1_small_size: int = 0     # L1_SMALL carve-out at mesh-open (only if an op routes semaphores there)
     supports_dflash: bool = False  # may PREFILL_DFLASH=1 attach the DFlash drafter to this model? The
                                # drafter is a separate checkpoint targeting ONE architecture (today only
-                               # Kimi-K2.6/K2.7), so leave it False unless a matching drafter exists.
+                               # Kimi-K2.7), so leave it False unless a matching drafter exists.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -140,6 +140,13 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
         channel carries no payload and can ignore it."""
 
+    def capture_trace(self, kv_cache) -> None:
+        """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
+        engine calls this via `getattr(runtime, "capture_trace", None)`, once, after `compile()`
+        and only when `config.use_trace` is set; a model that never traces can omit it entirely.
+        Must be idempotent (no-op if already captured) since the engine does not track capture
+        state itself."""
+
     # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
     #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
     #     the runtime), not inline here. ---
@@ -187,7 +194,7 @@ lazily, so the common module never imports your model at load):
 ```python
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
-    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
+    "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "my_model": "models.demos.my_model.tt.runners.adapters.my_model:MyModelAdapter",
 }
 ```

@@ -69,7 +69,6 @@ void kernel_main() {
     // CBs
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
     constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
-    constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
@@ -168,7 +167,6 @@ void kernel_main() {
     // CB typed wrappers
     CircularBuffer cb_tilize_output(tilize_output_cb_id);
     CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
-    CircularBuffer cb_total_chunks(total_chunks_cb_id);
     CircularBuffer cb_indices_tensor(indices_tensor_cb_id);
     CircularBuffer cb_scores_tensor(scores_tensor_cb_id);
     CircularBuffer cb_mapping_tensor(mapping_tensor_cb_id);
@@ -397,11 +395,6 @@ void kernel_main() {
         num_tokens_per_expert[e] = per_expert_counts[e];
     }
 
-    // Wait for reader to push total_chunks
-    cb_total_chunks.wait_front(one_page);
-    [[maybe_unused]] uint32_t total_chunks =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_total_chunks.get_read_ptr());
-
     /************************************************************************/
     /* Synchronization setup for signalling between tilize and matmul cores */
     /************************************************************************/
@@ -608,9 +601,8 @@ void kernel_main() {
         }
     }
 
-    // Pop the per-expert counts and total_chunks (cleanup)
+    // Pop the per-expert counts (cleanup).
     cb_per_expert_total_tokens.pop_front(one_page);
-    cb_total_chunks.pop_front(one_page);
 
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();

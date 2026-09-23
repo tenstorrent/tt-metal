@@ -202,6 +202,8 @@ jobs:
       # submodule out here so its JIT-compiled kernels match the libraries it
       # links against.
       metal-ref: ${{ github.sha }}
+      # tt-blaze compiles kernels with this container's SFPI; must be this commit's image.
+      dev-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       # Run tt-blaze's full merge gate from its main branch.
       blaze-ref: main
 
