@@ -1493,6 +1493,36 @@ class ModelArgs:
             return ttnn.L1_MEMORY_CONFIG
         return self.get_prefill_activation_mem_config(seq_len=seq_len)
 
+    def _resolve_mm_subblocks(self, knob: str = None, default=(1, 1)):
+        """MinimalMatmul output subblock (subblock_h, subblock_w).
+
+        ttnn.MinimalMatmulConfig defaults both to 1 in its Python binding, and
+        callers here historically did not set them, so every batched prefill
+        matmul ran a 1x1 output subblock -- one tile at a time in DST. That is
+        what tt-perf-report means by "No program_config specified, try using one
+        to override in0_block_w and out_subblock_h/w", and it is why the batched
+        rows come back SLOW at ~48% of BFP4/LoFi peak with only 16-31% DRAM
+        utilisation: neither compute nor bandwidth saturated, just per-tile
+        overhead.
+
+        Constraints enforced by the op: M_block_size % subblock_h == 0,
+        N_block_size % subblock_w == 0, and subblock_h * subblock_w <=
+        get_dest_reg_count(compute_kernel_config).
+
+        Read from a per-op knob first (e.g. QWEN_MM_SUBBLOCK_FF13=2,4) then the
+        global QWEN_MM_SUBBLOCK; default (1, 1) keeps every other model's
+        behaviour byte-identical.
+        """
+        for env in (knob, "QWEN_MM_SUBBLOCK"):
+            if not env:
+                continue
+            override = os.getenv(env)
+            if override:
+                parts = override.split(",")
+                if len(parts) == 2:
+                    return (int(parts[0]), int(parts[1]))
+        return default
+
     def _resolve_mm_grid(self, grid, seq_len):
         """Apply QWEN_MM_GRID env override for MinimalMatmulConfig grid experiments.
 
@@ -1624,10 +1654,13 @@ class ModelArgs:
             if self.use_minimal_prefill_matmul(seq_len):
                 grid = self._resolve_mm_grid(self.mlp1_3_grid(seq_len), seq_len)
                 mb, kb, nb = self._resolve_mm_blocks("QWEN_MM_BLOCK_FF13")
+                sbh, sbw = self._resolve_mm_subblocks("QWEN_MM_SUBBLOCK_FF13")
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=mb,
                     K_block_size=kb,
                     N_block_size=nb,
+                    subblock_h=sbh,
+                    subblock_w=sbw,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             return self.matmul_config(
@@ -1687,10 +1720,13 @@ class ModelArgs:
             if self.use_minimal_prefill_matmul(seq_len):
                 grid = self._resolve_mm_grid(self.mlp2_grid(seq_len), seq_len)
                 mb, kb, nb = self._resolve_mm_blocks("QWEN_MM_BLOCK_FF2")
+                sbh, sbw = self._resolve_mm_subblocks("QWEN_MM_SUBBLOCK_FF2")
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=mb,
                     K_block_size=kb,
                     N_block_size=nb,
+                    subblock_h=sbh,
+                    subblock_w=sbw,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             else:
@@ -2085,10 +2121,13 @@ class ModelArgs:
             if self.use_minimal_qkv_prefill_matmul(seq_len):
                 qkv_grid = self._resolve_mm_grid((8, 10) if is_blackhole() else (8, 8), seq_len)
                 mb, kb, nb = self._resolve_mm_blocks("QWEN_MM_BLOCK_QKV")
+                sbh, sbw = self._resolve_mm_subblocks("QWEN_MM_SUBBLOCK_QKV")
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=mb,
                     K_block_size=kb,
                     N_block_size=nb,
+                    subblock_h=sbh,
+                    subblock_w=sbw,
                     compute_with_storage_grid_size=ttnn.CoreCoord(qkv_grid[0], qkv_grid[1]),
                 )
             else:
@@ -2498,10 +2537,14 @@ class ModelArgs:
                 grid = self._resolve_mm_grid(
                     self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE), seq_len
                 )
+                mb, kb, nb = self._resolve_mm_blocks("QWEN_MM_BLOCK_WO", default=(8, 8, 8))
+                sbh, sbw = self._resolve_mm_subblocks("QWEN_MM_SUBBLOCK_WO")
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
-                    K_block_size=8,
-                    N_block_size=8,
+                    M_block_size=mb,
+                    K_block_size=kb,
+                    N_block_size=nb,
+                    subblock_h=sbh,
+                    subblock_w=sbw,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             return self.matmul_config(

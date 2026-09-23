@@ -29,12 +29,12 @@
     "Embeddings": 0.03
   },
   "named_limitations": [
-    "bs>=8 MinimalMatmul is 55% of device time at 48% of BFP4/LoFi peak; every block above (8,8,8) exceeds L1 (3.03 MB dataflow buffers vs 1.57 MB) and the grid is already at the device max of 120 cores",
-    "bs>=8 runs entirely dram_interleaved: a bs32 activation is 41.9 MB. Forcing TT_BATCHED_L1_PREFILL with caps of 24/32 MB and MM blocks shrunk to 4,4,4 / 4,8,8 / 6,8,8 all fail with 'statically allocated dataflow buffers clash with L1 buffer'",
-    "legacy MatmulMultiCoreReuseMultiCast rejected for batch: bs8 220.2 vs 189.3 ms, bs32 868.9 vs 707.2 ms, so minimal_matmul is correct at batch while legacy is correct at bs=1",
-    "MLP prefill chunking rejected: bs32 705.8 -> 746.1 (chunk 4096) -> 780.7 ms (2048), and raising the batched-L1 cap alongside did not help",
-    "core count is not a lever at bs=1: grid swept three ways (QWEN_MM_GRID, find_prefill_grid caps, QKV 8x8) all flat 28.8-29.0 ms; those rows already run at 69-70% of peak",
-    "bs=1 is device-bound with every op L1-resident (1.2 ms of 27.0 is dispatch), so fused-kernel approaches such as tt-blaze have little headroom to recover there",
+    "bs>=8 MinimalMatmul rows were SLOW at 48% of BFP4/LoFi peak because subblock_h/subblock_w were left at the binding default of 1; 1x8 fixes the bound classification. Re-profile to confirm the new FLOPs% before treating batched matmul as exhausted.",
+    "subblock is capped by DST: 2x8 fails 'subblock_h * subblock_w must be <= max_dest_volume', so 1x8 already uses the whole 8-tile budget",
+    "bs>=8 still runs dram_interleaved end to end: a bs32 activation is 41.9 MB. TT_BATCHED_L1_PREFILL with caps of 24/32 MB and MM blocks shrunk to 4,4,4 / 4,8,8 / 6,8,8 all fail with 'statically allocated dataflow buffers clash with L1 buffer'",
+    "legacy MatmulMultiCoreReuseMultiCast rejected for batch (bs8 220.2 vs 189.3, bs32 868.9 vs 707.2 ms) while it is correct at bs=1 (33.1 vs 49.0 ms)",
+    "MLP prefill chunking rejected: bs32 705.8 -> 746.1 (chunk 4096) -> 780.7 ms (2048)",
+    "bs=1 matmuls are FLOP-bound at 69-70% of peak and unaffected by subblock (legacy path derives out_subblock_w itself); its remaining 45% is SDPA/LayerNorm/BinaryNg/Rotary",
     "device is harvested 120/130 cores, so absolute numbers are ~8% pessimistic vs a full P150"
   ],
   "optimization_steps_ms_best": {
@@ -51,14 +51,14 @@
   },
   "batch_capability_ms_best": {
     "bs1": 25.9,
-    "bs8": 181.9,
-    "bs16": 355.4,
-    "bs32": 683.7,
+    "bs8": 160.9,
+    "bs16": 308.6,
+    "bs32": 558.2,
     "tok_s": {
-      "bs1": 19745,
-      "bs8": 22516,
-      "bs16": 23052,
-      "bs32": 23964
+      "bs1": 19749,
+      "bs8": 25454,
+      "bs16": 26543,
+      "bs32": 29349
     },
     "h200_ms": {
       "bs1": 5.437,
@@ -68,9 +68,15 @@
     },
     "x_h200": {
       "bs1": 4.76,
-      "bs8": 5.5,
-      "bs16": 5.29,
-      "bs32": 4.91
+      "bs8": 4.86,
+      "bs16": 4.59,
+      "bs32": 4.01
+    },
+    "vs_bh_reference_ff13bfp4_pct": {
+      "bs1": -41.2,
+      "bs8": -13.0,
+      "bs16": -15.7,
+      "bs32": -19.2
     }
   }
 }
