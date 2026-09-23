@@ -744,6 +744,51 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
 
 
 @pytest.mark.parametrize(
+    "shape, shard_layout, shard_shape",
+    [
+        # Rows longer than one tile (1056 elements)
+        ([1, 1, 8, 2112], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [8, 1056]),
+        ([1, 1, 16, 1056], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [8, 1056]),
+        # Rows shorter than one tile (64 elements)
+        ([1, 1, 8, 128], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [8, 64]),
+    ],
+    ids=["width_wide", "height_wide", "width_narrow"],
+)
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype, tt_output_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16, ttnn.uint16),
+        (torch.float32, ttnn.float32, ttnn.int32),
+        (torch.bfloat16, ttnn.bfloat16, ttnn.float32),
+    ],
+)
+def test_typecast_legacy_sharded_row_major_page_not_tile_sized(
+    device, shape, shard_layout, shard_shape, pt_input_dtype, tt_input_dtype, tt_output_dtype
+):
+    """Sharded ROW_MAJOR input whose rows are shorter or longer than one tile."""
+    torch.manual_seed(0)
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+
+    in_low, in_high = typecast_test_input_bounds(tt_input_dtype, tt_output_dtype)
+    torch_input = make_typecast_test_input(shape, pt_input_dtype, in_low, in_high)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=tt_input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+    )
+    output_tensor = ttnn.typecast(input_tensor, dtype=tt_output_dtype)
+    assert output_tensor.dtype == tt_output_dtype
+
+    result = ttnn.to_torch(output_tensor)
+    expected = eltwise_typecast(torch_input, tt_input_dtype=tt_input_dtype, tt_output_dtype=tt_output_dtype)
+    if uses_exact_integer_typecast_check(tt_input_dtype, tt_output_dtype):
+        assert_integer_typecast_equal(expected, result)
+    else:
+        assert_equal(expected, result)
+
+
+@pytest.mark.parametrize(
     "shape",
     [
         [120, 104],  # width=104, not divisible by 32 (WAN 480p per-device shard)
