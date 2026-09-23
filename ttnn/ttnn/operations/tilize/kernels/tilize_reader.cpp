@@ -20,6 +20,11 @@
 //
 // Split reader (CT `split_reader`): this RISC-V produces only the EVEN walk
 // positions; the BRISC writer produces the odd ones into its own CB.
+//
+// Resident input (CT `input_resident`, sharded_resident regime): cb_input_sticks
+// is backed on this Tensix core's own input shard, which already holds the
+// tilize stick layout, so load_block is a publish of the shard's pages: no NoC
+// read at all.
 
 #include <cstdint>
 
@@ -36,21 +41,41 @@ void kernel_main() {
     constexpr uint32_t depth_in = get_compile_time_arg_val(6);          // CB slots (quanta)
     constexpr uint32_t read_ahead = get_compile_time_arg_val(7);        // quanta of reads in flight
     constexpr uint32_t rows_per_quantum = get_compile_time_arg_val(8);  // tile-rows per CB quantum
-    constexpr auto input_args = TensorAccessorArgs<9>();
+    constexpr bool input_resident = get_compile_time_arg_val(9) != 0;   // cb_input_sticks backed on the shard
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(10);       // data bytes per input page
+    constexpr uint32_t pages_per_stick = get_compile_time_arg_val(11);  // input pages per logical stick
+    constexpr auto input_args = TensorAccessorArgs<12>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
     const uint32_t core_row_tiles = get_arg_val<uint32_t>(2);
     const uint32_t col_start = get_arg_val<uint32_t>(3);
     const uint32_t core_col_tiles = get_arg_val<uint32_t>(4);
-    const uint32_t traversal_rotation = get_arg_val<uint32_t>(5);
+    const uint32_t row_rotation = get_arg_val<uint32_t>(5);
+    const uint32_t stick_rotation = get_arg_val<uint32_t>(6);
+
+    if constexpr (input_resident) {
+        // The shard's valid tile-rows, at the nominal (shard-width) block_width pages each.
+        const uint32_t pages = core_row_tiles * block_width;
+        cb_reserve_back(cb_input_sticks, pages);
+        cb_push_back(cb_input_sticks, pages);
+        return;
+    }
 
     const auto input_accessor = TensorAccessor(input_args, src_addr, stick_page_bytes);
 
-    tilize_dataflow::Walker<block_width> walk(row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
-    tilize_dataflow::
-        StickProducer<cb_input_sticks, block_width, depth_in, read_ahead, tile_h, tile_col_bytes, rows_per_quantum>
-            producer(traversal_rotation);
+    tilize_dataflow::Walker<block_width> walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+    tilize_dataflow::StickProducer<
+        cb_input_sticks,
+        block_width,
+        depth_in,
+        read_ahead,
+        tile_h,
+        tile_col_bytes,
+        rows_per_quantum,
+        page_bytes,
+        pages_per_stick>
+        producer(stick_rotation);
 
     const uint32_t num_positions = walk.num_positions();
     for (uint32_t seq = 0; seq < num_positions; ++seq, walk.advance()) {

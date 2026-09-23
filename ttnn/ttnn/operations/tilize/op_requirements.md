@@ -52,7 +52,7 @@
 - **Block knobs**: `block_width` = `balanced_width(C, CB_BUDGET_BYTES[low_l1])`; `rows_per_quantum` from `QUANTUM_MIN_TILES` (verifier); `DEPTH_IN = DEPTH_OUT = 2`; `READ_AHEAD` = 1 and the split reader, parked as live knobs
 - **Golden baseline**: 30 supported_pass / 1746 xfail_expected / 2310 invalid_skipped / 0 loud (per verifier CLI). `test_regression.py` has 10 tracked failures (fp32 / uint16 / int32), closed by Refinement 7.
 
-### [ ] Refinement 1 — Sharded and L1 placement (legacy 2-D, ND, crossovers, DRAM-sharded) + rank widening
+### [x] Refinement 1 — Sharded and L1 placement (legacy 2-D, ND, crossovers, DRAM-sharded) + rank widening
 
 **Goal**: add to SUPPORTED:
 - `shard_api`: `legacy_2d`, `nd`
@@ -82,6 +82,7 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - **Reference timings.** The sharded LOOSE_CASES (not flagged) give device-ns references to report against: HEIGHT-sharded in → DRAM 16852 ns, DRAM → HEIGHT out 12142 ns, same spec 1891 ns, BLOCK COL_MAJOR 1832 ns (WH).
 
 **Done when**: every golden cell whose only unsupported axes are the ones above passes, with zero loud categories. The `sharded_legacy_2d` / `sharded_nd` groups and the translated sharded / L1 / rank tests pass. The sharded LOOSE_CASES report device-ns and core counts, and the same-spec case shows no NoC traffic on the resident sides.
+**Outcome**: landed. Every named axis value is in SUPPORTED. `test_golden.py` has 32 pass / 0 fail / 0 XPASS; 24 of those are new, including every `sharded_legacy_2d` / `sharded_nd` / buffer / rank cell at bf16 → bf16. `short_wide` / `square_large` are admitted only where an L1 shard fixes the core assignment; EXCLUSIONS refuse them on every row-split path until Refinement 5, and that is what lets `short_wide_width_sharded` and the four sharded LOOSE_CASES run now. Translated sharded / ND / L1 / rank tests: 191 pass, 1 fail. The failure, `test_tilize_program_cache_addr_change[sharded_width_l1]`, passes alone; in module order an earlier COL_MAJOR 1×4 WIDTH case already built the byte-identical program, so its `entries == 1` sees a correct cache hit. Sharded LOOSE_CASES, WH device-kernel ns: HEIGHT in → DRAM 16502 on 64 Tensix cores (ref 16852); DRAM → HEIGHT out 12269 on 64 (ref 12142); same spec 1914 on 64 (ref 1891); BLOCK COL_MAJOR 1971 on 16 (ref 1832). The same-spec case moves no NoC bytes: NCRISC 252 ns (page publish only), BRISC waits on compute. What is left: the same-spec / BLOCK cases are compute + launch bound (~1.7 µs for 16 tiles per core); DRAM → HEIGHT out is read-bound (NCRISC ~10.7 µs of 12.3).
 
 ### [ ] Refinement 2 — Tile geometry: tiny output tiles + retile of a TILE input
 

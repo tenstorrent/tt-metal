@@ -23,6 +23,11 @@
 //
 // Tile-rows are walked with the same per-core rotation as the reader
 // (tilize_stick_reads.hpp), so the CB FIFO order agrees.
+//
+// Resident output (CT `output_resident`, sharded_resident regime):
+// cb_output_tiles is backed on this Tensix core's own output shard and compute
+// packs straight into it, so store_block issues no NoC write; this kernel only
+// waits for the shard to be complete (it stays the CB's single consumer).
 
 #include <cstdint>
 
@@ -41,7 +46,10 @@ void kernel_main() {
     constexpr uint32_t depth_in = get_compile_time_arg_val(8);
     constexpr uint32_t read_ahead = get_compile_time_arg_val(9);
     constexpr uint32_t rows_per_quantum = get_compile_time_arg_val(10);  // tile-rows per CB quantum
-    constexpr auto output_args = TensorAccessorArgs<11>();
+    constexpr bool output_resident = get_compile_time_arg_val(11) != 0;  // cb_output_tiles backed on the shard
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(12);        // data bytes per input page
+    constexpr uint32_t pages_per_stick = get_compile_time_arg_val(13);   // input pages per logical stick
+    constexpr auto output_args = TensorAccessorArgs<14>();
     constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -50,29 +58,42 @@ void kernel_main() {
     const uint32_t col_start = get_arg_val<uint32_t>(3);
     const uint32_t core_col_tiles = get_arg_val<uint32_t>(4);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(5);  // C: output tile-columns of the whole tensor
-    const uint32_t traversal_rotation = get_arg_val<uint32_t>(6);
+    const uint32_t row_rotation = get_arg_val<uint32_t>(6);
     const uint32_t src_addr = get_arg_val<uint32_t>(7);  // input stick buffer (split reader only)
+    const uint32_t stick_rotation = get_arg_val<uint32_t>(8);
+
+    if constexpr (output_resident) {
+        cb_wait_front(cb_output_tiles, core_row_tiles * block_width);
+        return;
+    }
 
     const auto output_accessor = TensorAccessor(output_args, dst_addr, out_tile_bytes);
 
-    tilize_dataflow::Walker<block_width> store_walk(
-        row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
+    tilize_dataflow::Walker<block_width> store_walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
     const uint32_t num_positions = store_walk.num_positions();
 
     // Split reader runs one tile-row per quantum (host-enforced), so this stores one position.
     auto store_next = [&]() {
         tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes>(
-            output_accessor, store_walk, tiles_per_row, 1);
+            output_accessor, store_walk, tiles_per_row, 1, stick_rotation);
     };
 
     static_assert(!split_reader || rows_per_quantum == 1, "the split reader alternates CBs per tile-row");
     if constexpr (split_reader) {
         const auto input_accessor = TensorAccessor(input_args, src_addr, stick_page_bytes);
         tilize_dataflow::Walker<block_width> load_walk(
-            row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
-        tilize_dataflow::
-            StickProducer<cb_input_sticks_odd, block_width, depth_in, read_ahead, tile_h, tile_col_bytes, 1>
-                producer(traversal_rotation);
+            row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+        tilize_dataflow::StickProducer<
+            cb_input_sticks_odd,
+            block_width,
+            depth_in,
+            read_ahead,
+            tile_h,
+            tile_col_bytes,
+            1,
+            page_bytes,
+            pages_per_stick>
+            producer(stick_rotation);
 
         uint32_t stored = 0;     // positions [0, stored) are written
         uint32_t published = 0;  // positions [0, published) have all their inputs pushed
@@ -104,7 +125,8 @@ void kernel_main() {
                 output_accessor,
                 store_walk,
                 tiles_per_row,
-                remaining < rows_per_quantum ? remaining : rows_per_quantum);
+                remaining < rows_per_quantum ? remaining : rows_per_quantum,
+                stick_rotation);
         }
     }
     noc_async_write_barrier();

@@ -11,7 +11,6 @@ mis-tags both. validate() reads `created_with_nd_shard_spec` instead.
 import torch
 import ttnn
 
-from ttnn.operations._op_contract import UnsupportedAxisValue
 from ttnn.operations.tilize import validate
 
 
@@ -26,19 +25,25 @@ def _rm(device, shape, memory_config):
     )
 
 
-def test_legacy_sharded_input_tags_legacy_2d(device, expect_error):
+# Sharding is SUPPORTED since Refinement 1, so validate() returns the tagged axes
+# instead of refusing; the tags themselves are what this file pins.
+def test_legacy_sharded_input_tags_legacy_2d(device):
     spec = ttnn.ShardSpec(_crs(3), (128, 64), ttnn.ShardOrientation.ROW_MAJOR)
     mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
     t = _rm(device, (1, 1, 512, 64), mc)
-    with expect_error(UnsupportedAxisValue, "shard_api='legacy_2d'"):
-        validate(t, mc)
+    axes = validate(t, mc)
+    assert axes["shard_api"] == "legacy_2d"
+    assert axes["out_scheme"] == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert axes["buffer"] == "l1_to_l1"
 
 
-def test_nd_sharded_input_tags_nd(device, expect_error):
+def test_nd_sharded_input_tags_nd(device):
     nd = ttnn.NdShardSpec(ttnn.Shape([1, 1, 64, 64]), _crs(1), ttnn.ShardOrientation.ROW_MAJOR)
     t = _rm(device, (1, 1, 128, 64), ttnn.MemoryConfig(ttnn.BufferType.L1, nd))
-    with expect_error(UnsupportedAxisValue, "shard_api='nd'"):
-        validate(t, ttnn.DRAM_MEMORY_CONFIG)
+    axes = validate(t, ttnn.DRAM_MEMORY_CONFIG)
+    assert axes["shard_api"] == "nd"
+    assert axes["out_scheme"] == "interleaved"
+    assert axes["buffer"] == "l1_to_dram"
 
 
 def test_interleaved_phase0_cell_is_supported(device):

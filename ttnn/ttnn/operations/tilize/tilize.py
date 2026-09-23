@@ -14,7 +14,8 @@ builds the same scenario dict from the live call (`_scenario_from_call`) and
 runs the very same taggers over it, so the runtime gate and the golden
 harness's xfail decisions share one set of rules.
 
-Phase 0 regime: `row_split_interleaved` (op_design.md -> Blocking Model).
+Regimes: `row_split_interleaved`, `sharded_resident`, `sharded_accessor`
+(op_design.md -> Blocking Model -> Regimes).
 """
 
 from __future__ import annotations
@@ -180,39 +181,73 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED — Phase 0 rectangle (op_design.md -> "Phase 0 SUPPORTED rectangle")
+# 2. SUPPORTED
 # ---------------------------------------------------------------------------
+#
+# Placement (Refinement 1): every shard API / scheme / orientation and every
+# DRAM/L1 buffer pairing, through the sharded_resident / sharded_accessor
+# regimes of op_design.md (tilize_program_descriptor._core_assignment). Ranks
+# 2-6 fold their leading dims into R.
 #
 # tile_grid: the row split (`split_work_to_cores(grid, R, row_wise=True)`)
 # reaches min(R, N) Tensix cores. On single_tile / small that is all the work
 # there is; on tall_narrow (R >= 16*C) it fills the grid whenever R >= N and is
 # within one tile-row of the 2-D optimum otherwise. It does NOT reach the grid
-# on short_wide (R is 1-2) nor balance square_large, so both are refused until
-# the grid_2d_split refinement.
+# on short_wide (R is 1-2) nor balance square_large, so those two are refused
+# (EXCLUSIONS) wherever the row split would be the core assignment, until the
+# grid_2d_split refinement. Where an L1 shard fixes the core assignment (a
+# legacy-sharded L1 output, or a legacy-sharded L1 input with an interleaved
+# output) the shard grid IS the parallelism, whatever the tile-grid shape.
+
+_LEGACY_SCHEMES = (
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+)
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "output_dtype": [ttnn.bfloat16],
     "low_l1": [False],
-    "shard_api": ["none"],
-    "out_scheme": ["interleaved"],
-    "buffer": ["dram_to_dram"],
-    "rank": [4],
-    "orientation": ["none"],
+    "shard_api": ["none", "legacy_2d", "nd"],
+    "out_scheme": ["interleaved", *_LEGACY_SCHEMES, "nd"],
+    "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
+    "rank": [2, 3, 4, 5, 6],
+    "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     "pad_mode": ["none"],
     "pad_value": ["none"],
     "alignment": ["tile_aligned"],
     "tile_height": [32],
     "in_tile_height": ["none"],
-    "tile_grid": ["single_tile", "small", "tall_narrow"],
+    "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],
 }
 
 
 # ---------------------------------------------------------------------------
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
+#
+# short_wide / square_large wherever no L1 shard fixes the core assignment, so
+# the interleaved row split would under-fill the grid (grid_2d_split refinement):
+# no sharding at all; an ND output; a DRAM-sharded output; an interleaved output
+# fed by an ND or DRAM-resident input.
 
-EXCLUSIONS = []
+
+def _row_split_wide_exclusions():
+    cells = []
+    for tile_grid in ("short_wide", "square_large"):
+        cells.append({"shard_api": "none", "tile_grid": tile_grid})
+        cells.append({"out_scheme": "nd", "tile_grid": tile_grid})
+        cells.append({"out_scheme": "interleaved", "shard_api": "nd", "tile_grid": tile_grid})
+        for buffer in ("dram_to_dram", "dram_to_l1"):
+            cells.append({"out_scheme": "interleaved", "buffer": buffer, "tile_grid": tile_grid})
+        for scheme in _LEGACY_SCHEMES:
+            for buffer in ("dram_to_dram", "l1_to_dram"):
+                cells.append({"out_scheme": scheme, "buffer": buffer, "tile_grid": tile_grid})
+    return cells
+
+
+EXCLUSIONS = _row_split_wide_exclusions()
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +255,8 @@ EXCLUSIONS = []
 # ---------------------------------------------------------------------------
 
 PROPERTIES = {
-    # split_work_to_cores over device.compute_with_storage_grid_size(): min(R, N) Tensix cores.
+    # split_work_to_cores over device.compute_with_storage_grid_size(): min(R, N) Tensix cores;
+    # a resident L1 shard's grid when one fixes the core assignment (sharded_resident).
     "multi_core": {"value": True, "source": "declared"},
     # CB total = rows_per_quantum * block_width * per_col_tile_bytes <= CB_BUDGET_BYTES[low_l1] (l1_ledger.md).
     "bounded_cb": {"value": True, "source": "declared"},

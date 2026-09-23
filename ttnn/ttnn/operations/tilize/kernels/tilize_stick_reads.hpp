@@ -84,6 +84,12 @@ struct Walker {
 // from that instead of CB internals. Nothing is pushed after the partial slot,
 // so it cannot break the ring-wrap invariant. Requires read_ahead <= depth and
 // depth <= 15 (one trid per slot).
+//
+// Input pages: interleaved and HEIGHT-sharded Layout::ROW_MAJOR tensors keep one
+// page per stick (pages_per_stick == 1: one NoC read per stick segment). A
+// WIDTH / BLOCK / ND-sharded one cuts each stick into pages of the shard width
+// (`page_bytes` data bytes each; page id = stick * pages_per_stick + k), so a
+// segment is read as one NoC read per page it overlaps (read_paged_segment).
 template <
     uint32_t cb,
     uint32_t block_width,
@@ -91,7 +97,9 @@ template <
     uint32_t read_ahead,
     uint32_t tile_h,
     uint32_t tile_col_bytes,
-    uint32_t rows_per_slot>
+    uint32_t rows_per_slot,
+    uint32_t page_bytes,
+    uint32_t pages_per_stick>
 struct StickProducer {
     static_assert((tile_h & (tile_h - 1)) == 0, "tile_h must be a power of two");
     static_assert(read_ahead >= 1 && read_ahead <= depth, "read_ahead must be in [1, depth]");
@@ -136,13 +144,31 @@ struct StickProducer {
         const uint32_t first_stick = row * tile_h;
         for (uint32_t s = 0; s < tile_h; ++s) {
             const uint32_t stick = (s + stick_rotation) & (tile_h - 1);
-            noc_async_read(
-                accessor.get_noc_addr(first_stick + stick, segment_offset),
-                l1_base + stick * block_stick_bytes,
-                segment_bytes);
+            const uint32_t l1_dst = l1_base + stick * block_stick_bytes;
+            if constexpr (pages_per_stick == 1) {
+                noc_async_read(accessor.get_noc_addr(first_stick + stick, segment_offset), l1_dst, segment_bytes);
+            } else {
+                read_paged_segment(accessor, first_stick + stick, segment_offset, l1_dst, segment_bytes);
+            }
         }
         if (++open_rows == rows_per_slot) {
             open_rows = 0;  // slot sealed; it completes lazily
+        }
+    }
+
+    // Bytes [offset, offset + bytes) of logical stick `stick`, split at page boundaries.
+    template <typename Accessor>
+    FORCE_INLINE static void read_paged_segment(
+        const Accessor& accessor, uint32_t stick, uint32_t offset, uint32_t l1_dst, uint32_t bytes) {
+        uint32_t page = stick * pages_per_stick + offset / page_bytes;
+        uint32_t in_page = offset % page_bytes;
+        while (bytes > 0) {
+            const uint32_t chunk = bytes < page_bytes - in_page ? bytes : page_bytes - in_page;
+            noc_async_read(accessor.get_noc_addr(page, in_page), l1_dst, chunk);
+            l1_dst += chunk;
+            bytes -= chunk;
+            ++page;
+            in_page = 0;
         }
     }
 
@@ -169,19 +195,25 @@ struct StickProducer {
 // store_block for `num_rows` consecutive walk positions (one CB quantum): wait
 // num_rows * block_width pages, valid_width tile-page writes per tile-row in
 // flight, one flush (L1 source reads done), pop. `walk` is advanced past them.
+// The writes of one tile-row start at column `col_rotation % valid_width` and
+// wrap (the write twin of the reader's stick rotation): when every Tensix core
+// holds the same few tile-rows at once, concurrent first writes would otherwise
+// all land on the banks of column 0.
 template <uint32_t cb_output_tiles, uint32_t block_width, uint32_t out_tile_bytes, typename Accessor, typename Walk>
-FORCE_INLINE void store_rows(const Accessor& accessor, Walk& walk, uint32_t tiles_per_row, uint32_t num_rows) {
+FORCE_INLINE void store_rows(
+    const Accessor& accessor, Walk& walk, uint32_t tiles_per_row, uint32_t num_rows, uint32_t col_rotation) {
     const uint32_t pages = num_rows * block_width;
     cb_wait_front(cb_output_tiles, pages);
     uint32_t l1_row_addr = get_read_ptr(cb_output_tiles);
     for (uint32_t j = 0; j < num_rows; ++j, walk.advance()) {
-        uint32_t l1_read_addr = l1_row_addr;
-        uint32_t tile_idx = walk.row() * tiles_per_row + walk.first_col();
+        const uint32_t row_tile_idx = walk.row() * tiles_per_row + walk.first_col();
         const uint32_t valid_width = walk.valid_width();
-        for (uint32_t t = 0; t < valid_width; ++t) {
-            noc_async_write(l1_read_addr, accessor.get_noc_addr(tile_idx), out_tile_bytes);
-            l1_read_addr += out_tile_bytes;
-            ++tile_idx;
+        uint32_t t = col_rotation % valid_width;
+        for (uint32_t n = 0; n < valid_width; ++n) {
+            noc_async_write(l1_row_addr + t * out_tile_bytes, accessor.get_noc_addr(row_tile_idx + t), out_tile_bytes);
+            if (++t == valid_width) {
+                t = 0;
+            }
         }
         l1_row_addr += block_width * out_tile_bytes;
     }

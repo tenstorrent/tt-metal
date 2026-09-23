@@ -21,12 +21,28 @@ Implementation notes (deviations from the planner's inventory, all advisory):
 - `rows_per_quantum` (verifier, Phase 0 review): the `tile_row` streaming window. Each CB push / pop, read barrier and write flush covers `rows_per_quantum` consecutive walk positions instead of one. Host-derived as `min(ceil(QUANTUM_MIN_TILES / block_width), max_positions // depth_in, CB_BUDGET_BYTES[low_l1] // (block_width * per_col_tile_bytes))`, floored at 1. It never lowers `block_width`, and it engages only when one tile-row is under `QUANTUM_MIN_TILES` = 8 tiles. Only the kernel's final quantum can be partial, and nothing is pushed after it, so the ring-wrap invariant holds. Measured −3 % / −6 % device-kernel ns on [1,1,16384,64] / [1,1,16384,32] (WH B0, 64 Tensix cores). Wider tile-rows are unchanged.
 - Per-core traversal rotation: each Tensix core starts its tile-row walk (and its stick order inside a tile-row) at a per-core offset, so concurrent DRAM requests spread over all banks. Reader and writer walk the same rotated order. No L1 or byte-count change.
 
+## Sharded regimes (`sharded_resident` / `sharded_accessor`, Refinement 1)
+
+The same two CB slots, each either **resident** (backed on its own tensor's shard, 0 extra bytes) or **streamed** (the row above). A side is resident iff it is L1-sharded, `resident_ok`, and its per-core shard rectangle equals the core's assigned rectangle (`_core_assignment`).
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_input_sticks`, resident (input shard) | `shard_h / tile_h * shard_w / 32` pages of `in_tile_bytes`: the shard's own allocation (`ttnn.cb_descriptor_from_sharded_tensor`, format descriptor re-set to the tile-sized page + `TileDescriptor(tile_h, 32)`) | the whole shard, published at once (`core_row_tiles * block_width` pages: valid tile-rows at the nominal shard width) | `{tile_row: spans → shard_h / tile_h, tile_col: spans → shard_w / 32 (= block_width), image: spans (within the shard), stick_in_tile_row: spans → tile_h}` | input dtype | reader (publishes only, no NoC read) | compute | whole kernel | shares with the input tensor's shard buffer (zero-copy). A Layout::ROW_MAJOR shard row has stride `shard_w * elem_bytes = block_width * tile_col_bytes`, which is exactly the tilize input layout |
+| `cb_output_tiles`, resident (output shard) | `shard_h / tile_h * shard_w / 32` TILE pages of `out_tile_bytes`: the shard's own allocation | the whole shard; compute packs `block_width` pages per tile-row straight into it | `{tile_row: spans → shard_h / tile_h, tile_col: spans → shard_w / 32, image: spans, stick_in_tile_row: spans → tile_h}` | output dtype | compute | writer (waits for completion, no NoC write) | whole kernel | shares with the output tensor's shard buffer (pack into the destination) |
+
+Streamed partner of a resident side: the streamed row above, with `block_width = shard_w / 32` (the whole resident shard width is one block; a wider shard fails `resident_ok` and the side streams) and `per_col_tile_bytes` counting only the streamed CB. `rows_per_quantum` applies to the streamed side only. Footprint: at most `rows_per_quantum * block_width * depth * tile_bytes` for the one streamed CB, which is ≤ `CB_BUDGET_BYTES[low_l1]`; both sides resident = 0 CB bytes beyond the tensors.
+
+Data movement per sub-case (bytes relative to the DRAM-boundary minimum):
+- both resident (same spec): 0 NoC bytes. The reader publishes pages and the writer waits.
+- input resident, output streamed (interleaved / DRAM-sharded / L1-interleaved out): input 0 bytes, output written once.
+- output resident, input streamed (interleaved in, cross-spec, ND in): output 0 bytes, each input stick segment read once (remote L1 shard or DRAM).
+- neither resident (DRAM-sharded both sides, ND without a 2-D equivalent): as `row_split_interleaved`, via `TensorAccessor` on both sides.
+
 ## Deferred-regime CBs (not allocated in Phase 0; listed so the refinement's footprint is decided now)
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_retile_staging` (`retile_l1_facewalk`) | `block_width` pages of `in_tile_bytes_at_in_tile_h` (one input tile-row) | `block_width` input tiles: the one input tile-row whose faces are being copied into sticks. Depth 1, because the face-walk copy runs synchronously on the reader RISC-V that filled it | `{tile_row: streams → one input tile-row (= in_tile_h / tile_h output tile-rows, or 1/(tile_h / in_tile_h) of one), tile_col: spans → block_width, image: streams, stick_in_tile_row: spans → in_tile_h}` | input dtype (a raw byte copy, no DEST involvement) | reader (NoC read) | reader (face-walk copy). A single RISC-V owns both ends, so there is no cross-thread credit | retile regime only | cannot alias `cb_input_sticks`: the copy reads staging while writing `cb_input_sticks`, so the lifetimes overlap. Cannot pack into the destination: the staging layout (faces) differs from the stick layout the tilize LLK consumes |
-| `cb_input_sticks` backed on the input shard (`sharded_resident`, input side) | `shard_h / tile_h * shard_w / 32` pages of `in_tile_bytes`, which is the shard's own allocation | the whole shard (the tensor's own L1, not an extra allocation) | `{tile_row: spans → shard_h / tile_h, tile_col: spans → shard_w / 32, image: spans (within the shard), stick_in_tile_row: spans → tile_h}` | input dtype | reader (publishes only) | compute | whole kernel | shares with the input tensor's shard buffer (zero-copy). That is the sharing |
 
 ## Symbol table
 
