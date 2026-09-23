@@ -34,9 +34,8 @@ from models.experimental.deepseek_v4_flash.tests.test_decoder_layer_pcc import (
     _reference_path,
     _weight_cache,
 )
+from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV
 from models.experimental.deepseek_v4_flash.tt.attention import (
-    build_static_layer_cache,
-    decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
@@ -203,15 +202,7 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
     reference = bundle["output"].to(torch.float32)
     split = seq_len - 32
     assert split % 32 == 0 and split + _DECODE_STEPS <= seq_len
-    kv_cache = build_static_layer_cache(
-        submesh,
-        cfg.sliding_window,
-        layer_type,
-        cfg.head_dim,
-        seq_len,
-        cfg.compress_rates,
-        batch=batch,
-    )
+    pkv = DecodeLayerKV(cfg, layer_type, seq_len, batch, submesh)
 
     with contextlib.ExitStack() as prefetcher:
         if use_prefetcher:
@@ -238,9 +229,8 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
                 win_slot = int32_pos_tensor(pos % compress_rate, submesh, batch)
                 win_row = int32_pos_tensor(cfg.sliding_window + window, submesh, batch)
 
-            mask, sdpa_cur_pos = decode_sdpa_bounds(
-                cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh, batch
-            )
+            pkv.step(pos)
+            mask, sdpa_cur_pos = pkv.bounds(pos)
             out_tt = layer.decode_static(
                 _to_tt_replicated(streams[:, pos : pos + 1], submesh),
                 cos,
@@ -249,9 +239,10 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
                 cos_win,
                 sin_win,
                 mask,
-                kv_cache,
+                pkv.cache,
                 int32_pos_tensor(pos % cfg.sliding_window, submesh, batch),
                 int32_pos_tensor(pos, submesh, batch),
+                pkv.view,
                 hash_token=_token_row(bundle["input_ids"][:, pos : pos + 1], submesh) if is_hash else None,
                 pool_compressor=pool,
                 win_slot=win_slot,

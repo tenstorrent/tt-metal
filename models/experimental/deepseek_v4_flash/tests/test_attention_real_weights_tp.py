@@ -27,10 +27,9 @@ from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights imp
     _reference_path,
     _weight_cache,
 )
+from models.experimental.deepseek_v4_flash.tests.decode_kv_utils import DecodeLayerKV
 from models.experimental.deepseek_v4_flash.tt.attention import (
     DeepSeekV4Attention,
-    build_static_layer_cache,
-    decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
@@ -133,15 +132,7 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
     )
     expected_o_b_width = cfg.hidden_size if o_b_tp_strategy == "row" else cfg.hidden_size // TP_SIZE
     assert attn.o_b_proj.N == expected_o_b_width
-    kv_cache = build_static_layer_cache(
-        submesh,
-        cfg.sliding_window,
-        layer_type,
-        cfg.head_dim,
-        seq_len,
-        cfg.compress_rates,
-        batch=batch,
-    )
+    pkv = DecodeLayerKV(cfg, layer_type, seq_len, batch, submesh)
 
     hidden = bundle["hidden"]
     reference = bundle["output"].float()
@@ -172,9 +163,8 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
                 win_slot = int32_pos_tensor(pos % compress_rate, submesh, batch)
                 win_row = int32_pos_tensor(cfg.sliding_window + window, submesh, batch)
 
-            mask, sdpa_cur_pos = decode_sdpa_bounds(
-                cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh, batch
-            )
+            pkv.step(pos)
+            mask, sdpa_cur_pos = pkv.bounds(pos)
             hidden_tt = _to_tt_width_sharded(hidden[:, pos : pos + 1].reshape(batch, 1, 1, cfg.hidden_size), submesh)
             assert hidden_tt.layout == ttnn.ROW_MAJOR_LAYOUT
             assert hidden_tt.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
@@ -186,9 +176,10 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
                 cos_win,
                 sin_win,
                 mask,
-                kv_cache,
+                pkv.cache,
                 int32_pos_tensor(pos % cfg.sliding_window, submesh, batch),
                 int32_pos_tensor(pos, submesh, batch),
+                pkv.view,
                 pool_compressor=pool,
                 win_slot=win_slot,
                 win_row=win_row,
