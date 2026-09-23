@@ -49,7 +49,8 @@ class FusedHead:
             raise ValueError("The native head partition requires sixteen workers")
         self.grid = _grid(self.cores)
         self.norm = FusedNorm(
-            self.mesh, model.lm_head.config.input_memcfg, model.layers[0].eps, cores=norm_cores, output=norm_output
+            self.mesh, model.lm_head.config.input_memcfg, model.layers[0].eps, cores=norm_cores, output=norm_output,
+            compact_output=self.tuning.compact_activations != "off"
         )
         self.output = ttnn.empty(
             (1, 1, 1, 32768),
@@ -116,6 +117,9 @@ class FusedHead:
                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)],
                 )
             )
+        if self.tuning.compact_activations != "off":
+            cbs.append(ttnn.CBDescriptor(total_size=4096, core_ranges=self.grid,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=31, data_format=ttnn.uint32, page_size=4096)]))
         if self.tuning.alias_projection_cbs:
             # Final-block reload consumes each partial subblock before the
             # output pack overwrites that same subblock. Both rings are64 tiles.

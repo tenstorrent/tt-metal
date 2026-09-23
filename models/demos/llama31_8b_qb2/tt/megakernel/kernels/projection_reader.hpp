@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "api/dataflow/dataflow_api.h"
+#if COMPACT_ACTIVATIONS
+#include "compact_rows.hpp"
+#endif
 
 // One worker per bank owns consecutive K rows. Two workers per bank own
 // alternating half rows and must retain strided source reads. All selected
@@ -52,6 +55,18 @@ template <uint32_t A, uint32_t B, uint32_t KBlock, uint32_t N, uint32_t K, uint3
 void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t worker,
                              uint64_t prefetched_base = 0, uint32_t prefetched_blocks = 0, uint32_t local_prefetched_blocks = 0) {
     constexpr uint32_t blocks = K / KBlock;
+#if COMPACT_ACTIVATIONS
+    constexpr bool compact = (COMPACT_ACTIVATIONS & 2) || K == 128;
+    constexpr uint32_t shard_tiles = K == 32 ? 4 : K == 112 ? 7 : 16;
+    const uint32_t compact_base = get_write_ptr(31) + 128;
+    static_assert(128 + PROJECTION_BUFFERS * KBlock * 64 <= 4096);
+    if constexpr (compact) {
+        if (initialize_layer_scratch(1)) {
+            // Aliased input rings retain zero padding throughout this token.
+            zero_compact_input<KBlock * PROJECTION_BUFFERS * 2048>(get_write_ptr(A));
+        }
+    }
+#endif
     static_assert(K % KBlock == 0 && blocks >= 2);
 #if PROJECTION_READER >= 2
     // A bounded window of DMA blocks in flight. Reservations include all
@@ -81,6 +96,14 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         const uint32_t a = get_write_ptr(A);
         const uint32_t b = get_write_ptr(B);
 #endif
+#if COMPACT_ACTIVATIONS
+        if constexpr (compact) {
+            const uint32_t tile = block * KBlock;
+            noc_async_read<KBlock * 64>(input.get_noc_addr(tile / shard_tiles * shard_tiles) + (tile % shard_tiles) * 64,
+                compact_base + slot * KBlock * 64, KBlock * 64);
+        } else
+#endif
+        {
 #if PROJECTION_COALESCE_INPUT
         // Selected BF16 width shards contain a whole number of K blocks:
         // QKV16/GU8 divide16 tiles, O4 divides4, down7 divides7, head4 divides16.
@@ -91,6 +114,7 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
             noc_async_read_page(block * KBlock + row, input, a + row * 2048);
         }
 #endif
+        }
         if (block < prefetched_blocks) {
             noc_async_read<KBlock * N * WeightBytes>(
                 prefetched_base + block * KBlock * N * WeightBytes, b, KBlock * N * WeightBytes);
@@ -101,6 +125,12 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         if (block + 1 >= inflight) {
             const uint32_t completed = block + 1 - inflight;
             noc_async_read_barrier_with_trid(completed % PROJECTION_BUFFERS + 1);
+#if COMPACT_ACTIVATIONS
+            if constexpr (compact) {
+                expand_bf16_rows<KBlock>(compact_base + (completed % PROJECTION_BUFFERS) * KBlock * 64,
+                    a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
+            }
+#endif
             cb_push_back(A, KBlock);
             cb_push_back(B, KBlock * N);
             if (block + 1 < blocks) {
@@ -117,6 +147,12 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
 #if PROJECTION_READER >= 2
     for (uint32_t block = blocks + 1 - inflight; block < blocks; ++block) {
         noc_async_read_barrier_with_trid(block % PROJECTION_BUFFERS + 1);
+#if COMPACT_ACTIVATIONS
+        if constexpr (compact) {
+            expand_bf16_rows<KBlock>(compact_base + (block % PROJECTION_BUFFERS) * KBlock * 64,
+                a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
+        }
+#endif
         cb_push_back(A, KBlock);
         cb_push_back(B, KBlock * N);
     }

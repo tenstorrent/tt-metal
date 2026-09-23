@@ -31,19 +31,31 @@ void QB2_ENTRY() {
     const auto target = TensorAccessor(target_args, get_arg_val<uint32_t>(CONCAT_RT_OFFSET), 2048);
     cb_reserve_back(32, 32);
     const uint32_t scratch = get_write_ptr(32);
+#if COMPACT_ATTENTION_OUTPUT
+    if (initialize_layer_scratch(1) || inactive) { zero_l1<2048>(scratch); }
+    constexpr uint32_t tile_stride = 64, face_stride = 32;
+#else
     if (initialize_layer_scratch(1)) { zero_l1<32 * 2048>(scratch); }
+    constexpr uint32_t tile_stride = 2048, face_stride = 512;
+#endif
     for (uint32_t head = 0; !inactive && head < 8; ++head) {
         for (uint32_t column = 0; column < 4; ++column) {
-            const uint32_t destination = scratch + (head * 4 + column) * 2048;
+            const uint32_t destination = scratch + (head * 4 + column) * tile_stride;
             const uint64_t origin = source.get_noc_addr(column) + head * 32;
             noc_async_read(origin, destination, 32);
-            noc_async_read(origin + 512, destination + 512, 32);
+            noc_async_read(origin + 512, destination + face_stride, 32);
         }
     }
     noc_async_read_barrier();
+#if COMPACT_ATTENTION_OUTPUT
+    for (uint32_t shard = 0; shard < 8; ++shard) {
+        noc_async_write(scratch + shard * 4 * 64, target.get_noc_addr(shard * 4), 4 * 64);
+    }
+#else
     for (uint32_t tile = 0; tile < 32; ++tile) {
         noc_async_write_page(tile, target, scratch + tile * 2048);
     }
+#endif
     noc_async_write_barrier();
     for (uint32_t core = 0; core < 8; ++core) {
         noc_semaphore_inc(

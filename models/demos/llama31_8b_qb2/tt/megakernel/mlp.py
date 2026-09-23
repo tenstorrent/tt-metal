@@ -55,6 +55,8 @@ class FusedMLP:
         if gu_workers not in (8, 16):
             raise ValueError("gu_workers must be 8 or 16")
         self.tuning = tuning or ProjectionTuning()
+        if self.tuning.compact_activations != "off" and not fuse_prepare:
+            raise ValueError("Compact transport requires the complete decoder body")
         if self.tuning.split_gu_bank_rows and gu_workers != 16:
             raise ValueError("Split GU bank rows currently require sixteen compute workers")
         if reuse_scratch and (self.tuning.reader != "original" or self.tuning.buffers != 2):
@@ -169,13 +171,13 @@ class FusedMLP:
         if fuse_norm:
             from .norm import FusedNorm
 
-            self.normalizer = FusedNorm(self.mesh, layers[0].decode_inputs["gate_up"], layers[0].eps)
+            self.normalizer = FusedNorm(self.mesh, layers[0].decode_inputs["gate_up"], layers[0].eps, compact_output=self.tuning.compact_activations != "off")
         self.attention_stage = None
         if fuse_attention:
             from .attention import FusedAttention
 
             self.attention_stage = FusedAttention(layers[0], output=workspace["o"] if fuse_prepare else None,
-                cores=self.placement.map([ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)], row_major=True))
+                cores=self.placement.map([ttnn.CoreCoord(x, y) for y in range(6, 10) for x in range(8)], row_major=True), compact_output=self.tuning.compact_activations == "all")
         self.preparation = None
         if fuse_prepare:
             from .prepare import FusedPreparation

@@ -18,6 +18,9 @@ constexpr unsigned gu_width = 224 / GU_WORKERS;
 #if defined(READER) || defined(WRITER)
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#if COMPACT_ACTIVATIONS & 2
+#include "compact_rows.hpp"
+#endif
 
 constexpr auto input_args = TensorAccessorArgs<0>();
 constexpr auto gu_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -328,6 +331,9 @@ void QB2_ENTRY() {
 #elif defined(SWIGLU) && defined(WRITER)
 void QB2_ENTRY() {
     cb_wait_front(18, 7);
+#if COMPACT_ACTIVATIONS & 2
+    compact_bf16_rows<7>(get_read_ptr(18));
+#endif
     notify_coordinator(2);
     noc_async_atomic_barrier();
     cb_pop_front(18, 7);

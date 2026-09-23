@@ -27,11 +27,19 @@ class ProjectionTuning:
     early_weight_phases: int = 15
     share_qkv_workers: bool = False
 
+    compact_activations: str = "off"
+    head_placement: str = "row"
     profiler_phase: int = 0
     split_gu_bank_rows: bool = False
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.head_placement not in ("row", "order", "select"):
+            raise ValueError("Head placement must be row/order/select")
+        if self.compact_activations not in ("off", "norm", "all"):
+            raise ValueError("Compact activation transport must select off/norm/all")
+        if self.compact_activations != "off" and (self.reader != "pipelined" or self.buffer_count != 3 or not self.alias_projection_cbs or self.scratch_init_once != "all" or self.share_qkv_workers or self.prefetch_head_workers or self.prefetch_gu_blocks or self.prefetch_down_blocks):
+            raise ValueError("Compact transport requires the separate-QKV aliased three-buffer pipeline with scratch-once all and no helper prefetch")
         if self.profiler_phase not in (0, 1, 2, 3):
             raise ValueError("Profiler phase must select main/O/GU/down")
         if self.split_gu_bank_rows and self.reader == "original":
@@ -76,6 +84,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("COMPACT_ACTIVATIONS", str({"off":0, "norm":1, "all":3}[self.compact_activations])),
             ("PROFILER_PROJECTION_PHASE", str(self.profiler_phase)),
             ("GU_BANK_SPLIT", str(int(self.split_gu_bank_rows))),
             ("BATCH_SWIGLU", str(int(self.batch_swiglu))),

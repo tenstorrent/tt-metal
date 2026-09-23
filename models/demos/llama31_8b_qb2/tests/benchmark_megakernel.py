@@ -86,6 +86,8 @@ def parse_args():
     parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined", "pipelined_rows"), default="original")
     parser.add_argument("--projection-lookahead", type=int, choices=(2, 3, 4), default=2)
     parser.add_argument("--projection-buffers", type=int, choices=(2, 3, 4, 5), default=2)
+    parser.add_argument("--compact-activations", choices=("off", "norm", "all"), default="off")
+    parser.add_argument("--head-placement", choices=("row", "order", "select"), default="row")
     parser.add_argument("--batch-swiglu", action="store_true")
     parser.add_argument("--coalesce-input", action="store_true")
     parser.add_argument("--scratch-init-once", choices=("off", "padding", "norm", "all"), default="off")
@@ -130,6 +132,8 @@ def run(args):
 
     tuning = ProjectionTuning(
         profiler_phase={"main":0, "o":1, "gu":2, "down":3}[args.profiler_phase],
+        compact_activations=args.compact_activations,
+        head_placement=args.head_placement,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
         bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,

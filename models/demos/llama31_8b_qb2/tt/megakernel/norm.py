@@ -9,8 +9,11 @@ from .mlp import _grid
 
 
 class FusedNorm:
-    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False, cores=None, output=None):
+    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False, cores=None, output=None, compact_output=False):
         self.mesh = mesh
+        self.compact_output = compact_output
+        if debug and compact_output:
+            raise ValueError("Compact norm output is a private projection transport")
         self.epsilon = struct.unpack("I", struct.pack("f", epsilon))[0]
         self.cores = list(cores) if cores is not None else [ttnn.CoreCoord(x, 5) for x in range(8)]
         self.grid = _grid(self.cores)
@@ -62,7 +65,7 @@ class FusedNorm:
                     core_ranges=self.grid,
                     compile_time_args=ct,
                     runtime_args=rt,
-                    defines=[(role, "1"), ("NORM_READY_SEMAPHORE", str(ready_semaphore))]
+                    defines=[(role, "1"), ("NORM_READY_SEMAPHORE", str(ready_semaphore)), ("COMPACT_NORM_OUTPUT", str(int(self.compact_output)))]
                     + ([("FUSE_NORM", "1")] if projection_cores else [])
                     + ([("FUSE_GATHER", "1")] if wait_for_gather else []),
                     config=config,

@@ -26,6 +26,7 @@ class FusedPreparation:
             layer.eps,
             cores=self.norm_cores,
             output=body.normalizer.output,
+            compact_output=body.tuning.compact_activations != "off",
         )
         self.packed = ttnn.empty(
             (1, 1, 1, 1536),

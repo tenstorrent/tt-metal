@@ -283,6 +283,9 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
             ]
             if len(free) < 24:
                 raise ValueError("The integrated terminal boundary requires24 free workers on the QB2 grid")
+            if body.tuning.head_placement != "row":
+                from .placement import terminal_head_placement
+                free = terminal_head_placement(model.mesh_device, free, body.tuning.head_placement)
             integrated_head = FusedHead(
                 model, cores=free[:16], norm_cores=free[16:24], norm_output=body.normalizer.output, tuning=tuning
             )

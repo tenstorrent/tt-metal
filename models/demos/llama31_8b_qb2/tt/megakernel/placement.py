@@ -41,3 +41,43 @@ class ProjectionPlacement:
     def map(self, cores, *, row_major=False):
         result = [ttnn.CoreCoord(*self.relocation.get((c.x, c.y), (c.x, c.y))) for c in cores]
         return sorted(result, key=lambda c: (c.y, c.x)) if row_major else result
+
+
+
+def terminal_head_placement(mesh, free, mode):
+    """Minimum summed NoC0 hop assignment; each bank owns two column halves."""
+    optimal = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh, ttnn.NOC.NOC_0)
+    candidates = free[:16] if mode == "order" else free
+    costs = [[ttnn._ttnn.multi_device.experimental.get_worker_noc_hop_distance(
+        mesh, ttnn.MeshCoordinate(0, 0), candidate, optimal[worker // 2], ttnn.NOC.NOC_0)
+        for candidate in candidates] for worker in range(16)]
+    # Rectangular Hungarian assignment. Deterministic tie breaking by original
+    # row-major index; no external numerical package or device operation.
+    n, m = len(costs), len(candidates)
+    u, v, match, way = [0]*(n+1), [0]*(m+1), [0]*(m+1), [0]*(m+1)
+    for i in range(1, n+1):
+        match[0] = i
+        j0, minimum, used = 0, [float("inf")]*(m+1), [False]*(m+1)
+        while True:
+            used[j0] = True
+            i0, delta, j1 = match[j0], float("inf"), 0
+            for j in range(1, m+1):
+                if not used[j]:
+                    value = costs[i0-1][j-1] - u[i0] - v[j]
+                    if value < minimum[j]: minimum[j], way[j] = value, j0
+                    if minimum[j] < delta: delta, j1 = minimum[j], j
+            for j in range(m+1):
+                if used[j]: u[match[j]] += delta; v[j] -= delta
+                else: minimum[j] -= delta
+            j0 = j1
+            if not match[j0]: break
+        while j0:
+            j1 = way[j0]; match[j0] = match[j1]; j0 = j1
+    assignment = [None]*n
+    for j in range(1, m+1):
+        if match[j]: assignment[match[j]-1] = j-1
+    selected = [candidates[j] for j in assignment]
+    occupied = {(c.x, c.y) for c in selected}
+    remainder = [c for c in free if (c.x, c.y) not in occupied]
+    assert len(selected) == 16 and len(remainder) >= 8
+    return selected + remainder

@@ -8,6 +8,9 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "zero_l1.hpp"
+#if COMPACT_NORM_OUTPUT
+#include "compact_rows.hpp"
+#endif
 #ifdef PREFETCH_ROLE
 #include "prefetch_projection.hpp"
 #endif
@@ -87,7 +90,12 @@ void QB2_ENTRY() {
     }
     cb_wait_front(16,16);
     const auto output=TensorAccessor(output_args,get_arg_val<uint32_t>(2),2048);
+#if COMPACT_NORM_OUTPUT
+    compact_bf16_rows<16>(get_read_ptr(16));
+    noc_async_write(get_read_ptr(16), output.get_noc_addr(rank * 16), 16 * 64);
+#else
     for(uint32_t t=0;t<16;++t) { noc_async_write_page(rank*16+t,output,get_read_ptr(16)+t*2048); }
+#endif
     noc_async_write_barrier();
     cb_pop_front(16,16);
 #ifdef FUSE_NORM

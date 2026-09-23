@@ -14,7 +14,8 @@ from .mlp import _grid
 
 
 class FusedAttention:
-    def __init__(self, layer, *, output=None, cores=None):
+    def __init__(self, layer, *, output=None, cores=None, compact_output=False):
+        self.compact_output = compact_output
         self.mesh = layer.mesh_device
         if self.mesh.compute_with_storage_grid_size().y < 10:
             raise ValueError("Attention composition requires ten worker rows")
@@ -100,6 +101,7 @@ class FusedAttention:
         writer.kernel_source = str(Path(__file__).with_name("kernels") / "attention_writer.cpp")
         writer.defines = [
             *writer.defines,
+            ("COMPACT_ATTENTION_OUTPUT", str(int(self.compact_output))),
             ("CONCAT_CT_OFFSET", str(len(writer.compile_time_args))),
             ("CONCAT_RT_OFFSET", str(offsets.pop())),
         ]
