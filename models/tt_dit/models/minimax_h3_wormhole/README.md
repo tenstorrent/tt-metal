@@ -156,7 +156,7 @@ SP=8. Block input shard 13664 x 1344 bf16 = 36.7 MB/device.
 | UntilizeWithUnpadding | 21 | 1.76 | 0.07 | +1.70 |
 | ConcatDeviceOperation | 1 | 1.51 | — | +1.51 |
 | TilizeWithValPadding | 8 | 1.35 | 0.06 | +1.30 |
-| *(remaining 8 ops)* | | 2.81 | 2.78 | +0.04 |
+| *(remaining 8 ops — adaLN modulate/gate, head split/merge, slice/typecast; itemised under [The small ops](#the-small-ops--whole-block-roofline-per-op-2026-09-23))* | 17 | 2.81 | 2.78 | +0.04 |
 | **device only** | | **246.92** | **233.41** | **+13.51 (5.8%)** |
 | **device + op gap** | | **250.80** | **238.46** | +12.34 |
 | SDPA share of block | | 70.7% | 74.8% | |
@@ -248,6 +248,57 @@ Per device per layer at 15 s, against 4 links x 12.5 GB/s = 50 GB/s of ring ingr
 | DRAM: 193 MB weights + ~1-2 GB activation passes at 288 GB/s | | < 10 ms | everything |
 
 Even at 100% FPU the collectives sit under compute by 5-10x. The floor is the matrix engine.
+
+#### The small ops — whole-block roofline, per op (2026-09-23)
+
+The per-op cross-check above stops at the five compute ops. `tools/transformer_roofline.py` whole-block mode
+(`load_block_profile`, `transformer_roofline.py:1027`) reads the same 09-17 fsdp1 CSV (`transformer_roofline.py:914`),
+gives every op code a bound by class and folds every op group under 1% of the block (`OTHER_SHARE`,
+`transformer_roofline.py:925`) into one "other (small ops)" row on the two block figures. That row is 9.12 ms,
+3.7% of the block, 12 op groups, 48 calls — larger than any single non-SDPA op except ff1 and to_qkv, so it gets
+its own figure (`fig_block_other`, `transformer_roofline.py:1320`) and indented sub-rows in the `--dump` table.
+Every op in it moves DRAM-resident tensors once, so the bound is bytes in + out / 288 GB/s (`DRAM_BOUND_NAMES`,
+`transformer_roofline.py:938`), except that an op averaging under 10 µs of bytes per call sits at the kernel-launch
+floor and stays measured only (`LAUNCH_FLOOR_S`, `transformer_roofline.py:929`); the adaLN matmul keeps its FLOP +
+DRAM model and is DRAM-bound at M=32.
+
+```bash
+python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --dump --figs block_stacked,block_ops,block_other
+# writes transformer_roofline_out/block_{stacked,ops,other}_wh_M13664.png; --profile-csv <csv> for a newer profile
+```
+
+| op group | calls | measured ms | ideal ms | util | headroom | bound |
+|---|---|---|---|---|---|---|
+| UntilizeWithUnpadding | 21 | 1.764 | 0.935 | 53% | 1.9x | 269 MB / 288 GB/s |
+| MinimalMatmul M=32 (adaLN) | 1 | 1.672 | 0.463 | 28% | 3.6x | 2·32·2688·24192 FLOP on 72 cores; 133 MB DRAM |
+| Concat | 1 | 1.511 | 0.903 | 60% | 1.7x | 260 MB |
+| TilizeWithValPadding | 8 | 1.355 | 0.907 | 67% | 1.5x | 261 MB |
+| BinaryNg (adaLN modulate) | 4 | 0.997 | 0.512 | 51% | 1.9x | 147 MB |
+| Ternary (adaLN gate + residual) | 1 | 0.629 | 0.510 | 81% | 1.2x | 147 MB |
+| NLPConcatHeads (heads merge) | 1 | 0.573 | 0.340 | 59% | 1.7x | 98 MB |
+| NlpCreateHeads (q/k/v split) | 1 | 0.568 | 0.340 | 60% | 1.7x | 98 MB |
+| Slice, Typecast, ReshapeView, Unary | 10 | 0.047 | — | — | — | < 1 MB per call: launch-latency floor, no bandwidth model |
+| **other (small ops)** | **48** | **9.12** | **4.91** | **54%** | **1.86x** | 99% of the group has a bound |
+
+Reading it:
+
+1. **The FSDP layout round-trips are half the group** — untilize + tilize + concat = 4.63 ms against a 2.75 ms
+   DRAM floor. The 24x blowup in Finding 3 is a count problem (21 untilize calls, 8 tilize) more than a per-call
+   one: each call already runs at 53-67% of DRAM bandwidth. Removing the round-trips, not speeding them up, is the
+   lever (experiment 8 in the index below).
+2. **adaLN costs 3.3 ms outside the embeddings** — the M=32 modulation matmul at 28% (a 32-row matmul cannot fill
+   72 cores; 3.6x headroom, the worst ratio in the group), four BinaryNg modulates and one Ternary gate+residual,
+   each a full pass over the 36.7 MB activation. The Ternary at 81% is the best-utilised op in the block. The
+   modulates and the gate are candidates for fusing into the neighbouring RMSNorm / matmul epilogues rather than
+   tuning in place.
+3. **The head split and merge around SDPA are 1.14 ms** of pure data movement at 60% of DRAM; a head-major
+   to_qkv writer or an SDPA that reads the [S, heads·d] layout directly would remove both.
+4. **The tail is noise** — slice, typecast, reshape and the single unary total 47 µs across 10 calls, 3-8 µs each:
+   kernel-launch cost, not bandwidth, so the tool gives them no ideal.
+
+The group's own headroom (1.86x) is lower than the block's (2.26x, `--dump` footer): these ops are closer to
+their floor than the matmuls and SDPA are, so the ~4 ms recoverable here comes from removing ops, not from
+tuning them.
 
 ### Baseline re-measured, and run-to-run variance (2026-09-21)
 
