@@ -1,9 +1,3 @@
-# Fabric CPU-only unit test matrix (mock cluster / tt-run; no hardware).
-#
-# Each entry: id, name, cmd, skus, team, arch, owner_id.
-# Commands are kept in sync with tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh.
-# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> unit).
-
 - id: fabric-cpu-unit-phys-ctrl-t3k-wh
   name: fabric cpu unit tests (unit-phys-ctrl-t3k-wh)
   cmd: |
@@ -14,7 +8,7 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group wh-galaxy
   skus:
     cpu_medium:
-      timeout: 15
+      timeout: 8
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -29,28 +23,18 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-misc
   skus:
     cpu_medium:
-      timeout: 25
+      timeout: 10
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
-# bh-pod-pipeline became runnable after the SC36 subtorus rename and runs 38 per-host-sliced pod combos
-# across 4 single-pod mocks. The four 40-host llama_8b pods dominate wall-clock (they alone need ~40 min),
-# so they are pulled into their own shard; the remaining fast layout/pipeline-builder combos are split by
-# mock revision. Partition (disjoint, exhaustive): revAB-fast (16) + revC-fast (14) + llama (8) = 38.
-#   revAB-fast: SC4 revAB subtorus/aisleD + SP3 16x8, minus llama  (--grep revAB --grep-exclude llama_8b)
-#   revC-fast:  SC4 revC subtorus aisleC/aisleD, minus llama       (--grep revC  --grep-exclude llama_8b)
-#   llama:      all 40-host llama_8b pods on revAB + revC mocks     (--grep llama_8b)
 - id: fabric-cpu-bh-pod-pipeline-revab
   name: fabric cpu unit tests (bh-pod-pipeline-revAB)
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revAB --grep-exclude llama_8b
   skus:
     cpu_medium:
-      # 16 fast layout/pipeline-builder combos (SC36-subtorus single-pod mock + 16x8 SP3 mock); ~3 min.
-      # (The one pathological 8x16 pipeline-builder combo is dropped on CI —
-      # see https://github.com/tenstorrent/tt-metal/issues/49313.)
-      timeout: 15
+      timeout: 10
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -61,8 +45,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revC --grep-exclude llama_8b
   skus:
     cpu_medium:
-      # 14 fast layout/pipeline-builder combos (SC4 revC subtorus aisleC/aisleD); ~3 min.
-      timeout: 15
+      timeout: 10
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -73,10 +56,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep llama_8b
   skus:
     cpu_medium:
-      # 8 slow 40-host llama_8b pods (revAB subtorus/aisleD + revC subtorus aisleC/aisleD). These dominate
-      # the pod-pipeline wall-clock; a combined revAB shard timed out at 35 min, and the 8-combo llama-only
-      # run completes in ~40 min, so this shard gets a dedicated 55-min budget for host-variance headroom.
-      timeout: 55
+      timeout: 10
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -87,7 +67,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-sp4-glx
   skus:
     cpu_medium:
-      timeout: 15
+      timeout: 16
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -100,7 +80,7 @@
     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc16
   skus:
     cpu_medium:
-      timeout: 15
+      timeout: 20
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -111,9 +91,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
   skus:
     cpu_medium:
-      # 20-host SC20 rings on 2 mocks: 80-stage 2x4 (x2), 40-stage 4x4, 20-stage 8x4, and the 160-node
-      # 32x4 5-group ring — the slowest CPU-only shard; 15 min timed out on CI.
-      timeout: 40
+      timeout: 45
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -124,9 +102,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-blitz-decode
   skus:
     cpu_medium:
-      # ~17 tt-run combos incl. slow 48/64/80-stage rings on SC16/SC20 clusters; the
-      # suite has grown past the old 15-min cap (deterministic timeout on main nightly).
-      timeout: 30
+      timeout: 35
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -137,7 +113,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "TT_PIPELINE_TEST_STAGES=20"
   skus:
     cpu_medium:
-      timeout: 10
+      timeout: 8
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -148,12 +124,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
   skus:
     cpu_medium:
-      # Long-running: non-pod-aligned ring maps (20/24/28/32/36 stages) on the SC36 revC subtorus aisleD
-      # and SC36 revAB subtorus aisleC (SC20 mapping) mocks, plus the long 96/112-stage rings embedded on
-      # the full SC36 aisleD mock and the 112-stage exact fit on the SC28 aisleD subset, plus the SC24
-      # 96-stage/6-BigMesh entries. Erratic general-SAT solves; the cpu_medium CI runner is ~4x slower
-      # than local (the 4-stage step measured 5m34s on CI). Budgeted from local end-to-end x4 + margin.
-      timeout: 45
+      timeout: 42
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -164,11 +135,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-heterogeneous
   skus:
     cpu_medium:
-      # Heterogeneous (mixed-shape) mesh graphs: the 2-branch mesh-per-stage router pipeline (69 meshes /
-      # 352 chips = 11 galaxies) on the 36-host SC36 revC subtorus aisleD mock, plus the unpinned llama_8b
-      # 4-galaxy 7-mesh ring on the four SC4 single-pod mocks. The 36-host multi-mesh placement solve
-      # dominates wall-clock; cpu_medium is ~4x slower than local.
-      timeout: 50
+      timeout: 56
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
