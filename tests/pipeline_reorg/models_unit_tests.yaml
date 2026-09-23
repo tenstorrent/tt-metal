@@ -255,18 +255,25 @@
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=0
     export HF_MODEL=CohereLabs/c4ai-command-r-v01 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/CohereLabs/c4ai-command-r-v01 MESH_DEVICE=P150x4
-    # Only the e2e decode smoke test runs here. The two PCC harnesses
-    # (test_cohere_pcc.py, test_cohere_fullmodel_pcc.py) compare against fp32 CPU
-    # reference dumps produced by models/experimental/cohere/reference/cpu_reference_capture.py,
-    # which needs a ~140 GB-RAM CPU host and is not staged on /mnt/MLPerf. Add them
-    # once those dumps exist and COHERE_REF_DIR can point at them.
-    pytest --timeout 2400 models/experimental/cohere/tests/test_cohere_vllm_e2e.py
+    export COHERE_REF_DIR=/mnt/MLPerf/tt_dnn-models/CohereLabs/c4ai-command-r-v01-reference
+    # The PCC harnesses pytest.skip() when the fp32 CPU reference dump is absent, which
+    # would report a green job that validated nothing. Fail loudly instead.
+    if [ ! -f "$COHERE_REF_DIR/prompt00.npz" ]; then
+      echo "::error::Missing $COHERE_REF_DIR/prompt00.npz - generate with models/experimental/cohere/reference/cpu_reference_capture.py on a ~140 GB-RAM CPU host and stage it on /mnt/MLPerf."
+      exit 1
+    fi
+    # test_cohere_vllm_e2e.py is deliberately NOT here: it imports generator_vllm, which
+    # imports vllm at module scope, and vllm is only installed in the vllm-model-tests
+    # pipeline. It belongs in tests/pipeline_reorg/vllm_model_tests.yaml.
+    pytest --timeout 900 models/experimental/cohere/tests/test_cohere_pcc.py
+    pytest --timeout 1500 models/experimental/cohere/tests/test_cohere_fullmodel_pcc.py
   model: command-r-35b
   model_family: Cohere
   skus:
     bh_quietbox_2:
-      # First run is cold: 70 GB checkpoint off the NAS plus tt_cache generation for
-      # a 35B model. The author measured 230 s warm on this same SKU (VALIDATION.md).
+      # First run is cold: 70 GB checkpoint off the NAS plus tt_cache generation for a
+      # 35B model, then a chained 40-layer sweep. Author's QB2 reference numbers:
+      # chained min PCC 0.995873 / mean 0.999017, logits 0.997250 (VALIDATION.md).
       timeout: 45
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
