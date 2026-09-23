@@ -346,14 +346,15 @@ TEST_F(QueryOpConstraintsMockDevice, Matmul) {
         false,  // transpose_b
         ttnn::L1_MEMORY_CONFIG,
         DataType::BFLOAT16,
-        std::nullopt,   // program_config
-        std::nullopt,   // activation
-        std::nullopt,   // compute_kernel_config
-        std::nullopt,   // core_grid
-        std::nullopt,   // output_tile
-        std::nullopt,   // optional_output_tensor
-        std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,                                     // program_config
+        std::nullopt,                                     // activation
+        std::nullopt,                                     // compute_kernel_config
+        std::nullopt,                                     // core_grid
+        std::nullopt,                                     // output_tile
+        std::nullopt,                                     // optional_output_tensor
+        std::nullopt,                                     // global_cb
+        std::nullopt,                                     // sub_device_id
+        ttnn::operations::matmul::PrefetcherPipeList{});  // prefetcher_pipes
 
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
     EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
@@ -390,14 +391,15 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
         false,  // transpose_b
         ttnn::L1_MEMORY_CONFIG,
         DataType::BFLOAT16,
-        std::nullopt,   // program_config
-        std::nullopt,   // activation
-        std::nullopt,   // compute_kernel_config
-        std::nullopt,   // core_grid
-        std::nullopt,   // output_tile
-        std::nullopt,   // optional_output_tensor
-        std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,                                     // program_config
+        std::nullopt,                                     // activation
+        std::nullopt,                                     // compute_kernel_config
+        std::nullopt,                                     // core_grid
+        std::nullopt,                                     // output_tile
+        std::nullopt,                                     // optional_output_tensor
+        std::nullopt,                                     // global_cb
+        std::nullopt,                                     // sub_device_id
+        ttnn::operations::matmul::PrefetcherPipeList{});  // prefetcher_pipes
 
     EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << out.response.error_message.value_or("none");
@@ -426,7 +428,8 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        ttnn::operations::matmul::PrefetcherPipeList{});
 
     EXPECT_EQ(verify.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << verify.response.error_message.value_or("none");
@@ -470,14 +473,15 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
         false,          // transpose_b
         width_sharded,  // width-sharded output memory config
         DataType::BFLOAT16,
-        std::nullopt,   // program_config — let ttnn auto-select
-        std::nullopt,   // activation
-        std::nullopt,   // compute_kernel_config
-        std::nullopt,   // core_grid
-        std::nullopt,   // output_tile
-        std::nullopt,   // optional_output_tensor
-        std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,                                     // program_config — let ttnn auto-select
+        std::nullopt,                                     // activation
+        std::nullopt,                                     // compute_kernel_config
+        std::nullopt,                                     // core_grid
+        std::nullopt,                                     // output_tile
+        std::nullopt,                                     // optional_output_tensor
+        std::nullopt,                                     // global_cb
+        std::nullopt,                                     // sub_device_id
+        ttnn::operations::matmul::PrefetcherPipeList{});  // prefetcher_pipes
 
     EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << out.response.error_message.value_or("none");
@@ -505,7 +509,8 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        ttnn::operations::matmul::PrefetcherPipeList{});
 
     EXPECT_EQ(verify.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << verify.response.error_message.value_or("none");
