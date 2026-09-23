@@ -62,10 +62,6 @@ Accuracy criteria
 
 Coverage that deliberately lives elsewhere (recorded here so an unrelated
 refactor of those files doesn't silently delete coverage this one relies on):
-  - sigmoid vector_mode=2 (C): test_sigmoid_vector_modes.py, which uses the
-    narrow shapes it is meant for (see the vector_mode quirk below).
-  - sigmoid_accurate over [-87, 88.5] at ULP<=3:
-    test_sigmoid_accurate_21f.py::test_sigmoid_accurate_arange.
   - round on bfloat8_b: test_round.py::test_round_new. Only that file's
     bfloat16 row was removed in favour of the sweep here.
 
@@ -78,7 +74,7 @@ Golden-function quirks (see ttnn/ttnn/operations/unary.py):
 
 Real-hardware quirks. Every item below was observed running this file against
 a live wormhole_b0 chip -- each started as a failure whose exclusion band was
-read off the failing elements. Blackhole has not been exercised at all.
+read off the failing elements.
   - hardtanh/clamp/clip bounds and threshold's `value` take the fp32->bf16
     *truncation* path (same as `fill`), not round-to-nearest-even, so their
     goldens are built from _to_device_bf16_scalar.
@@ -92,9 +88,10 @@ read off the failing elements. Blackhole has not been exercised at all.
     bit-pattern compares -- torch.equal reports +0.0 == -0.0 and cannot see
     this at all.
   - sigmoid's vector_mode is only valid as C (2) or RC (4); R (1) raises a
-    TT_FATAL. C is a sub-tile optimization for narrow inputs, and on a full
+    TT_FATAL. C is a sub-tile optimization for narrow inputs; on a full
     32x32 tile the unprocessed columns hold stale DEST content rather than a
-    sigmoid output, so only vector_mode=4 is swept here.
+    sigmoid output. vector_mode=4 is the exhaustive sweep in test_sigmoid_op;
+    vector_mode=2 is covered by test_sigmoid_vector_mode2.
   - the fast exp approximation stops saturating from x ~= 172 (0.98 at 172,
     0.26 at 177, 0.05 at 179) instead of holding 1.0. This hits both entry
     points -- SigmoidMode.AccurateWithFastExp and
@@ -834,38 +831,55 @@ def test_polygamma_op_ulp_window(device, k):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# sigmoid — vector_mode x SigmoidMode (structural: own dedicated tests)
+# sigmoid — vector_mode x SigmoidMode
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
-    "mode, pcc",
+    "vector_mode, mode, pcc",
     [
-        (ttnn.SigmoidMode.Accurate, None),  # ULP-gated instead (ulp<=2)
-        (ttnn.SigmoidMode.AccurateWithFastExp, 0.999),
-        (ttnn.SigmoidMode.FastApproximate, 0.99),
+        (4, ttnn.SigmoidMode.Accurate, None),  # ULP-gated (ulp<=2)
+        (4, ttnn.SigmoidMode.AccurateWithFastExp, 0.999),
+        (4, ttnn.SigmoidMode.FastApproximate, 0.99),
+        (2, ttnn.SigmoidMode.Accurate, None),
+        (2, ttnn.SigmoidMode.FastApproximate, 0.99),
     ],
-    ids=["accurate", "accurate_fast_exp", "fast_approximate"],
+    ids=[
+        "vm4-accurate",
+        "vm4-accurate_fast_exp",
+        "vm4-fast_approximate",
+        "vm2-accurate",
+        "vm2-fast_approximate",
+    ],
 )
-def test_sigmoid_op(device, mode, pcc):
-    """Exhaustive normal bf16 sweep for every SigmoidMode, at the default
-    vector_mode=4 (RC, full tile processed) -- vector_mode is not swept here
-    for the reason given in the module docstring.
+def test_sigmoid_op(device, vector_mode, mode, pcc):
+    """Exhaustive normal bf16 sweep for every (vector_mode, SigmoidMode) pair.
 
-    Accurate is ULP-gated (<=2); the other two are PCC-gated since both trade
-    accuracy for speed by design. All three exclude the FTZ boundary, and
+    vector_mode=4 (RC) processes a full tile and uses the standard (256, 256)
+    exhaustive layout. vector_mode=2 (C) only processes one face-column
+    (columns 0–15) per tile, so the input is reshaped to (1, 1, 4096, 16) —
+    one face-column wide — to avoid stale DEST content in unprocessed columns.
+    AccurateWithFastExp is only tested at vector_mode=4.
+
+    Accurate is ULP-gated (<=2); the other modes are PCC-gated since they trade
+    accuracy for speed by design. All modes exclude the FTZ boundary, and
     AccurateWithFastExp additionally excludes x >= 174.
     """
-    input_tensor = _exhaustive_bf16_4d()
+    input_tensor = generate_bfloat16_bits(include_spl_values=False)  # (256, 256)
+    if vector_mode == 2:
+        input_tensor = input_tensor.reshape(1, 1, 4096, 16)  # one face-column wide
+    else:
+        input_tensor = input_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, 256, 256)
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden = torch.sigmoid(input_tensor.float()).to(torch.bfloat16)
 
-    tt_result = ttnn.sigmoid(tt_in, vector_mode=4, mode=mode)
+    tt_result = ttnn.sigmoid(tt_in, vector_mode=vector_mode, mode=mode)
     result = ttnn.to_torch(tt_result)
 
+    label = f"sigmoid(vm={vector_mode}, {mode})"
     ftz = _ftz_boundary_mask(golden)
-    _assert_ftz_region_is_zeroish(result, ftz, f"sigmoid({mode})")
+    _assert_ftz_region_is_zeroish(result, ftz, label)
 
     keep = ~ftz
     if mode == ttnn.SigmoidMode.AccurateWithFastExp:
@@ -873,7 +887,7 @@ def test_sigmoid_op(device, mode, pcc):
 
     # sigmoid underflows to 0 below x ~= -88, so the FTZ band alone is ~24% of
     # the grid and the fast-exp overflow band another ~24%.
-    _assert_excluded_region(~keep, f"sigmoid({mode}) excluded region", max_fraction=0.55)
+    _assert_excluded_region(~keep, f"{label} excluded region", max_fraction=0.55)
 
     golden_keep = golden[keep]
     result_keep = result[keep]

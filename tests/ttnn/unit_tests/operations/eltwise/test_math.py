@@ -9,9 +9,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_allclose
-from models.common.utility_functions import torch_random
-
-from loguru import logger
 
 pytestmark = pytest.mark.use_module_device
 
@@ -98,63 +95,6 @@ def test_digamma_small_x(device):
     input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
     assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2)
-
-
-def run_math_unary_test_recip(device, h, w, ttnn_function, ulp=1):
-    """Reciprocal on random bf16 inputs in ``[-100, 100] + 0.0001`` (non-zero).
-
-    Default ``ulp=1``; ``test_recip`` overrides to 2 to cover an additional bf16 ULP of error from
-    the reciprocal hardware approximation near the tails of this range. The ``1/+0 = +inf`` edge
-    case is covered separately by ``test_recip_fixed[fill_value=0.0]`` so the test can assert the
-    sign of the resulting infinity, which a generic ``allow_nonfinite=True`` ULP check on a random
-    tensor cannot do.
-    """
-    torch.manual_seed(0)
-
-    low = -100
-    high = 100
-
-    torch_input_tensor = torch.empty((h, w), dtype=torch.bfloat16).uniform_(low, high) + 0.0001
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_recip(device, h, w):
-    class reciprocal_golden_wrapper:
-        def __call__(self, input_tensor):
-            return ttnn.reciprocal.golden_function(input_tensor, device=device)
-
-    class reciprocal_wrapper:
-        def __init__(self):
-            self.golden_function = reciprocal_golden_wrapper()
-
-        def __call__(self, input_tensor):
-            return ttnn.reciprocal(input_tensor)
-
-    run_math_unary_test_recip(device, h, w, reciprocal_wrapper(), ulp=2)
-
-
-def run_math_unary_test_range(device, h, w, ttnn_function, ulp=1):
-    torch.manual_seed(0)
-    low = 1.6
-    high = 100
-
-    torch_input_tensor = torch_random((h, w), low, high, dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("h", [64])

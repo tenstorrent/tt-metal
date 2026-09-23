@@ -453,6 +453,72 @@ def test_exp_ops(device, ttnn_op, low, high):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
+def test_exp_allclose(device):
+    """exp underflow region (-89, -87) allclose check.
+
+    The ULP sweep in test_exp_ops covers (-87.0, 88.5); this extends into the
+    underflow tail where exp(x) -> 0 and checks allclose tolerances there.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(-89, -87)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    tt_result = ttnn.exp(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert torch.allclose(golden, result, atol=1e-3, rtol=1e-2)
+
+
+def test_exp2_allclose(device):
+    """exp2 underflow region (-127, -126) allclose check.
+
+    The ULP sweep in test_exp_ops covers (-126.0, 127.0); this extends into the
+    underflow tail where exp2(x) -> 0 and checks allclose tolerances there.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(-127, -126)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert torch.allclose(golden, result, atol=1e-3, rtol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "low, high, expected_atol, expected_rtol",
+    [
+        (-1.6 * 10**38, -0.28515625, 0.001, 0.004),
+        (-0.28515625, 0.69140625, 0.004, 0.02),
+        (0.69140625, 88.5, 0.001, 0.01),
+    ],
+)
+def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
+    """expm1 cancellation-band and extended-range allclose check.
+
+    The ULP sweep in test_exp_ops covers the working range with bit-exact
+    tolerance; this test verifies allclose bounds over three subdomains that
+    partition the same range with different atol/rtol requirements.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
+
+    golden_function = ttnn.get_golden_function(ttnn.expm1)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    tt_result = ttnn.expm1(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert torch.allclose(golden, result, atol=expected_atol, rtol=expected_rtol)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # digamma and multigammaln
 # digamma: defined for x > 0, LUT kernel fitted on [0.01, 102], asymptotic for x > 102

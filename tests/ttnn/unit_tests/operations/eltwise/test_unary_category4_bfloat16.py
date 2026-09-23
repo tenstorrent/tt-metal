@@ -5,6 +5,7 @@
 import torch
 import pytest
 import ttnn
+import math
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
@@ -44,8 +45,8 @@ Accuracy criteria
   leaky_relu, softshrink                    : ULP ≤ 1
       One multiply/add-sub on the non-identity branch.
   elu, celu                                 : ULP ≤ 1 (excluding a narrow band)
-      exp(x)-1 [or exp(x/alpha)-1] cancels near 0; already characterized via
-      allclose in test_elu.py / test_celu_21f.py and excluded the same way.
+      exp(x)-1 [or exp(x/alpha)-1] cancels near 0; characterized via
+      allclose in test_elu_allclose / test_celu_allclose below.
   softcap                                   : ULP ≤ 2 (post-FTZ) + PCC ≥ 0.9999
       tanh is a Sollya polynomial approximation. Blackhole only.
   rpow                                      : PCC ≥ 0.99 + allclose(atol=1e-2, rtol=0.1)
@@ -249,8 +250,8 @@ def test_softshrink_op(device, lambd):
 # elu, celu — ULP ≤ 1 (excluding a narrow cancellation band near 0)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Characterized (default alpha=1.0) and covered via allclose in test_elu.py /
-# test_celu_21f.py. elu's band is in x directly (alpha only scales the output
+# Characterized (default alpha=1.0)
+# elu's band is in x directly (alpha only scales the output
 # after cancellation); celu's band is in x/alpha (it evaluates exp(x/alpha)-1),
 # so the celu mask below scales the band by alpha.
 _ELU_CANCELLATION_BAND = (-0.28515625, 1.1663108012064884e-38)
@@ -289,6 +290,73 @@ def test_celu_op(device, alpha):
     result = ttnn.to_torch(tt_result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# elu (narrow cancellation band near 0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "low, high, expected_atol, expected_rtol",
+    [
+        (-0.28515625, 1.1663108012064884e-38, 0.002, 0.02),
+        (-88.0, 1.6 * 10**38, 0.0, 0.0),  # bf16 working range for elu
+    ],
+)
+def test_elu_allclose(low, high, expected_atol, expected_rtol, device):
+    num_elements = math.prod(torch.Size([1, 3, 320, 320]))
+    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
+    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
+
+    golden_function = ttnn.get_golden_function(ttnn.elu)
+    golden = golden_function(torch_input, device=device)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.elu(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert torch.allclose(golden, result, atol=expected_atol, rtol=expected_rtol)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# celu (narrow cancellation band near 0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "low, high, expected_atol, expected_rtol",
+    [
+        (-1.6 * 10**38, -0.28515625, 0.001, 0.004),
+        (-0.28515625, 1.1663108012064884e-38, 0.002, 0.02),
+        (1.1663108012064884e-38, 1.6 * 10**38, 1e-6, 1e-6),
+    ],
+)
+def test_celu_allclose(low, high, expected_atol, expected_rtol, device):
+    num_elements = math.prod([1, 3, 320, 320])
+    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
+    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
+
+    golden_function = ttnn.get_golden_function(ttnn.celu)
+    golden = golden_function(torch_input, device=device)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.celu(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert torch.allclose(golden, result, atol=expected_atol, rtol=expected_rtol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,8 +420,6 @@ def test_rpow_op(device, exponent):
 
     tt_result = ttnn.rpow(tt_in, exponent)
     result = ttnn.to_torch(tt_result)
-
-    import math
 
     arg_magnitude = input_tensor.to(torch.float64).abs() * abs(math.log2(exponent))
     reliable = arg_magnitude < _RPOW_UNRELIABLE_ARG_MAGNITUDE
