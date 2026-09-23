@@ -13,7 +13,7 @@ using namespace ckernel;
 template <uint32_t A, uint32_t B, uint32_t Out, uint32_t Partial, uint32_t KBlock, uint32_t N, uint32_t K, uint32_t Subblock = 4>
 void projection() {
 #if CUSTOM_GU
-    if constexpr (A == 0 && B == 1 && KBlock == 8 && N == 28 && K == 128 && Subblock == 7) {
+    if constexpr (A == 0 && B == 1 && KBlock == 8 && (N == 28 || N == 14) && K == 128 && Subblock == 7) {
         custom_gu_projection();
         return;
     }

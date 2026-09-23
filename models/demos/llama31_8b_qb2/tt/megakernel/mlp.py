@@ -67,8 +67,6 @@ class FusedMLP:
             raise ValueError("Weight staging requires a complete GU8 loop with a tuned reader")
         if self.tuning.alias_projection_cbs and (not fuse_prepare or gu_workers != 8 or reuse_scratch):
             raise ValueError("Static projection aliasing requires the complete GU8 layer loop")
-        if self.tuning.custom_gu and gu_workers != 8:
-            raise ValueError("Custom GU requires eight projection workers")
         self.gu_workers = gu_workers
         self.layers = tuple(layers)
         self.reuse_scratch = reuse_scratch

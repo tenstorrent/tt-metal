@@ -5,7 +5,7 @@
 
 #ifdef TRISC_UNPACK
 // Use the pinned source revision's custom MOP with an explicit weight row
-// stride. Each bank's native layout is[K,28]; this call computes seven columns
+// stride. The worker's local layout is[K,224/GU_WORKERS]; compute seven columns
 // without a persistent weight permutation or extra weight payload.
 void custom_gu_unpack(uint32_t column) {
     auto& weights = get_local_cb_interface(1);
@@ -16,7 +16,7 @@ void custom_gu_unpack(uint32_t column) {
     TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     _llk_unpack_AB_custom_mm_run_(cfg,
         weights.fifo_rd_ptr - 1 + column * weights.fifo_page_size,
-        input.fifo_rd_ptr - 1, weights.fifo_page_size, 22 * weights.fifo_page_size, 8);
+        input.fifo_rd_ptr - 1, weights.fifo_page_size, (224 / GU_WORKERS - 7 + 1) * weights.fifo_page_size, 8);
 }
 #endif
 
@@ -28,9 +28,13 @@ void custom_gu_projection() {
     pack_reconfig_l1_acc(0);
     for (uint32_t block = 0; block < 16; ++block) {
         cb_wait_front(0, 8);
-        cb_wait_front(1, 224);
+        cb_wait_front(1, 8 * (224 / GU_WORKERS));
         const bool last = block == 15;
-        for (uint32_t column = 0; column < 28; column += 7) {
+#if PROJECTION_HOIST_PACK
+        if (block == 1 || last) { pack_reconfig_l1_acc(!last); }
+        if (last) { pack_reconfig_data_format(16); }
+#endif
+        for (uint32_t column = 0; column < 224 / GU_WORKERS; column += 7) {
             tile_regs_acquire();
             if (last) {
                 reconfig_data_format_srca(1, 24);
@@ -49,20 +53,22 @@ void custom_gu_projection() {
             const uint32_t destination = last ? 16 : 24;
             cb_reserve_back(destination, 7);
             tile_regs_wait();
+#if !PROJECTION_HOIST_PACK
             pack_reconfig_data_format(destination);
             pack_reconfig_l1_acc(!last && block > 0);
+#endif
             pack_block(0, destination, 7);
             tile_regs_release();
             cb_push_back(destination, 7);
         }
         if (block < 14) {
-            for (uint32_t column = 0; column < 28; column += 7) {
+            for (uint32_t column = 0; column < 224 / GU_WORKERS; column += 7) {
                 cb_wait_front(24, 7);
                 cb_pop_front(24, 7);
             }
         }
         cb_pop_front(0, 8);
-        cb_pop_front(1, 224);
+        cb_pop_front(1, 8 * (224 / GU_WORKERS));
     }
     pack_reconfig_l1_acc(0);
     custom_mm_block_uninit<false>();

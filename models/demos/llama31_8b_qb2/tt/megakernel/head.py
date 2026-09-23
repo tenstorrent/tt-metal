@@ -154,4 +154,6 @@ class FusedHead:
         return [self.norm.output, self.weight, self.output]
 
     def __call__(self, gathered):
+        if self.tuning.head_early_blocks:
+            raise ValueError("Head prefetch requires the final-layer QKV trigger in the resident program")
         return ttnn.generic_op([gathered, *self.tensors()], self.append(ttnn.ProgramDescriptor(), gathered))

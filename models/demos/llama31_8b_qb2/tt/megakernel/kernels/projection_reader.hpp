@@ -148,7 +148,7 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
             }
 #endif
 #if QKV_CUSTOM_MM || CUSTOM_GU
-            if constexpr ((QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && N == 28 && Workers == 8)) {
+            if constexpr ((QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
                 compact_custom_input<KBlock>(a_start + (completed % PROJECTION_BUFFERS) * KBlock * 2048);
             }
 #endif
@@ -175,7 +175,7 @@ void tuned_stream_projection(const Input& input, const Weight& weight, uint32_t 
         }
 #endif
 #if QKV_CUSTOM_MM || CUSTOM_GU
-        if constexpr ((QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && N == 28 && Workers == 8)) {
+        if constexpr ((QKV_CUSTOM_MM && N == 6 && Workers == 8) || (CUSTOM_GU && (N == 28 || N == 14) && (Workers == 8 || Workers == 16))) {
             compact_custom_input<KBlock>(a_start + (block % PROJECTION_BUFFERS) * KBlock * 2048);
         }
 #endif
