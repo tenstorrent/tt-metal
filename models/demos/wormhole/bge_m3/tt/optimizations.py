@@ -295,7 +295,7 @@ def _qkv_nomask_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     # 52.884 ms to 49.830 ms. The masked SDPA circular buffers overlap it by 243 KB,
     # so the masked path keeps it in DRAM. Placement does not change the result.
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    if max_seq_len == 512 and max_batch in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return None
 
