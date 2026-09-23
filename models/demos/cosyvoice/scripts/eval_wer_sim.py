@@ -64,7 +64,10 @@ SIM_MODEL = "microsoft/wavlm-base-plus-sv"
 # --------------------------------------------------------------------------
 # text normalisation + edit distance
 # --------------------------------------------------------------------------
-_PUNCT = re.compile(r"[\s\.,!?;:\"'`~@#$%^&*()\[\]{}<>/\\|+=_-–—…、。，！？；：" "''（）《》【】〈〉「」『』·]+")
+# The hyphen is escaped. Bare, between `_` and `–` it is a range, U+005F to U+2013, which takes
+# in a-z: every English reference normalised to no words, and English WER read 0.00 whatever the
+# audio said.
+_PUNCT = re.compile(r"[\s\.,!?;:\"'`~@#$%^&*()\[\]{}<>/\\|+=_\-–—…、。，！？；：" "''（）《》【】〈〉「」『』·]+")
 
 
 def _to_simplified(text: str) -> str:
