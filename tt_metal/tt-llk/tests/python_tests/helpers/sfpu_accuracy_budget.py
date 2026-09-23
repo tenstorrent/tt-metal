@@ -64,9 +64,16 @@ MEASURED_ARCH = ChipArchitecture.WORMHOLE
 #: Call order alone cannot associate a reading with a variant -- two lookups followed by
 #: one comparison would file it under the second op, and a lookup with no comparison
 #: would leak into a later test. So the query carries the test it was made in, and a
-#: second lookup arriving before the first is consumed sets :data:`PENDING_AMBIGUOUS`
-#: rather than overwriting silently. The collector then records nothing at all, which
-#: costs a datapoint; filing it under the wrong variant would cost a budget.
+#: second lookup arriving before the first is consumed *within the same test* sets
+#: :data:`PENDING_AMBIGUOUS` rather than overwriting silently. The collector then
+#: records nothing at all, which costs a datapoint; filing it under the wrong variant
+#: would cost a budget.
+#:
+#: Within the same test, specifically. A query left unconsumed by a *previous* test is
+#: ordinary and common -- the exhaustive sweep resolves a contract and then skips the
+#: cell when it is on the tolerance metric -- and treating that as ambiguity discarded
+#: the next test's reading. Measured: it silently dropped every one of the 40 readings
+#: that followed a skip in an 130-test run.
 LAST_QUERY: Optional[Tuple[Any, ...]] = None
 PENDING_AMBIGUOUS: bool = False
 
@@ -401,10 +408,14 @@ def accuracy_contract(
     # Overwriting an unconsumed query means the association is no longer one-to-one; see
     # LAST_QUERY.
     global LAST_QUERY, PENDING_AMBIGUOUS
-    if LAST_QUERY is not None:
+    here = _current_test()
+    if LAST_QUERY is not None and LAST_QUERY[0] == here:
+        # Two lookups, one test, nothing consumed between them: the association is no
+        # longer one-to-one. A stale query from an earlier test is not that -- it is a
+        # cell that resolved to tolerance and skipped -- so it is replaced, not flagged.
         PENDING_AMBIGUOUS = True
     LAST_QUERY = (
-        _current_test(),
+        here,
         op.name,
         input_format,
         output_format,
