@@ -72,18 +72,8 @@ def reset_comparison_records_data():
     _comparison_records_data = _new_comparison_records_data()
 
 
-# Glob patterns for frames to strip from stack traces (pathlib-style).
-# Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
-_STACK_TRACE_INTERNAL_PATTERNS = (
-    "**/ttnn/**/decorators.py",
-    "**/ttnn/decorators.py",
-    "**/ttnn/**/graph.py",
-    "**/ttnn/graph.py",
-    "**/_pytest/**",
-    "**/_pytest/config/__init__.py",
-    "**/pluggy/**",
-    "**/bin/pytest",
-)
+# Basenames under a ttnn package directory that are infrastructure, not user code.
+_STACK_TRACE_TTNN_INTERNAL_FILES = frozenset({"decorators.py", "graph.py"})
 
 
 def enable_python_io_recording():
@@ -204,6 +194,25 @@ def is_python_stack_trace_enabled() -> bool:
     return _python_stack_traces_enabled
 
 
+def _is_internal_stack_frame(filename: str) -> bool:
+    """Return True for ttnn, pytest, and pluggy frames that graph traces should drop.
+
+    This is a string check on purpose. ``pathlib.PurePath.match`` parses every
+    component through ``sys.intern``, and on CPython 3.12 that segfaults when
+    garbage collection is already running. The LLK-assert nightly hit that in
+    ``test_setup_failure_does_not_assign_next_same_name_record``.
+    """
+    parts = tuple(part for part in filename.replace("\\", "/").split("/") if part not in ("", "."))
+    if not parts:
+        return False
+    name = parts[-1]
+    if name in _STACK_TRACE_TTNN_INTERNAL_FILES and "ttnn" in parts[:-1]:
+        return True
+    if "_pytest" in parts or "pluggy" in parts:
+        return True
+    return len(parts) >= 2 and parts[-2] == "bin" and name == "pytest"
+
+
 def _capture_python_stack_trace() -> list[str]:
     """Capture the current Python call stack, filtering out ttnn internals.
 
@@ -216,10 +225,7 @@ def _capture_python_stack_trace() -> list[str]:
     for frame in frames:
         try:
             filename = str(frame.filename)
-            path = pathlib.PurePath(filename)
-
-            # Match without filesystem resolution to avoid fragile behavior during capture
-            if any(path.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
+            if _is_internal_stack_frame(filename):
                 continue
 
             result.append(f'  File "{filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')

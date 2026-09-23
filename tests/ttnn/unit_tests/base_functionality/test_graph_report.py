@@ -4036,6 +4036,24 @@ class TestRecordPythonOperation:
         finally:
             g.disable_python_stack_traces()
 
+    def test_internal_stack_frame_filter(self):
+        from ttnn.graph import _is_internal_stack_frame
+
+        assert _is_internal_stack_frame("/opt/venv/lib/python3.12/site-packages/ttnn/graph.py")
+        assert _is_internal_stack_frame("/opt/venv/lib/python3.12/site-packages/ttnn/decorators.py")
+        assert _is_internal_stack_frame("/opt/venv/lib/python3.12/site-packages/ttnn/nested/decorators.py")
+        assert _is_internal_stack_frame("/opt/venv/lib/python3.12/site-packages/_pytest/python.py")
+        assert _is_internal_stack_frame("/opt/venv/lib/python3.12/site-packages/_pytest/config/__init__.py")
+        assert _is_internal_stack_frame("/opt/venv/lib/python3.12/site-packages/pluggy/_hooks.py")
+        assert _is_internal_stack_frame("/opt/venv/bin/pytest")
+        assert not _is_internal_stack_frame(
+            "/work/tests/ttnn/unit_tests/base_functionality/test_graph_report.py"
+        )
+        assert not _is_internal_stack_frame("/usr/lib/python3.12/pathlib.py")
+        assert not _is_internal_stack_frame("<frozen importlib._bootstrap>")
+        assert not _is_internal_stack_frame("graph.py")
+        assert not _is_internal_stack_frame("/work/ttnn_user/graph.py")
+
     def test_enable_disable_toggle(self):
         import ttnn.graph as g
 

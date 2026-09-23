@@ -21,7 +21,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, skip_with_llk_assert
 from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_rule_ops import (
     l2_norm,
     recurrent_gated_delta_rule,
@@ -34,6 +34,12 @@ REPEATS = 8  # extra multicast runs per shape, to give a non-deterministic race 
 # Measured:
 PCC_O = 0.99999
 PCC_STATE = 0.99999
+
+# LLK asserts enlarge chunk_gdn_prep past the TENSIX kernel config buffer (74704 > 70656).
+# Hardware then times out on readback; the simulator rejects the program at launch.
+pytestmark = skip_with_llk_assert(
+    "chunk_gated_delta_rule exceeds the TENSIX kernel config buffer when LLK asserts are enabled"
+)
 
 
 def _const_tiles(device, chunk_size=CHUNK):

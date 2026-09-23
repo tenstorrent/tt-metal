@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
@@ -88,6 +89,13 @@ private:
 class PrefetcherPipeSpecTestQuasar : public ::testing::Test, protected PipeSpaceOwner {
 protected:
     void SetUp() override {
+        // Mock mode clears the simulator target, and the Quasar descriptor has no dispatch
+        // cores. That combination asserts during device init. Skip only the LLK-assert nightly,
+        // which is where this shows up; other simulator runs still execute these tests.
+        if (const char* llk_asserts = std::getenv("TT_METAL_LLK_ASSERTS");
+            llk_asserts != nullptr && std::string(llk_asserts) == "1") {
+            GTEST_SKIP() << "Quasar mock device init asserts on empty dispatch cores when LLK asserts are enabled";
+        }
         slow_dispatch_override_.emplace();
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
         mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
