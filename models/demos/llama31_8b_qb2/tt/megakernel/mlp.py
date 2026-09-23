@@ -55,6 +55,8 @@ class FusedMLP:
         if gu_workers not in (8, 16):
             raise ValueError("gu_workers must be 8 or 16")
         self.tuning = tuning or ProjectionTuning()
+        if self.tuning.split_gu_bank_rows and gu_workers != 16:
+            raise ValueError("Split GU bank rows currently require sixteen compute workers")
         if reuse_scratch and (self.tuning.reader != "original" or self.tuning.buffers != 2):
             raise ValueError("Tuned readers require independent projection buffers")
         if (self.tuning.prefetch_gu_blocks or self.tuning.prefetch_down_blocks) and (
@@ -211,11 +213,17 @@ class FusedMLP:
             # gate/up packs and every SFPU read, so the previous input, weight
             # and partial CB contents have no remaining consumers.
 
+        self.gu_weights = [layer.decode_weights["gate_up"] for layer in layers]
+        if self.tuning.split_gu_bank_rows:
+            from .weight_layout import split_gu_bank_rows
+            self.gu_weights = [split_gu_bank_rows(weight, self.mesh) for weight in self.gu_weights]
+            ttnn.synchronize_device(self.mesh)
+
         # Each 128-byte row is an independently addressable DRAM page. The
         # reserved fields are zero, not uninitialized kernel arguments.
         addresses = torch.zeros((len(layers), 32), dtype=torch.int64)
         for i, layer in enumerate(layers):
-            addresses[i, 0] = layer.decode_weights["gate_up"].buffer_address()
+            addresses[i, 0] = self.gu_weights[i].buffer_address()
             addresses[i, 1] = layer.decode_weights["down"].buffer_address()
             if fuse_output:
                 addresses[i, 2] = layer.decode_weights["o"].buffer_address()
@@ -240,7 +248,7 @@ class FusedMLP:
             raise ValueError("Expected the original eight-core normalized input layout")
         tensors = (
             normalized,
-            self.layers[0].decode_weights["gate_up"],
+            self.gu_weights[0],
             self.layers[0].decode_weights["down"],
             self.packed,
             self.product,
@@ -374,7 +382,7 @@ class FusedMLP:
             cb(16, 224 // self.gu_workers, ttnn.bfloat16, self.projection_grid)
         cb(31, 1, ttnn.uint32, self.projection_grid)
         for index in (0, 1, 2):
-            cb(index, 4, ttnn.bfloat16, self.sfpu_grid)
+            cb(index, 7 if self.tuning.batch_swiglu else 4, ttnn.bfloat16, self.sfpu_grid)
         cbs.extend(
             (
                 ttnn.cb_descriptor_from_sharded_tensor(16, self.packed),
@@ -468,7 +476,8 @@ class FusedMLP:
             io.append(norm_input)
         if residual is not None:
             io.append(residual)
-        io.extend(w for layer in self.layers for w in (layer.decode_weights["gate_up"], layer.decode_weights["down"]))
+        io.extend(self.gu_weights)
+        io.extend(layer.decode_weights["down"] for layer in self.layers)
         if self.reduction is None:
             ttnn.generic_op([*io, self.output], descriptor)
             return self.output

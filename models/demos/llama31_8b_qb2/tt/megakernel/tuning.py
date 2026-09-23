@@ -27,7 +27,12 @@ class ProjectionTuning:
     early_weight_phases: int = 15
     share_qkv_workers: bool = False
 
+    split_gu_bank_rows: bool = False
+    batch_swiglu: bool = False
+
     def __post_init__(self):
+        if self.split_gu_bank_rows and self.reader == "original":
+            raise ValueError("Split GU bank rows require a tuned projection reader")
         if self.multicast_barrier and not self.bounded_barrier:
             raise ValueError("Multicast release currently requires the bounded layer barrier")
         if self.scratch_init_once not in ("off", "padding", "norm", "all"):
@@ -68,6 +73,8 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("GU_BANK_SPLIT", str(int(self.split_gu_bank_rows))),
+            ("BATCH_SWIGLU", str(int(self.batch_swiglu))),
             ("EARLY_WEIGHT_BLOCKS", str(self.early_weight_blocks)),
             ("EARLY_WEIGHT_PHASES", str(self.early_weight_phases)),
             ("SHARED_QKV", str(int(self.share_qkv_workers))),

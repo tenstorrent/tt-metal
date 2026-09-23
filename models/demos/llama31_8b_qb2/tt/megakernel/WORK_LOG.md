@@ -155,3 +155,11 @@ Prepared multicast release replaces86 individual semaphore writes with two worke
 ## 12:05 UTC — multicast combined focused gate passes; checkpoint
 
 Multicast release + scratch-all + early-prefix2 + contiguous activation reads passed focused strict exact layer/page/inactive/replay validation under worker-only Watcher onall4chips (multicast-combined-loop-watcher). Release broadcasts target two reserved worker rectangles without crossing DRAM/nonworker columns. Full-model separate/composite latency screening next. New screening-summary JSON contains every unprofiled full run's source/tuning/trials/setup and exact comparison metadata, excluding Watcher/profile timings. Hourly durable bundle and evidence refreshed.
+
+## 2026-09-23 12:19 UTC — combined screening
+
+Source bcd77aa8, five warmed unprofiled full128/32 trials per variant, exact teacher/all64 KV/greedy checks passed. Foundation+multicast8.438444129; +coalesce8.501564291; scratch+early2all8.267074999; +coalesce8.260359871; +multicast8.205477419; +both8.194119260 ms/token. Best trial range8.193365227–8.197416225. Best remains0.558375ms slower than fresh native7.635744. Qualification now running: `bash ../artifacts/commands/combined-qualification.sh`.
+
+## 2026-09-23 12:24 UTC — combined qualification and new component candidates
+
+Combined candidate passed exact teacher/all64 touchedKV/greedy at2048/32=8.625901774,8192/32=9.296411840,128/256=8.238191223 ms/token, five warmed unprofiled trials each (31/255 denominator). Native remains faster. Added opt-in raw GU bank-half layout for16workers and batched seven-tile SwiGLU preserving BF16 intermediate. Neither new change is qualified yet. Raw permutation retains originalweights, adds16,515,072B/chip/layer DRAM and copiesonce duringconstruction. Added explicit experimental_setup_seconds to fullbenchmark (synchronized, outside warmedscore). Nextcommand `bash ../artifacts/commands/gu-swiglu-components.sh`: separate WorkerWatcher gates then paired componenttimings.

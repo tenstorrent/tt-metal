@@ -291,6 +291,17 @@ void QB2_ENTRY() {
     }
     const uint32_t first_tile = get_arg_val<uint32_t>(0) * 7;
     const auto packed = TensorAccessor(packed_args, get_arg_val<uint32_t>(2), 2048);
+#if BATCH_SWIGLU
+    cb_reserve_back(0, 7);
+    cb_reserve_back(1, 7);
+    for (uint32_t tile = 0; tile < 7; ++tile) {
+        noc_async_read_page(first_tile + tile, packed, get_write_ptr(0) + tile * 2048);
+        noc_async_read_page(112 + first_tile + tile, packed, get_write_ptr(1) + tile * 2048);
+    }
+    noc_async_read_barrier();
+    cb_push_back(0, 7);
+    cb_push_back(1, 7);
+#else
     for (uint32_t tile = 0; tile < 7; ++tile) {
         cb_reserve_back(0, 1);
         cb_reserve_back(1, 1);
@@ -300,6 +311,7 @@ void QB2_ENTRY() {
         cb_push_back(0, 1);
         cb_push_back(1, 1);
     }
+#endif
 }
 #elif defined(SWIGLU) && defined(WRITER)
 void QB2_ENTRY() {
@@ -359,6 +371,42 @@ void QB2_ENTRY() {
 void QB2_ENTRY() {
     compute_kernel_hw_startup(0, 18);
     DeviceZoneScopedN("MLP-SWIGLU-MATH");
+#if BATCH_SWIGLU
+    // Preserve the native BF16 SiLU intermediate before the multiply. Seven
+    // outputs plus one input scratch tile fit the eight-tile half-DST bank.
+    cb_wait_front(0, 7);
+    cb_reserve_back(2, 7);
+    copy_init(0);
+    tile_regs_acquire();
+    for (uint32_t tile = 0; tile < 7; ++tile) { copy_tile(0, tile, tile); }
+    silu_tile_init();
+    for (uint32_t tile = 0; tile < 7; ++tile) { silu_tile(tile); }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_block(0, 2, 7);
+    tile_regs_release();
+    cb_pop_front(0, 7);
+    cb_push_back(2, 7);
+    cb_wait_front(2, 7);
+    cb_wait_front(1, 7);
+    cb_reserve_back(18, 7);
+    tile_regs_acquire();
+    copy_init(2);
+    for (uint32_t tile = 0; tile < 7; ++tile) { copy_tile(2, tile, tile); }
+    for (uint32_t tile = 0; tile < 7; ++tile) {
+        copy_init(1);
+        copy_tile(1, tile, 7);
+        mul_binary_tile_init();
+        mul_binary_tile(tile, 7, tile);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_block(0, 18, 7);
+    tile_regs_release();
+    cb_pop_front(2, 7);
+    cb_pop_front(1, 7);
+    cb_push_back(18, 7);
+#else
     for (uint32_t tile = 0; tile < 7; ++tile) {
         cb_wait_front(0, 1);
         cb_reserve_back(2, 1);
@@ -391,6 +439,7 @@ void QB2_ENTRY() {
         cb_pop_front(1, 1);
         cb_push_back(18, 1);
     }
+#endif
 }
 #endif
 #endif

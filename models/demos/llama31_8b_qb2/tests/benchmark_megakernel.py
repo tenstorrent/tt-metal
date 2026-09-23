@@ -85,6 +85,7 @@ def parse_args():
     parser.add_argument("--projection-reader", choices=("original", "coalesced", "pipelined", "pipelined_rows"), default="original")
     parser.add_argument("--projection-lookahead", type=int, choices=(2, 3, 4), default=2)
     parser.add_argument("--projection-buffers", type=int, choices=(2, 3, 4, 5), default=2)
+    parser.add_argument("--batch-swiglu", action="store_true")
     parser.add_argument("--coalesce-input", action="store_true")
     parser.add_argument("--scratch-init-once", choices=("off", "padding", "norm", "all"), default="off")
     parser.add_argument("--early-weight-blocks", type=int, choices=(0, 2, 3), default=0)
@@ -130,7 +131,7 @@ def run(args):
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
-        projection_placement=args.projection_placement, coalesce_input=args.coalesce_input,
+        projection_placement=args.projection_placement, coalesce_input=args.coalesce_input, batch_swiglu=args.batch_swiglu,
         head_prefetch_targets=args.head_prefetch_targets, share_qkv_workers=args.share_qkv_workers,
         early_weight_blocks=args.early_weight_blocks, scratch_init_once=args.scratch_init_once,
         early_weight_phases={"qkv":1, "o":2, "gu":4, "qkv_o_gu":7, "down":8, "all":15}[args.early_weight_phases],
@@ -176,6 +177,7 @@ def run(args):
         load_start = time.perf_counter()
         generator = LlamaGenerator(mesh, max_batch_size=1, trace_prefill=False, record_token_history=True)
         result["model_load_seconds"] = time.perf_counter() - load_start
+        experimental_setup_start = time.perf_counter()
         if args.mode != "baseline":
             enable_experimental_decode(
                 generator.model,
@@ -185,6 +187,8 @@ def run(args):
                 kv_cache=generator.kv_cache,
                 tuning=tuning,
             )
+        ttnn.synchronize_device(mesh)
+        result["experimental_setup_seconds"] = time.perf_counter() - experimental_setup_start
         assert generator.model.num_layers == 32
         result["precision"] = generator.model.precision_policy
         evidence["precision"] = result["precision"]

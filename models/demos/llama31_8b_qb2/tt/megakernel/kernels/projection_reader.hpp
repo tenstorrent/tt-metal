@@ -10,7 +10,14 @@ template <uint32_t KBlock, uint32_t N, uint32_t Workers, uint32_t WeightBytes, t
 void read_projection_weights(const Weight& weight, uint32_t worker, uint32_t k, uint32_t destination) {
     static_assert(WeightBytes % 64 == 0);
     const uint32_t vc = PROJECTION_BANK_VC ? (worker / (Workers / 8)) % 4 : 1;
-    if constexpr (Workers == 8 && PROJECTION_READER != 3) {
+    if constexpr (GU_BANK_SPLIT && Workers == 16 && WeightBytes == 576) {
+        // Raw tile permutation stores each half-bank's128 K rows contiguously.
+        // The logical output column rank is still bank*2+half.
+        const uint32_t bank = worker / 2, half = worker % 2;
+        noc_async_read<KBlock * N * WeightBytes>(
+            weight.get_noc_addr((half * 128 + k) * 8 * N + bank * N),
+            destination, KBlock * N * WeightBytes, noc_index, vc);
+    } else if constexpr (Workers == 8 && PROJECTION_READER != 3) {
         noc_async_read<KBlock * N * WeightBytes>(
             weight.get_noc_addr(k * Workers * N + worker * N), destination, KBlock * N * WeightBytes, noc_index, vc);
     } else {

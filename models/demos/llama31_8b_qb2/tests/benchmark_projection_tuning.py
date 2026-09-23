@@ -11,7 +11,9 @@ import subprocess
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--batch-swiglu", action="store_true")
     parser.add_argument("--coalesce-input", action="store_true")
+    parser.add_argument("--split-gu-bank-rows", action="store_true")
     parser.add_argument("--placement", choices=("row", "dram"), default="row")
     parser.add_argument("--reader", choices=("original", "coalesced", "pipelined", "pipelined_rows"), default="original")
     parser.add_argument("--buffers", type=int, choices=(2, 3), default=2)
@@ -27,7 +29,7 @@ def main():
     from models.demos.llama31_8b_qb2.tests.test_megakernel_mlp import test_mlp_stages_real_weights
     from models.demos.utils.trace_region_sizes import build_trace_device_params
 
-    tuning = ProjectionTuning(args.reader, args.wide_subblocks, buffer_count=args.buffers, hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc, projection_placement=args.placement, coalesce_input=args.coalesce_input)
+    tuning = ProjectionTuning(args.reader, args.wide_subblocks, buffer_count=args.buffers, hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc, projection_placement=args.placement, coalesce_input=args.coalesce_input, batch_swiglu=args.batch_swiglu, split_gu_bank_rows=args.split_gu_bank_rows)
     result = {"tuning": asdict(tuning), "gu_workers": args.gu_workers,
               "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
               "scope": "Local gate/up, SiLU/multiply and down; host trace enqueue plus final synchronization, 100 replays per trial"}
