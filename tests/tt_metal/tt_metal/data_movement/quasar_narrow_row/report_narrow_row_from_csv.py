@@ -41,6 +41,11 @@ COL_DATA = 6
 COL_ZONE = 10
 COL_TYPE = 11
 
+# Verdict column values written by the test (see record_result).
+VERDICT_WRONG = 0
+VERDICT_PASS = 1
+VERDICT_DIAGNOSTIC = 2
+
 ENGINE_IDMA_SCATTER = 0
 ENGINE_IDMA_PER_ROW = 1
 ENGINE_NOC_PER_ROW = 2
@@ -129,7 +134,7 @@ def load_verdicts(path):
     out = []
     for r in rows[1:]:
         if len(r) >= 9:
-            out.append(r[-1] == "1")
+            out.append(int(r[-1]))  # 0 wrong, 1 pass, 2 diagnostic
     return out
 
 
@@ -142,22 +147,40 @@ def report_vs_workaround(stage2, verdicts=None):
     cost is strongly size-dependent (descriptor-bound and flat below ~80 B/row, then roughly
     one cycle per 16-20 B), so comparing engines across different shapes means nothing.
     """
+    # Validate the join BEFORE using it. Setting verdicts = None afterwards would not reach
+    # the rows already bucketed, which is how a stale join can survive its own warning.
+    if verdicts is None:
+        print("NOTE: no verdict file -- correctness unknown, every number below could be a wrong answer.")
+    elif len(verdicts) != len(stage2):
+        print(
+            f"NOTE: {len(verdicts)} verdicts vs {len(stage2)} timed runs -- indices cannot line up, "
+            "so correctness is treated as unknown. Re-run the tests to regenerate both files together."
+        )
+        verdicts = None
+
     groups = {}
+    dropped = 0
     for i, run in enumerate(stage2):
+        # verdicts is in the same execution order as the zones, so index i lines up.
+        v = verdicts[i] if verdicts is not None and i < len(verdicts) else None
+        # A DIAGNOSTIC run emits a zone but is not a measurement: it runs one un-warmed
+        # iteration and may deliberately drive a broken engine. Dropping it is not cosmetic --
+        # the mapping probes use the SHIPPING engine at a shape the sweeps also cover, so
+        # leaving them in both poisons that shape's average and, because they carry no
+        # pass/fail, marks the whole group "correctness unknown" and hands the verdict to
+        # whatever arm is left. That produced a "workaround wins" headline once.
+        if v == VERDICT_DIAGNOSTIC:
+            dropped += 1
+            continue
         key = (run.get("rows"), run.get("row_bytes"))
         # A repeat of the same configuration is a run-to-run stability check; keep both and
         # average, rather than letting the later one silently win.
         cfg = (run.get("engine"), run.get("channels"), run.get("packet"))
         per_pass = run["dur"] / run["iters"] if run.get("iters") else float("nan")
-        # verdicts is in the same execution order as the zones, so index i lines up.
-        ok = verdicts[i] if verdicts is not None and i < len(verdicts) else None
+        ok = None if v is None else (v == VERDICT_PASS)
         groups.setdefault(key, {}).setdefault(cfg, []).append((per_pass, ok))
-
-    if verdicts is None:
-        print("NOTE: no verdict file -- correctness unknown, every number below could be a wrong answer.")
-    elif len(verdicts) != len(stage2):
-        print(f"NOTE: {len(verdicts)} verdicts vs {len(stage2)} timed runs -- not joining; correctness unknown.")
-        verdicts = None
+    if dropped:
+        print(f"({dropped} diagnostic runs excluded from the timing tables)")
 
     print("=== vs the current workaround (NOC per-row), grouped by shape ===")
     verdict_rows = []

@@ -135,6 +135,15 @@ constexpr std::uint32_t SRC_PAD_FILL = 0xDEADBEEF;
 // and the same order as the profiler log, and the report joins the two.
 const char* RESULTS_CSV = "generated/profiler/.logs/narrow_row_results.csv";
 
+// Verdict column values. DIAGNOSTIC exists so a run that emits a profiler zone but is not a
+// measurement still gets a row: the report joins verdicts to zones BY INDEX, so a zone with no
+// row silently shifts every later pairing. It also lets the report drop the run outright,
+// which matters because a diagnostic probe runs one un-warmed iteration and may deliberately
+// drive a broken engine -- its cycles must never reach a timing table.
+constexpr int VERDICT_WRONG = 0;
+constexpr int VERDICT_PASS = 1;
+constexpr int VERDICT_DIAGNOSTIC = 2;
+
 void record_result(
     std::uint32_t ct_dim,
     std::uint32_t last_tile_w,
@@ -144,7 +153,7 @@ void record_result(
     std::uint32_t engine_mode,
     std::uint32_t num_channels,
     std::uint32_t max_packet_bytes,
-    bool passed) {
+    int verdict) {
     // Truncate once per process so a rerun cannot be joined against a previous run's verdicts.
     static bool first = true;
     std::error_code ec;
@@ -158,7 +167,7 @@ void record_result(
         first = false;
     }
     f << ct_dim << ',' << last_tile_w << ',' << matrix_w << ',' << out_row_bytes << ',' << pad_row_bytes << ','
-      << engine_mode << ',' << num_channels << ',' << max_packet_bytes << ',' << (passed ? 1 : 0) << '\n';
+      << engine_mode << ',' << num_channels << ',' << max_packet_bytes << ',' << verdict << '\n';
 }
 
 bool should_skip_test() {
@@ -592,6 +601,18 @@ bool run_narrow_row(
 
     if (cfg.mapping_dump) {
         dump_mapping(out_datums, compact_rows, matrix_w, pad_w, cfg);
+        // Still record a row, marked DIAGNOSTIC: it keeps the report's index join 1:1 with the
+        // profiler zones and tells the report to drop this run from the timing tables.
+        record_result(
+            ct_dim,
+            cfg.last_tile_w,
+            matrix_w,
+            out_row_bytes,
+            pad_row_bytes,
+            cfg.engine_mode,
+            cfg.num_channels,
+            max_packet_bytes,
+            VERDICT_DIAGNOSTIC);
         return true;  // an instrument, not a verdict
     }
 
@@ -632,7 +653,7 @@ bool run_narrow_row(
         cfg.engine_mode,
         cfg.num_channels,
         max_packet_bytes,
-        bad == 0 && guard_bad == 0);
+        (bad == 0 && guard_bad == 0) ? VERDICT_PASS : VERDICT_WRONG);
 
     if (bad != 0 || guard_bad != 0) {
         log_error(
@@ -945,9 +966,13 @@ TEST_F(QuasarNarrowRowUntilize, NarrowExtremes) {
 // Every destination slot is written exactly ONCE, so nothing is overwritten and the
 // destination auto-increment is correct. What fails is SCATTER_INDEX: it does not advance for
 // the first 16 entries, so the first 16 destinations all receive entry 0's offset, then the
-// index jumps to 16 and tracks correctly. 16 entries x 8 B = 128 B, one list fetch block --
-// which reads as the engine consuming entries before the first block lands and using the
-// reset value until it does.
+// index jumps to 16 and tracks correctly. 16 entries x 8 B = 128 B, one list fetch block.
+//
+// The stuck prefix is not a single repeated value: within those 16, the source address
+// ALTERNATES between src row 0 col 0 and col 8, i.e. between offset +0 and +16 B. So the list
+// INDEX is stuck at 0 while the address the engine forms still moves, between two values 16 B
+// apart. That is a detail for whoever owns the overlay RTL; it rules out the simplest reading
+// ("the engine just reuses entry 0 until the fetch lands").
 //
 // Two earlier hypotheses died here, and the probes that killed them are kept below:
 //   * A DRAIN RACE (idma_acked reading zero before a one-issue multi-entry walk generates its
