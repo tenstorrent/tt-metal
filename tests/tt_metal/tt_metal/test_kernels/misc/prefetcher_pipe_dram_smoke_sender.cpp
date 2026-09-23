@@ -4,11 +4,10 @@
 //
 // Smoke-test DRISC sender for a DRAM-sender PrefetcherPipe.
 //
-// Pushes a host-preloaded pattern from DRISC L1 to each receiver, one entry at a time, using the
-// bare sender helpers in internal/prefetcher_pipe_dram_sender.h. Unlike the GlobalCircularBuffer
-// smoke sender, nothing here stands up a mock config block: the host has already written a real
-// PrefetcherPipe sender config page into DRISC L1, so the kernel just loads it. Receivers are
-// ordinary workers running the device PrefetcherPipe class.
+// Pushes a host-preloaded pattern from DRISC L1 to each receiver, one entry at a time, through the
+// device PrefetcherPipe class -- the same class the worker receivers consume with. A DRAM core has
+// no Program slot to name its pipe, so the kernel builds it from the sender config page the host
+// stamped into DRISC L1.
 //
 // Compile-time args:
 //   [0] config_page_addr  - DRISC L1 address of this sender's PrefetcherPipe config page
@@ -24,7 +23,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "internal/prefetcher_pipe_dram_sender.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/prefetcher_pipe.h"
 
 // DRISC firmware does not define cb_interface (no CB infrastructure on DRAM cores), and
 // dataflow_api.h references it.
@@ -36,27 +36,25 @@ void kernel_main() {
     constexpr uint32_t data_l1_base = get_compile_time_arg_val(2);
     constexpr uint32_t entry_bytes = get_compile_time_arg_val(3);
 
-    experimental::PipeSenderCtx ctx;
-    experimental::pipe_load_sender_ctx(ctx, config_page_addr);
+    // Snaps onto this batch's entry grid and publishes the pad credits the receivers' own resize
+    // waits for, when entry_bytes differs from the size last applied.
+    experimental::PrefetcherPipe pipe(experimental::DramSenderConfigPage{config_page_addr}, entry_bytes);
+    const CoreLocalMem<uint8_t> pattern(data_l1_base);
+    Noc noc;
 
-    // Snap onto this batch's entry grid and publish the pad credits the receivers' own resize
-    // waits for. A no-op when the cursor already sits on the grid, which it does whenever this
-    // batch uses the same entry size as the last one.
-    experimental::pipe_set_entry_size(ctx, entry_bytes, noc_index);
-
+    const uint32_t num_receivers = pipe.num_receivers();
     for (uint32_t i = 0; i < num_entries; ++i) {
-        experimental::pipe_reserve_back(ctx, 1);
-        for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
-            const uint32_t src = data_l1_base + (r * num_entries + i) * ctx.entry_bytes;
-            experimental::pipe_write_to_receiver(ctx, r, src, 1, noc_index);
+        pipe.reserve_back(1);
+        for (uint32_t r = 0; r < num_receivers; ++r) {
+            pipe.write_to_receiver(noc, r, pattern, 1, {.offset_bytes = (r * num_entries + i) * entry_bytes});
         }
         // Payload must land before the credit that advertises it.
-        noc_async_posted_writes_flushed();
-        experimental::pipe_push_credits(ctx, 1, noc_index);
+        pipe.flush_writes(noc);
+        pipe.push_back(1, noc);
     }
 
     // Drain: every receiver has consumed and acked everything before this kernel returns. Their
     // acks target this core's L1, and firmware leaves the NIU in stream mode for the board's
     // lifetime, so there is no mode restore for the barrier to be sequenced against.
-    experimental::pipe_sender_barrier(ctx);
+    pipe.barrier();
 }
