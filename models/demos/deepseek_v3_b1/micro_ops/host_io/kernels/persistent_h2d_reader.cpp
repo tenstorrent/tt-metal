@@ -102,9 +102,7 @@ void kernel_main() {
         }
     }
 
-    // read_pcie_page_chunked programs NOC_TARG_ADDR_MID from the 64 bit host address and the plain read
-    // path no longer rewrites it. Without this, the next kernel scheduled on this core reads host memory
-    // instead of on-chip whenever it reuses read_cmd_buf.
+    // The PCIe reads above leave MID routed to host, and firmware does not reset it before the next kernel.
     noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
 
     update_socket_config(receiver_socket);

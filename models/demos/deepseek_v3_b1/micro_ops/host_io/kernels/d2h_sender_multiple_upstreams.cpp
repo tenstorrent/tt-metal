@@ -129,4 +129,7 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
+    // Termination can land after a PCIe write without a following socket_notify_receiver, which is what
+    // normally clears MID. Firmware does not reset it before the next kernel on this core.
+    noc_async_write_clear_pcie_state(NOC_INDEX, write_cmd_buf);
 }
