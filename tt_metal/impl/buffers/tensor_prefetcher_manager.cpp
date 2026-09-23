@@ -607,7 +607,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
 }
 
 TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
-    const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes) const {
+    const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes) const {
     TT_FATAL(!prefetcher_pipes.empty(), "QueueTensorPrefetcherRequest requires at least one PrefetcherPipe");
 
     RequestTarget target;
@@ -617,7 +617,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     // it. It fixes only which page goes to which sender; each pipe carries its own slab base, so
     // the caller may pass one factory call's pipes in any order. It must pass all of them: a tensor
     // laid out for a subset has fewer slabs per bank than the pipes' slab bases assume.
-    target.mapping = experimental::prefetcher_pipe_sender_receiver_mapping(prefetcher_pipes);
+    target.mapping = experimental::GetPrefetcherPipeSenderReceiverMapping(prefetcher_pipes);
     target.state_addr_per_sender.reserve(target.mapping.size());
     target.recv_index_base_per_sender.reserve(target.mapping.size());
 
@@ -627,8 +627,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     uint32_t factory_num_pipes = 0;
 
     for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
-        // Null pipes were rejected by prefetcher_pipe_sender_receiver_mapping above.
-        const experimental::PrefetcherPipe& pipe = *prefetcher_pipes[p];
+        const experimental::PrefetcherPipe& pipe = prefetcher_pipes[p];
         const auto bank_id = static_cast<uint32_t>(target.mapping[p].first.x);
 
         // Same reason as the GCB overload: state_addr_per_sender below is a DRISC L1 offset
@@ -1302,7 +1301,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
 
 void TensorPrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
-    const std::optional<MeshCoordinateRangeSet>& device_subset,
+    ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
     MeshCommandQueue* trace_capture_cq) {
     TT_FATAL(
@@ -1312,8 +1311,8 @@ void TensorPrefetcherManager::queue(
 }
 
 void TensorPrefetcherManager::queue(
-    const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
-    const std::optional<MeshCoordinateRangeSet>& device_subset,
+    const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
     MeshCommandQueue* trace_capture_cq) {
     // target_for validates the list: banks in contiguous runs appearing once each, one to two DRAM
@@ -1323,7 +1322,7 @@ void TensorPrefetcherManager::queue(
 
 void TensorPrefetcherManager::queue_to_target(
     const RequestTarget& target,
-    const std::optional<MeshCoordinateRangeSet>& device_subset,
+    ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
     MeshCommandQueue* trace_capture_cq) {
     auto lock = lock_api_function_();
@@ -1426,7 +1425,7 @@ void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
 }
 
 void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
-    MeshCommandQueue& cq, const std::optional<MeshCoordinateRangeSet>& device_subset) {
+    MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset) {
     // Hold the API lock across this whole call. Three things must be atomic together:
     //   1. the counter bump (++cq_signal_counter_[cq_id]),
     //   2. the dispatcher write that pushes that value to the device, and
@@ -1712,7 +1711,7 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq) {
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
@@ -1721,8 +1720,8 @@ void QueueTensorPrefetcherRequest(
 
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
-    const std::vector<std::shared_ptr<PrefetcherPipe>>& prefetcher_pipes,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq) {
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
@@ -1730,7 +1729,8 @@ void QueueTensorPrefetcherRequest(
 }
 
 void WaitForCqOnTensorPrefetcher(
-    distributed::MeshCommandQueue& cq, const std::optional<distributed::MeshCoordinateRangeSet>& device_subset) {
+    distributed::MeshCommandQueue& cq,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset) {
     auto* mesh_device = cq.device();
     auto& manager = mesh_device->impl().tensor_prefetcher(mesh_device);
     manager.enqueue_cq_signal_and_wait(cq, device_subset);

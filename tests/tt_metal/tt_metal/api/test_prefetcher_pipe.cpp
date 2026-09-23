@@ -1033,7 +1033,7 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
     auto mesh_device = devices_[0];
     uint32_t first_ring_address = 0;
     uint32_t first_config_address = 0;
-    uint64_t first_pipe_identity = 0;
+    m2::PrefetcherPipeIdentity first_pipe_identity{0};
     {
         // Spaces are scoped here rather than parked on the fixture: the replacement below can only
         // land back at the first addresses once both spaces have released their persistent L1.

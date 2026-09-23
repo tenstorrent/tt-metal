@@ -186,7 +186,7 @@ public:
     const PrefetcherPipeSpaceImpl& space() const;
     SenderCoreType sender_core_type() const;
     uint32_t initial_entry_size() const { return initial_entry_size_; }
-    uint64_t identity() const { return identity_; }
+    PrefetcherPipeIdentity identity() const { return identity_; }
     uint64_t tensor_prefetcher_factory_id() const { return tensor_prefetcher_factory_id_; }
     // How many pipes the CreatePrefetcherPipesForTensorPrefetcher call that made this one returned.
     uint32_t tensor_prefetcher_factory_num_pipes() const { return tensor_prefetcher_factory_num_pipes_; }
@@ -202,7 +202,7 @@ private:
     void detach_from_space() noexcept;
 
     PrefetcherPipeSpaceImpl* space_ = nullptr;
-    uint64_t identity_ = 0;
+    PrefetcherPipeIdentity identity_{0};
     CoreCoord sender_core_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;

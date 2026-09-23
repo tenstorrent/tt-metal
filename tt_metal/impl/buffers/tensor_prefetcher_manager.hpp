@@ -88,7 +88,7 @@ public:
     // recording trace's MeshTraceId, and are re-queued by replay_trace().
     void queue(
         const experimental::GlobalCircularBuffer& gcb,
-        const std::optional<MeshCoordinateRangeSet>& device_subset,
+        ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
         MeshCommandQueue* trace_capture_cq);
 
@@ -98,8 +98,8 @@ public:
     // `prefetcher_pipes` must be every pipe of one CreatePrefetcherPipesForTensorPrefetcher result, in
     // any order.
     void queue(
-        const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
-        const std::optional<MeshCoordinateRangeSet>& device_subset,
+        const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
+        ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
         MeshCommandQueue* trace_capture_cq);
 
@@ -119,7 +119,8 @@ public:
     // host thread that enqueues the data writes (after them, before the dependent
     // prefetch request). `cq` must belong to this manager's mesh device, and its id
     // must be within [0, kNumCqSignalSlots).
-    void enqueue_cq_signal_and_wait(MeshCommandQueue& cq, const std::optional<MeshCoordinateRangeSet>& device_subset);
+    void enqueue_cq_signal_and_wait(
+        MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
 
     void stop();
 
@@ -167,9 +168,9 @@ private:
     // GlobalCircularBuffer or the per-bank groups of DRAM-sender PrefetcherPipes. Owns its mapping
     // by value: the pipes' mapping is assembled at queue time and has no home on the pipe objects.
     //
-    // It holds no reference to the target itself, and must not start to. A pipe reaching here from
-    // Python is owned by a shared_ptr whose deleter takes the GIL, so the worker thread must never
-    // be the one that drops the last owner; addresses and a mapping are all it needs anyway.
+    // It holds no reference to the target itself, and must not start to. The queue call only borrows
+    // the target, and the worker thread that later sends the pages needs nothing but addresses and a
+    // mapping.
     struct RequestTarget {
         // Sender core -> receivers, in the order that fixes bank-local slab numbering.
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
@@ -190,7 +191,8 @@ private:
     void worker_loop();
     void enumerate_dram_senders();
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
-    RequestTarget target_for(const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes) const;
+    RequestTarget target_for(
+        const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes) const;
     std::vector<uint32_t> sender_indices_for_target(const RequestTarget& target) const;
     void build_and_launch_programs(
         uint32_t stage_ring_base, uint32_t stage_ring_size, const std::optional<MpfePolicy>& mpfe_policy);
@@ -206,7 +208,7 @@ private:
     // Shared body of the two public queue() overloads.
     void queue_to_target(
         const RequestTarget& target,
-        const std::optional<MeshCoordinateRangeSet>& device_subset,
+        ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
         MeshCommandQueue* trace_capture_cq);
     MeshCoordinateRangeSet full_mesh_subset() const;

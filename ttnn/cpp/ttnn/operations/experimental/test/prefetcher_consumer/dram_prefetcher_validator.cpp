@@ -4,6 +4,8 @@
 
 #include "dram_prefetcher_validator.hpp"
 
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
+
 #include <filesystem>
 
 #include <tt_stl/assert.hpp>
@@ -377,7 +379,8 @@ void test_tensor_prefetcher_pipe_validator(
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
 
-    const CoreRangeSet receiver_cores = metal_exp::prefetcher_pipe_receiver_cores(prefetcher_pipes);
+    const CoreRangeSet receiver_cores =
+        metal_exp::GetPrefetcherPipeReceiverCores(prefetcher_pipe_refs(prefetcher_pipes));
     TT_FATAL(receiver_cores.num_cores() > 0, "The PrefetcherPipes have no receiver cores");
 
     // Slab order comes from the plan the pipes were created from, so the pipes may be passed in

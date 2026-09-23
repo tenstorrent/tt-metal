@@ -27,7 +27,7 @@ namespace {
 std::atomic<uint64_t> next_tensor_prefetcher_factory_id{1};
 }
 
-std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefetcher(
+std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     PrefetcherPipeSpace& space,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards) {
@@ -64,14 +64,13 @@ std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefe
     // adjacently, in role order, and keeps the banks in input order. The returned list keeps that
     // order as a convention consumers can rely on for pairing pipes with banks; it no longer
     // carries slab numbering, which each pipe now holds itself.
-    std::vector<std::shared_ptr<PrefetcherPipe>> pipes;
+    std::vector<PrefetcherPipe> pipes;
     pipes.reserve(mapping.size());
     const uint64_t factory_id = next_tensor_prefetcher_factory_id.fetch_add(1, std::memory_order_relaxed);
     for (size_t s = 0; s < mapping.size(); ++s) {
         const auto& [sender_logical, receivers] = mapping[s];
-        auto pipe = create_dram_sender_pipe(
-            space, sender_logical, receivers, bases[s], factory_id, static_cast<uint32_t>(mapping.size()));
-        pipes.push_back(std::make_shared<PrefetcherPipe>(std::move(pipe)));
+        pipes.push_back(create_dram_sender_pipe(
+            space, sender_logical, receivers, bases[s], factory_id, static_cast<uint32_t>(mapping.size())));
     }
     return pipes;
 }

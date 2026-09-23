@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt_stl/optional_reference.hpp>
 
 namespace tt::tt_metal {
 
@@ -163,7 +164,7 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);
 
@@ -194,8 +195,8 @@ void QueueTensorPrefetcherRequest(
 // block of lookahead (a streaming matmul) needs two.
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
-    const std::vector<std::shared_ptr<PrefetcherPipe>>& prefetcher_pipes,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);
 
@@ -213,7 +214,8 @@ void QueueTensorPrefetcherRequest(
 //
 // Preconditions (TT_FATAL): a prefetcher is active on `cq`'s mesh device.
 void WaitForCqOnTensorPrefetcher(
-    distributed::MeshCommandQueue& cq, const std::optional<distributed::MeshCoordinateRangeSet>& device_subset);
+    distributed::MeshCommandQueue& cq,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset);
 
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no
