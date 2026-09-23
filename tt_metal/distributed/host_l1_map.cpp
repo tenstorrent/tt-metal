@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/sockets/internal/host_l1_map.hpp>
+#include "tt_metal/distributed/host_l1_map.hpp"
 
 #include <fmt/format.h>
 

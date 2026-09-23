@@ -8,8 +8,8 @@
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
 
-#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
-#include <tt-metalium/experimental/sockets/internal/tt_uva.hpp>
+#include <tt-metalium/experimental/sockets/host_uva_layout.hpp>
+#include "api/tt_uva.h"
 
 namespace ex = tt::tt_metal::experimental;
 

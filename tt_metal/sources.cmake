@@ -99,15 +99,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
-    api/tt-metalium/experimental/sockets/internal/host_d2h_leg.hpp
-    api/tt-metalium/experimental/sockets/internal/host_l1_map.hpp
-    api/tt-metalium/experimental/sockets/internal/host_region.hpp
-    api/tt-metalium/experimental/sockets/internal/host_ring_alias.hpp
-    api/tt-metalium/experimental/sockets/internal/host_tasks.hpp
-    api/tt-metalium/experimental/sockets/internal/host_uva.hpp
-    api/tt-metalium/experimental/sockets/internal/host_uva_frame.hpp
-    api/tt-metalium/experimental/sockets/internal/host_uva_layout.hpp
-    api/tt-metalium/experimental/sockets/internal/tt_uva.hpp
+    api/tt-metalium/experimental/sockets/host_uva.hpp
+    api/tt-metalium/experimental/sockets/host_uva_frame.hpp
+    api/tt-metalium/experimental/sockets/host_uva_layout.hpp
     api/tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp
     api/tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp
@@ -206,10 +200,9 @@ set(JITAPI_FILES
     api/tt-metalium/constants.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
-    api/tt-metalium/experimental/sockets/internal/host_uva.hpp
-    api/tt-metalium/experimental/sockets/internal/host_uva_frame.hpp
-    api/tt-metalium/experimental/sockets/internal/host_uva_layout.hpp
-    api/tt-metalium/experimental/sockets/internal/tt_uva.hpp
+    api/tt-metalium/experimental/sockets/host_uva.hpp
+    api/tt-metalium/experimental/sockets/host_uva_frame.hpp
+    api/tt-metalium/experimental/sockets/host_uva_layout.hpp
     core_descriptors/blackhole_140_arch.yaml
     core_descriptors/blackhole_140_arch_eth_dispatch.yaml
     core_descriptors/blackhole_140_arch_fabric_mux.yaml

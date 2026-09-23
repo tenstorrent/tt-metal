@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
+#include "tt_metal/distributed/host_region.hpp"
 
 #include <sys/mman.h>
 #include <sys/resource.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
 #include <stdexcept>
 
@@ -17,52 +18,35 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt_stl/indestructible.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::experimental {
 
 namespace {
 
-// Sized to kRegionBytesMax even though only a prefix is pinned: the offsets must be
-// compile-time constants for every legal core index. In .bss, so it costs nothing on disk.
-alignas(kAlign2M) uint8_t g_region[kRegionBytesMax];
-
-bool g_provisioned = false;
-
-constexpr uint32_t kArenas = static_cast<uint32_t>(AliasArena::Count);
-uint64_t g_alias_fill[kArenas][kProvisionedCores] = {};
-uint64_t g_alias_mapped[kArenas][kProvisionedCores] = {};
-
 uint64_t arena_offset_of(AliasArena a, uint32_t core) {
     return a == AliasArena::Tx ? tx_arena_offset(core) : rx_arena_offset(core);
 }
 
-// Makes every page resident so the pin does not fault the whole region inside an ioctl,
-// and clears it -- minus the spans a socket's own metadata owns.
-void zero_around_aliases(uint8_t* base, uint64_t want) {
-    uint64_t cursor = 0;
-    bool past_end = false;
-    // TX precedes RX within a core and arenas ascend with the index, so one cursor is enough.
-    for (uint32_t c = 0; c < kProvisionedCores && !past_end; ++c) {
-        for (uint32_t a = 0; a < kArenas && !past_end; ++a) {
-            if (g_alias_fill[a][c] == 0) {
-                continue;
-            }
-            const uint64_t arena = arena_offset_of(static_cast<AliasArena>(a), c);
-            const uint64_t hole_start = arena + g_alias_fill[a][c];
-            if (hole_start >= want) {
-                past_end = true;
-                break;
-            }
-            if (hole_start > cursor) {
-                std::memset(base + cursor, 0, hole_start - cursor);
-            }
-            cursor = std::min(arena + g_alias_mapped[a][c], want);
-        }
+// mmap, not the heap: RingAlias MAP_FIXEDs over the arenas, which would swap out pages an
+// allocator still believed it owned. Over-allocates for 2 MiB alignment, then trims.
+uint8_t* map_region(uint64_t bytes) {
+    void* const raw = ::mmap(nullptr, bytes + kAlign2M, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (raw == MAP_FAILED) {
+        return nullptr;
     }
-    if (cursor < want) {
-        std::memset(base + cursor, 0, want - cursor);
+    const uintptr_t start = reinterpret_cast<uintptr_t>(raw);
+    const uintptr_t aligned = align_up(start, kAlign2M);
+    if (aligned > start) {
+        ::munmap(raw, aligned - start);
     }
+    const uintptr_t tail = aligned + bytes;
+    const uintptr_t end = start + bytes + kAlign2M;
+    if (end > tail) {
+        ::munmap(reinterpret_cast<void*>(tail), end - tail);
+    }
+    return reinterpret_cast<uint8_t*>(aligned);
 }
 
 void validate_shape(uint32_t cores_in_use, HostTopology topology, HostRegion::Grid grid) {
@@ -104,6 +88,8 @@ void publish_header(
     const HostRegion::DeviceView& dev) {
     std::memset(h, 0, sizeof(*h));
     h->version = kRegionVersion;
+    // The compile-time offset grid, NOT what exists here: both sides must agree on it or
+    // they compute different addresses for one core. cores_in_use below is the real bound.
     h->provisioned_cores = kProvisionedCores;
     h->arena_bytes = kArenaBytes;
     h->arena_stride = kArenaStride;
@@ -124,30 +110,95 @@ void publish_header(
 
 }  // namespace
 
-uint8_t* HostRegion::reserved_base() { return g_region; }
-bool HostRegion::is_provisioned() { return g_provisioned; }
+uint8_t* HostRegion::reserved_base(uint32_t cores_in_use) {
+    if (region_ != nullptr) {
+        // Not re-mapped: growing moves the base, and every overlay already placed against
+        // the old one would go on naming pages nothing owns.
+        if (cores_in_use != reserved_cores_) {
+            throw std::runtime_error(fmt::format(
+                "the region is already sized for {} cores and cannot be resized to {}", reserved_cores_, cores_in_use));
+        }
+        return region_;
+    }
+    if (cores_in_use == 0 || cores_in_use > kProvisionedCores) {
+        throw std::runtime_error(
+            fmt::format("cannot size a region for {} cores; the arenas span 1..{}", cores_in_use, kProvisionedCores));
+    }
+    // Rounded so the whole mapping is a 2 MiB multiple: MADV_HUGEPAGE only acts on ranges
+    // it covers completely, and an odd core count leaves pinned_bytes_for() short of one.
+    const uint64_t bytes = align_up(pinned_bytes_for(cores_in_use), kAlign2M);
+    uint8_t* const base = map_region(bytes);
+    if (base == nullptr) {
+        // Throws like every other failure here rather than returning null: a null would
+        // reach RingAlias as "no region base", reporting an OOM as a missing argument.
+        throw std::runtime_error(fmt::format(
+            "could not map {} MiB for {} cores: {}", bytes >> 20, cores_in_use, std::strerror(errno)));
+    }
+    region_ = base;
+    region_bytes_ = bytes;
+    reserved_cores_ = cores_in_use;
+    return region_;
+}
 
 // Dropping the PinnedMemory is what unpins; the flag is what lets RingAlias overlay again.
+// The mapping stays: re-mapping would move the base out from under the overlays.
 void HostRegion::release() {
-    HostRegion& r = storage();
-    r.pinned_.reset();
-    r.base_ = nullptr;
-    r.pinned_bytes_ = 0;
-    g_provisioned = false;
+    // Magic first, with a release store, mirroring how publish_header raises it: it is the
+    // gate a peer polls, and the pages behind it are about to stop being device-reachable.
+    if (region_ != nullptr) {
+        __atomic_store_n(&header()->magic, UINT64_C(0), __ATOMIC_RELEASE);
+    }
+    pinned_.reset();
+    pinned_bytes_ = 0;
+    provisioned_ = false;
 }
 
 HostRegion& HostRegion::storage() {
-    static HostRegion r;
-    return r;
+    // Indestructible, per BestPractices §17: an ordinary static would drop PinnedMemory at
+    // exit, unmapping DMA on a cluster torn down long before. release() is the way out.
+    static ttsl::Indestructible<HostRegion> r;
+    return r.get();
+}
+
+// Makes every page resident so the pin does not fault the whole region inside an ioctl,
+// and clears it -- minus the spans a socket's own metadata owns.
+void HostRegion::zero_around_aliases(uint64_t want) {
+    uint8_t* const base = region_;
+    uint64_t cursor = 0;
+    bool past_end = false;
+    // TX precedes RX within a core and arenas ascend with the index, so one cursor is enough.
+    for (uint32_t c = 0; c < kProvisionedCores && !past_end; ++c) {
+        for (uint32_t a = 0; a < kArenas && !past_end; ++a) {
+            if (alias_fill_[a][c] == 0) {
+                continue;
+            }
+            const uint64_t arena = arena_offset_of(static_cast<AliasArena>(a), c);
+            const uint64_t hole_start = arena + alias_fill_[a][c];
+            if (hole_start >= want) {
+                past_end = true;
+                break;
+            }
+            if (hole_start > cursor) {
+                std::memset(base + cursor, 0, hole_start - cursor);
+            }
+            cursor = std::min(arena + alias_mapped_[a][c], want);
+        }
+    }
+    if (cursor < want) {
+        std::memset(base + cursor, 0, want - cursor);
+    }
 }
 
 void HostRegion::declare_alias(AliasArena arena, uint32_t core, uint64_t fill_bytes, uint64_t mapped_bytes) {
     const uint32_t a = static_cast<uint32_t>(arena);
-    if (core >= kProvisionedCores || a >= kArenas) {
-        throw std::runtime_error("declare_alias: core or arena is outside the provisioned range");
+    // Against what was mapped, not kProvisionedCores: that bound was only ever right for
+    // the fixed-size array this replaced, and an arena past it has no pages behind it.
+    if (core >= reserved_cores_ || a >= kArenas) {
+        throw std::runtime_error(fmt::format(
+            "declare_alias: core {} or arena {} is outside the {} cores mapped", core, a, reserved_cores_));
     }
     // An overlay declared after the pin leaves the pin naming pages that are no longer here.
-    if (g_provisioned) {
+    if (provisioned_) {
         throw std::runtime_error("declare_alias called after provisioning; the overlay must precede the pin");
     }
     if (fill_bytes != 0 && (fill_bytes > mapped_bytes || mapped_bytes > kArenaBytes)) {
@@ -159,25 +210,31 @@ void HostRegion::declare_alias(AliasArena arena, uint32_t core, uint64_t fill_by
             mapped_bytes,
             kArenaBytes));
     }
-    g_alias_fill[a][core] = fill_bytes;
-    g_alias_mapped[a][core] = fill_bytes == 0 ? 0 : mapped_bytes;
+    alias_fill_[a][core] = fill_bytes;
+    alias_mapped_[a][core] = fill_bytes == 0 ? 0 : mapped_bytes;
 }
 
-void HostRegion::clear_aliases() {
-    std::memset(g_alias_fill, 0, sizeof(g_alias_fill));
-    std::memset(g_alias_mapped, 0, sizeof(g_alias_mapped));
-}
-
-uint64_t HostRegion::alias_fill_bytes(AliasArena arena, uint32_t core) {
+void HostRegion::clear_aliases(AliasArena arena) {
     const uint32_t a = static_cast<uint32_t>(arena);
-    return (core >= kProvisionedCores || a >= kArenas || g_alias_fill[a][core] == 0) ? kArenaBytes
-                                                                                     : g_alias_fill[a][core];
+    if (a >= kArenas) {
+        return;
+    }
+    std::memset(alias_fill_[a], 0, sizeof(alias_fill_[a]));
+    std::memset(alias_mapped_[a], 0, sizeof(alias_mapped_[a]));
 }
 
-uint64_t HostRegion::alias_tail_offset(AliasArena arena, uint32_t core) {
+// Both return a length a memset consumes, so `core` is bounded by what is MAPPED, not by
+// the table extent: an arena past reserved_cores_ has no pages to fill.
+uint64_t HostRegion::alias_fill_bytes(AliasArena arena, uint32_t core) const {
     const uint32_t a = static_cast<uint32_t>(arena);
-    return (core >= kProvisionedCores || a >= kArenas || g_alias_fill[a][core] == 0) ? kArenaBytes
-                                                                                     : g_alias_mapped[a][core];
+    return (core >= reserved_cores_ || a >= kArenas || alias_fill_[a][core] == 0) ? kArenaBytes
+                                                                                  : alias_fill_[a][core];
+}
+
+uint64_t HostRegion::alias_tail_offset(AliasArena arena, uint32_t core) const {
+    const uint32_t a = static_cast<uint32_t>(arena);
+    return (core >= reserved_cores_ || a >= kArenas || alias_fill_[a][core] == 0) ? kArenaBytes
+                                                                                  : alias_mapped_[a][core];
 }
 
 PinLimits query_pin_limits(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device) {
@@ -193,14 +250,23 @@ PinLimits query_pin_limits(const std::shared_ptr<tt::tt_metal::distributed::Mesh
     return out;
 }
 
-HostRegion& HostRegion::provision(
+void HostRegion::provision(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t chip,
     uint32_t cores_in_use,
     HostTopology topology,
     Grid grid) {
-    if (g_provisioned) {
-        throw std::runtime_error("HostRegion::provision called twice; reuse the reference the first call returned");
+    if (provisioned_) {
+        throw std::runtime_error("HostRegion::provision called twice; release() first to provision again");
+    }
+    // The overlays MAP_FIXED onto the mapping, so it has to exist before they are built,
+    // which puts reserved_base() ahead of this call rather than inside it.
+    if (region_ == nullptr) {
+        throw std::runtime_error("HostRegion::provision called before reserved_base(); there is no region to pin");
+    }
+    if (cores_in_use != reserved_cores_) {
+        throw std::runtime_error(fmt::format(
+            "provision asks for {} cores but the region was sized for {}", cores_in_use, reserved_cores_));
     }
     validate_shape(cores_in_use, topology, grid);
 
@@ -222,19 +288,25 @@ HostRegion& HostRegion::provision(
             "need {} MiB but the driver's max_total_pin_size is {} MiB", want >> 20, limits.max_total_pin >> 20));
     }
 
-    uint8_t* const base = g_region;
+    uint8_t* const base = region_;
     if (reinterpret_cast<uintptr_t>(base) % kAlign2M != 0 || want % kPageBytes != 0) {
         throw std::runtime_error("the region is misaligned or the pinned length is not a page multiple");
     }
+    // Holds by construction -- region_bytes_ is want rounded up -- but pinning past the
+    // mapping is the one error here the ioctl would report as a bare errno.
+    if (want > region_bytes_) {
+        throw std::runtime_error(
+            fmt::format("pinning {} B would run past the {} B mapped", want, region_bytes_));
+    }
 
-    // Both advisory. Hugepages save TLB walks; DONTFORK matches what ibv_reg_mr will set
-    // on the same range, so a child can never inherit pinned pages.
-    (void)madvise(base, want, MADV_HUGEPAGE);
-    (void)madvise(base, want, MADV_DONTFORK);
-    zero_around_aliases(base, want);
+    // Both advisory, and over the whole mapping rather than the pinned prefix: MADV_HUGEPAGE
+    // only acts on a 2 MiB range it covers fully, which is what region_bytes_ rounds up for.
+    (void)madvise(base, region_bytes_, MADV_HUGEPAGE);
+    (void)madvise(base, region_bytes_, MADV_DONTFORK);
+    zero_around_aliases(want);
 
     // PinnedMemory pins what this points at; it does not allocate. The no-op deleter is
-    // because the storage is static and outlives everything.
+    // because HostRegion owns the mapping and never unmaps it, so it outlives every pin.
     auto borrowed = std::shared_ptr<uint32_t[]>(reinterpret_cast<uint32_t*>(base), [](uint32_t*) {});
     HostBuffer view(ttsl::Span<uint32_t>(borrowed.get(), want / sizeof(uint32_t)), MemoryPin(borrowed));
 
@@ -257,26 +329,25 @@ HostRegion& HostRegion::provision(
         throw std::runtime_error("PinnedMemory has no NOC address -- the device cannot reach the region");
     }
 
-    HostRegion& r = storage();
-    r.base_ = base;
-    r.pinned_bytes_ = want;
-    r.cores_in_use_ = cores_in_use;
-    r.chip_ = chip;
-    r.topology_ = topology;
-    r.grid_ = grid;
-    r.device_ = DeviceView{noc->pcie_xy_enc, noc->addr};
-    r.pinned_ = std::move(pinned);
+    pinned_bytes_ = want;
+    cores_in_use_ = cores_in_use;
+    topology_ = topology;
+    grid_ = grid;
+    device_ = DeviceView{noc->pcie_xy_enc, noc->addr};
+    pinned_ = std::move(pinned);
 
-    r.reset_arenas();
-    publish_header(r.header(), cores_in_use, topology, grid, chip, want, r.device_);
-    g_provisioned = true;
-    return r;
+    reset_arenas();
+    publish_header(header(), cores_in_use, topology, grid, chip, want, device_);
+    provisioned_ = true;
 }
 
 void HostRegion::reset_arenas(uint8_t fill) {
+    if (region_ == nullptr) {
+        return;
+    }
     // Each arena in two pieces: a ring may be mapped over its front, and the bytes between
     // the ring's data region and the end of that mapping belong to the socket.
-    const auto fill_arena = [fill](uint8_t* arena, AliasArena which, uint32_t core) {
+    const auto fill_arena = [this, fill](uint8_t* arena, AliasArena which, uint32_t core) {
         const uint64_t tail = alias_tail_offset(which, core);
         std::memset(arena, fill, alias_fill_bytes(which, core));
         if (tail < kArenaBytes) {
@@ -289,11 +360,14 @@ void HostRegion::reset_arenas(uint8_t fill) {
     }
     // Every line of both arrays, not just the cores in use: a stale count in an unused entry
     // is what makes a sender's gate open on a message that was never consumed.
-    std::memset(base_ + kCreditArrayOffset, 0, kCreditArrayBytes + kDoneArrayBytes);
+    std::memset(region_ + kCreditArrayOffset, 0, kCreditArrayBytes + kDoneArrayBytes);
     __atomic_thread_fence(__ATOMIC_RELEASE);
 }
 
 std::string HostRegion::verify_header() const {
+    if (region_ == nullptr) {
+        return "no region mapped -- reserved_base() has not been called";
+    }
     const RegionHeader* h = header();
     if (__atomic_load_n(&h->magic, __ATOMIC_ACQUIRE) != kRegionMagic) {
         return "region magic absent -- unprovisioned, or a pointer into the wrong mapping";

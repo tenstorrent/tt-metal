@@ -72,7 +72,6 @@ constexpr uint32_t tt_uva_core_index(uint32_t logical_x, uint32_t logical_y, uin
 constexpr uint64_t pinned_bytes_for(uint32_t cores) {
     return kArenaArrayOffset + static_cast<uint64_t>(cores) * kArenaStride;
 }
-constexpr uint64_t kRegionBytesMax = pinned_bytes_for(kProvisionedCores);
 
 // The header. Two parties disagreeing on geometry compute different offsets for one core
 // and each reads bytes that are legitimately idle, so the constants are published.

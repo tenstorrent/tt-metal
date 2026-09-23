@@ -11,9 +11,9 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/sockets/internal/host_tasks.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_uva_frame.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_uva.hpp>
+#include "tt_metal/distributed/host_tasks.hpp"
+#include <tt-metalium/experimental/sockets/host_uva_frame.hpp>
+#include <tt-metalium/experimental/sockets/host_uva.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;

@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
+#include "tt_metal/distributed/host_region.hpp"
 
 namespace tt::tt_metal::experimental {
 

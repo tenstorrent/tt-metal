@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 
-#include <tt-metalium/experimental/sockets/internal/host_uva_frame.hpp>
+#include <tt-metalium/experimental/sockets/host_uva_frame.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -19,35 +19,38 @@ namespace detail {
 
 // One socket per core and one kernel per core, so this is the right lifetime. A kernel is
 // a single translation unit, so `static` gives exactly one instance in .bss.
-static SocketSenderInterface g_socket;
-static uint32_t g_stage_addr = 0;
-static uint32_t g_origin = 0;
+inline SocketSenderInterface g_socket;
+inline uint32_t g_stage_addr = 0;
+inline uint32_t g_origin = 0;
 // Where the host publishes what the FAR device has pulled, and what we have put.
-static uint32_t g_consumed_addr = 0;
-static uint32_t g_posted = 0;
+inline uint32_t g_consumed_addr = 0;
+inline uint32_t g_posted = 0;
 // Signal addresses go on the wire as offsets from this, so a target with a different
 // allocator base still resolves them.
-static uint32_t g_l1_base = 0;
+inline uint32_t g_l1_base = 0;
 
-static SocketReceiverInterface g_rx;
-static uint64_t g_ring = 0;  // host ring anchor; read_ptr is an offset against it
-static uint32_t g_rx_pcie_xy_enc = 0;
-static uint32_t g_landing = 0;
-static uint32_t g_page_size = 0;
+inline SocketReceiverInterface g_rx;
+inline uint64_t g_ring = 0;  // host ring anchor; read_ptr is an offset against it
+inline uint32_t g_rx_pcie_xy_enc = 0;
+inline uint32_t g_landing = 0;
+inline uint32_t g_page_size = 0;
 // The span ABOVE l1_base, not the size of L1: a signal store lands at l1_base + sig_off, so
 // bounding the offset alone would let it run l1_base bytes past the end.
-static uint32_t g_sig_span = 0;
-static uint32_t g_rx_l1_base = 0;
-static bool g_tx_on = false;
-static bool g_rx_on = false;
+inline uint32_t g_sig_span = 0;
+inline uint32_t g_rx_l1_base = 0;
+inline bool g_tx_on = false;
+inline bool g_rx_on = false;
 
-// A single NOC transaction has a length cap and exceeding it writes NOTHING, so the chunk
-// loop is unconditional rather than a limit every caller must remember.
-constexpr uint32_t kMaxNocWrite = 8192;
+// Exceeding a single NOC transaction's cap writes NOTHING, so the chunk loop is
+// unconditional. Per-arch: a hardcoded 8 KiB used to split every page needlessly.
+constexpr uint32_t kMaxNocWrite = NOC_MAX_BURST_SIZE;
 
 inline uint64_t page_addr() {
-    return (static_cast<uint64_t>(g_socket.d2h.data_addr_hi) << 32) |
-           static_cast<uint64_t>(g_socket.downstream_fifo_addr + g_socket.write_ptr);
+    // write_ptr added in 64 bits, after the halves are joined: the 32-bit add drops the
+    // carry when fifo_addr sits within fifo_size of a 4 GiB boundary.
+    return ((static_cast<uint64_t>(g_socket.d2h.data_addr_hi) << 32) |
+            static_cast<uint64_t>(g_socket.downstream_fifo_addr)) +
+           g_socket.write_ptr;
 }
 
 inline void push(uint32_t src, uint64_t dst, uint32_t bytes) {
@@ -94,7 +97,9 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
     t->sig_val = sig_val;
     t->sig_op = sig_op;
 
-    push(g_stage_addr, page + bytes, kFrameTrailerBytes);
+    // Page TAIL, not page + bytes: D2HLeg::poll() always reads the trailer at
+    // page_size - kFrameTrailerBytes, and cannot know `bytes` before it has the trailer.
+    push(g_stage_addr, page + g_page_size - kFrameTrailerBytes, kFrameTrailerBytes);
     noc_async_write_barrier();
 
     socket_push_pages(g_socket, 1);
@@ -177,6 +182,8 @@ inline void tt_uva_ini(
     uint32_t consumed_addr = 0) {
     detail::g_tx_on = tx_config_addr != 0;
     detail::g_rx_on = rx_config_addr != 0;
+    // Both legs share it, and stage() needs it to place the trailer at the page tail.
+    detail::g_page_size = page_size;
     if (detail::g_tx_on) {
         detail::g_socket = create_sender_socket_interface(tx_config_addr);
         set_sender_socket_page_size(detail::g_socket, page_size);
@@ -196,9 +203,11 @@ inline void tt_uva_ini(
                          static_cast<uint64_t>(detail::g_rx.h2d.data_addr_lo);
         detail::g_rx_pcie_xy_enc = detail::g_rx.h2d.pcie_xy_enc;
         detail::g_landing = landing;
-        detail::g_page_size = page_size;
         detail::g_rx_l1_base = l1_base;
         detail::g_sig_span = l1_size > l1_base ? l1_size - l1_base : 0;
+        // Required before noc_read_with_state on the same buffer: it is what sets
+        // RESP_MARKED, without which detail::pull()'s read never retires.
+        noc_read_init_state<read_cmd_buf>(NOC_INDEX);
     }
 }
 

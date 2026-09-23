@@ -25,11 +25,11 @@
 
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
-#include <tt-metalium/experimental/sockets/internal/host_d2h_leg.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_l1_map.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_uva_frame.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
+#include "tt_metal/distributed/host_d2h_leg.hpp"
+#include "tt_metal/distributed/host_l1_map.hpp"
+#include "tt_metal/distributed/host_region.hpp"
+#include <tt-metalium/experimental/sockets/host_uva_frame.hpp>
+#include <tt-metalium/experimental/sockets/host_uva_layout.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -94,14 +94,25 @@ bool parse(int argc, char** argv, Options& o) {
         if (a == "--iters" && has_next && parse_u32(argv[++i], o.iters)) {
             continue;
         }
-        if (a == "--warmup-pct" && has_next && parse_u32(argv[++i], o.warmup_pct)) {
-            continue;
+        // Not parse_u32: its blanket zero-rejection would refuse 0, which means
+        // "measure the whole run" and is a setting a caller legitimately wants.
+        if (a == "--warmup-pct" && has_next) {
+            const std::string v = argv[++i];
+            char* end = nullptr;
+            errno = 0;
+            const unsigned long pct = std::strtoul(v.c_str(), &end, 10);
+            if (end != v.c_str() && *end == '\0' && errno != ERANGE && pct < 100) {
+                o.warmup_pct = static_cast<uint32_t>(pct);
+                continue;
+            }
+            std::cerr << "error: --warmup-pct must be 0..99\n";
+            return false;
         }
         std::cerr << "usage: " << argv[0]
                   << " [--payload B] [--cores N] [--ring frames] [--iters N] [--warmup-pct P]\n";
         return false;
     }
-    return o.warmup_pct < 100;
+    return true;
 }
 
 uint64_t pct(const std::vector<uint64_t>& v, double p) {
@@ -156,15 +167,24 @@ int main(int argc, char** argv) {
     dc.payload_bytes = o.payload;
     dc.ring_pages = o.ring;
     dc.consumed_addr = 0;  // no far device, so nothing credits and tt_uva_sync() is unused
-    dc.alias_region_base = HostRegion::reserved_base();  // access the static memory reserved for memory aliasing
-    std::unique_ptr<D2HLeg> d2h = D2HLeg::create(mesh, dc, err);
+    // Maps the region, sized for these cores: the leg MAP_FIXEDs its rings onto it below,
+    // so it has to exist before D2HLeg::create().
+    HostRegion& region = HostRegion::storage();
+    std::unique_ptr<D2HLeg> d2h;
+    try {
+        dc.alias_region_base = region.reserved_base(o.cores);
+        d2h = D2HLeg::create(mesh, dc, err);
+    } catch (const std::exception& ex) {
+        std::cerr << "host region unavailable: " << ex.what() << "\n";
+        return 1;
+    }
     if (!d2h) {
         std::cerr << "d2h bringup failed: " << err << "\n";
         return 1;
     }
     try {
-        // try to alias the d2h rings with the static memory reserved; this gets registered w/RDMA via MPI_Windows
-        HostRegion& region = HostRegion::provision(
+        // try to alias the d2h rings with the region reserved above; this gets registered w/RDMA via MPI_Windows
+        region.provision(
             mesh,
             /*chip=*/0,
             o.cores,
@@ -172,7 +192,7 @@ int main(int argc, char** argv) {
             HostRegion::Grid{grid_width, static_cast<uint32_t>(grid.y)});
         if (const std::string e = region.verify_header(); !e.empty()) {
             std::cerr << "region header check failed: " << e << "\n";
-            HostRegion::release();
+            region.release();
             return 1;
         }
     } catch (const std::exception& ex) {
@@ -188,7 +208,10 @@ int main(int argc, char** argv) {
         cores = cores.merge(CoreRangeSet(CoreRange(c, c)));
     }
 
-    const uint32_t warmup_iters = o.iters * o.warmup_pct / 100;
+    // 64-bit: iters and warmup_pct are both user-supplied uint32, and the 32-bit product
+    // wraps well inside the range the test accepts, reporting a wrong rate as a clean PASS.
+    const uint32_t warmup_iters =
+        static_cast<uint32_t>(static_cast<uint64_t>(o.iters) * o.warmup_pct / 100);
     const uint64_t total = static_cast<uint64_t>(o.cores) * o.iters;
     // Per core, then scaled: the kernel stamps steady state at its own warmup_iters, so a
     // differently-rounded host figure would divide the wrong frame count by that window.
@@ -237,23 +260,35 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> pending(o.cores, 0);
     std::vector<uint64_t> issue_cycles;
     std::vector<uint64_t> stall_cycles;
-    issue_cycles.reserve(total - warmup);
-    stall_cycles.reserve(total - warmup);
+    // Capped: total scales with cores x iters, and the 32-bit wrap that used to bound
+    // this is gone. An uncapped reserve throws bad_alloc with the region still pinned.
+    constexpr uint64_t kMaxSamples = 4u << 20;
+    const size_t samples = static_cast<size_t>(std::min<uint64_t>(total - warmup, kMaxSamples));
+    issue_cycles.reserve(samples);
+    stall_cycles.reserve(samples);
     uint64_t frames = 0;
     bool ok = true;
+    // Per core, not against the global count: poll() drains one core fully before moving
+    // on, so a global gate admits a fast core's ramp and drops its steady-state samples.
+    std::vector<uint32_t> seen(o.cores, 0);
+
+    // Hoisted: the lambda captures more than the small-buffer holds, so building it inside
+    // the loop put an operator new/delete pair on every pass of the drain spin.
+    const D2HLeg::Sink sink = [&](const SendTask& t) {
+        ++pending[t.core];
+        ++frames;
+        // Matches the kernel's own `i == warmup_iters` stamp.
+        if (seen[t.core]++ >= warmup_iters) {
+            issue_cycles.push_back(tt_uva_frame_elapsed_issue(t.elapsed));
+            stall_cycles.push_back(tt_uva_frame_elapsed_stall(t.elapsed));
+        }
+        return true;
+    };
 
     auto deadline = std::chrono::steady_clock::now() + kStall;
 
     while (frames < total && ok) {
-        d2h->poll([&](const SendTask& t) {
-            ++pending[t.core];
-            ++frames;
-            if (frames > warmup) {
-                issue_cycles.push_back(tt_uva_frame_elapsed_issue(t.elapsed));
-                stall_cycles.push_back(tt_uva_frame_elapsed_stall(t.elapsed));
-            }
-            return true;
-        });
+        d2h->poll(sink);
 
         // Batched per pass, not per frame: each retire is a PCIe write to the device, and
         // one per frame would put this host's overhead inside the number being measured.
@@ -318,7 +353,7 @@ int main(int argc, char** argv) {
 
     // Unpin BEFORE the leg's destructor puts anonymous pages back over the arenas: the pin
     // must not still name the pages being swapped out.
-    HostRegion::release();
+    region.release();
     d2h.reset();
     return ok ? 0 : 1;
 }
