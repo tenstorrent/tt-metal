@@ -21,7 +21,7 @@ so with C[k,n] = cos(2*pi*k*n/N) and S[k,n] = sin(2*pi*k*n/N),
     real = C @ (windowed frames),  imag = -S @ (windowed frames)
 
 and stacking `[C ; -S]` as one `[18, 16]` matrix produces `[real ; imag]`
-**directly in the concatenated layout `decode` wants** -- the concat is free, it
+directly in the concatenated layout `decode` wants -- the concat is free, it
 is just how the matmul comes out.
 
 Framing plus windowing is a single strided conv1d with a diagonal kernel

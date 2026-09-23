@@ -82,7 +82,7 @@ def main() -> int:
         # shared by all 14 layers.
         mask_h = dev(mask_t.expand(1, 1, H, w).contiguous())
         # Decode-mode q is `[1, B, n_heads, d]` and the bias `[B, 1, n_heads, W]`, so
-        # both need the head axis moved off dim 1. Built on the **host** here, so that a
+        # both need the head axis moved off dim 1. Built on the host here, so that a
         # wrong answer cannot be blamed on `ttnn.permute` moving a length-1 tiled axis to
         # a length-16 one -- an exotic enough re-tile to be worth ruling out before
         # concluding anything about the kernel. The permute's cost is added back in the

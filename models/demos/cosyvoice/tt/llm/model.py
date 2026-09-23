@@ -4,7 +4,7 @@
 """TransformerLM: text -> semantic speech tokens, autoregressively, on device.
 
     text tokens ------> text_embedding (51866 x 512)
-                    --> ConformerEncoder, 6 blocks, 16 heads, d=1024, **causal**
+                    --> ConformerEncoder, 6 blocks, 16 heads, d=1024, causal
                     --> text_encoder_affine (1024 -> 1024)
     speaker x-vector -> L2 normalise, affine (192 -> 1024)
     prompt tokens ----> speech_embedding (4096 x 1024)
@@ -13,8 +13,8 @@
     loop: AR decoder (14 blocks, KV cache) -> llm_decoder (1024 -> 4097)
           -> RAS sampling -> next token -> speech_embedding -> loop
 
-The two encoders in this checkpoint are the same class family with **different
-attention patterns and different feed-forward activations**, which the config only
+The two encoders in this checkpoint are the same class family with different
+attention patterns and different feed-forward activations, which the config only
 implies:
 
 * the text encoder sets `static_chunk_size: 1`, and `subsequent_chunk_mask` turns
@@ -466,7 +466,7 @@ class TtTransformerLM:
             per_row_caches.append(caches)
 
         if b == 1:
-            # `ttnn.concat` of a single tensor returns an **alias** of it, so the
+            # `ttnn.concat` of a single tensor returns an alias of it, so the
             # stack-then-free below would free the very buffers it just produced --
             # the same aliasing trap `logits_for_last` documents for a full-extent
             # `ttnn.slice`. One row needs no stacking.

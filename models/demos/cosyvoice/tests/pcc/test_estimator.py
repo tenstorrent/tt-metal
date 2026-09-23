@@ -5,13 +5,13 @@
 
 Three tiers, cheapest first:
 
-1. **Structure**, from the weight names alone. Catches a miscounted ModuleList
+1. Structure, from the weight names alone. Catches a miscounted ModuleList
    without loading anything.
-2. **Graph**, via `tt/flow/reference.py` -- a pure-torch reimplementation driven
+2. Graph, via `tt/flow/reference.py` -- a pure-torch reimplementation driven
    only by the flat export. If this matches the captured golden then the
    architecture is right and any device failure is a TTNN question, not an
    architecture question. That split is what makes the device tier cheap to debug.
-3. **Device**, the TTNN UNet against the same golden.
+3. Device, the TTNN UNet against the same golden.
 """
 from __future__ import annotations
 

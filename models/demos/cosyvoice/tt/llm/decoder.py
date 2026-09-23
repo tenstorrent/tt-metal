@@ -8,17 +8,17 @@ Architecturally this is the flow encoder's block with two names changed
 so `TtRelPosAttention` and the layer body are shared rather than duplicated.
 The differences that matter are all at the edges:
 
-**The input layer has a ReLU.** `input_layer: 'linear_legacy'` selects
+The input layer has a ReLU. `input_layer: 'linear_legacy'` selects
 `LegacyLinearNoSubsampling`, which is `Linear -> LayerNorm(eps=1e-5) -> Dropout ->
 ReLU`. The plain `LinearNoSubsampling` the flow encoder uses stops at Dropout.
 Nothing downstream would fail if the ReLU were left out -- the model would simply be
 wrong. `embed_has_relu` in the exported meta records which one this checkpoint has.
 
-**Two different LayerNorm epsilons.** `subsampling.py` pins `1e-5` on the
+Two different LayerNorm epsilons. `subsampling.py` pins `1e-5` on the
 embedding norm; `encoder_layer.py` pins `1e-12` on the block norms. Both are
 carried in the meta rather than assumed.
 
-**The positional window follows the cache, not the chunk.** `forward_chunk`
+The positional window follows the cache, not the chunk. `forward_chunk`
 recomputes `pos_emb = position_encoding(offset - cache_t1, size=cache_t1 + chunk)`,
 discarding what the embedding produced. With `required_cache_size = -1` -- what
 CosyVoice always passes -- the cache holds everything, so `offset == cache_t1` and
@@ -27,7 +27,7 @@ That is what makes a single `espnet_rel_positional_encoding(key_size, d_model)`
 correct at every step, and it is worth stating because it is only true for this
 configuration.
 
-**Prefill is causal; decode is not.** The prefill mask is `tril`, so the prompt
+Prefill is causal; decode is not. The prefill mask is `tril`, so the prompt
 attends to itself autoregressively. A one-token decode step passes a `[1, 1, 1]`
 all-true mask, and `forward_attention` slices it to the score width -- so it masks
 nothing, which is right: every cached position is real history.
@@ -247,7 +247,7 @@ class TtARDecoder:
     # fixed-shape decoding
     # ----------------------------------------------------------------------
     def forward_chunk_fixed(self, xs, caches, max_len: int, valid: int, mask=None):
-        """`forward_chunk` with a **right-aligned, fixed-width** KV cache.
+        """`forward_chunk` with a right-aligned, fixed-width KV cache.
 
         A cache that grows by one slot per token gives every step a new attention key
         size, and TTNN's program cache is keyed on shape, so every token would pay a
@@ -733,7 +733,7 @@ def right_aligned_bias(max_len: int, valid, chunk: int = 1, causal: bool = False
     query `i` (sitting at slot `max_len - chunk + i`) additionally may not see any
     slot beyond its own.
 
-    **`valid` may be a sequence, one entry per batch row**, which is what makes a
+    `valid` may be a sequence, one entry per batch row, which is what makes a
     batched decode step possible at all. Utterances batched together have different
     prompt lengths and stop at different tokens, so at any given step they have
     different amounts of real history -- but because the cache is *right*-aligned,

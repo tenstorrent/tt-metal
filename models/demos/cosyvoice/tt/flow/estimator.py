@@ -4,7 +4,7 @@
 """ConditionalDecoder: the UNet-1D that the flow-matching ODE calls at every step.
 
 This is the model's hot spot. `ConditionalCFM` runs 10 Euler steps and each step
-evaluates this network on a **batch of 2** -- the conditioned and unconditioned
+evaluates this network on a batch of 2 -- the conditioned and unconditioned
 rows of classifier-free guidance -- so the RTF of the whole flow stage is
 essentially 20 forward passes of what is written here.
 
@@ -18,18 +18,18 @@ Shape, for the captured 608-frame utterance:
     up   1:  cat(skip) 512->256, 4 transformers, Conv1d(3, stride 1)     608 -> 608
     final:   Block1D 256->256, Conv1d(1) 256->80
 
-16 ResnetBlock1D and **64 BasicTransformerBlock** per call.
+16 ResnetBlock1D and 64 BasicTransformerBlock per call.
 
 Two things make the TTNN version structurally cheaper than the reference rather
 than merely equivalent:
 
-**No transposes.** The reference lives in `[B, C, T]` for its convolutions and
+No transposes. The reference lives in `[B, C, T]` for its convolutions and
 `rearrange`s to `[B, T, C]` and back around every transformer stack -- 32
 contiguous copies per forward pass. `ttnn.conv1d` is channels-last and so are
 linear, layer_norm and attention, so the entire UNet stays in `[B, T, C]` and
 every one of those transposes disappears.
 
-**GroupNorm without the native kernel.** `ttnn.group_norm` rejects these shapes;
+GroupNorm without the native kernel. `ttnn.group_norm` rejects these shapes;
 `TtGroupNorm` computes the same statistic as `torch.nn.GroupNorm` through a matmul
 against a group-indicator matrix.
 
@@ -354,7 +354,7 @@ class TtBasicTransformerBlock:
     """norm1 -> self-attention -> residual -> norm3 -> feed-forward -> residual.
 
     `act_fn='gelu'` in the checkpoint selects diffusers' `GELU`, which is a plain
-    `Linear(256, 1024)` followed by the **erf** GELU -- not GEGLU and not the tanh
+    `Linear(256, 1024)` followed by the erf GELU -- not GEGLU and not the tanh
     approximation. `ttnn.gelu(fast_and_approximate_mode=False)` is the matching
     one; the approximate mode measured 0.99999 vs 0.99999_75 on Blackhole, a real
     if small difference over 64 blocks.

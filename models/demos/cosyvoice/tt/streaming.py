@@ -19,21 +19,21 @@ The algorithm, from `cosyvoice/cli/model.py`:
 Three caches keep the chunks from sounding like separate utterances, and each
 one exists for a different reason:
 
-**mel overlap** — the last 34 mel frames of a chunk are Hamming-crossfaded with
+mel overlap — the last 34 mel frames of a chunk are Hamming-crossfaded with
 the first 34 of the next. Chunk boundaries are where the flow decoder's context
 changes, so the mel jumps slightly; the fade hides it.
 
-**hift mel cache** — the last 20 mel frames are *prepended* to the next chunk
+hift mel cache — the last 20 mel frames are *prepended* to the next chunk
 before vocoding. The vocoder's receptive field is wide (two transposed
 convolutions and eight ResBlocks), so a chunk decoded in isolation has wrong
 context at its left edge. The prepended frames are then discarded from the
 output.
 
-**excitation cache** — the last 5120 samples of the NSF source are spliced into
+excitation cache — the last 5120 samples of the NSF source are spliced into
 the front of the next chunk's excitation. This is the important one. The source
 is a phase-continuous oscillator, and a fresh chunk restarts its phase
-accumulator at zero, so without the splice **every boundary is a phase
-discontinuity** -- an audible click, and the thing the f0-into-phase analysis predicts will
+accumulator at zero, so without the splice every boundary is a phase
+discontinuity -- an audible click, and the thing the f0-into-phase analysis predicts will
 be worst. The corresponding speech tail is separately crossfaded with a Hamming
 window over the same 5120 samples.
 

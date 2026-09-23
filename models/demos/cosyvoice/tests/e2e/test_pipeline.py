@@ -89,7 +89,7 @@ def test_modes_differ_only_in_prompt_construction(expect_error):
     """All four modes run the same three stages with the same weights.
 
     Pinned because the instruct mode's shape is genuinely surprising:
-    `frontend_instruct` puts the instruction in the LLM's **prompt_text slot**, so
+    `frontend_instruct` puts the instruction in the LLM's prompt_text slot, so
     it is a prefix the model reads, not a control signal. CosyVoice-1 wants a
     style *description*; CosyVoice-2's directive phrasing makes this model read the
     instruction aloud -- which took zh CER from 9.09% to 42.42% in the WER sweep.
@@ -107,7 +107,7 @@ def test_modes_differ_only_in_prompt_construction(expect_error):
 
 @needs_golden
 def test_the_vocoder_draws_randomness_at_inference_time():
-    """`SineGen.forward` draws `phase_vec` and `noise` with **no training guard**,
+    """`SineGen.forward` draws `phase_vec` and `noise` with no training guard,
     so a vocoder that ignores them computes a different function -- not merely an
     unseeded one. The captured `phase_vec` proves the draw is real and that its
     fundamental is pinned to zero."""

@@ -131,7 +131,7 @@ def test_session_finish_is_not_reusable(expect_error):
 
 
 def test_window_is_symmetric_hamming_not_periodic():
-    """`np.hamming` is the **symmetric** form; `scipy.signal.get_window` returns the
+    """`np.hamming` is the symmetric form; `scipy.signal.get_window` returns the
     periodic one by default. The discriminator is palindromy: the symmetric window
     satisfies `w[i] == w[N-1-i]`, the periodic one does not.
 
@@ -146,7 +146,7 @@ def test_window_is_symmetric_hamming_not_periodic():
 
 
 def test_the_reference_crossfade_does_not_preserve_level():
-    """CosyVoice's crossfade sums to **1.06–1.08**, not 1.
+    """CosyVoice's crossfade sums to 1.06–1.08, not 1.
 
     `fade_in_out` weights the incoming signal by `w[:n]` and the outgoing by
     `w[n:]`, and for a Hamming window those do not form a complementary pair -- the

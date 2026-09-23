@@ -11,16 +11,16 @@ Ten forward-Euler steps on a cosine-spaced grid, each evaluating
 
 Three details that are easy to get wrong and produce plausible-but-wrong audio:
 
-**The grid is cosine, not linear.** `t_span = 1 - cos(linspace(0,1,11) * pi/2)`,
+The grid is cosine, not linear. `t_span = 1 - cos(linspace(0,1,11) * pi/2)`,
 so the steps start dense near t=0 and widen. A linear grid still integrates to
 something, just not this model's trajectory.
 
-**`dt` is recomputed from the grid, not held fixed.** The reference sets `dt`
+`dt` is recomputed from the grid, not held fixed. The reference sets `dt`
 once before the loop and then updates it at the *end* of each iteration with
 `dt = t_span[step + 1] - t`, where `t` has already advanced. Reading that as a
 constant `1/n` gives the right first step and drifts thereafter.
 
-**The noise is injected, never drawn.** `x0` comes from the caller. Seeding cannot
+The noise is injected, never drawn. `x0` comes from the caller. Seeding cannot
 align a device RNG with torch's stream, so the initial `z` is captured from the
 reference as a golden array and passed in -- the same rule the vocoder's source
 module follows. `ConditionalCFM.forward` draws it as `randn_like(mu) * temperature`.

@@ -158,19 +158,19 @@ def _layernorm_weights(device, bag, name, dtype):
 def decode_mask(mask, n_head: int):
     """`[b, 1, 1, W]` padding mask -> the `[b, 1, h, W]` form `sdpa_decode` wants.
 
-    `sdpa_decode` matches the mask's head axis against Q's **logically**, not by
+    `sdpa_decode` matches the mask's head axis against Q's logically, not by
     broadcast (`sdpa_decode_device_operation.cpp:119`), so the row has to be
     materialised per head.
 
-    **Called once per decode step, by the decoder — not once per layer, by the
-    attention.** All 14 layers share one mask, so this is 1 op per token rather than
+    Called once per decode step, by the decoder — not once per layer, by the
+    attention. All 14 layers share one mask, so this is 1 op per token rather than
     14. The attention cannot do the memoising itself: `TracedDecodeStepInPlace`
     captures 65 traces from the same `mask_buf` object, and any cache keyed on that
     object records the `repeat` into the first trace only, leaving the other 64
     replaying a value the first trace wrote. That is a stale read that no shape check
     catches, so the conversion is hoisted to the one place that runs once per step.
 
-    **No `1/scale` division, deliberately.** The kernel computes
+    No `1/scale` division, deliberately. The kernel computes
     `softmax((QK^T + M) * scale)` — `sdpa_flash_decode.cpp:378` fuses `QK += MASK`
     into the matmul and `:435` scales after — so an additive term meant to apply
     *after* the scale would need pre-dividing. This mask is binary, 0 or `NEG_INF`,
@@ -292,7 +292,7 @@ class TtRelPosAttention:
     def _project_pos(self, pos_emb, b):
         """`linear_pos(pos_emb)`, head-split, transposed, widened to `b` rows.
 
-        **The window does not depend on the batch row.** Relative position is a
+        The window does not depend on the batch row. Relative position is a
         function of the key axis alone, so every sequence in a batch projects the
         *same* `[1, h, d_k, N]` block -- the projection runs once and the result is
         repeated, rather than running `b` identical 536 MFLOP matmuls. `pos_emb`
@@ -338,7 +338,7 @@ class TtRelPosAttention:
         first row, reinterpret back, keep the left half. Every step is a reshape
         or a slice -- no gather op needed.
 
-        **At `t1 == 1` the whole sequence collapses to that final slice.** With one
+        At `t1 == 1` the whole sequence collapses to that final slice. With one
         query row the pad-and-drop is its own inverse: prepending a zero to a length
         `n` row and then dropping the first element of the `(n+1, 1)` reinterpretation
         returns the original `n` elements in the original order, so only the trailing
@@ -432,7 +432,7 @@ class TtRelPosAttention:
         if cache is not None and cache_write is not None:
             # In place: write this token's row, then read the buffer whole. Nothing is
             # copied, concatenated or permuted, so the buffers the caller passed in are
-            # the buffers the matmuls see -- and are emphatically **not** ours to free.
+            # the buffers the matmuls see -- and are emphatically not ours to free.
             #
             # `ttnn.update_cache(cache, token, idx)` wants `cache [1, h, W, d_k]` and
             # `token [1, h, 1, d_k]`, which is exactly what the split hands back. Its
@@ -440,7 +440,7 @@ class TtRelPosAttention:
             # factory splits it into `update_idx / 32` tiles plus a byte offset of
             # `update_idx % 32` rows within the tile, so any row is addressable.
             #
-            # `update_idx` is a **runtime argument**, which a trace bakes at capture --
+            # `update_idx` is a runtime argument, which a trace bakes at capture --
             # hence one captured trace per possible row. That is what caps the design at
             # a 32-row scratch zone rather than an arbitrarily long one.
             #
@@ -520,7 +520,7 @@ class TtRelPosAttention:
         # a one-token decode step still needs the skew.
         if bd_offset is not None:
             # An explicit window into the positional scores, for a cache whose query
-            # does **not** sit at the last slot. `rel_shift`'s `T = 1` fast path takes
+            # does not sit at the last slot. `rel_shift`'s `T = 1` fast path takes
             # `bd[..., :key_w]`, which is the special case `bd_offset == 0` -- correct
             # only when the query is the last key position.
             #
@@ -712,7 +712,7 @@ class TtConformerEncoder:
     def __call__(self, x, pos_emb, mask=None):
         """x: [B, T, input_size] -> [B, T, d_model].
 
-        `mask` is an **additive** score bias, broadcastable to `[B, 1, T, T]`. The
+        `mask` is an additive score bias, broadcastable to `[B, 1, T, T]`. The
         flow encoder passes None: its `static_chunk_size` is 0, so attention is
         full. The LLM's text encoder sets `static_chunk_size: 1`, which
         `subsequent_chunk_mask` turns into a plain causal mask -- same class, same

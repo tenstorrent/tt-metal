@@ -5,7 +5,7 @@
 
 CosyVoice-300M runs at 22050 Hz, which selects `SineGen` (type 1) rather than
 `SineGen2` -- the implementation that integrates phase with a cumsum over the
-**audio-rate** signal, 72 192 samples for 3.3 s of speech.
+audio-rate signal, 72 192 samples for 3.3 s of speech.
 
 Precision
 ---------

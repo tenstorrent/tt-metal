@@ -10,7 +10,7 @@
 All three stages run on device; nothing between them returns to the host except
 the sampled token IDs, which RAS needs on the host in Stage 1.
 
-**The four modes are prompt construction, not different networks.** Every one of
+The four modes are prompt construction, not different networks. Every one of
 them runs the same three stages with the same weights; what changes is which parts
 of the prefix are populated:
 
@@ -27,7 +27,7 @@ prefix. CosyVoice-1 wants a character or style *description* ("A cheerful young
 woman"); CosyVoice-2's `instruct2` directive phrasing ("Speak cheerfully") makes this
 model read the instruction aloud.
 
-**Randomness is injected, never drawn here.** Three places in this model sample:
+Randomness is injected, never drawn here. Three places in this model sample:
 the CFM's initial noise `z`, and the vocoder's `phase_vec` and `noise` in `SineGen`
 -- the latter two unconditionally, with no `if self.training` guard. Reproducing
 the reference bit-for-bit therefore requires its captured draws; generating fresh
@@ -140,8 +140,8 @@ class PromptContext:
     the prompt text (or the instruction) prepended, because that is what the LLM's
     `prompt_text` slot means -- see the note on `instruct` above.
 
-    **LLM and flow each get their own prompt-token and speaker-embedding
-    fields, not one shared pair.** The real frontend splits both in ways a
+    LLM and flow each get their own prompt-token and speaker-embedding
+    fields, not one shared pair. The real frontend splits both in ways a
     single field cannot represent:
 
     * `frontend_cross_lingual` deletes `llm_prompt_speech_token` (the LLM sees
@@ -436,7 +436,7 @@ class CosyVoiceTTNN:
         seed: int | None = None,
         **kw,
     ) -> "StreamResult":
-        """The full chain, **interleaved**: waveform chunks start before the LLM stops.
+        """The full chain, interleaved: waveform chunks start before the LLM stops.
 
         The warm-up chunk below is required for correct audio: it allocates the
         synthesizer's carry buffers before `generate` captures its decode trace (see
@@ -453,7 +453,7 @@ class CosyVoiceTTNN:
 
         Nothing overlaps in *compute* -- one device, one queue, and a chunk's flow and
         vocoder work does pause token generation while it runs. What changes is
-        **time to first audio**, which stops scaling with the length of the utterance
+        time to first audio, which stops scaling with the length of the utterance
         and becomes a function of the chunk size instead. For a caller playing audio
         out, that is the latency that matters, and `total_s` in the result says what
         the interleaving costs against the batch path.

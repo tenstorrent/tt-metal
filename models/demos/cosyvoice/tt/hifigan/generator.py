@@ -32,7 +32,7 @@ Traced from the captured reference (282 mel frames, 3.3 s of audio):
 and 72192 / 282 = 256 = the mel hop_size, so the round trip is exact.
 
 That `+1` is NOT cosmetic. The source branch runs `source_downs[1] = Conv1d(18,
-128, k=1, s=1)` over the excitation spectrogram, which has **18049** frames --
+128, k=1, s=1)` over the excitation spectrogram, which has 18049 frames --
 so `x = x + si` only aligns because of the reflection pad. Get it wrong and the
 failure surfaces as a shape mismatch at a residual add, forty-odd convolutions
 deep. `shape_trace()` below computes the whole chain without a device precisely
@@ -278,8 +278,8 @@ class TtHiFTGenerator:
     def upsample_f0(self, f0, mel_frames: int, batch_size: int = 1):
         """`nn.Upsample(scale_factor=hop, mode='nearest')` on `[B, T_mel, 1]`.
 
-        Nearest-neighbour upsampling by an integer factor is a **broadcast multiply
-        followed by a reshape**: broadcasting `[B, T, 1]` against a row of `n` ones
+        Nearest-neighbour upsampling by an integer factor is a broadcast multiply
+        followed by a reshape: broadcasting `[B, T, 1]` against a row of `n` ones
         gives `[B, T, n]`, and reinterpreting that as `[B, T*n, 1]` lays each
         value's `n` copies down contiguously -- which is the definition.
 
@@ -310,7 +310,7 @@ class TtHiFTGenerator:
         mel is `[B, T_mel, 80]` channels-last; returns `(waveform, n_samples, source)`.
 
         `phase_vec` and `sine_noise` are `SineGen`'s two draws. The reference makes
-        both **unconditionally** -- there is no `if self.training` guard on either --
+        both unconditionally -- there is no `if self.training` guard on either --
         so a vocoder that ignores them is not merely unseeded, it is a different
         function. Pass the captured arrays to reproduce a reference run; pass None
         to get the deterministic zero-phase, zero-noise excitation.

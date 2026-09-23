@@ -5,8 +5,8 @@
 
 The solver is checked in two independent ways before any device time:
 
-* the **schedule** (t and dt per step) against the captured timesteps, and
-* the **update rule** replayed against the captured per-step `dphi_dt`, with the
+* the schedule (t and dt per step) against the captured timesteps, and
+* the update rule replayed against the captured per-step `dphi_dt`, with the
   network taken entirely out of the loop.
 
 If both hold, then a device failure on `solve_euler` is the estimator drifting, not

@@ -85,7 +85,7 @@ def _prefill_rows(device, ttnn, dec, prefix_lens, max_len, d, seeds=None):
         per_row.append(caches)
 
     if len(per_row) == 1:
-        # `ttnn.concat` of a single tensor returns an **alias** of it, so stacking
+        # `ttnn.concat` of a single tensor returns an alias of it, so stacking
         # and then freeing the sources would free the result. One row needs no
         # stacking anyway.
         return per_row[0]

@@ -12,7 +12,7 @@ one: it takes a scale factor, whereas this needs an arbitrary (T_in -> T_out)
 mapping — 174 -> 348 for the prompt and 164 -> 260 for the generated part in the
 captured utterance, neither an integer ratio.
 
-**So linear interpolation is expressed as a matmul.** For fixed (T_in, T_out) it
+So linear interpolation is expressed as a matmul. For fixed (T_in, T_out) it
 is a fixed, extremely sparse `[T_out, T_in]` matrix with two non-zeros per row,
 built once on host. That is the same move the iSTFT makes with the DFT basis: an
 awkward op becomes a constant matrix, and matmul is the widest unit on the core.

@@ -77,7 +77,7 @@ def _to_simplified(text: str) -> str:
     said.
 
     Measured: the PyTorch reference's own audio for the golden utterance scored
-    **35.71 % CER** because Whisper emitted Traditional, while TTNN audio for the
+    35.71 % CER because Whisper emitted Traditional, while TTNN audio for the
     same sentence scored 7.14 % purely because it drew Simplified. Two implementations
     that sound the same, a 5x apparent difference, and the model had nothing to do
     with it. Folding first drops the reference to 14.29 % and TTNN to 7.14 %, both

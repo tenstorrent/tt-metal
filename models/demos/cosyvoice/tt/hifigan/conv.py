@@ -7,13 +7,13 @@ Two conventions this module fixes for the whole vocoder, because getting them
 wrong in one place and right in another is the classic source of a silent
 regression:
 
-**Channels-last everywhere inside HiFT.** ttnn.conv1d takes `[N, L, C]` while the
+Channels-last everywhere inside HiFT. ttnn.conv1d takes `[N, L, C]` while the
 reference works in `[N, C, L]`. Permuting at every layer boundary would cost a
 transpose per conv on tensors that reach 512 channels at audio rate. So tensors
 stay `[N, L, C]` from `conv_pre` to `conv_post` and are permuted exactly twice --
 once on the way in, once on the way out.
 
-**weight_norm folded on host.** Every conv in HiFT is wrapped in torch's
+weight_norm folded on host. Every conv in HiFT is wrapped in torch's
 weight_norm, i.e. `w = g * v/||v||`. The norm is constant once the weights are
 frozen, so computing it per inference is pure overhead. `from_torch_conv1d`
 collapses it at construction.
