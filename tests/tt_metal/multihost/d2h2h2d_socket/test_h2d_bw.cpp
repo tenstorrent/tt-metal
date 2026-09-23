@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
         SetRuntimeArgs(program, receiver, core_list[i], {cfg[i], 1u});
     }
 
-    MeshWorkload workload;
+    distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh->shape()), std::move(program));
     EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, /*blocking=*/false);
 
