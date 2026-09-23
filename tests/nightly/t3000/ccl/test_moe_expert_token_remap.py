@@ -186,10 +186,10 @@ def test_moe_expert_token_remaps(
 
     for (mapping_ref, reduced_ref), (mapping_test, reduced_test) in zip(output_tensor_goldens_list, out_tensor_list):
         mapping_test_torch = ttnn.to_torch(mapping_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        assert_with_pcc(mapping_test_torch, mapping_ref)
+        assert_with_pcc(mapping_ref, mapping_test_torch)
 
         reduced_test_torch = ttnn.to_torch(reduced_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        assert_equal(reduced_test_torch, reduced_ref)
+        assert_equal(reduced_ref, reduced_test_torch)
 
 
 @pytest.mark.parametrize(
@@ -275,11 +275,14 @@ def test_moe_expert_token_remap_multiple_reduction_groups_per_core(
         tt_topk, tt_expert_mapping, tt_metadata, reduction_size=reduction_size
     )
 
+    # output_mapping is a straight copy of the topk weights, so the golden is bit-derivable: compare it
+    # exactly rather than by correlation, which would absorb the handful of misplaced pages this is
+    # meant to catch. The cast is lossless - every non-zero came from the bfloat16 topk tensor.
     mapping_test_torch = ttnn.to_torch(mapping_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    assert_with_pcc(mapping_test_torch, output_mapping)
+    assert_equal(output_mapping.to(torch.bfloat16), mapping_test_torch)
 
     reduced_test_torch = ttnn.to_torch(reduced_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    assert_equal(reduced_test_torch, output_reduced)
+    assert_equal(output_reduced, reduced_test_torch)
 
 
 @pytest.mark.parametrize(
