@@ -39,34 +39,37 @@ std::vector<T> gold_transpose_wh(const std::vector<T>& src_vec, const std::vecto
 // src_vec is expected to be untilized
 // result is also untilized
 // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
+// pad fills the rest of the output tile with -inf for MAX and 0 otherwise
 std::vector<uint16_t> gold_reduce_h(
     const std::vector<uint16_t>& src_vec,
     const std::vector<uint32_t>& shape,
     float scaler,
     uint8_t red_type = 0,
-    bool zeropad = true);
+    bool pad = true);
 
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
 // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
+// pad fills the rest of the output tile with -inf for MAX and 0 otherwise
 std::vector<uint16_t> gold_reduce_w(
     const std::vector<uint16_t>& src_vec,
     const std::vector<uint32_t>& shape,
     float scaler,
     uint8_t red_type = 0,
-    bool zeropad = true);
+    bool pad = true);
 
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
 // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
+// pad fills the rest of the output tile with -inf for MAX and 0 otherwise
 std::vector<uint16_t> gold_reduce_hw(
     const std::vector<uint16_t>& src_vec,
     const std::vector<uint32_t>& shape,
     float scaler,
     uint8_t red_type = 0,
-    bool zeropad = true);
+    bool pad = true);
 
 // Takes untilized src0_vec and tilized src1_vec
 // returns tilized result of eltwise addition
