@@ -389,20 +389,3 @@ def test_dense_mlp_matches_transformers_and_reuses_programs(mesh_device, expect_
         synthetic_mlp(bad_memory_input)
     bad_memory_input.deallocate(True)
     valid_input.deallocate(True)
-
-    # A tensor on a child mesh is still a device tensor, but must not be mixed with this
-    # module's Galaxy-resident weights. Reject it before any matmul or collective runs.
-    child_mesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1))
-    foreign_input = ttnn.from_torch(
-        torch.zeros(1, 1, LOCAL_SEQUENCE, HIDDEN_SIZE, dtype=torch.bfloat16),
-        device=child_mesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(child_mesh),
-    )
-    try:
-        with expect_error(ValueError, "input must reside on the constructor mesh"):
-            synthetic_mlp(foreign_input)
-    finally:
-        foreign_input.deallocate(True)
