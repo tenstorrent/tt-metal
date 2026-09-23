@@ -67,10 +67,32 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
 
     rows = _rows(table)
     assert "{in: Float16, out: Float16, max_ulp: 6}" in rows[0]  # 5 * 1.1, rounded up
-    assert "max 5 ULP, today" in rows[0]
+    assert "max 5 ULP" in rows[0]
+    # The run identity is on the op's key line, once, not repeated on every row.
+    key_line = next(l for l in table.read_text().splitlines() if l.startswith("Gelu:"))
+    assert "measured by: today, except where a row says otherwise" in key_line
+    assert "header provenance, ungeneratable" in key_line  # and what it already said
+    assert "today" not in rows[0]
     # The op this run never measured, untouched.
     assert any("Log1p" in l for l in table.read_text().splitlines())
     assert "{in: Float16, out: Float16_b, metric: tolerance}" in rows[-1]
+
+
+def test_a_second_regeneration_replaces_the_run_identity(table):
+    """The key line carries which sweep the rows below came from, so a re-emit has to
+    replace it. Appending would accumulate one stale run identity per regeneration, and
+    the oldest would read as current."""
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    write_table(table, "sweep A, wormhole, 2026-09-23")
+    MEASURED.clear()
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    write_table(table, "sweep B, wormhole, 2026-09-24")
+
+    key_line = next(l for l in table.read_text().splitlines() if l.startswith("Gelu:"))
+    assert key_line.count("measured by:") == 1
+    assert "sweep B, wormhole, 2026-09-24" in key_line
+    assert "sweep A" not in key_line
+    assert "header provenance, ungeneratable" in key_line  # and the original survives
 
 
 def test_a_row_for_another_architecture_survives_a_regeneration(table):
@@ -189,6 +211,34 @@ def test_a_golden_past_the_output_range_is_not_a_nonfinite_failure():
         DataFormat.Float16_b,
         DataFormat.Float16,
     ).any()
+
+
+def test_the_sweeps_own_zero_padding_is_not_data():
+    """`generate_full_tensor` pads to the tile count, so the last 257 bf16 lanes are
+    zeros the sweep never chose to feed. They inflate every lane count, and on an op
+    singular at zero they would read as a real failure -- `reciprocal` returns `Inf`
+    there against a finite golden clamp, and only its registered domain excluding zero
+    keeps those lanes out of the verdict today.
+
+    By position, not by value: one legitimate `0.0` is swept, in the middle.
+    """
+    from helpers.stimuli_generator.strategies.structured import ulp_sweep_value_count
+    from helpers.ulp_sweep import padding_lanes
+
+    fmt = DataFormat.Float16_b
+    swept = ulp_sweep_value_count(fmt, float("-inf"), float("inf"))
+    src = torch.zeros(swept + 257, dtype=torch.bfloat16)
+    pad = padding_lanes(src, fmt)
+    assert int(pad.sum()) == 257
+    assert not bool(pad[:swept].any()) and bool(pad[swept:].all())
+
+    # And it reaches both masks: a padded lane is neither measurable nor a failure.
+    golden = torch.full_like(src, 1.0)
+    result = torch.full_like(src, float("inf"))
+    assert not measurable_mask(src, golden, result, fmt)[swept:].any()
+    assert not nonfinite_failures(MathOperation.Abs, src, golden, result, fmt, fmt)[
+        swept:
+    ].any()
 
 
 def test_an_input_outside_the_ops_domain_is_not_a_nonfinite_failure():

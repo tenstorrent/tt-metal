@@ -60,6 +60,30 @@ def sweep_spec() -> StimuliSpec:
     return StimuliSpec.ulp_sweep(low=-_INF, high=_INF)
 
 
+def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+    """The tail ``generate_full_tensor`` fills with zeros to reach the tile count.
+
+    The sweep enumerates every finite value of the stimuli format -- 65,279 for
+    bfloat16, 63,487 for float16 -- into a fixed 65,536-lane tensor, so the last 257
+    (or 2,049) lanes are padding rather than data. They are not values the sweep chose
+    to feed, and they are all the same one, so they belong in no statistic: they
+    inflate every lane count, and on an op singular at zero whose registered domain
+    includes it they would read as a real failure. ``reciprocal`` is the near miss --
+    the hardware returns ``Inf`` there against a finite golden clamp, and only its
+    registered domain excluding zero keeps those 257 lanes out of the verdict.
+
+    Identified by position rather than by value, because ``0.0`` is also a legitimate
+    swept value: exactly one, in the middle of the sorted order. Confirmed on hardware
+    that the padding is the contiguous tail.
+    """
+    from helpers.stimuli_generator.strategies.structured import ulp_sweep_value_count
+
+    swept = ulp_sweep_value_count(stimuli_format_for(input_format), -_INF, _INF)
+    flat = torch.zeros(src.numel(), dtype=torch.bool)
+    flat[swept:] = True
+    return flat.reshape(src.shape)
+
+
 def measurable_mask(
     src: torch.Tensor,
     golden: torch.Tensor,
@@ -82,6 +106,7 @@ def measurable_mask(
       is still finite. ``passed_test`` rejects those positionally whatever the budget
       says, so ranking them would inflate the number without tightening the gate. One
       such lane is worth ~48,000 steps.
+    * the sweep's own zero padding -- see :func:`padding_lanes`.
     * subnormal inputs. The hardware flushes them on the way in and the golden does not,
       so ``ceil(5.69e-39)`` is 1 in the model and 0 on silicon -- 16,129 bf16 steps for
       a difference that is the unpack path's flush, not the op's accuracy. Measured, it
@@ -115,7 +140,12 @@ def measurable_mask(
     normal_input = (magnitude >= smallest_normal) | (magnitude == 0)
 
     both_measurable = ~(torch.isnan(golden) | torch.isnan(result))
-    return both_measurable & ~nonfinite_mismatches(golden, result) & normal_input
+    return (
+        both_measurable
+        & ~nonfinite_mismatches(golden, result)
+        & normal_input
+        & ~padding_lanes(src, input_format)
+    )
 
 
 def _within_safe_domain(
@@ -164,7 +194,7 @@ def nonfinite_failures(
     hardware overflow or an unexpected NaN would otherwise leave the statistics clean
     and both emit and gate would pass.
 
-    Three exclusions, all of them the sweep's own doing rather than the op's:
+    Four exclusions, all of them the sweep's own doing rather than the op's:
 
     * **subnormal inputs**, on the same grounds as in the mask -- the unpack path
       flushes them and the golden does not, so a disagreement there is the flush.
@@ -174,6 +204,7 @@ def nonfinite_failures(
       represent -- 14,334 lanes of it. Saturating there is the store doing what it must
       (on WH an fp16 destination overflow packs NaN, not Inf), not the kernel being
       wrong, and no budget on any op could be met.
+    * **the sweep's own zero padding**, which is not a value it chose to feed.
     * **an input outside the op's registered safe domain.** ``Sin`` and ``Cos`` are
       registered over ``[-pi, pi]`` and disagree on ~21,000 bf16 lanes far outside it,
       which is the case ``measurable_mask``'s own docstring cites. The budget is still
@@ -200,6 +231,7 @@ def nonfinite_failures(
         & normal_input
         & in_range
         & _within_safe_domain(op, src, input_format)
+        & ~padding_lanes(src, input_format)
     )
 
 
@@ -320,17 +352,38 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
+#: What a key line says about the run every emitted row below it came from. The sweep
+#: identity is identical on every one of them -- ~63 characters times ~2,000 rows, a
+#: quarter of the file -- so it is stated once per op instead. "except where a row says
+#: otherwise" is not hedging: rows this run did not supersede keep their own suffix.
+_MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
+
+#: The same clause, for stripping a previous run's before writing this one's. Without
+#: it a second `--ulp-emit` appends rather than replaces, and the key line accumulates
+#: one stale run identity per regeneration.
+_MEASURED_BY_RE = re.compile(
+    r";?\s*measured by: .*?, except where a row says otherwise"
+)
+
+
 def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     """One op's block: each row with its verdict, and the measurement behind it.
 
-    *key_line* is passed through verbatim. Several ops carry their measurement as a
+    *key_line* keeps whatever it already said. Several ops carry their measurement as a
     header comment on that line -- `Fill:  # 0 ULP, 115 variants` -- and it is the
     provenance for every row of theirs this sweep does not reach. Rewriting the key as
     a bare `Fill:` dropped it, and the guard that every budget names its measurement
-    then failed on rows that had one all along.
+    then failed on rows that had one all along. The run identity is *appended* to it.
+
+    Each row still carries its own number, which is what the provenance audit reads and
+    what a budget may only be raised against. What moves to the key line is the part
+    that is the same on every row: which sweep, on which arch, on which day.
     """
     order = ("in", "out", "approx", "dest")
-    out = [key_line]
+    head, sep, comment = key_line.rstrip("\n").partition("#")
+    measured_by = _MEASURED_BY.format(suffix=suffix)
+    existing = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
+    out = [f"{head.rstrip()}  # {existing + '; ' if existing else ''}{measured_by}\n"]
     for row in rows:
         metric, value = row["verdict"]
         body = ", ".join(
@@ -356,7 +409,7 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
             note += f", budget would be {value} > {ceiling:.0f}-step ceiling"
         elif metric == "block":
             note += ", block-quantized, so tolerance"
-        out.append(f"  - {{{pairs}}}  # {note}, {suffix}\n")
+        out.append(f"  - {{{pairs}}}  # {note}\n")
     return out
 
 
