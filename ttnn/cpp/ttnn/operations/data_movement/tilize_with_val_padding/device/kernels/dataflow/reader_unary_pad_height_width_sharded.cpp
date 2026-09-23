@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -23,18 +24,20 @@ void kernel_main() {
     Noc noc;
     // dfb_in0 is the input shard itself (a DFB on borrowed memory) — read-only here.
     // dfb_in1 is the row-major staging DFB the compute kernel tilizes from.
-    // dfb_pad holds one row of the pad value, reused for every padded row.
+    // pad holds one row of the pad value, reused for every padded row. It is reader-private with no
+    // second party, so the former self-loop DFB (bound PRODUCER+CONSUMER) synchronized nothing;
+    // converted to a Scratchpad. (dfb_in0 stays a DFB: it is borrowed from the input shard, which a
+    // Scratchpad cannot represent.)
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in1(dfb::in1);
-    DataflowBuffer dfb_pad(dfb::pad);
+    Scratchpad<volatile uint32_t> pad(scratch::pad);
 
     dfb_in0.reserve_back(num_input_rows);
     dfb_in1.reserve_back(num_padded_tiles_per_batch);
-    dfb_pad.reserve_back(1);
 
     uint32_t read_addr = dfb_in0.get_read_ptr();
     uint32_t write_addr = dfb_in1.get_write_ptr();
-    uint32_t pad_addr = dfb_pad.get_write_ptr();
+    uint32_t pad_addr = pad.get_base_address();
 
     {
         CoreLocalMem<uint32_t> dst(write_addr);
@@ -47,7 +50,6 @@ void kernel_main() {
     }
     read_addr += input_block_size;
     write_addr += input_block_size;
-    volatile tt_l1_ptr std::uint32_t* pad = (volatile tt_l1_ptr uint32_t*)(pad_addr);
     for (uint32_t i = 0; i < input_width_bytes >> 2; ++i) {
         pad[i] = packed_pad_value;
     }
