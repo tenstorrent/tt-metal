@@ -11,15 +11,19 @@
 //
 // Per Tensix core: output-tile rectangle [row_start, row_start + core_row_tiles)
 // x [col_start, col_start + core_col_tiles), cut into column blocks of
-// block_width tiles. Per tile-row of a block:
-//   reserve block_width pages -> tile_h stick-segment reads (all in flight)
-//   -> ONE read barrier -> push block_width pages.
-// The push/pop quantum is always the nominal block_width; only the NoC transfer
-// narrows to valid_width on the ragged last column block.
+// block_width tiles. Per tile-row: tile_h stick-segment reads in flight, one
+// barrier, one push of the nominal block_width pages (only the NoC transfer
+// narrows on the ragged last column block). With read_ahead > 1 the next
+// tile-row's reads are issued before the previous tile-row's (transaction-id)
+// barrier, so the NoC never drains between tile-rows.
+//
+// Split reader (CT `split_reader`): this RISC-V produces only the EVEN walk
+// positions; the BRISC writer produces the odd ones into its own CB.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "tilize_stick_reads.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(0);
@@ -27,40 +31,31 @@ void kernel_main() {
     constexpr uint32_t tile_h = get_compile_time_arg_val(2);            // sticks per tile-row
     constexpr uint32_t tile_col_bytes = get_compile_time_arg_val(3);    // bytes of one stick per tile-column
     constexpr uint32_t stick_page_bytes = get_compile_time_arg_val(4);  // aligned interleaved stick page
-    constexpr auto input_args = TensorAccessorArgs<5>();
-
-    // L1 stride between consecutive sticks inside one tile-row slot (nominal width).
-    constexpr uint32_t block_stick_bytes = block_width * tile_col_bytes;
+    constexpr bool split_reader = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t depth_in = get_compile_time_arg_val(6);    // CB slots (tile-rows)
+    constexpr uint32_t read_ahead = get_compile_time_arg_val(7);  // tile-rows of reads in flight
+    constexpr uint32_t in_tile_bytes = get_compile_time_arg_val(8);
+    constexpr auto input_args = TensorAccessorArgs<9>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
     const uint32_t core_row_tiles = get_arg_val<uint32_t>(2);
     const uint32_t col_start = get_arg_val<uint32_t>(3);
     const uint32_t core_col_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t traversal_rotation = get_arg_val<uint32_t>(5);
 
     const auto input_accessor = TensorAccessor(input_args, src_addr, stick_page_bytes);
 
-    const uint32_t num_col_blocks = (core_col_tiles + block_width - 1) / block_width;
-    const uint32_t row_end = row_start + core_row_tiles;
+    tilize_dataflow::Walker<block_width> walk(row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
+    tilize_dataflow::
+        StickProducer<cb_input_sticks, block_width, depth_in, read_ahead, tile_h, tile_col_bytes, in_tile_bytes>
+            producer(traversal_rotation);
 
-    for (uint32_t col_block_idx = 0; col_block_idx < num_col_blocks; ++col_block_idx) {
-        const uint32_t block_col = col_block_idx * block_width;  // relative to col_start
-        const uint32_t remaining = core_col_tiles - block_col;
-        const uint32_t valid_width = remaining < block_width ? remaining : block_width;
-        const uint32_t segment_bytes = valid_width * tile_col_bytes;
-        const uint32_t segment_offset = (col_start + block_col) * tile_col_bytes;
-
-        for (uint32_t row = row_start; row < row_end; ++row) {
-            cb_reserve_back(cb_input_sticks, block_width);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_sticks);
-            uint32_t stick_idx = row * tile_h;
-            for (uint32_t s = 0; s < tile_h; ++s) {
-                noc_async_read(input_accessor.get_noc_addr(stick_idx, segment_offset), l1_write_addr, segment_bytes);
-                l1_write_addr += block_stick_bytes;
-                ++stick_idx;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_sticks, block_width);
+    const uint32_t num_positions = walk.num_positions();
+    for (uint32_t seq = 0; seq < num_positions; ++seq, walk.advance()) {
+        if (!split_reader || (seq & 1) == 0) {
+            producer.issue(input_accessor, walk.row(), walk.first_col(), walk.valid_width());
         }
     }
+    producer.complete_all();
 }

@@ -1,25 +1,47 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// tilize writer (BRISC / NoC1) — the `store_block` block operation (op_design.md).
+// tilize writer (BRISC / NoC1) — the `store_block` block operation (op_design.md),
+// plus, under the split reader, the odd half of `load_block`.
 //
 // No kernel_lib dataflow helper writes TILE pages (write_sticks_after_untilize
 // writes ROW_MAJOR sticks), so this is a custom block operation.
 //
-// Per tile-row of a column block: wait block_width pages -> valid_width tile-page
-// writes (all in flight) -> one flush (L1 source reads done) -> pop block_width.
-// The flush, rather than a full write barrier, is enough to release the CB
-// slots; one write barrier at kernel end guarantees the data has landed.
+// store_block, per tile-row: wait block_width pages -> valid_width tile-page
+// writes in flight -> one flush (L1 source reads done) -> pop block_width. The
+// flush, rather than a full write barrier, is enough to release the CB slots;
+// one write barrier at kernel end guarantees the data has landed.
+//
+// Split reader (CT `split_reader`): this RISC-V also produces the ODD walk
+// positions into cb_input_sticks_odd (its own CB, single producer). At odd
+// position q it issues q's reads, and while they are in flight it stores every
+// position whose inputs are already published (all positions <= the last odd
+// position it pushed). Deadlock-free: each store waits on a position whose even
+// input NCRISC produces independently and whose odd input this RISC-V has
+// already pushed; the output CB (depth_out tile-rows) is drained in order.
+//
+// Tile-rows are walked with the same per-core rotation as the reader
+// (tilize_stick_reads.hpp), so the CB FIFO order agrees.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "tilize_stick_reads.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t block_width = get_compile_time_arg_val(1);     // tiles per column block (CB quantum)
     constexpr uint32_t out_tile_bytes = get_compile_time_arg_val(2);  // one output TILE page
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr bool split_reader = get_compile_time_arg_val(3) != 0;
+    constexpr uint32_t cb_input_sticks_odd = get_compile_time_arg_val(4);
+    constexpr uint32_t tile_h = get_compile_time_arg_val(5);
+    constexpr uint32_t tile_col_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t stick_page_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t depth_in = get_compile_time_arg_val(8);
+    constexpr uint32_t read_ahead = get_compile_time_arg_val(9);
+    constexpr uint32_t in_tile_bytes = get_compile_time_arg_val(10);
+    constexpr auto output_args = TensorAccessorArgs<11>();
+    constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
@@ -27,28 +49,55 @@ void kernel_main() {
     const uint32_t col_start = get_arg_val<uint32_t>(3);
     const uint32_t core_col_tiles = get_arg_val<uint32_t>(4);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(5);  // C: output tile-columns of the whole tensor
+    const uint32_t traversal_rotation = get_arg_val<uint32_t>(6);
+    const uint32_t src_addr = get_arg_val<uint32_t>(7);  // input stick buffer (split reader only)
 
     const auto output_accessor = TensorAccessor(output_args, dst_addr, out_tile_bytes);
 
-    const uint32_t num_col_blocks = (core_col_tiles + block_width - 1) / block_width;
-    const uint32_t row_end = row_start + core_row_tiles;
+    tilize_dataflow::Walker<block_width> store_walk(
+        row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
+    const uint32_t num_positions = store_walk.num_positions();
 
-    for (uint32_t col_block_idx = 0; col_block_idx < num_col_blocks; ++col_block_idx) {
-        const uint32_t block_col = col_block_idx * block_width;  // relative to col_start
-        const uint32_t remaining = core_col_tiles - block_col;
-        const uint32_t valid_width = remaining < block_width ? remaining : block_width;
+    auto store_next = [&]() {
+        tilize_dataflow::store_tile_row<cb_output_tiles, block_width, out_tile_bytes>(
+            output_accessor, store_walk.row() * tiles_per_row + store_walk.first_col(), store_walk.valid_width());
+        store_walk.advance();
+    };
 
-        for (uint32_t row = row_start; row < row_end; ++row) {
-            cb_wait_front(cb_output_tiles, block_width);
-            uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
-            uint32_t tile_idx = row * tiles_per_row + col_start + block_col;
-            for (uint32_t t = 0; t < valid_width; ++t) {
-                noc_async_write(l1_read_addr, output_accessor.get_noc_addr(tile_idx), out_tile_bytes);
-                l1_read_addr += out_tile_bytes;
-                ++tile_idx;
+    if constexpr (split_reader) {
+        const auto input_accessor = TensorAccessor(input_args, src_addr, stick_page_bytes);
+        tilize_dataflow::Walker<block_width> load_walk(
+            row_start, core_row_tiles, col_start, core_col_tiles, traversal_rotation);
+        tilize_dataflow::
+            StickProducer<cb_input_sticks_odd, block_width, depth_in, read_ahead, tile_h, tile_col_bytes, in_tile_bytes>
+                producer(traversal_rotation);
+
+        uint32_t stored = 0;     // positions [0, stored) are written
+        uint32_t published = 0;  // positions [0, published) have all their inputs pushed
+        for (uint32_t seq = 0; seq < num_positions; ++seq, load_walk.advance()) {
+            if ((seq & 1) == 0) {
+                continue;
             }
-            noc_async_writes_flushed();
-            cb_pop_front(cb_output_tiles, block_width);
+            const uint32_t pushed_before = producer.next_slot - producer.outstanding;  // odd items pushed
+            producer.issue(input_accessor, load_walk.row(), load_walk.first_col(), load_walk.valid_width());
+            const uint32_t pushed_after = producer.next_slot - producer.outstanding;
+            if (pushed_after != pushed_before) {
+                // The k-th odd item (k = pushed_after - 1) is position 2k + 1: all positions <= it are publishable.
+                published = 2 * pushed_after;
+            }
+            while (stored < published) {
+                store_next();
+                ++stored;
+            }
+        }
+        producer.complete_all();
+        while (stored < num_positions) {
+            store_next();
+            ++stored;
+        }
+    } else {
+        for (uint32_t seq = 0; seq < num_positions; ++seq) {
+            store_next();
         }
     }
     noc_async_write_barrier();

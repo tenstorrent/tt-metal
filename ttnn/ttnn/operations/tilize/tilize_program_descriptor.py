@@ -31,10 +31,19 @@ TILE_WIDTH = 32  # elements per tile row (a tile's width is always 32)
 # CB slots (semantic names; the index is just a slot).
 CB_INPUT_STICKS = 0  # reader -> compute: tile_h stick segments per tile-row, block_width tile-sized pages
 CB_OUTPUT_TILES = 1  # compute -> writer: block_width TILE pages per tile-row
+CB_INPUT_STICKS_ODD = 2  # split reader only: BRISC -> compute, the odd tile-rows (one producer per CB)
 
 # Buffer-depth knobs, counted in helper quanta (one tile-row = block_width pages).
 DEPTH_IN = 2
 DEPTH_OUT = 2
+
+# Tile-rows of stick reads a producer keeps in flight before it waits on the oldest
+# one's (transaction-id) barrier (op_design.md perf lamp "Read in-flight depth").
+# 1 = barrier every tile-row before issuing the next. Must be <= DEPTH_IN.
+# Measured flat on WH 64 cores (2 vs 1: 26.5 vs 26.9 us on [1,1,16384,64], 20.2 vs
+# 19.8 us on [1,1,16384,32]): the pipeline is DRAM-traffic-bound there, not
+# barrier-bound. Parked at the trivial value; the knob stays live.
+READ_AHEAD = 1
 
 # Per-core CB budget in bytes; the only thing low_l1 changes (l1_ledger.md -> Footprint).
 CB_BUDGET_BYTES = {False: 524288, True: 65536}
@@ -46,6 +55,18 @@ FAST_TILIZE_MAX_BLOCK_WIDTH = 255
 # Phase 0 = 1 (row split); the grid_2d_split refinement replaces this with the
 # assignment rule pinned in op_design.md.
 NUM_COL_GROUPS = 1
+
+# Split-reader knob (op_design.md perf lamp "Reader issue-rate"). When a core's
+# stick-segment reads are small, one RISC-V is issue-bound; BRISC (the writer,
+# which issues only valid_width tile writes per tile-row) then also produces the
+# odd tile-rows through its own CB. Engaged when the stick segment is at most
+# this many bytes and the core has at least two tile-rows to alternate.
+# 0 disables the split reader entirely.
+# Measured on WH 64 cores: correct but slower (19.2 -> 20.2 us on [1,1,16384,32],
+# 26.9 -> 31.9 us on [1,1,16384,64]): BRISC then carries the odd reads AND the
+# writes, and the writes alone are DRAM-throughput-bound (~130 GB/s aggregate).
+# Parked disabled; what still has to shorten first is the write path.
+SPLIT_READER_MAX_SEGMENT_BYTES = 0
 
 
 def _div_up(a, b):
@@ -123,13 +144,21 @@ def create_program_descriptor(
     col_align_tiles = _col_align_tiles(input_tensor, in_elem_bytes)
     col_groups = _column_groups(C, NUM_COL_GROUPS, col_align_tiles)
     core_col_tiles_max = max(n for _, n in col_groups)
-    per_col_tile_bytes = DEPTH_IN * in_tile_bytes + DEPTH_OUT * out_tile_bytes
-    block_width = balanced_width(
-        core_col_tiles_max,
-        per_col_tile_bytes=per_col_tile_bytes,
-        low_l1=low_l1,
-        col_align_tiles=col_align_tiles,
-    )
+
+    # The split reader decision needs the segment width, which needs block_width, which
+    # needs the CB count: resolve it for the split configuration first (the tighter
+    # budget), and keep the split only if its segments are small enough.
+    def _block_width_for(num_input_cbs):
+        per_col_tile_bytes = num_input_cbs * DEPTH_IN * in_tile_bytes + DEPTH_OUT * out_tile_bytes
+        return balanced_width(
+            core_col_tiles_max,
+            per_col_tile_bytes=per_col_tile_bytes,
+            low_l1=low_l1,
+            col_align_tiles=col_align_tiles,
+        )
+
+    block_width_split = _block_width_for(2)
+    split_segment_bytes = block_width_split * TILE_WIDTH * in_elem_bytes
 
     # ---------------- work distribution (tile_row axis) ----------------
     # The Tensix core count is read from the device at runtime, never hardcoded.
@@ -149,6 +178,12 @@ def create_program_descriptor(
     cores_with_rows = [(c, rows_g1) for c in ttnn.corerange_to_cores(core_group_1, None, True)]
     cores_with_rows += [(c, rows_g2) for c in ttnn.corerange_to_cores(core_group_2, None, True)]
 
+    # Tile-rows each core walks in total (all column blocks): the split alternates on it.
+    num_col_blocks_max = _div_up(core_col_tiles_max, block_width_split)
+    split_reader = split_segment_bytes <= SPLIT_READER_MAX_SEGMENT_BYTES and rows_g1 * num_col_blocks_max >= 2
+    num_input_cbs = 2 if split_reader else 1
+    block_width = block_width_split if split_reader else _block_width_for(1)
+
     # ---------------- circular buffers ----------------
     tile_desc = ttnn.TileDescriptor(tile_h, TILE_WIDTH)
     cb_input_sticks = ttnn.CBDescriptor(
@@ -163,6 +198,23 @@ def create_program_descriptor(
             )
         ],
     )
+    cbs = [cb_input_sticks]
+    if split_reader:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=DEPTH_IN * block_width * in_tile_bytes,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_INPUT_STICKS_ODD,
+                        data_format=input_tensor.dtype,
+                        page_size=in_tile_bytes,
+                        tile=tile_desc,
+                    )
+                ],
+            )
+        )
+    assert len(cbs) == num_input_cbs
     cb_output_tiles = ttnn.CBDescriptor(
         total_size=DEPTH_OUT * block_width * out_tile_bytes,
         core_ranges=all_cores,
@@ -178,11 +230,36 @@ def create_program_descriptor(
 
     # ---------------- kernel args ----------------
     # CT args: config only (dtype pair, tile, block_width, accessor args) -> program-cache friendly.
-    reader_ct_args = [CB_INPUT_STICKS, block_width, tile_h, TILE_WIDTH * in_elem_bytes, stick_page_bytes]
+    tile_col_bytes = TILE_WIDTH * in_elem_bytes
+    assert 1 <= READ_AHEAD <= DEPTH_IN
+    reader_ct_args = [
+        CB_INPUT_STICKS,
+        block_width,
+        tile_h,
+        tile_col_bytes,
+        stick_page_bytes,
+        int(split_reader),
+        DEPTH_IN,
+        READ_AHEAD,
+        in_tile_bytes,
+    ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    writer_ct_args = [CB_OUTPUT_TILES, block_width, out_tile_bytes]
+    writer_ct_args = [
+        CB_OUTPUT_TILES,
+        block_width,
+        out_tile_bytes,
+        int(split_reader),
+        CB_INPUT_STICKS_ODD,
+        tile_h,
+        tile_col_bytes,
+        stick_page_bytes,
+        DEPTH_IN,
+        READ_AHEAD,
+        in_tile_bytes,
+    ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    compute_ct_args = [CB_INPUT_STICKS, CB_OUTPUT_TILES, block_width]
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    compute_ct_args = [CB_INPUT_STICKS, CB_OUTPUT_TILES, block_width, int(split_reader), CB_INPUT_STICKS_ODD]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
@@ -192,9 +269,21 @@ def create_program_descriptor(
 
     col_start, core_col_tiles = col_groups[0]  # NUM_COL_GROUPS == 1: every core owns [0, C)
     row_start = 0
-    for core, core_row_tiles in cores_with_rows:
-        reader_rt_args[core.x][core.y] = [in_addr, row_start, core_row_tiles, col_start, core_col_tiles]
-        writer_rt_args[core.x][core.y] = [out_addr, row_start, core_row_tiles, col_start, core_col_tiles, C]
+    for core_idx, (core, core_row_tiles) in enumerate(cores_with_rows):
+        # Per-core traversal rotation (single source for reader AND writer): spreads the
+        # cores' concurrent stick reads / tile writes over the DRAM banks.
+        rotation = core_idx
+        reader_rt_args[core.x][core.y] = [in_addr, row_start, core_row_tiles, col_start, core_col_tiles, rotation]
+        writer_rt_args[core.x][core.y] = [
+            out_addr,
+            row_start,
+            core_row_tiles,
+            col_start,
+            core_col_tiles,
+            C,
+            rotation,
+            in_addr,
+        ]
         compute_rt_args[core.x][core.y] = [core_row_tiles, core_col_tiles]
         row_start += core_row_tiles
     assert row_start == R, f"row split covered {row_start} of {R} tile-rows"
@@ -225,5 +314,5 @@ def create_program_descriptor(
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
         semaphores=[],
-        cbs=[cb_input_sticks, cb_output_tiles],
+        cbs=cbs + [cb_output_tiles],
     )
