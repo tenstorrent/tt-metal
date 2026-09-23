@@ -26,6 +26,7 @@ from helpers.matmul_sweep import (
 )
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
 from helpers.perf.core import PerfConfig
+from helpers.perf.relevance import _runtime_fields
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -43,6 +44,37 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
+from perf_matmul import MatmulRelevance
+
+
+class MathMatmulRelevance(MatmulRelevance):
+    """``perf_math_matmul`` / ``math_matmul_test.cpp``: blocked, face-aware.
+
+    Same shape as ``MatmulRelevance`` plus the blocking and face-layout knobs
+    this kernel adds. PACK gets its own set rather than the shared ``_EXTRA``
+    because pack INIT consumes faces / partial-face / tile rows while pack
+    TILE_LOOP consumes ``DST_INDEX``; ``k_dimm`` stays dropped as above.
+    """
+
+    _EXTRA = frozenset(
+        {NUM_BLOCKS, PARTIAL_FACE, IN_TILE_DIMS, UNPACK_TRANS_WITHIN_FACE}
+    )
+    # PACK INIT uses faces / partial / tile rows; TILE_LOOP uses DST_INDEX.
+    _PACK_EXTRA = frozenset(
+        {NUM_BLOCKS, NUM_FACES, PARTIAL_FACE, IN_TILE_DIMS, DEST_INDEX}
+    )
+    unpack_runtimes = MatmulRelevance.unpack_runtimes | _EXTRA
+    # MATH_ISOLATE still runs unpack/pack INIT, which configure tiny-tile
+    # geometry from NUM_FACES before those threads return from TILE_LOOP.
+    math_runtimes = (
+        MatmulRelevance.math_runtimes | _EXTRA | frozenset({DEST_INDEX, NUM_FACES})
+    )
+    pack_runtimes = MatmulRelevance.pack_runtimes | _PACK_EXTRA
+    cong_runtimes = MatmulRelevance.cong_runtimes | _EXTRA | frozenset({DEST_INDEX})
+    pack_runtime_fields = _runtime_fields(*pack_runtimes, drop={"k_dimm"})
+
+
+MATH_MATMUL_RELEVANCE = MathMatmulRelevance()
 
 MATMUL_FORMATS = input_output_formats(
     [
@@ -300,6 +332,8 @@ def test_perf_math_matmul(
             tile_count_res=matmul_config.tile_dimensions.output_tile_cnt * num_blocks,
         ),
         dest_acc=matmul_config.dest_acc,
+        relevance=MATH_MATMUL_RELEVANCE,
+        relevance_source=__name__,
     )
 
     configuration.run(perf_report)

@@ -3,9 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
+import inspect
 import os
 import re
 import shutil
+from collections import OrderedDict
+from copy import copy
 from dataclasses import fields
 from datetime import datetime, timezone
 from functools import reduce
@@ -26,6 +29,19 @@ from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from .relevance import ALL_PERF_RUN_TYPES  # noqa: F401
+from .relevance import (
+    PerfRelevance,
+    RunTypeRelevance,
+    assert_unique_runtime_field_names,
+    execute_key,
+    maybe_relevance,
+    project_formats,
+    project_runtimes,
+    project_stimuli,
+    project_templates,
+    spec_is_full_fidelity,
+)
 from .schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
@@ -48,6 +64,37 @@ from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 # TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
+EXECUTE_CACHE_MAX_ENV = "LLK_PERF_EXECUTE_CACHE_MAX"
+_DEFAULT_EXECUTE_CACHE_MAX = 16384
+
+
+def _relevance_caller() -> str:
+    """Pytest module stem that constructed PerfConfig, for execute_key namespacing.
+
+    Walks ``f_back`` so we never pay ``inspect.stack``'s ``findsource``. Skips
+    frames under ``helpers/`` (``create_test_or_perf_config``). Prefers
+    ``Path.stem`` so the value matches ``__name__`` at an entry point. Callers
+    that wrap a shared driver should pass ``relevance_source=__name__`` instead.
+    """
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back if frame is not None else None
+        while caller is not None:
+            path = Path(caller.f_code.co_filename)
+            nxt = caller.f_back
+            if "helpers" not in path.parts:
+                return path.stem
+            caller = nxt
+        return ""
+    finally:
+        del frame
+
+
+def _cached_report_frame(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Store ``None`` rather than an empty frame so a cache hit skips the merge."""
+    if df is None or df.empty:
+        return None
+    return df
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -61,17 +108,6 @@ def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     _ = elf_dir
     return [INIT_MARKER, TILE_LOOP_MARKER]  # zone 0 = INIT, zone 1 = TILE_LOOP
 
-
-# All perf run types in canonical order. Tests that exercise the full pipeline
-# pass this; a test may still pass a subset (e.g. [MATH_ISOLATE]) when that is
-# all it can measure.
-ALL_PERF_RUN_TYPES = [
-    PerfRunType.L1_TO_L1,
-    PerfRunType.UNPACK_ISOLATE,
-    PerfRunType.MATH_ISOLATE,
-    PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
-]
 
 # Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
 _CODE_SIZE_COMPONENTS = {
@@ -751,6 +787,15 @@ class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
+    # Process-local isolate results keyed by execute_key (TILE_LOOP-observable
+    # fields). A hit copies the full profiler frame — INIT, KERNEL, TILE_LOOP —
+    # as one unit and skips the device. Pytest builds a new PerfConfig per case,
+    # so hits only happen across cases in the same worker. Full-fidelity specs
+    # (L1_TO_L1) are never stored. Bounded by LLK_PERF_EXECUTE_CACHE_MAX.
+    EXECUTE_CACHE: ClassVar[OrderedDict[tuple, dict[str, Any]]] = OrderedDict()
+    CACHE_HITS: ClassVar[int] = 0
+    CACHE_MISSES: ClassVar[int] = 0
+    CACHE_EVICTIONS: ClassVar[int] = 0
 
     def __init__(
         self,
@@ -767,6 +812,8 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        relevance: dict[PerfRunType, RunTypeRelevance] | PerfRelevance | None = None,
+        relevance_source: str | None = None,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -774,6 +821,14 @@ class PerfConfig(TestConfig):
         self.passed_templates = templates.copy()
         self.passed_runtimes = runtimes.copy()
         self.current_run_type = None
+        if isinstance(relevance, PerfRelevance):
+            relevance_map = relevance.as_map
+        else:
+            relevance_map = relevance
+            if relevance_map:
+                for spec in relevance_map.values():
+                    assert_unique_runtime_field_names(spec)
+        self.relevance = maybe_relevance(relevance_map)
 
         # TODO Add check here for all selected runs, to see if the profiler/counter supports them
         self.run_configs = [
@@ -784,6 +839,18 @@ class PerfConfig(TestConfig):
             )
             for run_type in run_types
         ]
+        if self.relevance:
+            missing = [
+                run_type
+                for _, _, run_type in self.run_configs
+                if run_type not in self.relevance
+            ]
+            if missing:
+                names = ", ".join(run_type.name for run_type in missing)
+                raise ValueError(
+                    f"relevance map has no entry for {names}; "
+                    "every PerfConfig run_type must be in the map"
+                )
 
         super().__init__(
             test_name,
@@ -801,6 +868,15 @@ class PerfConfig(TestConfig):
             l1_acc,
             skip_build_header,
             compile_time_formats,
+        )
+        self.passed_formats_config = (
+            [copy(fmt) for fmt in self.formats_config] if self.formats_config else None
+        )
+        self.passed_stimuli = (
+            copy(self.variant_stimuli) if self.variant_stimuli is not None else None
+        )
+        self.relevance_source = (
+            relevance_source if relevance_source is not None else _relevance_caller()
         )
 
     @staticmethod
@@ -928,24 +1004,158 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    @classmethod
+    def clear_relevance_cache(cls) -> None:
+        """Drop process-local isolate measurements.
+
+        Tests clear this via an autouse fixture. Workers never clear (intentional).
+        """
+        cls.EXECUTE_CACHE.clear()
+        cls.CACHE_HITS = 0
+        cls.CACHE_MISSES = 0
+        cls.CACHE_EVICTIONS = 0
+
+    @classmethod
+    def execute_cache_max(cls) -> int:
+        raw = os.environ.get(EXECUTE_CACHE_MAX_ENV)
+        if raw is None or raw.strip() == "":
+            return _DEFAULT_EXECUTE_CACHE_MAX
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"{EXECUTE_CACHE_MAX_ENV}={raw!r} is not an integer"
+            ) from exc
+        if value < 1:
+            raise ValueError(
+                f"{EXECUTE_CACHE_MAX_ENV}={raw!r} must be >= 1 "
+                f"(unset it to use the default {_DEFAULT_EXECUTE_CACHE_MAX})"
+            )
+        return value
+
+    @classmethod
+    def _execute_cache_put(cls, key: tuple, value: dict[str, Any]) -> None:
+        cache = cls.EXECUTE_CACHE
+        if key in cache:
+            cache.move_to_end(key)
+        cache[key] = value
+        limit = cls.execute_cache_max()
+        while len(cache) > limit:
+            cache.popitem(last=False)
+            cls.CACHE_EVICTIONS += 1
+
+    @classmethod
+    def log_relevance_cache_stats(cls) -> None:
+        hits = cls.CACHE_HITS
+        misses = cls.CACHE_MISSES
+        if hits == 0 and misses == 0:
+            return
+        total = hits + misses
+        logger.info(
+            "LLK relevance EXECUTE_CACHE: {} hits, {} misses ({:.0%} hit), "
+            "{} entries, {} evictions",
+            hits,
+            misses,
+            hits / total if total else 0,
+            len(cls.EXECUTE_CACHE),
+            cls.CACHE_EVICTIONS,
+        )
+
+    def _relevance_spec(self, run_type: PerfRunType) -> RunTypeRelevance | None:
+        if not self.relevance:
+            return None
+        return self.relevance.get(run_type)
+
+    def _cacheable_spec(self, run_type: PerfRunType) -> bool:
+        if self.relevance is None or spec_is_full_fidelity(
+            self._relevance_spec(run_type)
+        ):
+            return False
+        return True
+
+    def _apply_run_config(self, templates, runtimes, run_type: PerfRunType) -> None:
+        """Project unused templates (and SoL runtimes/formats/stimuli) then refresh variant_id."""
+        spec = self._relevance_spec(run_type)
+        projected_templates = project_templates(templates, spec)
+        self.current_run_type = run_type
+        if TestConfig.SPEED_OF_LIGHT:
+            projected_runtimes = project_runtimes(runtimes, spec)
+            self.templates = projected_templates + projected_runtimes
+            self.runtimes = []
+            self.compile_time_formats = True
+            self.formats_config = project_formats(self.passed_formats_config, spec)
+            if self.passed_stimuli is not None:
+                self.variant_stimuli = project_stimuli(
+                    self.passed_stimuli, projected_runtimes, spec
+                )
+            self._refresh_tile_sizes()
+        else:
+            self.templates = projected_templates
+            self.runtimes = runtimes
+        self.generate_variant_hash()
+
+    def _execute_stimuli(self, runtimes, run_type: PerfRunType):
+        stimuli = self.passed_stimuli
+        if stimuli is None:
+            return None
+        spec = self._relevance_spec(run_type)
+        if TestConfig.SPEED_OF_LIGHT:
+            return project_stimuli(stimuli, runtimes, spec)
+        return stimuli
+
+    def _execute_cache_key(
+        self, templates, runtimes, run_type: PerfRunType, run_count: int = 1
+    ) -> tuple:
+        return execute_key(
+            test_name=self.test_name,
+            run_type=run_type,
+            dest_acc=self.dest_acc,
+            templates=templates,
+            runtimes=runtimes,
+            formats=(
+                self.passed_formats_config
+                if self.passed_formats_config is not None
+                else self.formats_config
+            ),
+            speed_of_light=TestConfig.SPEED_OF_LIGHT,
+            spec=self._relevance_spec(run_type),
+            unpack_to_dest=self.unpack_to_dest,
+            l1_acc=self.l1_acc,
+            source=self.relevance_source,
+            run_count=run_count,
+            stimuli=self._execute_stimuli(runtimes, run_type),
+        )
+
+    def _elf_code_size(self, run_type: PerfRunType) -> int | None:
+        elf_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        components = _CODE_SIZE_COMPONENTS.get(run_type)
+        # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
+        if run_type == PerfRunType.L1_TO_L1 and any(
+            rt == PerfRunType.SFPU_ISOLATE for _, _, rt in self.run_configs
+        ):
+            components = ["unpack", "math", "pack", "sfpu"]
+        if components is None:
+            return None
+        return sum(
+            TestConfig.get_elf_text_size(elf_dir / f"{c}.elf") for c in components
+        )
+
     def run(self, perf_report: PerfReport, run_count=1):
         results = []
         counter_results_list = []
         code_sizes = {}
 
+        # Callers may patch formats_config between construction and run()
+        # (e.g. perf_eltwise_unary_typecast). Snapshot after those patches so
+        # SoL projection and the post-loop restore keep them.
+        if self.formats_config is not None:
+            self.passed_formats_config = [copy(fmt) for fmt in self.formats_config]
+
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
-                self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
                 # because we run TestConfig constructor only once
-                if TestConfig.SPEED_OF_LIGHT:
-                    self.templates = templates + runtimes
-                    self.runtimes = []
-                    self.compile_time_formats = True
-                else:
-                    self.templates = templates
-                    self.runtimes = runtimes
-                self.generate_variant_hash()
+                self._apply_run_config(templates, runtimes, run_type)
                 self.build_elfs()
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
@@ -954,32 +1164,39 @@ class PerfConfig(TestConfig):
         PerfConfig.TEST_COUNTER += 1
 
         for templates, runtimes, run_type in self.run_configs:
-            self.current_run_type = run_type
+            cache_key = None
+            cached = None
+            if self._cacheable_spec(run_type):
+                cache_key = self._execute_cache_key(
+                    templates, runtimes, run_type, run_count
+                )
+                cached = PerfConfig.EXECUTE_CACHE.get(cache_key)
+
+            if cached is not None:
+                PerfConfig.CACHE_HITS += 1
+                PerfConfig.EXECUTE_CACHE.move_to_end(cache_key)
+                self._apply_run_config(templates, runtimes, run_type)
+                code_size = self._elf_code_size(run_type)
+                if code_size is not None:
+                    code_sizes[run_type] = code_size
+                if cached["stats_appended"]:
+                    results.append(cached["stats_df"].copy())
+                if cached["metrics_df"] is not None:
+                    results.append(cached["metrics_df"].copy())
+                if cached["counter_df"] is not None:
+                    counter_results_list.append(cached["counter_df"].copy())
+                continue
+
+            if cache_key is not None:
+                PerfConfig.CACHE_MISSES += 1
+
             # We need to manually assign different modified templates here if the speed of light is set,
             # because we run TestConfig constructor only once
-            if TestConfig.SPEED_OF_LIGHT:
-                self.templates = templates + runtimes
-                self.runtimes = []
-                self.compile_time_formats = True
-            else:
-                self.templates = templates
-                self.runtimes = runtimes
-            self.generate_variant_hash()
+            self._apply_run_config(templates, runtimes, run_type)
 
-            elf_dir = (
-                TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
-            )
-            components = _CODE_SIZE_COMPONENTS.get(run_type)
-            # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
-            if run_type == PerfRunType.L1_TO_L1 and any(
-                rt == PerfRunType.SFPU_ISOLATE for _, _, rt in self.run_configs
-            ):
-                components = ["unpack", "math", "pack", "sfpu"]
-            if components is not None:
-                code_sizes[run_type] = sum(
-                    TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
-                    for c in components
-                )
+            code_size = self._elf_code_size(run_type)
+            if code_size is not None:
+                code_sizes[run_type] = code_size
 
             variant_raw_data = []
             variant_counter_results = []
@@ -1020,9 +1237,13 @@ class PerfConfig(TestConfig):
                 TestConfig.ENABLE_PERF_COUNTERS
                 and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
             )
+            metrics_df = None
+            counter_df = None
+            stats_appended = False
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)
+                stats_appended = True
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
@@ -1041,7 +1262,8 @@ class PerfConfig(TestConfig):
                     zone_names=zone_names,
                 )
                 if not csv_df.empty:
-                    results.append(csv_df)
+                    metrics_df = csv_df
+                    results.append(metrics_df)
 
                 # Export raw counter values to the separate counters CSV
                 if (
@@ -1054,7 +1276,35 @@ class PerfConfig(TestConfig):
                         zone_names=zone_names,
                     )
                     if not counter_csv_df.empty:
-                        counter_results_list.append(counter_csv_df)
+                        counter_df = counter_csv_df
+                        counter_results_list.append(counter_df)
+
+            if cache_key is not None and stats_appended:
+                assert stats_df is not None and not stats_df.empty
+                if (
+                    MARKER not in stats_df.columns
+                    or not (stats_df[MARKER] == TILE_LOOP_MARKER).any()
+                ):
+                    raise ValueError(
+                        f"{run_type.name} produced stats but no {TILE_LOOP_MARKER} "
+                        "row to cache"
+                    )
+                PerfConfig._execute_cache_put(
+                    cache_key,
+                    {
+                        "stats_df": stats_df,
+                        "stats_appended": True,
+                        "metrics_df": _cached_report_frame(metrics_df),
+                        "counter_df": _cached_report_frame(counter_df),
+                    },
+                )
+
+        if self.passed_formats_config is not None:
+            self.formats_config = self.passed_formats_config
+        if self.passed_stimuli is not None:
+            self.variant_stimuli = self.passed_stimuli
+        if self.passed_formats_config is not None or self.passed_stimuli is not None:
+            self._refresh_tile_sizes(self.passed_templates + self.passed_runtimes)
 
         # Assemble the per-test report frame (pure — see build_report_frame).
         combined = PerfConfig.build_report_frame(

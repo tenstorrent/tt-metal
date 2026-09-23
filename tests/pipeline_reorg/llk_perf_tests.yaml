@@ -5,6 +5,7 @@
 # LLK perf tests are no longer triggered on PR label "llk:performance"
 # ci-quiet log mode is hard-coded.
 # SPEED_OF_LIGHT is supplied by llk-perf-impl and defaults to true in the runners.
+# LLK_DISABLE_PERF_RELEVANCE is supplied by llk-perf-impl (0 when relevance-map is on).
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
 # tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh

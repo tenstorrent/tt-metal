@@ -980,6 +980,7 @@ def perf_report(request, worker_id):
 
 
 def pytest_sessionfinish(session):
+    PerfConfig.log_relevance_cache_stats()
     if hasattr(session.config, "workerinput"):
         return
 

@@ -4,19 +4,48 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import (
-    PerfRunType,
-)
+from helpers.llk_params import PerfRunType
 from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
 from helpers.perf.core import PerfConfig
+from helpers.perf.relevance import PerfRelevance
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     TILE_COUNT,
     generate_input_dim,
+)
+
+PACK_UNTILIZE_RUN_TYPES = (
+    PerfRunType.L1_TO_L1,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
+)
+
+
+class PackUntilizeRelevance(PerfRelevance):
+    """``perf_pack_untilize`` / ``pack_untilize_perf.cpp``: no unpack or math mode.
+
+    Every runtime slot stays ``KEEP_ALL``; the reuse here comes from the format
+    axis, where an input-format change misses L1_TO_L1 but hits PACK_ISOLATE.
+    ``run_types`` shares the production test's canonical run-type tuple, but the
+    production perf test intentionally does not attach this policy.
+    """
+
+    run_types = PACK_UNTILIZE_RUN_TYPES
+    # INPUT_DIMENSIONS is not in _PINNABLE_TEMPLATES, so it stays in the execute
+    # key regardless of spec.templates. Layouts that share tile_cnt (4x5 vs 5x4)
+    # therefore miss without KEEP_ALL on cong_templates / pack_templates.
+
+
+PACK_UNTILIZE_RELEVANCE = PackUntilizeRelevance()
+
+assert PACK_UNTILIZE_RELEVANCE.run_types == (
+    PerfRunType.L1_TO_L1,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
 )
 
 
@@ -79,11 +108,7 @@ def test_perf_pack_untilize(
     configuration = PerfConfig(
         "sources/pack_untilize_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=list(PACK_UNTILIZE_RUN_TYPES),
         templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(32)],
         variant_stimuli=StimuliConfig(
@@ -97,6 +122,9 @@ def test_perf_pack_untilize(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
+        # Keep this measurement full-fidelity regardless of the global
+        # LLK_DISABLE_PERF_RELEVANCE setting.
+        relevance=None,
     )
 
     configuration.run(perf_report)
