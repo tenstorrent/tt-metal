@@ -179,6 +179,53 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA,M=176) vs minimal not bit-exact";
 }
 
+TEST_F(VariableMatmulTest, GranularOutputWriteFlushesBeforeCbReuse) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    constexpr uint32_t M = 64U;
+    constexpr uint32_t K = 32U;
+    constexpr uint32_t N = 2048U;
+    constexpr uint32_t NBlockElements = 8U * 32U;
+    const VariableMatmulConfig config{
+        .M_block_size = 1,
+        .K_block_size = 1,
+        .N_block_size = 8,
+        .subblock_h = 1,
+        .subblock_w = 2,
+        .compute_with_storage_grid_size = {2, 2},
+    };
+
+    const std::vector<float> input_host(static_cast<size_t>(M) * K, 1.0F);
+    std::vector<float> weight_host(static_cast<size_t>(K) * N);
+    for (uint32_t k = 0; k < K; ++k) {
+        for (uint32_t n = 0; n < N; ++n) {
+            weight_host[static_cast<size_t>(k) * N + n] = static_cast<float>(n / NBlockElements + 1U);
+        }
+    }
+
+    auto input =
+        ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(input_host, ttnn::Shape({1U, 1U, M, K}), device);
+    auto weight =
+        ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(weight_host, ttnn::Shape({1U, 1U, K, N}), device);
+    auto offsets = make_offsets({0U, K}, device);
+    auto ref = minimal_matmul_hifi4(input, weight, config);
+
+    for (uint32_t iteration = 0; iteration < 20U; ++iteration) {
+        auto result = ttml::metal::variable_matmul_k_sliced(
+            /*input_tensor=*/input,
+            /*weight_tensor=*/weight,
+            /*config=*/config,
+            /*offsets_tensor=*/offsets,
+            /*offsets_start_index=*/0U,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false);
+
+        EXPECT_EQ(max_abs_error(result, ref), 0.0F)
+            << "granular output write corrupted a reused CB slot on iteration " << iteration;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // M-axis offset parity. InputAndOutputRow reads the input row range [a, b) and writes the same
 // range of the output parent. With matched HiFi4 settings, that sub-region must be bit-identical
