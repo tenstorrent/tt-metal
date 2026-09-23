@@ -3,25 +3,26 @@
 #
 # Each entry:
 #   name: GitHub Actions job display name.
-#   cmd: Shell command(s) to run from TT_METAL_HOME (/work). {sku} is replaced
-#     with the selected SKU by prepare_test_matrix.py.
+#   cmd: Shell command(s) to run from TT_METAL_HOME (/work).
 #   skus: SKU -> { timeout } (minutes).
 #   team: Required for time_budget verification (scaleout).
 #   owner_id: Slack user ID to notify on failure.
 # `arch` is derived from the SKU inline in the impl workflow's ARCH_NAME
 # expression (wh_* -> wormhole_b0), not authored per entry.
 #
-# The measurement runner disables the device profiler itself. Host zones come
-# from the fabric-builder Tracy category compiled into the profiled artifact.
+# Host zones come from the fabric-builder Tracy category compiled into the profiled artifact.
+# The test compares them against
+# tests/tt_metal/tt_fabric/fabric_builder_perf/golden_data/fabric_builder_perf_golden_<arch>_<cluster>.csv.
+# Dispatching with fabric-builder-perf-update-golden sets FABRIC_BUILDER_PERF_UPDATE_GOLDEN=1,
+# which rewrites the golden instead of checking it, and the new golden is uploaded with the job artifacts.
 #
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> perf).
 
 - name: T3K fabric builder cold/hot
-  cmd: python3 tests/tt_metal/tt_fabric/fabric_builder_perf/run.py --hardware {sku} --mode report --output generated/fabric-builder/{sku}
-  # Keep the list of skus in sync with the skus in tests/tt_metal/tt_fabric/fabric_builder_perf/config.json
+  cmd: pytest -svv tests/tt_metal/tt_fabric/fabric_builder_perf/test_fabric_builder_perf.py
   skus:
     wh_llmbox_perf:
-      timeout: 45 # TODO FIGURE OUT WHAT TO DO HERE
+      timeout: 5
   team: scaleout
   budget_type: perf
   owner_id: U0BRTUH9VE0 # Amogh Rajagopal TODO SEE IF YOU SHOULD MAKE A FT PERSON THE OWNER

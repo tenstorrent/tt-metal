@@ -4,7 +4,7 @@ name: "(TM-Fabric) Fabric Tests"
 #   - tm-fabric-tests-impl.yaml                   -> tests/pipeline_reorg/fabric_tests.yaml
 #                                                   + fabric-cpu-only-tests-impl.yaml (CPU-only)
 #   - tm-fabric-tests-perf-impl.yaml              -> tests/pipeline_reorg/fabric_perf_tests.yaml
-#   - tm-fabric-builder-tests-perf-impl.yaml      -> tests/pipeline_reorg/fabric_builder_perf_tests.yaml 
+#   - tm-fabric-builder-tests-perf-impl.yaml      -> tests/pipeline_reorg/fabric_builder_perf_tests.yaml
 #
 # Scheduled run (nightly cron) covers CPU-only tests only.
 #
@@ -113,6 +113,11 @@ on:
         required: false
         default: "ALL_SKUS_IN_TESTS"
         type: string
+      fabric-builder-perf-update-golden:
+        description: "Regenerate the fabric builder perf golden CSV instead of checking it (uploaded as an artifact)"
+        required: false
+        default: false
+        type: boolean
       platform:
         required: false
         type: choice
@@ -257,3 +262,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-fabric-builder.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-fabric-builder.outputs.wheel-artifact-name }}
       enabled-skus: ${{ inputs.fabric-builder-perf-enabled-skus || 'ALL_SKUS_IN_TESTS' }}
+      update-golden: ${{ inputs.fabric-builder-perf-update-golden || false }}

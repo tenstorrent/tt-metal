@@ -1,7 +1,7 @@
 name: "[internal] TM Fabric Builder Perf Tests"
 
 # Runs the fabric builder perf matrix from tests/pipeline_reorg/fabric_builder_perf_tests.yaml.
-# Host-zone cold/hot measurements. The profiled build is selected by the parent.
+# Host-zone cold/hot measurements checked against the golden CSV. The profiled build is selected by the parent.
 
 on:
   workflow_call:
@@ -25,6 +25,11 @@ on:
         type: string
         default: ""
         description: "Comma-separated entry names from fabric_builder_perf_tests.yaml to run (default: all)."
+      update-golden:
+        required: false
+        type: boolean
+        default: false
+        description: "Rewrite the golden CSV from this run instead of checking against it."
 
 jobs:
   load-test-matrix:
@@ -93,8 +98,7 @@ jobs:
         TT_METAL_DEVICE_PROFILER: 0
         TT_METAL_STREAMING_PROFILER: 0
         TRACY_NO_INVARIANT_CHECK: 1
-        FABRIC_BUILDER_BUILD_ARTIFACT: ${{ inputs.build-artifact-name }}
-        FABRIC_BUILDER_DOCKER_IMAGE: ${{ inputs.docker-image }}
+        FABRIC_BUILDER_PERF_UPDATE_GOLDEN: ${{ inputs.update-golden && '1' || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -122,14 +126,24 @@ jobs:
       - name: Publish comparison summary
         if: always()
         run: |
-          report="generated/fabric-builder/${{ matrix.test-group.sku }}/summary.md"
-          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
-      - name: Upload traces, logs, timings, and baseline candidate
+          for summary in generated/fabric_builder_perf/*/summary_*.txt; do
+            [[ -f "$summary" ]] || continue
+            {
+              echo "### $(basename "$(dirname "$summary")")"
+              echo '```'
+              cat "$summary"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Upload traces, logs, summaries, and golden
         if: ${{ !cancelled() }}
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         with:
-          prefix: fabric-builder-${{ matrix.test-group.sku }}
-          path: /work/generated/fabric-builder/${{ matrix.test-group.sku }}
+          prefix: fabric-builder-perf-${{ matrix.test-group.sku }}
+          path: |
+            /work/generated/fabric_builder_perf
+            !/work/generated/fabric_builder_perf/*/cache
+            /work/tests/tt_metal/tt_fabric/fabric_builder_perf/golden_data
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

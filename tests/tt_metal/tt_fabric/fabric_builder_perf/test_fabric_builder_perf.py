@@ -31,7 +31,7 @@ CACHES = ["cold", "hot"]
 PHASE_MARKER = "FabricBuilderBenchmark::{cache}"
 
 DEFAULT_TOLERANCE_PERCENT = 10.0
-BENCHMARK_TIMEOUT_S = 900
+BENCHMARK_TIMEOUT_S = 180
 CAPTURE_EXIT_TIMEOUT_S = 60
 TRACY_PORTS = range(8086, 8500)
 
@@ -86,7 +86,7 @@ def get_output_dir(tt_metal_home: Path) -> Path:
 def get_golden_path(tt_metal_home: Path, arch: str, cluster_type: str) -> Path:
     return (
         tt_metal_home
-        / "tests/tt_metal/tt_fabric/fabric_builder_perf"
+        / "tests/tt_metal/tt_fabric/fabric_builder_perf/golden_data"
         / f"fabric_builder_perf_golden_{arch}_{cluster_type}.csv"
     )
 
@@ -241,6 +241,7 @@ def write_golden_rows(golden_path: Path, fabric_config: str, durations: dict[tup
         }
         for (cache, zone), duration_ms in durations.items()
     ]
+    golden_path.parent.mkdir(parents=True, exist_ok=True)
     with golden_path.open("w", newline="") as golden_file:
         writer = csv.DictWriter(golden_file, fieldnames=GOLDEN_HEADERS)
         writer.writeheader()
