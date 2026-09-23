@@ -68,7 +68,8 @@ ALWI void rope_sfpu_fused_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuTy
  * Requires rope_sfpu_fused_init(). See sfpu_rope_fused_all_rows for the operand layout.
  *
  * Fused cos/sin tiles sit at ``cs_base``, ``cs_stride`` rows apart
- * (even columns = cos, odd columns = sin).
+ * (even columns = cos, odd columns = sin). Loads and stores follow DST_ACCUM_MODE,
+ * including BF16 inputs unpacked into FP32 DEST.
  *
  * With has_scale, scale_fp32 (an fp32 bit pattern, read from L1 at runtime) is
  * folded into cos/sin for a deferred normalization.
@@ -88,10 +89,17 @@ ALWI void rope_sfpu_inplace_fused_rows(const std::uint32_t scale_fp32) {
     static_assert((x_base % 4) == 0 && (x_stride % 4) == 0, "x rows must be 4-row aligned");
     MATH(SAN_HOOK(unsupported()));
     MATH((sfpu::sfpu_rope_dest_setup()));
-    MATH(
-        (sfpu::
-             sfpu_rope_fused_all_rows<Ht, Wt, x_base, x_stride, cs_base, cs_stride, has_scale, tile_h, cos_sin_per_row>(
-                 scale_fp32)));
+    MATH((sfpu::sfpu_rope_fused_all_rows<
+          Ht,
+          Wt,
+          x_base,
+          x_stride,
+          cs_base,
+          cs_stride,
+          has_scale,
+          tile_h,
+          cos_sin_per_row,
+          DST_ACCUM_MODE>(scale_fp32)));
 }
 
 /**
@@ -100,7 +108,8 @@ ALWI void rope_sfpu_inplace_fused_rows(const std::uint32_t scale_fp32) {
  */
 template <std::uint32_t Ht, std::uint32_t Wt, std::uint32_t tile_h = 1, bool cos_sin_per_row = false>
 ALWI void rope_sfpu_inplace_fused() {
-    static_assert(Ht * Wt + Wt <= 8, "rope_sfpu: x + fused cos/sin must fit the 8 Tile32x32 slots of half DEST");
+    constexpr std::uint32_t dest_tiles = DST_ACCUM_MODE ? 4 : 8;
+    static_assert(Ht * Wt + Wt <= dest_tiles, "rope_sfpu: x + fused cos/sin must fit in half DEST");
     constexpr std::uint32_t T = ROPE_SFPU_TILE_ROWS;
     rope_sfpu_inplace_fused_rows<Ht, Wt, 0, T, (Ht * Wt) * T, T, false, tile_h, cos_sin_per_row>(0);
 }

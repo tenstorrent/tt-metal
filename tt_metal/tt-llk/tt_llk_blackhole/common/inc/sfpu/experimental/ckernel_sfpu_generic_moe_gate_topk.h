@@ -353,6 +353,20 @@ inline void _init_generic_moe_gate_topk_()
     sfpu_reciprocal_init<false>();
 }
 
+// GPT-OSS uses biased logits both for selection and softmax. Copy the unsorted
+// biased scores before the paired sort so index association and tail handling stay
+// identical to the original-score path.
+template <int num_experts, int offset = 0>
+inline void _generic_moe_gate_copy_biased_scores_()
+{
+    if constexpr (offset < num_experts / 16)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset);
+        TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_scores_tile + offset);
+        _generic_moe_gate_copy_biased_scores_<num_experts, offset + 2>();
+    }
+}
+
 // generate_indices fills DST[1] with the position identity [0..N-1] before sorting. Set it false when the
 // caller has already loaded DST[1] with its own mapping (e.g. bit-15-flagged SRAM slots) via
 // copy_tile(input_indices, 0, 1): the sort's LREG4-7 LO16 load then reads those values verbatim and the
@@ -363,8 +377,9 @@ template <
     int num_total_experts,
     bool zero_tail,
     bool full_sort,
-    bool generate_indices = true,
-    bool do_extra_scale   = false>
+    bool generate_indices    = true,
+    bool do_extra_scale      = false,
+    bool scores_include_bias = false>
 inline void _generic_moe_gate_topk_(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0)
 {
     static_assert(num_selected_experts >= 1 && num_selected_experts <= 16);
@@ -375,6 +390,10 @@ inline void _generic_moe_gate_topk_(std::uint32_t eps, std::uint32_t scale, std:
     constexpr int expert_block_size        = num_selected_experts > 8 ? 128 : 64;
     constexpr int padded_num_total_experts = ((num_total_experts + expert_block_size - 1) / expert_block_size) * expert_block_size;
 
+    if constexpr (scores_include_bias)
+    {
+        _generic_moe_gate_copy_biased_scores_<padded_num_total_experts>();
+    }
     if constexpr (generate_indices)
     {
         _topk_moe_generate_indices_<padded_num_total_experts>();
