@@ -15,7 +15,7 @@
  * ocb is unused on Quasar (different packer architecture); accepted to keep
  * the API arch-agnostic with Blackhole/Wormhole B0 callers that thread the output CB through.
  *
- * @tparam reduce_type: Pool type; MAX selects negative-infinity filling, except MX outputs retain zero fill.
+ * @tparam reduce_type: Pool type; MAX selects negative-infinity fill, except MX and integer outputs keep zero fill.
  * @tparam reduce_dim: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @tparam pack_mode: Unused on Quasar
  * @param ocb: The output Dataflow Buffer identifier
