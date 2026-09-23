@@ -189,3 +189,7 @@ Tiny16 MLP passed12exactchecks underWorkerWatcher. IndependentQKV8/prefix8 loop 
 Sourcebb4a9cf9 full128/32 withheadselect: tiny16=7.971907549; normal32+QKV4/prefix4=8.143589742; QKV6/prefix6=8.161759612; tiny16+QKV4=7.966220905; tiny16+compactall=7.974274614. Fivewarmunprofiledtrials andexactteacher/all64KV/greedy each. Native7.635744 stillfaster; noend-to-endwin. IndependentQKV6loop andtiny16loop WorkerWatcherbothpassedreal0/31,inactive,replay,pageedges. TinyMLPcomponent141.535025323us vscontrol144.442014862 atbuffers2, twelveexactchecks. Compact transportdoesnotaddtoTiny16 gain; keepoff. QKV4difference~5.7us needsmatchedconfirmation.
 
 Next unqualifiedsource experiments: fullDST synchronization allows14-wideGU and16-wideO/down/head subblocks atsameKorder/rounding; comparehead/mlp independently. Norm16-row geometry andoptional8-tile fullDST subblocks preservecolumnreduction order. Full-loop plusfullheadWatcher gates first.
+
+## 2026-09-23 13:02 UTC — wide projection correctness failure
+
+Source77a81d2f fullDST MLP14/16 subblocks withprojectionTile16 producednonfiniteoutput inreal0/31 loopWatcher atposition127. NoWatcherboundsfault/hang; processclosednormally. ThisvariantisNOTqualified. Savedoriginal /tmp focusedfailuredata underartifacts/full-dst-loop-watcher-evidence beforeothertests. Runnernowassignsunique QB2_MEGAKERNEL_ARTIFACT_DIR forfocusedtests. Norm-only gatescontinueindependently. NeedisolatefullDST32geometry versus16geometrybeforeacceptinganywideprojectionmode.
