@@ -67,6 +67,11 @@ GUARDS = {
     "sharded_accessor": ((1, 1, 2048, 512), None, "hs", "dram", 32),
     "tiny_tile16": ((1, 1, 16384, 64), None, "dram", None, 16),
     "retile_32_to_16": ((1, 1, 16384, 64), 32, "dram", None, 16),
+    # Refinement 5 / 6 additions: 2-D split, low_l1, narrow (64-byte) sticks, 2 KiB sticks (gated off)
+    "grid_2d_short_wide": ((1, 1, 32, 2048), None, "dram", None, 32),
+    "low_l1_narrow": ((1, 1, 16384, 64), None, "dram", None, 32, True),
+    "narrow32_dram": ((1, 1, 16384, 32), None, "dram", None, 32),
+    "wide1024_dram": ((1, 1, 2048, 1024), None, "dram", None, 32),
 }
 
 
@@ -79,9 +84,12 @@ def _mc(name):
     }[name]
 
 
+@pytest.mark.parametrize("variant", list(VARIANTS), ids=list(VARIANTS))
 @pytest.mark.parametrize("guard", list(GUARDS), ids=list(GUARDS))
-def test_r3_guard(device, guard):
-    shape, in_tile_h, in_mc, out_mc, tile_h = GUARDS[guard]
+def test_r3_guard(device, monkeypatch, guard, variant):
+    for k, v in VARIANTS[variant].items():
+        monkeypatch.setattr(pd, k, v)
+    shape, in_tile_h, in_mc, out_mc, tile_h, *low_l1 = GUARDS[guard]
     torch.manual_seed(0)
     x = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
     layout_kwargs = (
@@ -91,6 +99,8 @@ def test_r3_guard(device, guard):
     )
     t = ttnn.from_torch(x, dtype=ttnn.bfloat16, device=device, memory_config=_mc(in_mc), **layout_kwargs)
     kwargs = {} if tile_h == 32 else dict(tile=ttnn.Tile([tile_h, 32]))
+    if low_l1:
+        kwargs["low_l1"] = True
     for _ in range(REPS):
         out = tilize(t, memory_config=_mc(out_mc), **kwargs)
     assert torch.equal(ttnn.to_torch(out), x)

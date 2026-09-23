@@ -190,6 +190,8 @@ elif grid_2d_split(R, C, N).num_col_groups > 1:            -> grid_2d_split     
 else:                                                      -> row_split_interleaved     (built)
 ```
 
+**`load_block` variant `bank_coalesced` (built, Refinement 6).** Inside `row_split_interleaved` / `grid_2d_split`, a DRAM-interleaved input whose every Tensix core reads whole sticks (`block_width == C`, one column block) of at most `BANK_COALESCE_MAX_STICK_BYTES` = 256 bytes swaps `StickProducer` for the bank-coalesced reader. Stick page `p` sits in bank `p mod NB` at offset `(p div NB) * page`, so one NoC read per bank fetches a run's sticks from that bank into a reader-private staging ring. NoC loopback moves then scatter each stick into the tilize layout of the `cb_input_sticks` slot. Compute, the writer and the CB quanta are unchanged, except that the quantum on this path is `BANK_COALESCE_QUANTUM_ROWS` = 2 tile-rows. Same bytes at the DRAM boundary; per 64-stick unit, about `NB` reads of 5–6 pages instead of 64 one-page reads. See `l1_ledger.md` → Bank-coalesced.
+
 `resident_ok(side)`: shard spec is legacy-2D or ND with a 2-D equivalent, shard width a multiple of 32 elements and shard height a multiple of `tile_h`. Phase 0's `validate()` refuses everything that does not reach `row_split_interleaved`, and within it refuses `tile_grid ∈ {short_wide, square_large}`.
 
 | Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |

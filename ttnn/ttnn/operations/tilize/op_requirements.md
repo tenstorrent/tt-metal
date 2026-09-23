@@ -192,7 +192,7 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - **Lamps.** The column-group floor lamp favors maximum participation, so it is parked at 1. Gated column pipelining (`PIPELINE_MIN_POSITIONS` 2, ≥ 2 KiB segments) takes square_large from 92.3 to 87.0 µs.
 - **What is left.** short_wide is one tile-row per core: 32 reads of 64–256 bytes, then one tilize, then 1–4 writes, fully serialized. Launch and fill latency are most of its ~3.7 µs.
 
-### [ ] Refinement 6 — Speed up the perf-flagged profile (bank-coalesced stick reads)
+### [x] Refinement 6 — Speed up the perf-flagged profile (bank-coalesced stick reads)
 
 **Type**: perf
 
@@ -205,6 +205,12 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - No SUPPORTED change.
 
 **Done when**: measured device-ns improves on [1,1,16384,64] at this exact config, with the core count reported and the output bit-exact. The golden suite stays green, with no regression across the config-spanning guard set (one representative per kernel path × layout × placement: narrow- and wide-row interleaved DRAM, L1 interleaved, sharded resident, sharded accessor, tiny tile, retile, 2-D split, `low_l1`).
+**Outcome**: landed. [1,1,16384,64] takes 25.7–26.0 → 23.3–23.5 µs on 64 of 64 Tensix cores (WH B0, −9 %, medians of 3, bit-exact).
+- **Mechanism.** The `bank_coalesced` load_block issues one NoC read per DRAM bank per run of tile-rows (~5 sticks each) instead of one 128-byte read per stick, then a NoC-loopback scatter into the tilize stick layout. The quantum on this path is 2 tile-rows.
+- **Other shapes.** [1,1,16384,32] 18.2 → 13.3 µs (−27 %) and [1,1,32768,64] 51.5 → 46.3 µs (−10 %). The path is gated to sticks of at most 256 bytes, because 2 KiB sticks regressed +7.6 %. The rest of the guard set is within noise.
+- **Bottleneck now.** Aggregate DRAM throughput for the read + write mix. The no-transfer floor is 2.3 µs (was 8.1). Reads only take 12.0 µs, flat in the per-bank read size. Writes only take 17.8 µs, and the same on 32 Tensix cores as on 64. The scatter costs ~22 cycles per stick but only ~1.3 µs of the wall.
+- **Writer twin.** Measured and not built: one 4 KiB bank-contiguous write per tile-row made writes-only slower, 17.0 → 28.3 µs.
+- **Next.** Try raising DRAM write efficiency, e.g. read/write phase grouping to cut DRAM bus turnarounds. I did not try it here because it is outside this refinement's read-coalescing scope.
 
 ### [ ] Refinement 7 — Numerical formats: fp32 / fp8 / integer inputs, block-float and integer outputs
 

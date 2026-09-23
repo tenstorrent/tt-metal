@@ -77,6 +77,16 @@ No CB is added, removed or resized by the regime itself: each Tensix core runs t
 
 Data movement (`grid_2d_split`): the same minimum bytes as the row split (input 1 DRAM crossing, output 1 DRAM crossing, 0 cross-core bytes). Transactions: `R * tile_h * g_c` stick-segment reads of `core_col_tiles * 32 * in_elem_bytes` bytes (short_wide_canonical [1,1,32,2048] on 64 Tensix cores: 64-byte segments, 32 per core) + `R * C` tile-page writes.
 
+## Bank-coalesced stick reads (`bank_coalesced` load_block, Refinement 6)
+
+A DRAM-interleaved Layout::ROW_MAJOR input read as whole sticks of at most `BANK_COALESCE_MAX_STICK_BYTES` (256 bytes) in one column block per Tensix core (`block_width == C`). `cb_input_sticks` / `cb_output_tiles` rows are unchanged in format and producer / consumer. Their quantum on this path is `BANK_COALESCE_QUANTUM_ROWS` = 2 tile-rows (full 32-row equivalents) instead of the `QUANTUM_MIN_TILES` floor. One reader-private CB is added.
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_coalesce_staging` (index 3 = the retile staging slot; `bank_coalesced` only) | `BANK_COALESCE_STAGE_DEPTH * rows_per_quantum * tile_h` pages of `stick_page_bytes` (one aligned stick page) | `BANK_COALESCE_STAGE_DEPTH` units (default 2): one unit being scattered into `cb_input_sticks`, the next unit's per-bank reads in flight (transaction-id prefetch). Capacity equals the live set | `{tile_row: streams → rows_per_quantum tile-rows per unit (the CB quantum), tile_col: spans → C (the whole stick), image: streams (folded), stick_in_tile_row: spans → tile_h}`; inside a unit the sticks are bank-major (bank j's sticks `first + j, first + j + NB, …` back to back) | input dtype (raw bytes; never unpacked) | reader (one NoC read per DRAM bank per run of consecutive tile-rows) | reader (NoC loopback reads, one packet per stick, into `cb_input_sticks`). One RISC-V owns both ends, so it never pushes or pops; ordering is by transaction id (`1..depth` for the staging reads, `depth + 1` for the scatter) | whole kernel, `bank_coalesced` only | aliases the retile staging slot: the two regimes are disjoint, so one CB index (and the reader's CT arg) serves both. Cannot be `cb_input_sticks` itself: a bank-major run is a transpose of the tilize stick order, so the scatter reads staging while it writes the slot. Counted in the `rows_per_quantum` budget cap (`per_row_bytes += depth * tile_h * stick_page_bytes`); the path is only taken when one tile-row of it still fits `CB_BUDGET_BYTES[low_l1]` |
+
+Data movement (`bank_coalesced`): input 1 DRAM crossing of every stick page (the same bytes as the row split), in `≤ 2 * NB` reads per unit of `~rows_per_quantum * tile_h / NB` pages each (64 sticks per unit → 12 reads of 5–6 × 128 bytes on WH at W = 64 bf16) instead of one 128-byte read per stick; plus one core-local L1 → L1 re-lay of every input byte (the loopback scatter, one `C * 32 * in_elem_bytes`-byte move per stick); output 1 DRAM crossing as in the row split. No cross-core traffic.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate / source that establishes it |

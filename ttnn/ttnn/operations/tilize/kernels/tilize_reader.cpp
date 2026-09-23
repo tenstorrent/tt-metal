@@ -149,6 +149,155 @@ FORCE_INLINE void read_retile(
     out.finish();
 }
 
+// bank_coalesced load_block (Refinement 6): the stick reader for a DRAM-interleaved input whose
+// every Tensix core reads WHOLE sticks in one column block (host-gated). Stick page p lives in
+// bank p % num_banks at offset (p / num_banks) * stick_page_bytes, so the sticks of one run of
+// consecutive tile-rows that share a bank are contiguous in that bank: one NoC read per bank
+// fetches all of them (~count / num_banks sticks instead of one 128-byte read per stick).
+//
+// Per CB quantum (rows_per_quantum walk positions = a unit): its runs of consecutive tile-rows
+// (a rotated walk wraps at most once inside a unit) are read bank by bank into a reader-private
+// staging ring slot (bank-major: bank j's sticks first + j, first + j + NB, ... back to back),
+// with up to stage_depth - 1 units in flight ahead. Once a unit has landed, NoC loopback reads
+// (one packet per stick, the RISC-V only issues commands, as in FaceWalk) move each stick to
+// its tilize position in the reserved cb_input_sticks slot; after their barrier the slot is
+// pushed. Compute and the writer see the same slots, in the same walk order, as StickProducer's.
+//
+// Bank rotation: each core starts its per-run bank loop at bank_rotation % banks, so the 64
+// cores' concurrent requests spread over the banks.
+template <
+    uint32_t cb_input_sticks,
+    uint32_t cb_staging,
+    uint32_t block_width,
+    uint32_t tile_h,
+    uint32_t stick_bytes,       // L1 bytes of one stick in cb_input_sticks (the whole stick's data)
+    uint32_t stick_page_bytes,  // aligned interleaved page stride (staging stride too)
+    uint32_t rows_per_quantum,
+    uint32_t stage_depth,
+    uint32_t num_banks,
+    bool scatter_write,
+    typename Accessor>
+FORCE_INLINE void read_bank_coalesced(
+    const Accessor& accessor,
+    uint32_t row_start,
+    uint32_t core_row_tiles,
+    uint32_t col_start,
+    uint32_t core_col_tiles,
+    uint32_t row_rotation,
+    uint32_t bank_rotation) {
+    static_assert(stage_depth >= 1 && stage_depth <= 14, "one NoC transaction id per staging slot + the scatter's");
+    static_assert(stick_bytes <= stick_page_bytes, "a stick's data fits its page");
+    constexpr uint32_t scatter_trid = stage_depth + 1;
+    constexpr uint32_t stage_slot_bytes = rows_per_quantum * tile_h * stick_page_bytes;
+    constexpr uint32_t slot_pages = rows_per_quantum * block_width;
+
+    // Bank j of a run of `count` sticks: count / NB sticks, one more for j < count % NB; its
+    // sticks sit in staging after those of banks 0 .. j - 1.
+    struct Run {
+        uint32_t banks, q, rem;
+        explicit Run(uint32_t count) :
+            banks(count < num_banks ? count : num_banks), q(count / num_banks), rem(count % num_banks) {}
+        uint32_t sticks(uint32_t j) const { return q + (j < rem ? 1 : 0); }
+        uint32_t offset(uint32_t j) const { return j * q + (j < rem ? j : rem); }
+    };
+
+    // Visit the runs of consecutive tile-rows of the next `n` walk positions:
+    // fn(first tile-row, tile-rows in run, unit position of the run's first tile-row).
+    auto for_each_run = [](tilize_dataflow::Walker<block_width>& w, uint32_t n, auto&& fn) {
+        uint32_t p = 0;
+        while (p < n) {
+            const uint32_t run_row = w.row();
+            uint32_t run_len = 1;
+            w.advance();
+            while (p + run_len < n && w.row() == run_row + run_len) {
+                ++run_len;
+                w.advance();
+            }
+            fn(run_row, run_len, p);
+            p += run_len;
+        }
+    };
+
+    tilize_dataflow::Walker<block_width> issue_walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+    tilize_dataflow::Walker<block_width> scatter_walk(
+        row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+    const uint32_t num_positions = issue_walk.num_positions();
+    const uint32_t num_units = (num_positions + rows_per_quantum - 1) / rows_per_quantum;
+    auto unit_rows = [&](uint32_t k) {
+        const uint32_t left = num_positions - k * rows_per_quantum;
+        return left < rows_per_quantum ? left : rows_per_quantum;
+    };
+    const uint32_t stage_base = get_write_ptr(cb_staging);
+
+    auto issue = [&](uint32_t k) {
+        const uint32_t stage = stage_base + (k % stage_depth) * stage_slot_bytes;
+        noc_async_read_set_trid(1 + (k % stage_depth));
+        for_each_run(issue_walk, unit_rows(k), [&](uint32_t run_row, uint32_t run_len, uint32_t p) {
+            const uint32_t first_stick = run_row * tile_h;
+            const Run run(run_len * tile_h);
+            const uint32_t run_stage = stage + p * tile_h * stick_page_bytes;
+            uint32_t j = bank_rotation % run.banks;
+            for (uint32_t b = 0; b < run.banks; ++b) {
+                noc_async_read(
+                    accessor.get_noc_addr(first_stick + j),
+                    run_stage + run.offset(j) * stick_page_bytes,
+                    run.sticks(j) * stick_page_bytes);
+                if (++j == run.banks) {
+                    j = 0;
+                }
+            }
+        });
+    };
+
+    auto scatter = [&](uint32_t k) {
+        const uint32_t n = unit_rows(k);
+        const uint32_t stage = stage_base + (k % stage_depth) * stage_slot_bytes;
+        cb_reserve_back(cb_input_sticks, slot_pages);
+        const uint32_t slot = get_write_ptr(cb_input_sticks);
+        if constexpr (scatter_write) {
+            noc_async_write_one_packet_set_state(get_noc_addr(0), stick_bytes);
+        } else {
+            noc_async_read_set_trid(scatter_trid);
+            noc_async_read_one_packet_set_state(get_noc_addr(0), stick_bytes);
+        }
+        for_each_run(scatter_walk, n, [&](uint32_t, uint32_t run_len, uint32_t p) {
+            const Run run(run_len * tile_h);
+            uint32_t src = stage + p * tile_h * stick_page_bytes;
+            for (uint32_t j = 0; j < run.banks; ++j) {
+                uint32_t dst = slot + (p * tile_h + j) * stick_bytes;
+                for (uint32_t i = run.sticks(j); i > 0; --i) {
+                    if constexpr (scatter_write) {
+                        noc_async_write_one_packet_with_state(src, dst);
+                    } else {
+                        noc_async_read_one_packet_with_state(src, dst);
+                    }
+                    src += stick_page_bytes;
+                    dst += num_banks * stick_bytes;
+                }
+            }
+        });
+        if constexpr (scatter_write) {
+            noc_async_write_barrier();
+        } else {
+            noc_async_read_barrier_with_trid(scatter_trid);
+        }
+        cb_push_back(cb_input_sticks, n * block_width);
+    };
+
+    const uint32_t prefetch = num_units < stage_depth - 1 ? num_units : stage_depth - 1;
+    for (uint32_t k = 0; k < prefetch; ++k) {
+        issue(k);
+    }
+    for (uint32_t k = 0; k < num_units; ++k) {
+        if (k + stage_depth - 1 < num_units) {
+            issue(k + stage_depth - 1);  // lands in the slot unit k - 1 was scattered out of
+        }
+        noc_async_read_barrier_with_trid(1 + (k % stage_depth));
+        scatter(k);
+    }
+    noc_async_read_set_trid(0);
+}
+
 void kernel_main() {
     constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(0);
     constexpr uint32_t block_width = get_compile_time_arg_val(1);       // tiles per column block (CB quantum)
@@ -176,8 +325,13 @@ void kernel_main() {
     constexpr uint32_t pad_noc_min_bytes = get_compile_time_arg_val(23);  // shorter fills are CPU stores
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(24);         // input element size
     constexpr bool w_tail_persist = get_compile_time_arg_val(25) != 0;    // padded: band-fill first pass only
-    constexpr auto input_args = TensorAccessorArgs<26>();
+    constexpr uint32_t coalesce_depth = get_compile_time_arg_val(26);     // 0, else bank_coalesced staging units
+    constexpr bool coalesce_scatter_write = get_compile_time_arg_val(27) != 0;  // loopback writes, else reads
+    constexpr auto input_args = TensorAccessorArgs<28>();
     static_assert(!padded || !split_reader, "the split reader has no pad path");
+    static_assert(
+        coalesce_depth == 0 || (!padded && !split_reader && pages_per_stick == 1),
+        "bank_coalesced: whole unpadded sticks");
     static_assert(!padded || depth_in + 1 <= 15, "the fill's transaction id follows the slots' 1..depth_in");
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -223,6 +377,22 @@ void kernel_main() {
     }
 
     const auto input_accessor = TensorAccessor(input_args, src_addr, stick_page_bytes);
+
+    if constexpr (coalesce_depth != 0) {
+        read_bank_coalesced<
+            cb_input_sticks,
+            cb_retile_staging,  // the reader-private staging slot (retile and bank_coalesced are disjoint)
+            block_width,
+            tile_h,
+            block_width * tile_col_bytes,
+            stick_page_bytes,
+            rows_per_quantum,
+            coalesce_depth,
+            NUM_DRAM_BANKS,
+            coalesce_scatter_write>(
+            input_accessor, row_start, core_row_tiles, col_start, core_col_tiles, row_rotation, stick_rotation);
+        return;
+    }
 
     tilize_dataflow::Walker<block_width> walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
     tilize_dataflow::StickProducer<

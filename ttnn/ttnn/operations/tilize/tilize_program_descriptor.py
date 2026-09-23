@@ -56,6 +56,9 @@ CB_OUTPUT_TILES = 1  # compute -> writer: block_width TILE pages per tile-row
 CB_INPUT_STICKS_ODD = 2  # split reader only: BRISC -> compute, the odd tile-rows (one producer per CB)
 CB_RETILE_STAGING = 3  # retile only: reader-private staging of whole input tiles (or the resident input shard)
 CB_PAD_SOURCE = 4  # padded only: reader-private region of fill values, the source of NoC loopback fills
+# bank_coalesced only: reader-private staging ring of bank-major stick runs. Aliases the retile
+# staging slot: the two regimes are disjoint (a CB index, and the reader's CT arg, serve both).
+CB_COALESCE_STAGING = CB_RETILE_STAGING
 
 # Buffer-depth knobs, counted in CB quanta (one quantum = rows_per_quantum tile-rows
 # of block_width pages each).
@@ -234,6 +237,36 @@ class PadSpec:
 # issue congests the DRAM banks) and the full op flat (25.2 / 25.8 vs 25.4 us). Parked off; it
 # is the addressing a bank-coalesced read (Refinement 6) builds on.
 BANK_STRIDE = 0
+
+# ---- Refinement 6: bank-coalesced stick reads (bank_coalesced load_block, tilize_reader.cpp).
+# On a DRAM-interleaved input, stick page p lives in bank p % NB at offset (p // NB) * page, so
+# the sticks of one run of consecutive tile-rows that share a bank are contiguous there: one NoC
+# read per bank fetches them into a reader-private staging ring (CB_COALESCE_STAGING), and NoC
+# loopback reads then move each stick to its tilize position in cb_input_sticks. Engaged only
+# when every Tensix core reads WHOLE sticks in one column block (block_width == C) of at most
+# BANK_COALESCE_MAX_STICK_BYTES, with the StickProducer-only levers at their defaults.
+# Measured on WH B0, 64 Tensix cores, bf16, device-kernel ns (median of 3), off -> on:
+#   [1,1,16384,64] 25967 -> 23303   [1,1,16384,32] 18170 -> 13347   [1,1,32768,64] 51477 -> 46344
+#   [1,1,4096,64] / [4,3,256,96] / [1,1,16384,128] flat; [1,1,8192,256] flat; [1,1,2048,1024] +7.6 %
+# Ablations on [1,1,16384,64]: the no-transfer floor fell 8.1 -> 2.3 us (NB accessor calls per
+# run instead of one per stick) and reads-only 16.1 -> 12.0 us, flat in the per-bank read size
+# (3..21 sticks); the loopback scatter costs ~22 cycles per stick and is ~1.3 us of the wall.
+# BANK_COALESCE_STAGE_DEPTH: staging ring depth in CB quanta (units in flight = depth - 1);
+# 0 = off (StickProducer, one read per stick). 3 measured flat-to-worse vs 2.
+BANK_COALESCE_STAGE_DEPTH = 2
+# The bank_coalesced path's CB quantum in tile-rows (full 32-row equivalents; replaces the
+# QUANTUM_MIN_TILES floor there). Each quantum is a serial land -> loopback scatter -> push step,
+# so a finer quantum than StickProducer's pipelines better; the best unit measured the same
+# 2 tile-rows (64 sticks) at every narrow width ([1,1,16384,64]: 1 / 2 / 4 rows 24449 / 23303 /
+# 24304; [1,1,16384,32]: 2 / 4 / 8 rows 13347 / 14459 / 14287; [1,1,32768,64]: 1 / 2 / 4 rows
+# 49436 / 46344 / 46774).
+BANK_COALESCE_QUANTUM_ROWS = 2
+# Path gate: only sticks of at most this many bytes coalesce. Larger sticks are already large
+# transactions and the scatter only adds work ([1,1,2048,1024], 2 KiB sticks: +7.6 %).
+BANK_COALESCE_MAX_STICK_BYTES = 256
+# Scatter by NoC loopback WRITES (the write command buffer) instead of reads. Measured slower
+# (scatter-only 8.8 vs 8.1 us; [1,1,16384,32] 14259 vs 13215): parked off, a live knob.
+BANK_COALESCE_SCATTER_WRITE = False
 
 
 def _div_up(a, b):
@@ -611,11 +644,35 @@ def create_program_descriptor(
     per_row_bytes = block_width * _per_col_tile_bytes(
         num_input_cbs, input_resident=input_resident, output_resident=output_resident
     )
+    # bank_coalesced (BANK_COALESCE_STAGE_DEPTH): every core reads whole sticks of a DRAM-interleaved
+    # input in one column block, and the StickProducer-only levers are at their defaults. Its
+    # staging ring holds BANK_COALESCE_STAGE_DEPTH quanta of page-strided sticks.
+    in_mc = input_tensor.memory_config()
+    coalesce_row_bytes = BANK_COALESCE_STAGE_DEPTH * tile_h * stick_page_bytes  # staging per tile-row
+    coalesce = (
+        BANK_COALESCE_STAGE_DEPTH > 0
+        and not (input_resident or retile or split_reader or padded)
+        and pages_per_stick == 1
+        and in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        and in_mc.buffer_type == ttnn.BufferType.DRAM
+        and block_width == C
+        and block_width * TILE_WIDTH * in_elem_bytes <= BANK_COALESCE_MAX_STICK_BYTES
+        and all(col_start == 0 and cols == C for _, _, _, col_start, cols in assignment)
+        and READ_AHEAD == 1
+        and READ_WINDOW_MIN_TILES == 0
+        and READ_NOC_SPLIT == 0
+        and BANK_STRIDE == 0
+        and not EAGER_PUBLISH
+        and per_row_bytes + coalesce_row_bytes <= CB_BUDGET_BYTES[low_l1]
+    )
+    if coalesce:
+        per_row_bytes += coalesce_row_bytes
     max_positions = core_row_tiles_max * _div_up(core_col_tiles_max, block_width)  # busiest core's walk length
     # QUANTUM_MIN_TILES counts full 32-row tiles: a tiny tile carries tile_h / 32 of one
     # tile's bytes and per-quantum costs are per handshake, so the floor scales with 32 / tile_h
     # (at tile_h = 1 one "tile" is a single stick segment).
-    quantum_min_tiles = QUANTUM_MIN_TILES * (FULL_TILE_HEIGHT // tile_h)
+    quantum_floor = BANK_COALESCE_QUANTUM_ROWS * block_width if coalesce else QUANTUM_MIN_TILES
+    quantum_min_tiles = quantum_floor * (FULL_TILE_HEIGHT // tile_h)
     # The stick reader (StickProducer) streams cb_input_sticks with NoC reads; a resident input only
     # publishes pages, retile face-walks, and the split reader has its own schedule.
     stick_reader = not (input_resident or retile or split_reader)
@@ -660,7 +717,9 @@ def create_program_descriptor(
         output_resident=output_resident,
         depth_in=depth_in,
         depth_out=depth_out,
-    ) > CB_BUDGET_BYTES[low_l1] and (read_ahead > READ_AHEAD or write_ahead > 1):
+    ) + (rows_per_quantum * coalesce_row_bytes if coalesce else 0) > CB_BUDGET_BYTES[low_l1] and (
+        read_ahead > READ_AHEAD or write_ahead > 1
+    ):
         if read_ahead >= write_ahead and read_ahead > READ_AHEAD:
             read_ahead -= 1
         else:
@@ -676,7 +735,6 @@ def create_program_descriptor(
     if write_noc_split != 0:
         write_ahead = 1
     dynamic_noc = read_noc_split != 0 or write_noc_split != 0
-    in_mc = input_tensor.memory_config()
     bank_stride = (
         BANK_STRIDE
         if stick_reader
@@ -734,6 +792,17 @@ def create_program_descriptor(
                 core_ranges=all_cores,
                 format_descriptors=[staging_format],
             )
+    if coalesce:
+        assert read_ahead == 1 and not retile
+        cb_coalesce_staging = ttnn.CBDescriptor(
+            total_size=BANK_COALESCE_STAGE_DEPTH * rows_per_quantum * tile_h * stick_page_bytes,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_COALESCE_STAGING, data_format=input_tensor.dtype, page_size=stick_page_bytes
+                )
+            ],
+        )
     if padded:
         cb_pad_source = ttnn.CBDescriptor(
             total_size=PAD_SOURCE_BYTES,
@@ -764,6 +833,8 @@ def create_program_descriptor(
         cbs.append(cb_retile_staging)  # reader-private: not a compute input
     if padded:
         cbs.append(cb_pad_source)  # reader-private: not a compute input
+    if coalesce:
+        cbs.append(cb_coalesce_staging)  # reader-private: not a compute input
     if output_resident:
         # Zero-copy: compute packs straight into the output shard (TILE pages, shard order).
         cb_output_tiles = ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor, core_ranges=all_cores)
@@ -813,6 +884,8 @@ def create_program_descriptor(
         PAD_NOC_MIN_BYTES,
         in_elem_bytes,
         int(PAD_W_TAIL_PERSIST),
+        BANK_COALESCE_STAGE_DEPTH if coalesce else 0,
+        int(BANK_COALESCE_SCATTER_WRITE),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     writer_ct_args = [

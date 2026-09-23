@@ -77,6 +77,17 @@ CONFIGS = {
     "bank_major_tiny_budget_ra2": dict(
         BANK_STRIDE=2, READ_AHEAD=2, EAGER_PUBLISH=True, CB_BUDGET_BYTES={False: 3 * 8192, True: 3 * 8192}
     ),
+    # Refinement 6 bank-coalesced reads (the default on narrow DRAM sticks): off keeps StickProducer
+    # covered on those shapes; the rest turn its depth / quantum / stick gate / scatter mode, incl.
+    # rotated walks that wrap inside a unit and partial final units.
+    "coalesce_off": dict(BANK_COALESCE_STAGE_DEPTH=0),
+    "coalesce_depth1": dict(BANK_COALESCE_STAGE_DEPTH=1),
+    "coalesce_depth3_rows4": dict(BANK_COALESCE_STAGE_DEPTH=3, BANK_COALESCE_QUANTUM_ROWS=4),
+    "coalesce_rows1_wide_gate": dict(BANK_COALESCE_QUANTUM_ROWS=1, BANK_COALESCE_MAX_STICK_BYTES=1 << 20),
+    "coalesce_rows3_scatter_write": dict(BANK_COALESCE_QUANTUM_ROWS=3, BANK_COALESCE_SCATTER_WRITE=True),
+    "coalesce_tiny_budget": dict(
+        BANK_COALESCE_MAX_STICK_BYTES=1 << 20, CB_BUDGET_BYTES={False: 3 * 8192, True: 3 * 8192}
+    ),
 }
 
 

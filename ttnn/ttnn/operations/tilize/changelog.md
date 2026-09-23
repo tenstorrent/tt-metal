@@ -250,3 +250,53 @@
   - an L1-interleaved 2-D split;
   - the `low_l1` A/B bit-identity and the CB-budget bound;
   - the 2-D program cache.
+
+## Refinement 6 — Speed up the perf-flagged profile (bank-coalesced stick reads)
+- **Date**: 2026-09-23
+- **What was done**:
+  - **Reader.** New `bank_coalesced` load_block (`read_bank_coalesced`, `tilize_reader.cpp`), the lever the refinement names. Stick page `p` lives in DRAM bank `p mod NB` at offset `(p div NB) * page`, so a run of consecutive tile-rows' sticks in one bank are contiguous there.
+    - Per CB quantum (a unit), each run of consecutive tile-rows is read with one NoC read per bank into a reader-private staging ring (bank-major), up to `depth - 1` units ahead under per-slot transaction ids. Rotated walks wrap at most once inside a unit.
+    - Each core rotates its starting bank by its core index.
+    - Once a unit lands, NoC loopback reads (one packet per stick, `set_state` once) move each stick to its tilize position in the reserved `cb_input_sticks` slot. After their barrier the slot is pushed.
+    - Compute and the writer are unchanged.
+  - **Host (`tilize_program_descriptor.py`).** The path is gated: DRAM `TensorMemoryLayout::INTERLEAVED` input, one page per stick, no pad / retile / split reader / resident input, and every Tensix core reading whole sticks in one column block (`block_width == C`). Sticks must be at most `BANK_COALESCE_MAX_STICK_BYTES` = 256 bytes, the StickProducer-only levers must be at their defaults, and one tile-row of staging must still fit `CB_BUDGET_BYTES[low_l1]`.
+    - The staging CB reuses the retile staging slot (index 3; the regimes are disjoint).
+    - The staging bytes are counted in the `rows_per_quantum` budget cap and in the window loop.
+    - On this path the quantum is `BANK_COALESCE_QUANTUM_ROWS` = 2 tile-rows (full 32-row equivalents).
+  - **Knobs** (all live): `BANK_COALESCE_STAGE_DEPTH` (2; 0 = off, i.e. StickProducer), `BANK_COALESCE_QUANTUM_ROWS` (2), `BANK_COALESCE_MAX_STICK_BYTES` (256), `BANK_COALESCE_SCATTER_WRITE` (False, parked).
+  - **Measurements** (WH B0, 64 of 64 Tensix cores, device-kernel ns, median of 3; off → on):
+    - Perf shape [1,1,16384,64]: 25967 → 23303.
+    - [1,1,16384,32]: 18170 → 13347.
+    - [1,1,32768,64]: 51477 → 46344.
+    - Flat: [1,1,4096,64], [4,3,256,96], [1,1,16384,128], [1,1,8192,256].
+    - [1,1,2048,1024] (2 KiB sticks): +7.6 %, hence the stick-bytes gate.
+  - **Quantum sweep, in tile-rows.** [1,1,16384,64] 1 / 2 / 4 rows: 24449 / 23303 / 24304. [1,1,16384,32] 2 / 4 / 8 rows: 13347 / 14459 / 14287. [1,1,32768,64] 1 / 2 / 4 rows: 49436 / 46344 / 46774. Staging depth 3 measured flat-to-worse vs 2.
+  - **Ablations on [1,1,16384,64]** (payload stubbed, synchronization kept):
+    - The no-transfer floor fell 8.1 → 2.3 µs: `NB` accessor calls per run instead of one per stick.
+    - Reads only: 16.1 → 12.0 µs, flat across per-bank read sizes of 3 to 21 sticks.
+    - Scatter only: 8.1 µs, ~22 cycles per stick whatever the stick bytes. It costs ~1.3 µs of the wall (full 23.9 vs 22.6 µs with the scatter stubbed).
+    - Writes only: 17.8 µs, and 17.2 µs on 32 Tensix cores vs 17.0 µs on 64.
+    - Reads and writes still roughly add up, so the op is bound by aggregate DRAM throughput for its read + write mix.
+  - **Writer twin (measured, not built).** A timing-only ablation wrote each tile-row's 2 tiles as one 4 KiB bank-contiguous transaction. Writes-only went 17.0 → 28.3 µs. Larger writes do not help, and the writes do not scale with core count, so bank-coalesced writes have no headroom here. Loopback *writes* for the scatter also measured slower (scatter-only 8.8 vs 8.1 µs), so they are parked behind `BANK_COALESCE_SCATTER_WRITE`.
+  - **Reused / added.** Reused: `Walker`, the CB slot scheme, the retile staging slot and CT arg, the NoC-loopback `set_state` / `with_state` pattern from `FaceWalk`, the transaction-id prefetch loop shape from `read_retile`, and the `rows_per_quantum` caps. Added: `read_bank_coalesced`, reader CT args 26 / 27, the gate, the staging CB, 4 knobs.
+- **Accuracy achieved**: bit-exact (`torch.equal`, PCC = 1.0, atol = rtol = 0) on every shape and knob setting tested. That covers the 7 knob-matrix shapes × 6 new coalesce configs (depth 1 / 3, quantum 1 / 3 / 4 tile-rows, scatter-write, the wide-stick gate opened, a tiny budget) and the 11-path guard set at both settings.
+- **Golden test progress**:
+  - `test_golden.py -k "test_op_loose or test_program_cache_reuse"`: 19 passed / 1 xfailed / 0 failed.
+  - `-k dram_to_dram` bf16 → bf16: 45 passed / 0 failed / 0 XPASS.
+  - Unit net all green: `test_tilize.py` 22, `test_tilize_knobs.py` 210, `test_tilize_padding.py` 60, `test_tilize_grid_2d.py` 32, `test_tilize_tile_geometry.py` 102, `test_tilize_sharded.py` 26, registry 3, precision 5, perf shapes 5.
+- **Perf guard set** (`test_tilize_r3_perf.py::test_r3_guard`, now A/B-able via `TILIZE_R3_VARIANTS`; WH B0, 64 Tensix cores, median of 3; off → on):
+
+  | Guard | Off (ns) | On (ns) |
+  |---|---|---|
+  | narrow DRAM [1,1,16384,64] | 25670 | 23509 |
+  | narrow W=32 [1,1,16384,32] | 18488 | 13285 |
+  | tiny tile 16 | 24706 | 23184 |
+  | `low_l1` narrow | 24624 | 23736 |
+  | 2-D split [1,1,32,2048] | 3783 | 3678 |
+  | L1 interleaved | 5763 | 5692 |
+  | sharded resident | 1917 | 1914 |
+  | retile 32→16 | 37973 | 38254 |
+
+  Four guards run identical kernels at both settings because the gate does not select the coalesced path for them: wide DRAM [1,1,8192,256] (43851 / 45058), sharded accessor (16031 / 16519), wide 2 KiB sticks (45955 / 46231) and retile. Their spread is run-to-run noise. No regression.
+- **Issues encountered**: the new path's `static_assert` first sat inside a discarded `if constexpr` branch of the non-template `kernel_main`, where it is still evaluated. It fired on split-reader configs; I hoisted it as a conditional assert. Pytest `-k` is case-insensitive, so `not INT` also deselects "interleaved".
+- **Tests added**: `test_tilize_knobs.py` gains 6 coalesce configs (42 cases, including `coalesce_off`, which keeps StickProducer covered on the narrow DRAM shapes the coalesced path now takes by default). `test_tilize_r3_perf.py`: the guard test takes `TILIZE_R3_VARIANTS` and gains the 2-D split, `low_l1`, W=32 and 2 KiB-stick guards.
