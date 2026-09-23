@@ -348,13 +348,14 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
         if metric == "tolerance":
             from helpers.sfpu_accuracy_budget import usable_budget_ceiling
 
+            # Terse on purpose: the clause is repeated on every demoted row, and the
+            # reason it names is stated once in the table header. What has to be *here*
+            # is the pair of numbers, so the claim stays checkable against
+            # `usable_budget_ceiling`.
             ceiling = usable_budget_ceiling(DataFormat[row["out"]])
-            note += (
-                f", budget would be {value}, past the {ceiling:.0f}-step point where a "
-                "budget stops being tighter than the tolerance it replaces"
-            )
+            note += f", budget would be {value} > {ceiling:.0f}-step ceiling"
         elif metric == "block":
-            note += ", but a sorted sweep flatters a block format, so tolerance"
+            note += ", block-quantized, so tolerance"
         out.append(f"  - {{{pairs}}}  # {note}, {suffix}\n")
     return out
 
