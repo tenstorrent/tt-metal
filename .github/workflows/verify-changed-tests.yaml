@@ -282,7 +282,7 @@ jobs:
         - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_hugepages' || '/dev/hugepages-1G:/dev/hugepages-1G' }}
         # Weights cache, selected by the SKU's weights-cache-mode exactly as the
         # owning pipeline selects it.
-        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:rw' }}
       options: >-
          ${{ (startsWith(matrix.leg.sku, 'sim_') && '--label runner-mode=sim')
              || (matrix.leg.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent')
