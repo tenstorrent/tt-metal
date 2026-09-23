@@ -579,8 +579,16 @@ void process_write_linear(uint32_t num_mcast_dests) {
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
 #endif
-        cq_noc_async_write_with_state_any_len(
-            static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests, noc_index);
+        // This handler owns MID: wwrite_init_state programmed it from the same dst_addr, so reprogramming it
+        // per burst is what keeps a destination that crosses 4GB from writing into the previous window.
+        cq_noc_async_write_with_state_any_len<
+            /*write_last_packet=*/true,
+            /*update_counters=*/false,
+            CQ_NOC_WAIT,
+            NCRISC_WR_CMD_BUF,
+            /*flush_last_transfer=*/false,
+            CQ_NOC_SEND,
+            /*set_ret_mid=*/true>(static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests, noc_index);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;

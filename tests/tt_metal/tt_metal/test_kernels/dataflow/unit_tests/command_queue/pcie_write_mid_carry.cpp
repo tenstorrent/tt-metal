@@ -30,13 +30,16 @@ void kernel_main() {
     // RET_ADDR_MID from the starting address.
     cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false, false, cmd_buf>(0, pcie_xy_enc, dst_base, 0, NOC_0);
 
+    // set_ret_mid matches what process_write_linear passes, which is the path under test. Without it the
+    // walk would leave RET_ADDR_MID at whatever init_state programmed and the check below would be vacuous.
     cq_noc_async_write_with_state_any_len<
         /*write_last_packet=*/true,
         /*update_counters=*/false,
         CQ_NOC_WAIT,
         cmd_buf,
         /*flush_last_transfer=*/false,
-        CQ_NOC_send>(src_l1_addr, dst_base, total_bytes, 1, NOC_0);
+        CQ_NOC_send,
+        /*set_ret_mid=*/true>(src_l1_addr, dst_base, total_bytes, 1, NOC_0);
 
     // The registers should describe the last burst the loop issued, so walk the same bursts to get its address.
     uint64_t last_burst = dst_base;
