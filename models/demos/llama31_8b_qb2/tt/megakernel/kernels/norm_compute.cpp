@@ -6,9 +6,12 @@
 // Bind the current native Metal 2.0 RMSNorm arithmetic to fixed batch-one
 // legacy CB indices. DataflowBuffer uses the same Blackhole CB interface.
 #include "experimental/kernel_args.h"
+#ifndef NORM_SUBBLOCK
+#define NORM_SUBBLOCK 4
+#endif
 namespace args {
-constexpr experimental::CtaVal<uint32_t> num_blocks_first_stage{8}, block_w{16}, block_h{1}, subblock_w{4};
-constexpr experimental::CtaVal<uint32_t> num_subblocks_w{4}, num_tiles_per_block{16}, float32_dtype{1};
+constexpr experimental::CtaVal<uint32_t> num_blocks_first_stage{8}, block_w{16}, block_h{1}, subblock_w{NORM_SUBBLOCK};
+constexpr experimental::CtaVal<uint32_t> num_subblocks_w{16 / NORM_SUBBLOCK}, num_tiles_per_block{16}, float32_dtype{1};
 constexpr experimental::CtaVal<uint32_t> legacy_rsqrt{0}, num_blocks_second_stage{1}, num_reduce_tiles_per_block_h{16};
 constexpr experimental::CtaVal<uint32_t> num_rows_per_all_to_all_worker{1}, use_two_stage_reduce{0}, is_second_stage_reader{0};
 }

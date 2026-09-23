@@ -28,6 +28,9 @@ class ProjectionTuning:
     share_qkv_workers: bool = False
 
     compact_activations: str = "off"
+    projection_full_dst: str = "off"
+    norm_full_dst: bool = False
+    norm_tile_height: int = 32
     projection_tile_height: int = 32
     qkv_buffers: int = 0
     qkv_early_blocks: int = -1
@@ -37,6 +40,10 @@ class ProjectionTuning:
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.norm_tile_height not in (16, 32):
+            raise ValueError("Norm tile height must be sixteen or thirty-two")
+        if self.projection_full_dst not in ("off", "mlp", "head", "all"):
+            raise ValueError("Full destination mode must be off/mlp/head/all")
         if self.projection_tile_height not in (16, 32):
             raise ValueError("Projection tile height must be sixteen or thirty-two")
         if self.projection_tile_height == 16 and self.share_qkv_workers:
@@ -97,6 +104,8 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("FULL_DST_MLP", str(int(self.projection_full_dst in ("mlp", "all")))),
+            ("FULL_DST_HEAD", str(int(self.projection_full_dst in ("head", "all")))),
             ("TINY_PROJECTION_M", str(int(self.projection_tile_height == 16))),
             ("COMPACT_ACTIVATIONS", str({"off":0, "norm":1, "all":3}[self.compact_activations])),
             ("PROFILER_PROJECTION_PHASE", str(self.profiler_phase)),

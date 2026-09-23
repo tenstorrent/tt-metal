@@ -9,9 +9,12 @@ from .mlp import _grid
 
 
 class FusedNorm:
-    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False, cores=None, output=None, compact_output=False):
+    def __init__(self, mesh, output_memory_config, epsilon, *, debug=False, cores=None, output=None, compact_output=False, tile_height=32, full_dst=False):
         self.mesh = mesh
         self.compact_output = compact_output
+        if tile_height not in (16, 32): raise ValueError("Norm supports16 or32 rows")
+        self.tile_height = tile_height
+        self.full_dst = full_dst
         if debug and compact_output:
             raise ValueError("Compact norm output is a private projection transport")
         self.epsilon = struct.unpack("I", struct.pack("f", epsilon))[0]
@@ -65,7 +68,7 @@ class FusedNorm:
                     core_ranges=self.grid,
                     compile_time_args=ct,
                     runtime_args=rt,
-                    defines=[(role, "1"), ("NORM_READY_SEMAPHORE", str(ready_semaphore)), ("COMPACT_NORM_OUTPUT", str(int(self.compact_output)))]
+                    defines=[(role, "1"), ("NORM_READY_SEMAPHORE", str(ready_semaphore)), ("COMPACT_NORM_OUTPUT", str(int(self.compact_output))), ("TINY_NORM_M", str(int(self.tile_height == 16)))]
                     + ([("FUSE_NORM", "1")] if projection_cores else [])
                     + ([("FUSE_GATHER", "1")] if wait_for_gather else []),
                     config=config,
@@ -76,9 +79,9 @@ class FusedNorm:
                 ttnn.KernelDescriptor(
                     kernel_source=str(source / "norm_compute.cpp"),
                     core_ranges=_grid(cores),
-                    defines=defines,
+                    defines=[*defines, ("NORM_SUBBLOCK", str(8 if self.full_dst else 4))],
                     config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+                        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False, dst_full_sync_en=self.full_dst
                     ),
                 )
             )
@@ -105,7 +108,7 @@ class FusedNorm:
                 ttnn.CBDescriptor(
                     total_size=tiles * size,
                     core_ranges=self.grid,
-                    format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=size)],
+                    format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=size, tile=ttnn.TileDescriptor(self.tile_height, 32))],
                 )
             )
         program.kernels = kernels

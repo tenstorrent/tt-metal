@@ -90,6 +90,9 @@ def parse_args():
     parser.add_argument("--qkv-buffers", type=int, choices=(0, 3, 4, 5, 6), default=0)
     parser.add_argument("--qkv-early-blocks", type=int, choices=(-1, 0, 2, 3, 4, 5, 6), default=-1)
     parser.add_argument("--head-placement", choices=("row", "order", "select"), default="row")
+    parser.add_argument("--projection-full-dst", choices=("off", "mlp", "head", "all"), default="off")
+    parser.add_argument("--norm-full-dst", action="store_true")
+    parser.add_argument("--norm-tile-height", type=int, choices=(16, 32), default=32)
     parser.add_argument("--projection-tile-height", type=int, choices=(16, 32), default=32)
     parser.add_argument("--batch-swiglu", action="store_true")
     parser.add_argument("--coalesce-input", action="store_true")
@@ -143,7 +146,7 @@ def run(args):
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
-        projection_placement=args.projection_placement, coalesce_input=args.coalesce_input, batch_swiglu=args.batch_swiglu, projection_tile_height=args.projection_tile_height,
+        projection_placement=args.projection_placement, coalesce_input=args.coalesce_input, batch_swiglu=args.batch_swiglu, norm_tile_height=args.norm_tile_height, norm_full_dst=args.norm_full_dst, projection_tile_height=args.projection_tile_height, projection_full_dst=args.projection_full_dst,
         head_prefetch_targets=args.head_prefetch_targets, share_qkv_workers=args.share_qkv_workers,
         early_weight_blocks=args.early_weight_blocks, scratch_init_once=args.scratch_init_once,
         early_weight_phases={"qkv":1, "o":2, "gu":4, "qkv_o_gu":7, "down":8, "all":15}[args.early_weight_phases],

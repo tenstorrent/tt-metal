@@ -375,19 +375,19 @@ void QB2_ENTRY() {
         DeviceZoneScopedN("MLP-O-MATH");
 #endif
         compute_kernel_hw_startup<SrcOrder::Reverse>(6, 7, 25);
-        projection<6, 7, 17, 25, 4, 16, 32, PROJECTION_WIDE ? 8 : 4>();
+        projection<6, 7, 17, 25, 4, 16, 32, FULL_DST_MLP ? 16 : (PROJECTION_WIDE ? 8 : 4)>();
     }
 #endif
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 24);
     {
         DeviceZoneScopedN("MLP-GU-MATH");
-        projection<0, 1, 16, 24, 8, gu_width, 128, PROJECTION_WIDE ? 7 : (GU_WORKERS == 16 ? 2 : 4)>();
+        projection<0, 1, 16, 24, 8, gu_width, 128, FULL_DST_MLP ? 14 : (PROJECTION_WIDE ? 7 : (GU_WORKERS == 16 ? 2 : 4))>();
     }
     if (get_arg_val<uint32_t>(0) >= 8) { return; }
     reconfig_data_format(1, 3, 0, 4);
     {
         DeviceZoneScopedN("MLP-DOWN-MATH");
-        projection<4, 3, 17, 25, 7, 16, 112, PROJECTION_WIDE ? 8 : 4>();
+        projection<4, 3, 17, 25, 7, 16, 112, FULL_DST_MLP ? 16 : (PROJECTION_WIDE ? 8 : 4)>();
     }
 }
 #elif defined(SWIGLU)

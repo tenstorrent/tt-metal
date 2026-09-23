@@ -50,7 +50,7 @@ class FusedHead:
         self.grid = _grid(self.cores)
         self.norm = FusedNorm(
             self.mesh, model.lm_head.config.input_memcfg, model.layers[0].eps, cores=norm_cores, output=norm_output,
-            compact_output=self.tuning.compact_activations != "off"
+            compact_output=self.tuning.compact_activations != "off", tile_height=self.tuning.norm_tile_height, full_dst=self.tuning.norm_full_dst
         )
         self.output = ttnn.empty(
             (1, 1, 1, 32768),
@@ -85,7 +85,8 @@ class FusedHead:
             (
                 "COMPUTE",
                 ttnn.ComputeConfigDescriptor(
-                    math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+                    math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False,
+                    dst_full_sync_en=self.tuning.projection_full_dst in ("head", "all")
                 ),
             ),
         ):

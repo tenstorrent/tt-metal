@@ -76,6 +76,6 @@ void kernel_main() {
 void kernel_main() {
     DeviceZoneScopedN("LM-HEAD-MATH");
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 24);
-    projection<0, 1, 16, 24, 4, 64, 128, 8>();
+    projection<0, 1, 16, 24, 4, 64, 128, FULL_DST_HEAD ? 16 : 8>();
 }
 #endif

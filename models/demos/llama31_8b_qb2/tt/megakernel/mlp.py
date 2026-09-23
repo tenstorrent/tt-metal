@@ -171,7 +171,7 @@ class FusedMLP:
         if fuse_norm:
             from .norm import FusedNorm
 
-            self.normalizer = FusedNorm(self.mesh, layers[0].decode_inputs["gate_up"], layers[0].eps, compact_output=self.tuning.compact_activations != "off")
+            self.normalizer = FusedNorm(self.mesh, layers[0].decode_inputs["gate_up"], layers[0].eps, compact_output=self.tuning.compact_activations != "off", tile_height=self.tuning.norm_tile_height, full_dst=self.tuning.norm_full_dst)
         self.attention_stage = None
         if fuse_attention:
             from .attention import FusedAttention
@@ -309,6 +309,7 @@ class FusedMLP:
                         math_fidelity=ttnn.MathFidelity.LoFi if role == "PROJECTION" else ttnn.MathFidelity.HiFi4,
                         math_approx_mode=False,
                         fp32_dest_acc_en=False,
+                        dst_full_sync_en=role == "PROJECTION" and self.tuning.projection_full_dst in ("mlp", "all"),
                     ),
                 ),
             ):

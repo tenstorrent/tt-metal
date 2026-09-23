@@ -183,3 +183,9 @@ New unqualified candidates: independentlydeeperQKV buffers/prefix3..8, leavingML
 ## 2026-09-23 12:50 UTC — QKV8 L1 failure and bounded recovery
 
 Tiny16 MLP passed12exactchecks underWorkerWatcher. IndependentQKV8/prefix8 loop warmup ran, but tracecapture laterallocated morepersistentbuffers and failedhoststaticL1 check: CBregionends1,225,856B, firstlivebuffer1,201,408B (24,448Boverlap). Thisisnot a DRAM/NoCdeadlock; failedcaptureleftteardownstalled. Runner180s timeoutcapturedlivett-triage(all23checks passed) andterminatedonlyitschildgroup at12:49:31. Authorized recovery-qkv8-l1 reset/health/mesh nowrunning. BoundQKVoptions to<=6buffers; fixed focusedharnessfinally-end-capture beforetrace release onhosterrors. Added explicitwatcher/headlineeligibility metadata. Noheadline8-bufferresult.
+
+## 2026-09-23 12:59 UTC — sixteen-row projections improve full decode
+
+Sourcebb4a9cf9 full128/32 withheadselect: tiny16=7.971907549; normal32+QKV4/prefix4=8.143589742; QKV6/prefix6=8.161759612; tiny16+QKV4=7.966220905; tiny16+compactall=7.974274614. Fivewarmunprofiledtrials andexactteacher/all64KV/greedy each. Native7.635744 stillfaster; noend-to-endwin. IndependentQKV6loop andtiny16loop WorkerWatcherbothpassedreal0/31,inactive,replay,pageedges. TinyMLPcomponent141.535025323us vscontrol144.442014862 atbuffers2, twelveexactchecks. Compact transportdoesnotaddtoTiny16 gain; keepoff. QKV4difference~5.7us needsmatchedconfirmation.
+
+Next unqualifiedsource experiments: fullDST synchronization allows14-wideGU and16-wideO/down/head subblocks atsameKorder/rounding; comparehead/mlp independently. Norm16-row geometry andoptional8-tile fullDST subblocks preservecolumnreduction order. Full-loop plusfullheadWatcher gates first.

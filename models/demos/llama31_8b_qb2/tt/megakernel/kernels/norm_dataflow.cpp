@@ -34,6 +34,9 @@ void QB2_ENTRY() {
     // Reduction packing writes only the statistic column. Clear masked lanes
     // before publishing input so later full-row reduction cannot see old L1.
     if (initialize_layer_scratch(2)) {
+#if TINY_NORM_M
+        zero_l1<16 * 2048>(get_write_ptr(16));
+#endif
         for (uint32_t cb : {7u, 8u, 11u}) {
             zero_l1<4096>(get_write_ptr(cb));
         }
