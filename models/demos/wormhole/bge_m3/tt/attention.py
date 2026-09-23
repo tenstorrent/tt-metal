@@ -437,10 +437,12 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, data_parallel=False):
             # Single-chip S8192. q128/k256 is the plan that fits L1 on one
             # Wormhole chip. A larger q chunk overflows L1.
             return 128, 256
-        # B8: q=256 k=256 (swept q{64..512} x k{128,256,512}; 256x256 is the min,
-        # ~0.27ms under the B32-inherited 256x512). B32 keeps 256x512.
-        # B16: q=256 k=256 (swept; 256x256 ~0.25ms under 256x512, same as B8).
-        if seq_len == 512 and batch_size in (8, 16):
+        # B8: q=256 k=512 on the streaming SDPA kernel, 13.473 ms against 13.651 ms
+        # for 256x256; q128 and q512 are slower. On the legacy kernel 256x256 won.
+        if seq_len == 512 and batch_size == 8:
+            return 256, 512
+        # B16: q=256 k=256 (swept; 256x256 ~0.25ms under 256x512).
+        if seq_len == 512 and batch_size == 16:
             return 256, 256
         if seq_len == 512 and batch_size == 32:
             return 256, 512
