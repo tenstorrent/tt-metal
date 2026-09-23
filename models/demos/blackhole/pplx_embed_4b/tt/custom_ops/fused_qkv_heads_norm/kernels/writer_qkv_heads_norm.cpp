@@ -23,7 +23,8 @@
 //   6: head_groups          (BGE: 16)
 //   7: heads_per_group      (BGE: 1)
 //   8: seq_tiles            (= seq_len / TILE_H; BGE: 16)
-//   9+: TensorAccessorArgs for Q output
+//   9: separate_q           (1: Q tiles arrive in CB 17 with their own dtype/tile size)
+//   10+: TensorAccessorArgs for Q output
 //   ...: TensorAccessorArgs for K output
 //   ...: TensorAccessorArgs for V output
 //
@@ -56,12 +57,15 @@ void kernel_main() {
     constexpr uint32_t head_groups = get_compile_time_arg_val(6);
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(7);
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(8);
-    constexpr auto q_args = TensorAccessorArgs<9>();
+    constexpr uint32_t separate_q = get_compile_time_arg_val(9);
+    constexpr auto q_args = TensorAccessorArgs<10>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id = 16;  // compute output
+    constexpr uint32_t cb_id = 16;  // compute output: Q|K|V, or K|V when separate_q
+    constexpr uint32_t cb_q = separate_q ? 17 : cb_id;
     const uint32_t tile_size_bytes = get_tile_size(cb_id);
+    const uint32_t q_tile_bytes = get_tile_size(cb_q);
 
     const auto sq = TensorAccessor(q_args, q_tensor_addr);
     const auto sk = TensorAccessor(k_args, k_tensor_addr);
@@ -69,7 +73,7 @@ void kernel_main() {
 
     // Device 2.0 data-movement API (see device_api_migration_guide.md).
     Noc noc;
-    CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id), cbq(cb_q);
 
     constexpr uint32_t q_heads_per_group = heads_per_group * q_heads_per_kv;
     constexpr uint32_t group_q_tiles = q_heads_per_group * q_out_w_tiles;
@@ -78,6 +82,7 @@ void kernel_main() {
     constexpr uint32_t kv_batch_stride = num_kv_heads * q_out_HtWt;
 
     constexpr uint32_t unit_tiles = group_q_tiles + 2 * group_kv_tiles;
+    constexpr uint32_t kv_tiles = 2 * group_kv_tiles;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const uint32_t work_unit = work_unit_start + w;
         const uint32_t block = work_unit / head_groups;
@@ -88,18 +93,27 @@ void kernel_main() {
         const uint32_t kv_head_start = group * heads_per_group;
 
         // Whole unit at once; offsets mirror the reader's Q | K | V packing.
-        cb.wait_front(unit_tiles);
+        if constexpr (separate_q) {
+            cbq.wait_front(group_q_tiles);
+            cb.wait_front(kv_tiles);
+        } else {
+            cb.wait_front(unit_tiles);
+        }
         uint32_t l1_read_offset = 0;
         {
+            uint32_t q_read_offset = 0;
             uint32_t row_base = batch * q_batch_stride + q_head_start * q_out_HtWt + s_tile * q_out_w_tiles;
             for (uint32_t h = 0; h < q_heads_per_group; ++h) {
                 uint32_t dst = row_base;
                 for (uint32_t w_dim = 0; w_dim < q_out_w_tiles; ++w_dim) {
-                    noc.async_write(cb, sq, tile_size_bytes, {.offset_bytes = l1_read_offset}, {.page_id = dst});
-                    l1_read_offset += tile_size_bytes;
+                    noc.async_write(cbq, sq, q_tile_bytes, {.offset_bytes = q_read_offset}, {.page_id = dst});
+                    q_read_offset += q_tile_bytes;
                     dst++;
                 }
                 row_base += q_out_HtWt;
+            }
+            if constexpr (!separate_q) {
+                l1_read_offset = q_read_offset;
             }
         }
         {
@@ -127,6 +141,11 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb.pop_front(unit_tiles);
+        if constexpr (separate_q) {
+            cbq.pop_front(group_q_tiles);
+            cb.pop_front(kv_tiles);
+        } else {
+            cb.pop_front(unit_tiles);
+        }
     }
 }

@@ -546,6 +546,41 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### Fused op emits Q and K/V in bfp8 — Typecast deleted (2026-09-23)
+
+`fused_qkv_heads_norm` now packs Q into its own output CB in SDPA's operand dtype
+(`QWEN_FUSED_Q_BFP8=force`) and K/V in bfp8 (`QWEN_FUSED_KV_BFP8=1`), both default
+on. Rationale: at bs≥8 SDPA already consumed a bfp8 Q, produced by a separate
+Typecast (469 µs/layer at bs32 — 17 ms per iteration, a pure DRAM pass over
+134 MB in / 67 MB out); the packer can convert on the way out of the fused op for
+free. Packing uses `bfp8_pack_precise` (identical kernel time; mean |err| vs the
+un-quantised bf16 output 0.00601 — the same as the stock Typecast — versus
+0.00654 in approximate mode, which is what `ttnn.generic_op` defaults to).
+`_prepare_q_for_sdpa` returns Q untouched when it already has the target dtype.
+
+| variant (B=8, traced, standalone) | µs | Δ |
+|---|---|---|
+| fused (bf16) + Typecast Q | 457.7 | — |
+| fused emitting Q bfp8 | 321.9 | −29.7% |
+| fused (bf16) + Typecast Q,K,V | 519.6 | — |
+| fused emitting Q,K,V bfp8 | 312.0 | −39.9% |
+
+E2E (extended trace, 10 iters, best-of), and STS-B Spearman at bs1, where the eval
+runs — so it exercises the bfp8 Q/K/V path directly:
+
+| batch | H200 | before | Q bfp8 | **Q + K/V bfp8 (shipped)** | Δ | × H200 |
+|---|---|---|---|---|---|---|
+| bs1  | 5.437   | 23.9  | 23.7  | **23.7**  | −0.8% | 4.36× |
+| bs8  | 33.081  | 143.4 | 137.6 | **135.3** | **−5.6%** | 4.09× |
+| bs16 | 67.225  | 263.5 | 252.6 | **250.4** | **−5.0%** | 3.72× |
+| bs32 | 139.150 | 495.0 | 480.1 | **474.3** | **−4.2%** | 3.41× |
+
+STS-B: 0.8134 (before) → 0.8164 (Q bfp8) → **0.8190** (Q + K/V bfp8). bs1 gains
+little because the bs1 path never had the Typecast (bf16 Q went to SDPA directly);
+its 0.2 ms is SDPA reading half the Q/K/V bytes. Under evaluation next:
+`QWEN_QKV_OUT_BFP8=1` — the QKV projection itself writing bfp8 (upstream pins bf16
+only because the stock rotary asserted it; the fused op is now its only reader).
+
 ### Fused head-split + Q/K RMSNorm + RoPE — landed (2026-09-23)
 
 The same `fused_qkv_heads_norm` op now also applies RoPE to Q and K

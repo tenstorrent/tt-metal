@@ -94,16 +94,22 @@ def _wrap_create_qkv_heads_headsplit(original_fn):
     return wrapper
 
 
-def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None):
+def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_dtype=None):
     """Route ``nlp_create_qkv_heads`` to the head-split + Q/K RMSNorm fused op.
 
     ``consts`` = (gamma_q_tiles, gamma_k_tiles, scaler, eps) built once per layer. The
     caller makes ``q_norm``/``k_norm`` identities for the same forward so the norm is
-    applied exactly once. Falls back to the stock op where the fast path cannot express
-    the call (sharded input, transposed K heads, indivisible head counts).
+    applied exactly once. ``rot`` = (cos, sin, T) folds RoPE in as well; ``q_dtype`` /
+    ``kv_dtype`` make the op emit Q / K,V in SDPA's operand dtypes (no Typecast op).
+    Falls back to the stock op where the fast path cannot express the call (sharded
+    input, transposed K heads, indivisible head counts).
     """
     gq, gk, sc, ep = consts
     rot_kwargs = {} if rot is None else {"rot_cos": rot[0], "rot_sin": rot[1], "trans_mat": rot[2]}
+    if q_dtype is not None:
+        rot_kwargs["q_dtype"] = q_dtype
+    if kv_dtype is not None:
+        rot_kwargs["kv_dtype"] = kv_dtype
 
     @functools.wraps(original_fn)
     def wrapper(qkv_fused, *args, **kwargs):
@@ -128,6 +134,23 @@ def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None):
                 **rot_kwargs,
             )
         return original_fn(qkv_fused, *args, **kwargs)
+
+    return wrapper
+
+
+def _wrap_matmul_out_bfp8(original_fn, weight):
+    """Make the QKV projection (``b is weight``) emit bfp8 instead of the pinned bf16.
+
+    Upstream pins the QKV output to bf16 only because the stock rotary op asserts bf16;
+    the fused head-split op reads bfp8 directly, so the projection can write half the
+    bytes and the fused op read half the bytes (QWEN_QKV_OUT_BFP8=1).
+    """
+
+    @functools.wraps(original_fn)
+    def wrapper(a, b, *args, **kwargs):
+        if b is weight:
+            kwargs["dtype"] = ttnn.bfloat8_b
+        return original_fn(a, b, *args, **kwargs)
 
     return wrapper
 
@@ -225,12 +248,20 @@ class PplxBidirectionalAttention(Attention):
         )
         return q_heads_1QSD, k_heads_1KSD
 
-    def _prepare_q_for_sdpa(self, q_heads_1QSD: ttnn.Tensor) -> ttnn.Tensor:
-        if (
+    def _q_bf16_shortcut(self) -> bool:
+        """bs1/ISL512 embedding path: K/V stay bf16 and Q is handed to SDPA uncast."""
+        return (
             self.max_batch_size == _OPTIMIZED_BATCH
             and self.max_seq_len == _OPTIMIZED_SEQ_LEN
             and getattr(self.args, "skip_kv_cache_fill", False)
-        ):
+        )
+
+    def _prepare_q_for_sdpa(self, q_heads_1QSD: ttnn.Tensor) -> ttnn.Tensor:
+        if q_heads_1QSD.dtype == (self.activation_dtype or ttnn.bfloat8_b):
+            # Already in SDPA's Q dtype: the fused head-split op emitted it that way
+            # (QWEN_FUSED_Q_BFP8), so the upstream Typecast is not needed.
+            return q_heads_1QSD
+        if self._q_bf16_shortcut():
             return q_heads_1QSD
         return super()._prepare_q_for_sdpa(q_heads_1QSD)
 
@@ -254,14 +285,34 @@ class PplxBidirectionalAttention(Attention):
         _saved_norms = None
         _saved_rope = None
         _saved_dealloc = None
+        _saved_mm = None
         if self._fused_norm_consts is not None:
             # QWEN_FUSED_ROTARY=1 also folds RoPE into the same pass (rot_mats = [cos, sin] for
             # this chunk; the single 32x32 tile-local rotation is transformation_mats["prefill"]).
             rot = None
             if os.getenv("QWEN_FUSED_ROTARY", "0") == "1" and rot_mats is not None and self.transformation_mats:
                 rot = (rot_mats[0], rot_mats[1], self.transformation_mats["prefill"])
+            # Output dtypes: with RoPE fused, Q (and optionally K/V) can leave the op already
+            # in SDPA's operand dtype, deleting the per-layer Typecast. QWEN_FUSED_Q_BFP8=1
+            # matches what _prepare_q_for_sdpa would cast to (bf16 on the bs1 shortcut),
+            # "force" emits bfp8 Q there too. QWEN_FUSED_KV_BFP8=1 emits K/V in bfp8 (only
+            # meaningful when the KV-cache fill is skipped and SDPA reads K/V directly).
+            q_dtype = kv_dtype = None
+            if rot is not None:
+                q_mode = os.getenv("QWEN_FUSED_Q_BFP8", "0")
+                if q_mode == "force" or (q_mode == "1" and not self._q_bf16_shortcut()):
+                    q_dtype = self.activation_dtype or ttnn.bfloat8_b
+                if os.getenv("QWEN_FUSED_KV_BFP8", "0") == "1" and getattr(self.args, "skip_kv_cache_fill", False):
+                    kv_dtype = ttnn.bfloat8_b
+                if os.getenv("QWEN_QKV_OUT_BFP8", "0") == "1" and getattr(self.args, "skip_kv_cache_fill", False):
+                    # QKV projection output in bfp8: the fused op is the only reader. Q/K/V
+                    # are then already bfp8-quantised, so emit them in bfp8 as well.
+                    q_dtype = kv_dtype = ttnn.bfloat8_b
+                    _saved_mm = (ttnn.experimental.minimal_matmul, ttnn.linear)
+                    ttnn.experimental.minimal_matmul = _wrap_matmul_out_bfp8(_saved_mm[0], self.wqkv)
+                    ttnn.linear = _wrap_matmul_out_bfp8(_saved_mm[1], self.wqkv)
             ttnn.experimental.nlp_create_qkv_heads = _wrap_create_qkv_heads_norm(
-                original_create_heads, self._fused_norm_consts, rot
+                original_create_heads, self._fused_norm_consts, rot, q_dtype, kv_dtype
             )
             _saved_norms = (self.q_norm, self.k_norm)
             self.q_norm = lambda x, mode, norm_config: x
@@ -313,6 +364,8 @@ class PplxBidirectionalAttention(Attention):
                 self.rotary_embedding_prefill = _saved_rope
             if _saved_dealloc is not None:
                 ttnn.deallocate = _saved_dealloc
+            if _saved_mm is not None:
+                ttnn.experimental.minimal_matmul, ttnn.linear = _saved_mm
 
 
 PplxBidirectionalAttention.__name__ = "Attention"
