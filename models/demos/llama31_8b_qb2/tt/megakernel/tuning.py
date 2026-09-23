@@ -9,7 +9,7 @@ from dataclasses import dataclass
 class ProjectionTuning:
     reader: str = "original"
     wide_subblocks: bool = False
-    # Unqualified: full2048 hung despite short/four-layer passes; see EXPERIMENT2_REPORT.md.
+    # Rejected before hardware setup after a confirmed full2048 semaphore-address mismatch.
     single_layer_barrier: bool = False
     bounded_barrier: bool = False
     multicast_barrier: bool = False
@@ -57,8 +57,11 @@ class ProjectionTuning:
             raise ValueError("Attention placement must be row/head_priority/head_priority_all")
         if self.attention_placement != "row" and (self.attention_workers != 32 or self.head_placement != "select" or self.share_qkv_workers):
             raise ValueError("Head-priority placement requires 32 attention workers, selected head and separate QKV")
-        if self.single_layer_barrier and (not self.bounded_barrier or self.inline_cb_reset or self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
-            raise ValueError("Single layer boundary requires bounded barriers, ordinary CB reset and no helper prefetch")
+        if self.single_layer_barrier:
+            raise ValueError(
+                "Single-layer barrier is disabled: native Semaphore<> bypasses its address mapping "
+                "and full context2048 deadlocks. See EXPERIMENT2_REPORT.md."
+            )
         if self.custom_down and (self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
             raise ValueError("Custom down padding excludes helper prefetch")
         if self.norm_stats_face and (self.norm_tile_height != 16 or self.scratch_init_once != "all"):

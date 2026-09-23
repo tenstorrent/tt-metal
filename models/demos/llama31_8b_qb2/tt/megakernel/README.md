@@ -4,7 +4,7 @@
 with embedding, a 32-layer device loop, and final norm/head in one four-chip
 program. Real-model checks pass at contexts 128, 2048 and 8192.
 See [PROGRESS.md](PROGRESS.md) for exact checkpoints, results and recovery state.
-No measured variant is faster than the original traced model.
+Experiment2's selected resident configuration beats the native traced model in all four paired workloads. See [EXPERIMENT2_REPORT.md](EXPERIMENT2_REPORT.md) for the selected flags, exact comparisons and limits, and [experiment2-benchmark-summary.json](experiment2-benchmark-summary.json) for every trial. Default options preserve experiment1; experimental options are not all qualified. The historical results below describe experiment1.
 
 The body preserves the selected checkpoint policy: GU BFP4, QKV/O/down/head
 and KV BFP8, BF16 activations/residuals/collectives, LoFi projections with BF16

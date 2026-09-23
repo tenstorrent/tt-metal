@@ -274,3 +274,19 @@ Placement-only screens: constrained head_priority keeps native32 attention worke
 15:42 UTC final selective profiles:128 main/O/GU/down each pass all4 chips×3 windows×35 operations; required reader zones have32 layers×8 cores per chip/window, zero unmatched. Prefetch median duration/completion lead us:QKV5.92/9.07,O4.40/60.30,GU4.38/20.49,down4.15/12.70. Chip2 again has a large cross-core clock offset (~22.25s in this capture); same-core model BRISC firmware maxima remain~7.1ms and are usable, cross-core envelope is not. Final8192 first capture had clean device close but postprocessing failed on missing warmup operation4139011/device3 withop-support4000. Exclude it. Repeat profile-final-8192-main-v2 with16000 support; no reset needed. Compressing completed short captures during this instrumented run, before headline measurements.
 
 15:50 UTC: final full8192 workerWatcher exact gate passed, checks loggedall4chips (ETHexcluded). Final16000-op8192profile all3windows/all4chips complete with35ops/device/window; selected phase markersunmatched0. Same-coredeviceintervals auditedall110BRISCcores. Six finalprofilearchives(includingrejected8192capture) compressed,testedanddurable. Preparing code/evidencecheckpoint before40-processpairedsuite; threeprimaryblocks×fourcases, twoshortblocks×twocases.
+
+
+## 2026-09-23T16:50:59.339115+00:00: final paired measurements complete
+
+Measuredsource e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad. All40 processes passed strict exact teacher/all64KV/greedy/replay checks; no Watcher/profiler flags in headline runs. Three primary process blocks/case×five warmed trials; two short blocks/case×five. No source changes or heavycopy/compression during suite.
+
+| Context / outputs | Native | First resident | General candidate | Bounded short variant |
+|---|---:|---:|---:|---:|
+| 128 / 32 | 7.633649 | 9.248212 | 7.542283 | 7.513495 |
+| 2048 / 32 | 8.074194 | 9.674421 | 7.966866 | unqualified |
+| 8192 / 32 | 8.681360 | 10.335836 | 8.620870 | unqualified |
+| 128 / 256 | 7.679083 | 9.292730 | 7.579589 | 7.554150 |
+
+See experiment2-benchmark-summary.json for all trials, paired process deltas, command/source/result hashes, startup costs and denominator checks. Generalcandidate beatsnative in every paired block. Final code/report checkpoint and durablecopy verification follow; no further optimization jobs.
+
+After final measurement freeze: added a host-side rejection of single_layer_barrier=True, before mesh creation. The C++ experiment remains in source for investigation, but the known semaphore-address mismatch can no longer be selected through ordinary tuning. Default and selected configurations remain unchanged. Verified default/selected construction and rejection of both plain/bounded single-barrier requests without hardware.

@@ -1,12 +1,44 @@
 # Experiment 2: resident QB2 decode
 
-Status at 15:30 UTC: implementation and all four exact qualification cases complete; final interleaved measurements and separate instrumentation are running. The final result table will be filled from the saved paired runs, not from the best screening trial.
+Completed on 2026-09-23. The selected resident program improves all four measured workloads against the native traced model in the paired comparison below. Measured source: `e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad`. Exact agreement and separate instrumentation checks passed within the scope described here.
 
 This experiment uses one exclusive four-chip Blackhole QB2, batch one, snapshot `0e9e39f249a16976918f6564b8830bc894c89659`. It continues `f776a26ce77921cc84331cafb1434ba20c6ec46b` in an isolated checkout without updating main. The first experiment remains reproducible at that SHA and through the default `decode_token` options. Native prefill and device sampling remain separate. Both native decode and the resident implementation use trace replay.
 
 ## Final comparison
 
-PAIRED_TABLE_PENDING
+| Context / outputs | Native traced | First resident | Selected resident | Paired latency reduction |
+|---|---:|---:|---:|---:|
+| 128 / 32 | 7.633649 | 9.248212 | 7.542283 | 1.202% |
+| 2048 / 32 | 8.074194 | 9.674421 | 7.966866 | 1.306% |
+| 8192 / 32 | 8.681360 | 10.335836 | 8.620870 | 0.697% |
+| 128 / 256 | 7.679083 | 9.292730 | 7.579589 | 1.295% |
+
+Times are ms/token. Paired reduction is the median of within-round percentage reductions; it need not equal the ratio of the two displayed aggregate medians.
+
+| Context / outputs | Native process-median range | Candidate process-median range | Paired saving range, µs/token |
+|---|---:|---:|---:|
+| 128 / 32 | 7.632691–7.637361 | 7.540595–7.545525 | 91.37–92.10 |
+| 2048 / 32 | 8.072304–8.075223 | 7.964196–7.969903 | 105.32–110.00 |
+| 8192 / 32 | 8.680502–8.701274 | 8.619647–8.620977 | 59.52–81.63 |
+| 128 / 256 | 7.678647–7.679129 | 7.579437–7.579644 | 99.21–99.54 |
+
+The independently labelled short-context variant measured:
+
+- 128/32: **7.513495 ms/token**, 1.568% paired reduction; process medians 7.511156–7.515833, individual trials 7.509670–7.517865.
+- 128/256: **7.554150 ms/token**, 1.624% paired reduction; process medians 7.553976–7.554324, individual trials 7.553835–7.554528.
+
+Every completed paired process passed the exact teacher/KV/greedy gate. Repeated generations within each process were identical. See [experiment2-benchmark-summary.json](experiment2-benchmark-summary.json) for all individual trials, process medians, commands, hashes and startup costs.
+
+Startup measurements from these processes (kernel/model caches already populated) are separate from the score:
+
+| Path | Model load median (range), s | Enable/synchronize median, s | Warmup/capture/full-generation median (range), s |
+|---|---:|---:|---:|
+| native | 71.207 (67.522–74.417) | 0.013149 | 0.781 (0.468–2.205) |
+| first | 70.335 (65.720–73.558) | 0.015447 | 1.038 (0.497–3.144) |
+| candidate | 71.225 (68.791–73.891) | 0.015623 | 0.756 (0.444–2.154) |
+| short | 70.296 (68.595–71.762) | 0.016018 | 2.128 (0.436–2.837) |
+
+The warmup aggregate includes prefill, any needed compile, trace capture and one generation; it is not an isolated trace-capture measurement. Per-case details and warmed request setup/TTFT values remain in the JSON. No cold-start speedup is claimed.
 
 The score is warmed host-observed decode time, including sampled trace replay and final token-history readback. Prefill supplies the first output: 32 outputs contain 31 timed decode steps; 256 outputs contain 255. Model loading, initial compilation/capture, request setup and prefill are reported separately. The harness retains its original deferred readback boundary; neither the candidate nor its comparison omits sampling or KV work.
 
@@ -77,7 +109,7 @@ More prefetch was often worse. Norm-helper down staging lost over2ms; idle-head 
 
 CustomGU16 component arrangements were159.01us with native bank rows and157.76us with split bank rows versus144.73us for GU8; all were exact. That rejects these tested layouts, not all possible16-worker designs. Custom O, zero-padded custom down, full DST, custom QKV, cached layer tables and broader head-placement searches were also implemented and measured; none improved the selected composition. Tiny apparent wins such as inline CB reset were not promoted without evidence beyond noise.
 
-A single-global-join-per-layer experiment used alternating local semaphore banks and passed short full-model and four-layer Watcher tests. It hung at full context2048 after model readiness. Live triage across all four chips was saved before stopping only its child process group. Subsequent source inspection found a concrete address mismatch consistent with the captured attention waits: legacy `get_semaphore(id)` polls the new bank, while `Semaphore<>` sends through templated `get_semaphore<core_type>(id)`, bypassing the function-like macro. The short four-layer fixture uses positions 127/128/129 and does not exercise this reduction tree. No repaired version was hardware-qualified; other protocol races remain unassessed. A bounded reset plus health/connectivity/ring checks passed, and the otherwise identical placement candidate with both joins passed2048. `--single-layer-barrier` remains an unqualified experimental option and is explicitly excluded from the final configuration. The four-layer success did not justify trusting full 32-layer behavior.
+A single-global-join-per-layer experiment used alternating local semaphore banks and passed short full-model and four-layer Watcher tests. It hung at full context2048 after model readiness. Live triage across all four chips was saved before stopping only its child process group. Subsequent source inspection found a concrete address mismatch consistent with the captured attention waits: legacy `get_semaphore(id)` polls the new bank, while `Semaphore<>` sends through templated `get_semaphore<core_type>(id)`, bypassing the function-like macro. The short four-layer fixture uses positions 127/128/129 and does not exercise this reduction tree. No repaired version was hardware-qualified; other protocol races remain unassessed. A bounded reset plus health/connectivity/ring checks passed, and the otherwise identical placement candidate with both joins passed2048. `--single-layer-barrier` is rejected before hardware setup in the delivered source; its implementation and failing checkpoint remain available for investigation. This host-side guard was added after the measurement freeze and does not affect the measured selected/default configurations. The four-layer success did not justify trusting full 32-layer behavior.
 
 Other failures and repairs are retained in WORK_LOG.md: malformed helper-publication alignment, profiler marker collisions/truncated captures, ETH Watcher code-size overflow, and a custom-down Watcher alias-boundary violation. The latter was fixed by splitting the DMA at the inactive alias boundary while retaining all bytes and Watcher checks; repaired custom down was exact but slower. Failed or incomplete captures do not support the latency claims.
 
@@ -97,4 +129,4 @@ python -m models.demos.llama31_8b_qb2.tests.summarize_experiment2 \
 
 Durable root is `/data/moconnor/llama-minlat-114624`. The verified incremental `checkpoint-current.bundle` requires the starting f776 commit; the original source/evidence mirror is read-only at `/data/moconnor/llama-megakernel-113796`. Compressed, integrity-tested profiler archives and SHA256 manifests preserve raw captures separately. No credentials, weights, build outputs or caches enter Git. No push, force push, merge, PR, firmware change, reboot or allocation extension/release was performed.
 
-Final source checkpoint and durable evidence verification: PRESERVATION_PENDING. The next useful investigation is the residual terminal-head/attention placement interaction and critical-path activation delivery, with the original 32-worker numerical geometry held fixed. The single-barrier implementation must map both semaphore APIs consistently and pass long-context/replay qualification before any performance use.
+The measured source and final results are committed. The final documentation checkpoint and evidence-transfer verification are recorded in the durable PARENT_CHECKPOINT.md and artifacts/final-durable-verification.json after preservation. The next useful investigation is the residual terminal-head/attention placement interaction and critical-path activation delivery, with the original 32-worker numerical geometry held fixed. The single-barrier implementation must map both semaphore APIs consistently and pass long-context/replay qualification before any performance use.

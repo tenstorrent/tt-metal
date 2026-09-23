@@ -1,0 +1,5776 @@
+{
+  "schema_version": 1,
+  "manifest_sha256": "2d3144020f8bd3008111e445978b71a58335851f2c783a4955145d5894df15c5",
+  "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+  "configuration": {
+    "candidate": [
+      "--projection-reader",
+      "pipelined",
+      "--projection-buffers",
+      "3",
+      "--wide-subblocks",
+      "--bounded-layer-barrier",
+      "--alias-projection-cbs",
+      "--projection-placement",
+      "dram",
+      "--scratch-init-once",
+      "all",
+      "--early-weight-blocks",
+      "2",
+      "--multicast-layer-barrier",
+      "--coalesce-input",
+      "--projection-tile-height",
+      "16",
+      "--norm-tile-height",
+      "16",
+      "--head-placement",
+      "select",
+      "--custom-gu",
+      "--norm-stats-face",
+      "--attention-placement",
+      "head_priority"
+    ],
+    "short": [
+      "--projection-reader",
+      "pipelined",
+      "--projection-buffers",
+      "3",
+      "--wide-subblocks",
+      "--bounded-layer-barrier",
+      "--alias-projection-cbs",
+      "--projection-placement",
+      "dram",
+      "--scratch-init-once",
+      "all",
+      "--early-weight-blocks",
+      "2",
+      "--multicast-layer-barrier",
+      "--coalesce-input",
+      "--projection-tile-height",
+      "16",
+      "--norm-tile-height",
+      "16",
+      "--head-placement",
+      "select",
+      "--custom-gu",
+      "--norm-stats-face",
+      "--attention-workers",
+      "16"
+    ]
+  },
+  "measurement": "Unprofiled/Watcher-free full-model decode, sampling and final history readback included. Three process blocks per case; five warmed trials per process. Native/first/candidate order is Latin-balanced. Short variant has two process blocks per qualified context128 workload and is separately labelled.",
+  "statistics": "Median of process medians; five warmed trials per process. Paired differences use process medians within the same case/round. No independence claim for trials within a process.",
+  "quality_scope": "Fixed prompt, batch one, matched quantized TT teacher stream. Exact teacher logits, all64 request-touched K/V tensors including padding, greedy output and repeated generations. This is not broad quality qualification. Both native and prototype failed the separate provisional HF PCC0.99 diagnostic.",
+  "runs": [
+    {
+      "name": "paired-r0-128-short",
+      "round": 0,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "short",
+      "completed_utc": "2026-09-23T15:55:26.442126+00:00",
+      "result_sha256": "41ab7842a1998e52d0cf2523de4cdfb309849c0c57473168d31163eaead772fe",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-workers",
+        "16",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-128-short-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.5150365160117225,
+        7.516880065292841,
+        7.5111561943025835,
+        7.509670449390767,
+        7.510614517565456
+      ],
+      "process_median_ms_per_token": 7.5111561943025835,
+      "model_load_seconds": 71.30672815802973,
+      "experimental_setup_seconds": 0.016291372012346983,
+      "warmup_capture_generation_seconds": 2.8366456519579515,
+      "warmup_perf": {
+        "ttft_ms": 2603.586721001193,
+        "decode_ms": 232.93417191598564,
+        "setup_ms": 2.5653881020843983,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.21569390874356,
+        21.38332393951714,
+        21.646548062562943,
+        20.756243960931897,
+        20.543908001855016
+      ],
+      "warmed_request_setup_ms": [
+        1.0055939201265574,
+        0.920351012609899,
+        1.0570019949227571,
+        0.7946499390527606,
+        0.6762739503756166
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r0-128-native",
+      "round": 0,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T15:56:44.670490+00:00",
+      "result_sha256": "64f98b85768cb3795658d55c9a048300283bb21c1063536b2b66b639b40edc2a",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-128-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.632690808555532,
+        7.639292774030999,
+        7.630184709635233,
+        7.62899728837393,
+        7.636526839867715
+      ],
+      "process_median_ms_per_token": 7.632690808555532,
+      "model_load_seconds": 71.3819587409962,
+      "experimental_setup_seconds": 0.013158033019863069,
+      "warmup_capture_generation_seconds": 0.5082533929962665,
+      "warmup_perf": {
+        "ttft_ms": 271.3965519797057,
+        "decode_ms": 236.68978200294077,
+        "setup_ms": 2.6943349512293935,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        22.317236987873912,
+        21.584314992651343,
+        22.420214023441076,
+        22.11164403706789,
+        21.139534073881805
+      ],
+      "warmed_request_setup_ms": [
+        1.1429860023781657,
+        0.8395060431212187,
+        1.0794249828904867,
+        0.9679020149633288,
+        0.8165730396285653
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r0-128-first",
+      "round": 0,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T15:58:06.512476+00:00",
+      "result_sha256": "3ba39cc8e7070f8b77413b34848f8e78bf32e5eb8b4cf9c6bb406c7332f99a50",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-128-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        9.248040323596328,
+        9.249049321477932,
+        9.253004967655626,
+        9.245061030190799,
+        9.248212223962671
+      ],
+      "process_median_ms_per_token": 9.248212223962671,
+      "model_load_seconds": 71.95142492302693,
+      "experimental_setup_seconds": 0.016035175998695195,
+      "warmup_capture_generation_seconds": 3.1442134639946744,
+      "warmup_perf": {
+        "ttft_ms": 2857.3480969062075,
+        "decode_ms": 286.7232149001211,
+        "setup_ms": 2.444355981424451,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.48644404951483,
+        21.2388300569728,
+        20.991335972212255,
+        22.017059032805264,
+        21.369730937294662
+      ],
+      "warmed_request_setup_ms": [
+        1.019329996779561,
+        0.9593750583007932,
+        1.065438031218946,
+        1.0278960689902306,
+        0.9811569470912218
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r0-128-candidate",
+      "round": 0,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T15:59:23.010962+00:00",
+      "result_sha256": "0018c95fe4ef82e33f6b308071ae73101180be5d33df84a764c39f6e4a284b55",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-128-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.543271546432328,
+        7.538818836873097,
+        7.548617259148629,
+        7.540457776837772,
+        7.540595128140863
+      ],
+      "process_median_ms_per_token": 7.540595128140863,
+      "model_load_seconds": 69.60529734299053,
+      "experimental_setup_seconds": 0.015522853005677462,
+      "warmup_capture_generation_seconds": 0.44407200207933784,
+      "warmup_perf": {
+        "ttft_ms": 209.83745192643255,
+        "decode_ms": 233.98790892679244,
+        "setup_ms": 2.769757993519306,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        23.007389972917736,
+        21.39479503966868,
+        20.627869060263038,
+        21.681564045138657,
+        21.09759603627026
+      ],
+      "warmed_request_setup_ms": [
+        1.0971090523526073,
+        0.9968060767278075,
+        0.7319300202652812,
+        1.0222849668934941,
+        0.938254059292376
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r0-2048-native",
+      "round": 0,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:00:40.596388+00:00",
+      "result_sha256": "627b353f91ccda2dd7f9676f1cc671b7613efa1784c348f4d6fa61e564dfcd45",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-2048-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.078937486354862,
+        8.072304486807797,
+        8.06642422497633,
+        8.069270902553633,
+        8.072819001221609
+      ],
+      "process_median_ms_per_token": 8.072304486807797,
+      "model_load_seconds": 69.27411974698771,
+      "experimental_setup_seconds": 0.013216570019721985,
+      "warmup_capture_generation_seconds": 0.5565257749985904,
+      "warmup_perf": {
+        "ttft_ms": 306.41413398552686,
+        "decode_ms": 249.96879801619798,
+        "setup_ms": 2.886030008085072,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        106.71636101324111,
+        105.85632594302297,
+        108.26783895026892,
+        110.06432597059757,
+        108.77421800978482
+      ],
+      "warmed_request_setup_ms": [
+        1.1807180708274245,
+        1.2034319806843996,
+        1.2146530207246542,
+        5.69117593113333,
+        1.3256449019536376
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r0-2048-first",
+      "round": 0,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:01:58.117508+00:00",
+      "result_sha256": "53c7fb9f974bb682bbcd3397e76ae2e6caeeb3c8a065767ef49a2e726a94cdbf",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-2048-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        9.674944096214828,
+        9.67442148530315,
+        9.673601838820163,
+        9.6658673550513,
+        9.764218680380333
+      ],
+      "process_median_ms_per_token": 9.67442148530315,
+      "model_load_seconds": 68.79389449197333,
+      "experimental_setup_seconds": 0.015140588046051562,
+      "warmup_capture_generation_seconds": 0.5748399449512362,
+      "warmup_perf": {
+        "ttft_ms": 274.83979100361466,
+        "decode_ms": 299.83611998613924,
+        "setup_ms": 2.5905839866027236,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        109.9231339758262,
+        106.35783500038087,
+        104.41747296135873,
+        103.42672897968441,
+        108.20951592177153
+      ],
+      "warmed_request_setup_ms": [
+        1.2326769065111876,
+        1.748103997670114,
+        1.0460899211466312,
+        1.127587049268186,
+        1.139448955655098
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r0-2048-candidate",
+      "round": 0,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:03:17.396987+00:00",
+      "result_sha256": "3f54f19e1c45b7ea9adedc5beeb55d1aa6960f889472ecba222f5a6fca186470",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-2048-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.966169903445388,
+        7.96686606331458,
+        7.963530002011647,
+        7.974122515729358,
+        8.020553869315453
+      ],
+      "process_median_ms_per_token": 7.96686606331458,
+      "model_load_seconds": 71.03020387608558,
+      "experimental_setup_seconds": 0.015285814995877445,
+      "warmup_capture_generation_seconds": 0.5296196460258216,
+      "warmup_perf": {
+        "ttft_ms": 282.58421702776104,
+        "decode_ms": 246.86135502997786,
+        "setup_ms": 2.4960030568763614,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        103.49177301395684,
+        105.99387902766466,
+        104.33110897429287,
+        113.74538403470069,
+        104.87712291069329
+      ],
+      "warmed_request_setup_ms": [
+        1.2544189812615514,
+        1.04571005795151,
+        1.112438039854169,
+        1.276221009902656,
+        1.0108529822900891
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r0-8192-native",
+      "round": 0,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:04:42.508321+00:00",
+      "result_sha256": "60c363b744806cee4d9727cb19b39d162907e98ca9a52476b85ad8c631d21f53",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-8192-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.680501547191412,
+        8.679214902522583,
+        8.676236611790955,
+        8.68975761301455,
+        8.68164403213849
+      ],
+      "process_median_ms_per_token": 8.680501547191412,
+      "model_load_seconds": 69.63838257803582,
+      "experimental_setup_seconds": 0.013069556094706059,
+      "warmup_capture_generation_seconds": 1.0116076639387757,
+      "warmup_perf": {
+        "ttft_ms": 742.4327040789649,
+        "decode_ms": 268.98992608767,
+        "setup_ms": 2.9960100073367357,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        545.9998410660774,
+        552.7764899889007,
+        545.6386390142143,
+        548.5242980066687,
+        552.233390044421
+      ],
+      "warmed_request_setup_ms": [
+        1.6369209624826908,
+        1.5522189205512404,
+        1.6161809908226132,
+        1.5163299394771457,
+        1.9498789915814996
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r0-8192-first",
+      "round": 0,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:06:03.921184+00:00",
+      "result_sha256": "185f9b81b55883525f54dea96f418e71388e7794bde5246b3fa56605675004cc",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-8192-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        10.333682808484282,
+        10.344652842069346,
+        10.335381195369747,
+        10.335621356423344,
+        10.334475258845956
+      ],
+      "process_median_ms_per_token": 10.335381195369747,
+      "model_load_seconds": 65.71986404596828,
+      "experimental_setup_seconds": 0.01529623195528984,
+      "warmup_capture_generation_seconds": 1.0334506160579622,
+      "warmup_perf": {
+        "ttft_ms": 712.7408189699054,
+        "decode_ms": 320.5237709917128,
+        "setup_ms": 3.154302015900612,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        542.8513620281592,
+        545.6368579762056,
+        550.887037999928,
+        552.7109360555187,
+        544.9941280530766
+      ],
+      "warmed_request_setup_ms": [
+        1.6105800168588758,
+        1.5509759541600943,
+        1.6308389604091644,
+        1.444161986000836,
+        1.7051410395652056
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r0-8192-candidate",
+      "round": 0,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:07:28.333370+00:00",
+      "result_sha256": "6ddfad91a3aa28d7bfc7f188fcc4a115cd54a8b5299c28d046b98d599d347342",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-8192-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.618096903627437,
+        8.616660255938768,
+        8.62180429225367,
+        8.62097722523275,
+        8.642366486451317
+      ],
+      "process_median_ms_per_token": 8.62097722523275,
+      "model_load_seconds": 68.79149843694177,
+      "experimental_setup_seconds": 0.016119987005367875,
+      "warmup_capture_generation_seconds": 0.9822250719880685,
+      "warmup_perf": {
+        "ttft_ms": 714.9932029424235,
+        "decode_ms": 267.09583902265877,
+        "setup_ms": 3.1788889318704605,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        539.6416099974886,
+        546.6441509779543,
+        554.6923619695008,
+        548.651700024493,
+        549.504499998875
+      ],
+      "warmed_request_setup_ms": [
+        1.4988469192758203,
+        1.4899990055710077,
+        1.5172319253906608,
+        1.794031006284058,
+        1.55481300316751
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r0-long-short",
+      "round": 0,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "short",
+      "completed_utc": "2026-09-23T16:08:56.668525+00:00",
+      "result_sha256": "6ba63eeab1e8f6bad0c2a92eaa0c9d84d9d58244d6a0a5aeace49ef28ce9caff",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-workers",
+        "16",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-long-short-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        7.553976183921537,
+        7.553930125454915,
+        7.553969251046724,
+        7.554430129718693,
+        7.554224117512942
+      ],
+      "process_median_ms_per_token": 7.553976183921537,
+      "model_load_seconds": 68.59523072105367,
+      "experimental_setup_seconds": 0.0155353780137375,
+      "warmup_capture_generation_seconds": 2.128317394061014,
+      "warmup_perf": {
+        "ttft_ms": 201.85358298476785,
+        "decode_ms": 1926.2796790571883,
+        "setup_ms": 3.072555991820991,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.842107991687953,
+        21.666181972250342,
+        22.086024982854724,
+        21.614582976326346,
+        21.61017502658069
+      ],
+      "warmed_request_setup_ms": [
+        1.1757879983633757,
+        1.0564799886196852,
+        1.5529299853369594,
+        1.0655369842424989,
+        1.0632530320435762
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r0-long-native",
+      "round": 0,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:10:29.101190+00:00",
+      "result_sha256": "d34836eb8cdae05b5ec321f84f419be8363f55afdc822465984f475388b1011f",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-long-native-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        7.6790829453909515,
+        7.6778303060278885,
+        7.679284960670652,
+        7.675977529702234,
+        7.6792313137511705
+      ],
+      "process_median_ms_per_token": 7.6790829453909515,
+      "model_load_seconds": 72.15166867908556,
+      "experimental_setup_seconds": 0.013096695067360997,
+      "warmup_capture_generation_seconds": 2.1936655649915338,
+      "warmup_perf": {
+        "ttft_ms": 235.38999410811812,
+        "decode_ms": 1958.0888849450275,
+        "setup_ms": 3.594394074752927,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.712630055844784,
+        21.791158942505717,
+        22.241521044634283,
+        22.27925299666822,
+        22.59861398488283
+      ],
+      "warmed_request_setup_ms": [
+        1.1376551119610667,
+        1.0999629739671946,
+        1.0661890264600515,
+        1.0427039815112948,
+        1.1196009581908584
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r0-long-first",
+      "round": 0,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:12:00.686697+00:00",
+      "result_sha256": "9cd7491df1e994f1de2fc5bcb8b6492c60ab24bce2ad3d93e14d48967e5afc3c",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-long-first-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        9.292883501735096,
+        9.292915870672932,
+        9.291805893949727,
+        9.289551419936412,
+        9.293347415422984
+      ],
+      "process_median_ms_per_token": 9.292883501735096,
+      "model_load_seconds": 68.68288786802441,
+      "experimental_setup_seconds": 0.015442618983797729,
+      "warmup_capture_generation_seconds": 2.583597999997437,
+      "warmup_perf": {
+        "ttft_ms": 213.9238870004192,
+        "decode_ms": 2369.420549017377,
+        "setup_ms": 3.0512550147250295,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        23.109178990125656,
+        22.025727899745107,
+        22.22400694154203,
+        22.01850397977978,
+        22.568174987100065
+      ],
+      "warmed_request_setup_ms": [
+        2.1204149816185236,
+        1.076939981430769,
+        1.0883519425988197,
+        1.0679829865694046,
+        1.0534239700064063
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r0-long-candidate",
+      "round": 0,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:13:31.989692+00:00",
+      "result_sha256": "8e54639074dbd0fb6e152593f4b9abc72121930aba5f7fe50c94b26539c8fb71",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r0-long-candidate-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        7.579719760984767,
+        7.579643646821234,
+        7.579195219566863,
+        7.579129988181532,
+        7.5796505883701295
+      ],
+      "process_median_ms_per_token": 7.579643646821234,
+      "model_load_seconds": 71.58087149600033,
+      "experimental_setup_seconds": 0.015529165044426918,
+      "warmup_capture_generation_seconds": 2.1446437970735133,
+      "warmup_perf": {
+        "ttft_ms": 211.7407249752432,
+        "decode_ms": 1932.692239060998,
+        "setup_ms": 2.973386086523533,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.689363988116384,
+        21.735441987402737,
+        21.830583922564983,
+        21.736633963882923,
+        22.202334948815405
+      ],
+      "warmed_request_setup_ms": [
+        1.081908936612308,
+        1.054577063769102,
+        1.2670529540628195,
+        1.0667300084605813,
+        1.5451249200850725
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r1-long-first",
+      "round": 1,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:15:08.299471+00:00",
+      "result_sha256": "dbb65ec714bb469818b60348ad96f04ee00893513a69ab759d165d237f2e0d33",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-long-first-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        9.29259728211179,
+        9.293342702200308,
+        9.292729760465377,
+        9.29120102367711,
+        9.293713117493134
+      ],
+      "process_median_ms_per_token": 9.292729760465377,
+      "model_load_seconds": 73.46139787998982,
+      "experimental_setup_seconds": 0.01525390800088644,
+      "warmup_capture_generation_seconds": 2.579891322995536,
+      "warmup_perf": {
+        "ttft_ms": 210.19877004437149,
+        "decode_ms": 2369.5097119780257,
+        "setup_ms": 3.7724339636042714,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.76001900807023,
+        21.87453699298203,
+        21.598560037091374,
+        21.815082989633083,
+        24.680802947841585
+      ],
+      "warmed_request_setup_ms": [
+        1.1219760635867715,
+        1.0557379573583603,
+        1.0638040257617831,
+        1.175247016362846,
+        3.998716943897307
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r1-long-short",
+      "round": 1,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "short",
+      "completed_utc": "2026-09-23T16:16:37.540245+00:00",
+      "result_sha256": "15330256f5aeb5963c45fae4c9607b7046cc06f2114ba10e1bd89c0209487513",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-workers",
+        "16",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-long-short-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        7.554528140919466,
+        7.554213815441757,
+        7.553834854807778,
+        7.554377097746029,
+        7.5543238941178315
+      ],
+      "process_median_ms_per_token": 7.5543238941178315,
+      "model_load_seconds": 69.28590792103205,
+      "experimental_setup_seconds": 0.015745537006296217,
+      "warmup_capture_generation_seconds": 2.1283276879694313,
+      "warmup_perf": {
+        "ttft_ms": 201.59214898012578,
+        "decode_ms": 1926.2485089711845,
+        "setup_ms": 3.073818050324917,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.82549296412617,
+        22.156315040774643,
+        21.66174107696861,
+        21.56031597405672,
+        21.673573064617813
+      ],
+      "warmed_request_setup_ms": [
+        1.16082897875458,
+        1.170037081465125,
+        1.056030043400824,
+        1.0250300401821733,
+        1.0281059658154845
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r1-long-candidate",
+      "round": 1,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:18:09.858308+00:00",
+      "result_sha256": "a137354ba3d5ce241a203da0db1d5c707985f687713a934939d27d463a1d10af",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-long-candidate-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        7.578871957044683,
+        7.579819097950616,
+        7.578853795797947,
+        7.5794651218708236,
+        7.579436984515803
+      ],
+      "process_median_ms_per_token": 7.579436984515803,
+      "model_load_seconds": 72.35646697098855,
+      "experimental_setup_seconds": 0.01615815598051995,
+      "warmup_capture_generation_seconds": 2.1471189779695123,
+      "warmup_perf": {
+        "ttft_ms": 214.25656008068472,
+        "decode_ms": 1932.6758310198784,
+        "setup_ms": 3.337922040373087,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.747422986663878,
+        21.630921051837504,
+        21.61480998620391,
+        21.803069044835865,
+        21.632193005643785
+      ],
+      "warmed_request_setup_ms": [
+        1.1461509857326746,
+        1.0065350215882063,
+        1.0344679467380047,
+        1.0692039504647255,
+        1.0967770358547568
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r1-long-native",
+      "round": 1,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:19:38.948130+00:00",
+      "result_sha256": "97f34d7cfe38cfa46a3db716c139d1bd075795533e5f7f3fd18d46e069df5cef",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-long-native-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        7.6786467330712895,
+        7.677602968817832,
+        7.6793663806336765,
+        7.676164333379882,
+        7.679299737198972
+      ],
+      "process_median_ms_per_token": 7.6786467330712895,
+      "model_load_seconds": 69.1477446189383,
+      "experimental_setup_seconds": 0.013160214060917497,
+      "warmup_capture_generation_seconds": 2.205327213043347,
+      "warmup_perf": {
+        "ttft_ms": 247.05596209969372,
+        "decode_ms": 1958.0837220419198,
+        "setup_ms": 3.342180047184229,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        22.41793496068567,
+        22.348582977429032,
+        21.80598396807909,
+        21.78932400420308,
+        21.677879965864122
+      ],
+      "warmed_request_setup_ms": [
+        1.6933380393311381,
+        0.9840019047260284,
+        1.0744238970801234,
+        1.0645660804584622,
+        1.0674509685486555
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r1-8192-first",
+      "round": 1,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:21:03.057175+00:00",
+      "result_sha256": "3cda8537989b3dc9794afb3d08bbb65da786c4c73788043e3aa42822a8d612ef",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-8192-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        10.362003839785054,
+        10.334067872815556,
+        10.34672045329165,
+        10.335836420586753,
+        10.333192970363363
+      ],
+      "process_median_ms_per_token": 10.335836420586753,
+      "model_load_seconds": 68.08316249505151,
+      "experimental_setup_seconds": 0.015624615014530718,
+      "warmup_capture_generation_seconds": 1.045622957055457,
+      "warmup_perf": {
+        "ttft_ms": 724.8942599399015,
+        "decode_ms": 320.30888402368873,
+        "setup_ms": 2.962243976071477,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        543.7028290471062,
+        546.9064440112561,
+        546.967540984042,
+        554.4349789852276,
+        553.0797580722719
+      ],
+      "warmed_request_setup_ms": [
+        1.6085859388113022,
+        1.610819948837161,
+        1.5441019786521792,
+        1.4402440283447504,
+        1.554963062517345
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r1-8192-candidate",
+      "round": 1,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:22:29.263958+00:00",
+      "result_sha256": "a4ed81807aa7387bb435356f0a47b95f78d8c9609f05548da5d1ec0457dedd32",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-8192-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.624338000381906,
+        8.620051419242255,
+        8.620273160387672,
+        8.620869740092706,
+        8.62226790312918
+      ],
+      "process_median_ms_per_token": 8.620869740092706,
+      "model_load_seconds": 70.24161530891433,
+      "experimental_setup_seconds": 0.016827875981107354,
+      "warmup_capture_generation_seconds": 1.0227877229917794,
+      "warmup_perf": {
+        "ttft_ms": 754.8433470074087,
+        "decode_ms": 267.2367930645123,
+        "setup_ms": 2.8886229265481234,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        554.4638490537181,
+        561.2744309473783,
+        547.9041859507561,
+        548.5966899432242,
+        549.8981879791245
+      ],
+      "warmed_request_setup_ms": [
+        2.4394149659201503,
+        1.6420099418610334,
+        1.4981749700382352,
+        1.5781469410285354,
+        1.6508359694853425
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r1-8192-native",
+      "round": 1,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:23:52.559708+00:00",
+      "result_sha256": "5861abb412fb9f84d1d4154291b38652e6d965dc0d54d586fe853d270ef1037a",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-8192-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.681359708369259,
+        8.69987674072505,
+        8.676279647906702,
+        8.682343515477353,
+        8.679515516926203
+      ],
+      "process_median_ms_per_token": 8.681359708369259,
+      "model_load_seconds": 67.52230276900809,
+      "experimental_setup_seconds": 0.013154100044630468,
+      "warmup_capture_generation_seconds": 1.0160387209616601,
+      "warmup_perf": {
+        "ttft_ms": 746.8933949712664,
+        "decode_ms": 268.996441969648,
+        "setup_ms": 3.103306982666254,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        544.2828240338713,
+        545.8045940613374,
+        544.2679940024391,
+        560.6082789599895,
+        555.2857170114294
+      ],
+      "warmed_request_setup_ms": [
+        2.123882994055748,
+        1.5609849942848086,
+        1.557018025778234,
+        1.5593229327350855,
+        1.7505979631096125
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r1-2048-first",
+      "round": 1,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:25:14.211654+00:00",
+      "result_sha256": "d37815831e858efa334337f8e8c141c9d20a3c3f231ca4ceff6a0f12e64cea78",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-2048-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        9.671314191373606,
+        9.672282804404535,
+        9.669167515371115,
+        9.66897290650635,
+        9.665785225919418
+      ],
+      "process_median_ms_per_token": 9.669167515371115,
+      "model_load_seconds": 72.87540466396604,
+      "experimental_setup_seconds": 0.015831480035558343,
+      "warmup_capture_generation_seconds": 0.5774456149665639,
+      "warmup_perf": {
+        "ttft_ms": 277.4260160513222,
+        "decode_ms": 299.8154390370473,
+        "setup_ms": 2.963538048788905,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        103.65275398362428,
+        104.77646288927644,
+        103.81454299204051,
+        110.88278202805668,
+        112.12691199034452
+      ],
+      "warmed_request_setup_ms": [
+        1.1896559735760093,
+        1.1434269836172462,
+        1.1007660068571568,
+        1.5929259825497866,
+        1.5715459594503045
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r1-2048-candidate",
+      "round": 1,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:26:36.369311+00:00",
+      "result_sha256": "b7ba9f736ef53ebc8d83d5c1f03abdded6bc5295a54f9774adc25db083816b6a",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-2048-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.9617808392692,
+        7.964196385845782,
+        7.959341968319589,
+        7.964582644372938,
+        7.971569223539723
+      ],
+      "process_median_ms_per_token": 7.964196385845782,
+      "model_load_seconds": 73.89129853295162,
+      "experimental_setup_seconds": 0.015609654947184026,
+      "warmup_capture_generation_seconds": 0.5278341990197077,
+      "warmup_perf": {
+        "ttft_ms": 280.83388903178275,
+        "decode_ms": 246.83238903526217,
+        "setup_ms": 2.7192409615963697,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        103.33742189686745,
+        112.63621598482132,
+        104.41104497294873,
+        104.5307939639315,
+        103.36811002343893
+      ],
+      "warmed_request_setup_ms": [
+        1.142224995419383,
+        1.1108339531347156,
+        1.3621450634673238,
+        0.9918570285663009,
+        1.1265240609645844
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r1-2048-native",
+      "round": 1,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:27:55.705855+00:00",
+      "result_sha256": "3c47b19b7fc5473032d688b4af0a45a9dce39565bf15365f31ba051fe74c0f43",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-2048-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.08819203126815,
+        8.079343805870701,
+        8.074194290525009,
+        8.064050388882958,
+        8.065413289342917
+      ],
+      "process_median_ms_per_token": 8.074194290525009,
+      "model_load_seconds": 71.05195609899238,
+      "experimental_setup_seconds": 0.013242947985418141,
+      "warmup_capture_generation_seconds": 0.5468001239933074,
+      "warmup_perf": {
+        "ttft_ms": 296.6944939689711,
+        "decode_ms": 249.96385001577437,
+        "setup_ms": 2.798693021759391,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        113.0661410279572,
+        103.2083680620417,
+        107.05387301277369,
+        105.12886999640614,
+        106.64440901018679
+      ],
+      "warmed_request_setup_ms": [
+        1.1733339633792639,
+        1.1436979984864593,
+        1.171511015854776,
+        1.1113049695268273,
+        1.1153729865327477
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r1-128-first",
+      "round": 1,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:29:13.905897+00:00",
+      "result_sha256": "d455c8b5cb3f8a04ef4c61b0a3c8f1fc5071dadac1d3b939cb559de6e7b66fd7",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-128-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        9.25333855012732,
+        9.250729712807845,
+        9.247498323900565,
+        9.248011261074533,
+        9.24236012712842
+      ],
+      "process_median_ms_per_token": 9.248011261074533,
+      "model_load_seconds": 70.89410174300428,
+      "experimental_setup_seconds": 0.015539969899691641,
+      "warmup_capture_generation_seconds": 0.4975267080590129,
+      "warmup_perf": {
+        "ttft_ms": 210.4836009675637,
+        "decode_ms": 286.8880209280178,
+        "setup_ms": 2.5144689716398716,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.452427026815712,
+        21.90046396572143,
+        21.345121087506413,
+        20.647808094508946,
+        21.189362974837422
+      ],
+      "warmed_request_setup_ms": [
+        1.0354910045862198,
+        0.9986599907279015,
+        0.9463800815865397,
+        0.7792001124471426,
+        0.7908319821581244
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r1-128-short",
+      "round": 1,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "short",
+      "completed_utc": "2026-09-23T16:30:32.537761+00:00",
+      "result_sha256": "81d5aead9e85a0fbbe6034d27ff649097c2bbaf20830e805ff2a1ce640dd2e88",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-workers",
+        "16",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-128-short-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.515833322559634,
+        7.517258324960787,
+        7.510144064473288,
+        7.513118126700001,
+        7.517865288161462
+      ],
+      "process_median_ms_per_token": 7.515833322559634,
+      "model_load_seconds": 71.76185693207663,
+      "experimental_setup_seconds": 0.016543537960387766,
+      "warmup_capture_generation_seconds": 0.435957747977227,
+      "warmup_perf": {
+        "ttft_ms": 202.880549011752,
+        "decode_ms": 232.91955702006817,
+        "setup_ms": 2.350423950701952,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.184473065659404,
+        22.03616197220981,
+        21.98463410604745,
+        20.813512965105474,
+        20.789537928067148
+      ],
+      "warmed_request_setup_ms": [
+        1.0203709825873375,
+        1.4254559064283967,
+        1.018849085085094,
+        0.8170619839802384,
+        0.8704540086910129
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r1-128-candidate",
+      "round": 1,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:31:51.720101+00:00",
+      "result_sha256": "4d01f19fd255f01cc2f54eea7bd3408de970de6816ce1e29dd4df036503eaa80",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-128-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.542804582044482,
+        7.5462110971491185,
+        7.540965580471581,
+        7.537543514533149,
+        7.542282902455378
+      ],
+      "process_median_ms_per_token": 7.542282902455378,
+      "model_load_seconds": 72.2716534009669,
+      "experimental_setup_seconds": 0.015507627045735717,
+      "warmup_capture_generation_seconds": 0.4457664160290733,
+      "warmup_perf": {
+        "ttft_ms": 211.82386309374124,
+        "decode_ms": 233.79376798402518,
+        "setup_ms": 2.311169053427875,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.630084956996143,
+        21.89133397769183,
+        21.601790911518037,
+        21.166768041439354,
+        20.886542974039912
+      ],
+      "warmed_request_setup_ms": [
+        1.0433050338178873,
+        0.9838019032031298,
+        1.0340779554098845,
+        1.204953994601965,
+        1.0248100152239203
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r1-128-native",
+      "round": 1,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:33:10.054258+00:00",
+      "result_sha256": "b79d1f0d700a8cd50866cb1d1d00af38df30a513dd1b7ac35996085a4e7d0ea8",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r1-128-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.633958582676226,
+        7.63364928969813,
+        7.62894254688534,
+        7.63249677425671,
+        7.63769899945586
+      ],
+      "process_median_ms_per_token": 7.63364928969813,
+      "model_load_seconds": 71.36291556002107,
+      "experimental_setup_seconds": 0.0131068549817428,
+      "warmup_capture_generation_seconds": 0.4689415179891512,
+      "warmup_perf": {
+        "ttft_ms": 232.02405509073287,
+        "decode_ms": 236.74748791381717,
+        "setup_ms": 2.9016489861533046,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.819405956193805,
+        21.460248972289264,
+        21.58879500348121,
+        21.301415050402284,
+        21.958280936814845
+      ],
+      "warmed_request_setup_ms": [
+        1.095625921152532,
+        0.9550258982926607,
+        0.84128906019032,
+        0.9593339636921883,
+        0.9428230114281178
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r2-128-candidate",
+      "round": 2,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:34:26.475554+00:00",
+      "result_sha256": "5ce9d49da076feb0c6641eb816f929e55ef6312bc23a364277f3adc3507a2eea",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-128-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.547755451542476,
+        7.5448208052905334,
+        7.548907997026559,
+        7.54552474245429,
+        7.543050319767527
+      ],
+      "process_median_ms_per_token": 7.54552474245429,
+      "model_load_seconds": 69.46373238100205,
+      "experimental_setup_seconds": 0.01563617109786719,
+      "warmup_capture_generation_seconds": 0.4760206809733063,
+      "warmup_perf": {
+        "ttft_ms": 242.10567702539265,
+        "decode_ms": 233.7755769258365,
+        "setup_ms": 2.508106059394777,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.476889960467815,
+        21.681120968423784,
+        22.460250998847187,
+        23.309384007006884,
+        21.854512975551188
+      ],
+      "warmed_request_setup_ms": [
+        1.010773004963994,
+        1.0590959573164582,
+        1.6052400460466743,
+        1.305946963839233,
+        1.0473830625414848
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r2-128-native",
+      "round": 2,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:35:47.770785+00:00",
+      "result_sha256": "a438a6facde3ab41bae8cba2c00faa5fdc6d895410c8b228bbf7d93760b67b6d",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-128-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.639484194618079,
+        7.637501356282061,
+        7.6360867110892165,
+        7.637361421309892,
+        7.631999260235217
+      ],
+      "process_median_ms_per_token": 7.637361421309892,
+      "model_load_seconds": 74.41697955306154,
+      "experimental_setup_seconds": 0.013143713935278356,
+      "warmup_capture_generation_seconds": 0.46835062105674297,
+      "warmup_perf": {
+        "ttft_ms": 231.50112200528383,
+        "decode_ms": 236.68911203276366,
+        "setup_ms": 3.3039579866454005,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        22.65946997795254,
+        21.654149051755667,
+        22.566844010725617,
+        21.54711401090026,
+        21.731355926021934
+      ],
+      "warmed_request_setup_ms": [
+        1.4873340260237455,
+        1.0232770582661033,
+        1.0472229914739728,
+        1.0482949437573552,
+        1.096557010896504
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r2-128-first",
+      "round": 2,
+      "case": "128",
+      "context": 128,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:37:08.569623+00:00",
+      "result_sha256": "0a7a239aaa6638e5950b598f15426fe66c6008329c77e8b4b0978890afc73bfc",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-128",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-128-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        9.245476032036446,
+        9.257531968966848,
+        9.24887541951912,
+        9.250853387188286,
+        9.246376095219485
+      ],
+      "process_median_ms_per_token": 9.24887541951912,
+      "model_load_seconds": 73.5581683749333,
+      "experimental_setup_seconds": 0.015544524998404086,
+      "warmup_capture_generation_seconds": 0.49738160299602896,
+      "warmup_perf": {
+        "ttft_ms": 210.47241403721273,
+        "decode_ms": 286.73500707373023,
+        "setup_ms": 2.3676680866628885,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.941225975751877,
+        21.128243068233132,
+        21.839212044142187,
+        21.893505938351154,
+        20.723248017020524
+      ],
+      "warmed_request_setup_ms": [
+        1.1383770033717155,
+        0.8177839918062091,
+        1.2176180025562644,
+        1.0794649133458734,
+        0.7797309663146734
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "a39296d0d6c6434fb8cdfee8cd624d6e077e450091321d7099b83b8607469b6c",
+      "teacher_position_range": [
+        128,
+        159
+      ]
+    },
+    {
+      "name": "paired-r2-2048-candidate",
+      "round": 2,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:38:29.559417+00:00",
+      "result_sha256": "06823957fe179223a09b19fe96cfb8a8d55d852204df2a2e5d81b5cf35f1c07d",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-2048-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        7.974966643227925,
+        7.969902775761101,
+        7.98847506784143,
+        7.958439580585447,
+        7.963040644573348
+      ],
+      "process_median_ms_per_token": 7.969902775761101,
+      "model_load_seconds": 72.67744583601598,
+      "experimental_setup_seconds": 0.015439503942616284,
+      "warmup_capture_generation_seconds": 0.5263683419907466,
+      "warmup_perf": {
+        "ttft_ms": 279.2088380083442,
+        "decode_ms": 246.94371002260596,
+        "setup_ms": 2.4941490264609456,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        105.04481906536967,
+        104.29219901561737,
+        104.43634609691799,
+        103.8256980245933,
+        107.69166995305568
+      ],
+      "warmed_request_setup_ms": [
+        1.3612430775538087,
+        0.9452470112591982,
+        1.280148047953844,
+        1.215194002725184,
+        1.1229179799556732
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r2-2048-native",
+      "round": 2,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:39:50.687863+00:00",
+      "result_sha256": "ecc403d385ea3e584c52d1c4f05b3f31ce77e9173f6aef4b6dcd208f3944d73a",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-2048-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.075222744786691,
+        8.065112449619319,
+        8.086733129476347,
+        8.060512677465956,
+        8.099585129398733
+      ],
+      "process_median_ms_per_token": 8.075222744786691,
+      "model_load_seconds": 72.67790680692997,
+      "experimental_setup_seconds": 0.013040586025454104,
+      "warmup_capture_generation_seconds": 0.5532984680030495,
+      "warmup_perf": {
+        "ttft_ms": 303.1276910332963,
+        "decode_ms": 250.01598102971911,
+        "setup_ms": 3.0007880413904786,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        104.24815292935818,
+        104.11451698746532,
+        112.51865793019533,
+        104.4308029813692,
+        106.39464808627963
+      ],
+      "warmed_request_setup_ms": [
+        1.2475859839469194,
+        0.9915860136970878,
+        3.6873609060421586,
+        1.1471229372546077,
+        0.9885200997814536
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r2-2048-first",
+      "round": 2,
+      "case": "2048",
+      "context": 2048,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:41:11.732624+00:00",
+      "result_sha256": "7fd84751bb879d536b24ed90c4273a1ac765bb047dd0b7abefe85864af207bac",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "2048",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-2048",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-2048-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        9.67767551886819,
+        9.696774935770419,
+        9.66815567845779,
+        9.697415546754435,
+        9.6695005157662
+      ],
+      "process_median_ms_per_token": 9.67767551886819,
+      "model_load_seconds": 72.23326589295175,
+      "experimental_setup_seconds": 0.01529191096778959,
+      "warmup_capture_generation_seconds": 0.5827672600280493,
+      "warmup_perf": {
+        "ttft_ms": 282.84475090913475,
+        "decode_ms": 299.7570710722357,
+        "setup_ms": 2.484560012817383,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          2048
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        105.25430599227548,
+        108.00689889583737,
+        102.72555006667972,
+        107.37394902389497,
+        105.21737509407103
+      ],
+      "warmed_request_setup_ms": [
+        1.2197219766676426,
+        0.9246979607269168,
+        0.9242870146408677,
+        1.1546879541128874,
+        1.1873909970745444
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        2048,
+        2079
+      ]
+    },
+    {
+      "name": "paired-r2-8192-candidate",
+      "round": 2,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:42:38.700426+00:00",
+      "result_sha256": "78a5bc23b879d94eac609450accb4222c60389d1cc7b0b42232f1e2a48e060f9",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-8192-candidate-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.61873825816738,
+        8.615516967350437,
+        8.6314668090293,
+        8.619647420522186,
+        8.621609901198216
+      ],
+      "process_median_ms_per_token": 8.619647420522186,
+      "model_load_seconds": 71.27384855796117,
+      "experimental_setup_seconds": 0.015738333924673498,
+      "warmup_capture_generation_seconds": 0.9886597190052271,
+      "warmup_perf": {
+        "ttft_ms": 721.383941010572,
+        "decode_ms": 267.1335260383785,
+        "setup_ms": 2.8323259903118014,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        556.1691519105807,
+        542.3363919835538,
+        550.030322978273,
+        546.3786800391972,
+        550.1172289950773
+      ],
+      "warmed_request_setup_ms": [
+        1.5289830043911934,
+        1.4564950251951814,
+        1.4693989651277661,
+        1.5522580360993743,
+        1.9434359855949879
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r2-8192-native",
+      "round": 2,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:44:03.840169+00:00",
+      "result_sha256": "a76d344389179516f5931957e86ebcdc4c39a8df59c5a69a50f22b6642a3b0f1",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-8192-native-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        8.701353870903052,
+        8.701273709565642,
+        8.679600357408486,
+        8.752591840382065,
+        8.675126321313362
+      ],
+      "process_median_ms_per_token": 8.701273709565642,
+      "model_load_seconds": 69.31497210799716,
+      "experimental_setup_seconds": 0.012905117007903755,
+      "warmup_capture_generation_seconds": 1.0049217520281672,
+      "warmup_perf": {
+        "ttft_ms": 735.6767420424148,
+        "decode_ms": 269.04347399249673,
+        "setup_ms": 3.190550021827221,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        553.2940980046988,
+        544.5904149673879,
+        541.1769170314074,
+        547.4788279971108,
+        548.8492579897866
+      ],
+      "warmed_request_setup_ms": [
+        1.6692420467734337,
+        1.5624379739165306,
+        1.526559004560113,
+        1.551736961118877,
+        1.5884169843047857
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r2-8192-first",
+      "round": 2,
+      "case": "8192",
+      "context": 8192,
+      "tokens": 32,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:45:28.103399+00:00",
+      "result_sha256": "7ea69ca7f6c6c145161a223326461b4604d94304db7cf2d1f0375181b8c750d5",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "8192",
+        "--tokens",
+        "32",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-8192",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-8192-first-result"
+      ],
+      "timing_denominator": 31,
+      "trials_ms_per_token": [
+        10.336810388722487,
+        10.33642093440698,
+        10.344018352278058,
+        10.336042483217053,
+        10.334654966549527
+      ],
+      "process_median_ms_per_token": 10.33642093440698,
+      "model_load_seconds": 68.13130930904299,
+      "experimental_setup_seconds": 0.015112576889805496,
+      "warmup_capture_generation_seconds": 1.04281049198471,
+      "warmup_perf": {
+        "ttft_ms": 722.3909810418263,
+        "decode_ms": 320.2296670060605,
+        "setup_ms": 2.922627958469093,
+        "decode_tokens": 31,
+        "batch": 1,
+        "prompt_lens": [
+          8192
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 32,
+          "token_readbacks": 1,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 31,
+          "model_trace_replays": 31,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        558.393404004164,
+        544.4464639294893,
+        543.5517029836774,
+        555.373840034008,
+        555.3807319374755
+      ],
+      "warmed_request_setup_ms": [
+        1.5674070455133915,
+        1.505918917246163,
+        1.6105190152302384,
+        1.5016320394352078,
+        1.5872250078245997
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "0d4f9b0b33611f0ba63865d02334733794df49c534c5de0960685620391fdda1",
+      "teacher_position_range": [
+        8192,
+        8223
+      ]
+    },
+    {
+      "name": "paired-r2-long-candidate",
+      "round": 2,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "candidate",
+      "completed_utc": "2026-09-23T16:46:59.254786+00:00",
+      "result_sha256": "e39bcec04c4a6d50c06437d7e7ddd5657fb268d6c723813e549a4ca32a769553",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--projection-reader",
+        "pipelined",
+        "--projection-buffers",
+        "3",
+        "--wide-subblocks",
+        "--bounded-layer-barrier",
+        "--alias-projection-cbs",
+        "--projection-placement",
+        "dram",
+        "--scratch-init-once",
+        "all",
+        "--early-weight-blocks",
+        "2",
+        "--multicast-layer-barrier",
+        "--coalesce-input",
+        "--projection-tile-height",
+        "16",
+        "--norm-tile-height",
+        "16",
+        "--head-placement",
+        "select",
+        "--custom-gu",
+        "--norm-stats-face",
+        "--attention-placement",
+        "head_priority",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-long-candidate-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        7.579359254690216,
+        7.579589458912904,
+        7.580391776419299,
+        7.579380114033234,
+        7.580217399963123
+      ],
+      "process_median_ms_per_token": 7.579589458912904,
+      "model_load_seconds": 71.1754582739668,
+      "experimental_setup_seconds": 0.015955780050717294,
+      "warmup_capture_generation_seconds": 2.1538620040519163,
+      "warmup_perf": {
+        "ttft_ms": 221.09215997625142,
+        "decode_ms": 1932.5858110096306,
+        "setup_ms": 3.0535379191860557,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.77335403393954,
+        22.247329936362803,
+        22.05920999404043,
+        21.771330037154257,
+        22.513067931868136
+      ],
+      "warmed_request_setup_ms": [
+        1.2502510799095035,
+        1.592956017702818,
+        1.0245989542454481,
+        1.1375449830666184,
+        1.0322429006919265
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r2-long-native",
+      "round": 2,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "native",
+      "completed_utc": "2026-09-23T16:48:32.862511+00:00",
+      "result_sha256": "a4cea67632a2963f7d62938f42b8bafe8e4713ac89c66b3d4802da27e3d9c05d",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "baseline",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-long-native-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        7.6791287961361165,
+        7.67747806704731,
+        7.67946145862487,
+        7.676527305853133,
+        7.680830827859395
+      ],
+      "process_median_ms_per_token": 7.6791287961361165,
+      "model_load_seconds": 73.57488576404285,
+      "experimental_setup_seconds": 0.013161276001483202,
+      "warmup_capture_generation_seconds": 2.1953134579816833,
+      "warmup_perf": {
+        "ttft_ms": 236.93862895015627,
+        "decode_ms": 1958.18941493053,
+        "setup_ms": 3.4855849808081985,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.859539090655744,
+        37.298210081644356,
+        22.058579022996128,
+        21.62647305522114,
+        21.7319349758327
+      ],
+      "warmed_request_setup_ms": [
+        1.152232987806201,
+        15.959597076289356,
+        1.0111529845744371,
+        1.0526330443099141,
+        1.0684030130505562
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    },
+    {
+      "name": "paired-r2-long-first",
+      "round": 2,
+      "case": "long",
+      "context": 128,
+      "tokens": 256,
+      "implementation": "first",
+      "completed_utc": "2026-09-23T16:50:05.873380+00:00",
+      "result_sha256": "35382b3455f89b0dd2f4c72ef13df4b1d02651e78cb1502daaf9c479faabfde9",
+      "source_sha": "e5fa79c28ab9eb2f924aaf7eb0c53e3af7b25aad",
+      "source_status": "",
+      "command": [
+        "/home/moconnor/llama-minlat-114624/venv-current/bin/python",
+        "-m",
+        "models.demos.llama31_8b_qb2.tests.benchmark_megakernel",
+        "--mode",
+        "decode_token",
+        "--context",
+        "128",
+        "--tokens",
+        "256",
+        "--repeats",
+        "5",
+        "--require-exact",
+        "--reference",
+        "/home/moconnor/llama-minlat-114624/artifacts/initial-baseline-long",
+        "--output",
+        "/home/moconnor/llama-minlat-114624/artifacts/paired-r2-long-first-result"
+      ],
+      "timing_denominator": 255,
+      "trials_ms_per_token": [
+        9.292618140998279,
+        9.291874992149864,
+        9.292448913751572,
+        9.293209702032161,
+        9.293114654628523
+      ],
+      "process_median_ms_per_token": 9.292618140998279,
+      "model_load_seconds": 69.77536144002806,
+      "experimental_setup_seconds": 0.01545096398331225,
+      "warmup_capture_generation_seconds": 2.5793275699252263,
+      "warmup_perf": {
+        "ttft_ms": 209.7489369334653,
+        "decode_ms": 2369.381915894337,
+        "setup_ms": 3.128611948341131,
+        "decode_tokens": 255,
+        "batch": 1,
+        "prompt_lens": [
+          128
+        ],
+        "teacher_forcing": false,
+        "host_sampling": false,
+        "readback_each_token": false,
+        "counters": {
+          "history_index_refreshes": 1,
+          "token_refreshes": 2,
+          "position_refreshes": 2,
+          "rotary_refreshes": 2,
+          "seed_refreshes": 1,
+          "page_table_refreshes": 1,
+          "capture_inactive_warmup": 2,
+          "capture_synchronizations": 1,
+          "capture_state_restores": 5,
+          "sampling_trace_replays": 256,
+          "token_readbacks": 1,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "cache_resets": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        },
+        "steady_counters": {
+          "sampling_trace_replays": 255,
+          "model_trace_replays": 255,
+          "history_readbacks": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "rotary_refreshes": 0,
+          "page_table_refreshes": 0,
+          "cache_resets": 0,
+          "capture_synchronizations": 0,
+          "token_readbacks": 0,
+          "full_logits_readbacks": 0,
+          "teacher_or_host_token_refreshes": 0,
+          "eos_position_refreshes": 0
+        }
+      },
+      "warmed_ttft_ms": [
+        21.76464698277414,
+        22.2238649148494,
+        21.711074048653245,
+        21.800826070830226,
+        21.614970988593996
+      ],
+      "warmed_request_setup_ms": [
+        1.1271450202912092,
+        1.0970279108732939,
+        1.0247089667245746,
+        1.1072669876739383,
+        1.0681329295039177
+      ],
+      "exact": true,
+      "generated_tokens_sha256": "49dd1debbcaec859ced21f99eab9ba0ef9e5515efd268bd3d5cfebd76be30865",
+      "teacher_position_range": [
+        128,
+        383
+      ]
+    }
+  ],
+  "cases": {
+    "128": {
+      "context": 128,
+      "outputs": 32,
+      "decode_steps": 31,
+      "implementations": {
+        "short": {
+          "process_count": 2,
+          "trial_count": 10,
+          "process_medians_ms_per_token": [
+            7.5111561943025835,
+            7.515833322559634
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 7.513494758431109,
+            "minimum": 7.5111561943025835,
+            "maximum": 7.515833322559634,
+            "median_absolute_deviation": 0.002338564128525178
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 7.514077321355861,
+            "minimum": 7.509670449390767,
+            "maximum": 7.517865288161462,
+            "median_absolute_deviation": 0.003051065329101821
+          },
+          "model_load_seconds": {
+            "median": 71.53429254505318,
+            "minimum": 71.30672815802973,
+            "maximum": 71.76185693207663,
+            "median_absolute_deviation": 0.22756438702344894
+          },
+          "experimental_setup_seconds": {
+            "median": 0.016417454986367375,
+            "minimum": 0.016291372012346983,
+            "maximum": 0.016543537960387766,
+            "median_absolute_deviation": 0.0001260829740203917
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 1.6363016999675892,
+            "minimum": 0.435957747977227,
+            "maximum": 2.8366456519579515,
+            "median_absolute_deviation": 1.2003439519903623
+          }
+        },
+        "native": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            7.632690808555532,
+            7.63364928969813,
+            7.637361421309892
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 7.63364928969813,
+            "minimum": 7.632690808555532,
+            "maximum": 7.637361421309892,
+            "median_absolute_deviation": 0.0009584811425975559
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 7.633958582676226,
+            "minimum": 7.62894254688534,
+            "maximum": 7.639484194618079,
+            "median_absolute_deviation": 0.003402838633665972
+          },
+          "model_load_seconds": {
+            "median": 71.3819587409962,
+            "minimum": 71.36291556002107,
+            "maximum": 74.41697955306154,
+            "median_absolute_deviation": 0.01904318097513169
+          },
+          "experimental_setup_seconds": {
+            "median": 0.013143713935278356,
+            "minimum": 0.0131068549817428,
+            "maximum": 0.013158033019863069,
+            "median_absolute_deviation": 1.4319084584712982e-05
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 0.4689415179891512,
+            "minimum": 0.46835062105674297,
+            "maximum": 0.5082533929962665,
+            "median_absolute_deviation": 0.0005908969324082136
+          }
+        },
+        "first": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            9.248212223962671,
+            9.248011261074533,
+            9.24887541951912
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 9.248212223962671,
+            "minimum": 9.248011261074533,
+            "maximum": 9.24887541951912,
+            "median_absolute_deviation": 0.0002009628881385339
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 9.248212223962671,
+            "minimum": 9.24236012712842,
+            "maximum": 9.257531968966848,
+            "median_absolute_deviation": 0.0025174888451733324
+          },
+          "model_load_seconds": {
+            "median": 71.95142492302693,
+            "minimum": 70.89410174300428,
+            "maximum": 73.5581683749333,
+            "median_absolute_deviation": 1.0573231800226495
+          },
+          "experimental_setup_seconds": {
+            "median": 0.015544524998404086,
+            "minimum": 0.015539969899691641,
+            "maximum": 0.016035175998695195,
+            "median_absolute_deviation": 4.555098712444305e-06
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 0.4975267080590129,
+            "minimum": 0.49738160299602896,
+            "maximum": 3.1442134639946744,
+            "median_absolute_deviation": 0.0001451050629839301
+          }
+        },
+        "candidate": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            7.540595128140863,
+            7.542282902455378,
+            7.54552474245429
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 7.542282902455378,
+            "minimum": 7.540595128140863,
+            "maximum": 7.54552474245429,
+            "median_absolute_deviation": 0.001687774314515167
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 7.543050319767527,
+            "minimum": 7.537543514533149,
+            "maximum": 7.548907997026559,
+            "median_absolute_deviation": 0.0024744226867632335
+          },
+          "model_load_seconds": {
+            "median": 69.60529734299053,
+            "minimum": 69.46373238100205,
+            "maximum": 72.2716534009669,
+            "median_absolute_deviation": 0.1415649619884789
+          },
+          "experimental_setup_seconds": {
+            "median": 0.015522853005677462,
+            "minimum": 0.015507627045735717,
+            "maximum": 0.01563617109786719,
+            "median_absolute_deviation": 1.5225959941744804e-05
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 0.4457664160290733,
+            "minimum": 0.44407200207933784,
+            "maximum": 0.4760206809733063,
+            "median_absolute_deviation": 0.0016944139497354627
+          }
+        }
+      },
+      "paired_against_native": {
+        "short": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": 0.12153461425294854,
+              "latency_reduction_percent": 1.5922905473482512
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": 0.11781596713849574,
+              "latency_reduction_percent": 1.54337673460441
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": 0.11967529069572214,
+            "minimum": 0.11781596713849574,
+            "maximum": 0.12153461425294854,
+            "median_absolute_deviation": 0.0018593235572264
+          },
+          "latency_reduction_percent": {
+            "median": 1.5678336409763305,
+            "minimum": 1.54337673460441,
+            "maximum": 1.5922905473482512,
+            "median_absolute_deviation": 0.02445690637192055
+          }
+        },
+        "first": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": -1.6155214154071391,
+              "latency_reduction_percent": -21.16581761174304
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": -1.614361971376403,
+              "latency_reduction_percent": -21.14797143687279
+            },
+            {
+              "round": 2,
+              "saved_ms_per_token": -1.6115139982092277,
+              "latency_reduction_percent": -21.100402472937244
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": -1.614361971376403,
+            "minimum": -1.6155214154071391,
+            "maximum": -1.6115139982092277,
+            "median_absolute_deviation": 0.0011594440307360898
+          },
+          "latency_reduction_percent": {
+            "median": -21.14797143687279,
+            "minimum": -21.16581761174304,
+            "maximum": -21.100402472937244,
+            "median_absolute_deviation": 0.01784617487025031
+          }
+        },
+        "candidate": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": 0.09209568041466909,
+              "latency_reduction_percent": 1.2065951932893502
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": 0.09136638724275148,
+              "latency_reduction_percent": 1.1968900295963758
+            },
+            {
+              "round": 2,
+              "saved_ms_per_token": 0.09183667885560176,
+              "latency_reduction_percent": 1.2024660584918443
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": 0.09183667885560176,
+            "minimum": 0.09136638724275148,
+            "maximum": 0.09209568041466909,
+            "median_absolute_deviation": 0.0002590015590673289
+          },
+          "latency_reduction_percent": {
+            "median": 1.2024660584918443,
+            "minimum": 1.1968900295963758,
+            "maximum": 1.2065951932893502,
+            "median_absolute_deviation": 0.004129134797505873
+          }
+        }
+      }
+    },
+    "2048": {
+      "context": 2048,
+      "outputs": 32,
+      "decode_steps": 31,
+      "implementations": {
+        "native": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            8.072304486807797,
+            8.074194290525009,
+            8.075222744786691
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 8.074194290525009,
+            "minimum": 8.072304486807797,
+            "maximum": 8.075222744786691,
+            "median_absolute_deviation": 0.001028454261682299
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 8.072819001221609,
+            "minimum": 8.060512677465956,
+            "maximum": 8.099585129398733,
+            "median_absolute_deviation": 0.006524804649092886
+          },
+          "model_load_seconds": {
+            "median": 71.05195609899238,
+            "minimum": 69.27411974698771,
+            "maximum": 72.67790680692997,
+            "median_absolute_deviation": 1.6259507079375908
+          },
+          "experimental_setup_seconds": {
+            "median": 0.013216570019721985,
+            "minimum": 0.013040586025454104,
+            "maximum": 0.013242947985418141,
+            "median_absolute_deviation": 2.6377965696156025e-05
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 0.5532984680030495,
+            "minimum": 0.5468001239933074,
+            "maximum": 0.5565257749985904,
+            "median_absolute_deviation": 0.0032273069955408573
+          }
+        },
+        "first": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            9.67442148530315,
+            9.669167515371115,
+            9.67767551886819
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 9.67442148530315,
+            "minimum": 9.669167515371115,
+            "maximum": 9.67767551886819,
+            "median_absolute_deviation": 0.003254033565040615
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 9.672282804404535,
+            "minimum": 9.665785225919418,
+            "maximum": 9.764218680380333,
+            "median_absolute_deviation": 0.0033098978981858096
+          },
+          "model_load_seconds": {
+            "median": 72.23326589295175,
+            "minimum": 68.79389449197333,
+            "maximum": 72.87540466396604,
+            "median_absolute_deviation": 0.6421387710142881
+          },
+          "experimental_setup_seconds": {
+            "median": 0.01529191096778959,
+            "minimum": 0.015140588046051562,
+            "maximum": 0.015831480035558343,
+            "median_absolute_deviation": 0.00015132292173802853
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 0.5774456149665639,
+            "minimum": 0.5748399449512362,
+            "maximum": 0.5827672600280493,
+            "median_absolute_deviation": 0.0026056700153276324
+          }
+        },
+        "candidate": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            7.96686606331458,
+            7.964196385845782,
+            7.969902775761101
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 7.96686606331458,
+            "minimum": 7.964196385845782,
+            "maximum": 7.969902775761101,
+            "median_absolute_deviation": 0.0026696774687975378
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 7.966169903445388,
+            "minimum": 7.958439580585447,
+            "maximum": 8.020553869315453,
+            "median_absolute_deviation": 0.004389064176187674
+          },
+          "model_load_seconds": {
+            "median": 72.67744583601598,
+            "minimum": 71.03020387608558,
+            "maximum": 73.89129853295162,
+            "median_absolute_deviation": 1.2138526969356462
+          },
+          "experimental_setup_seconds": {
+            "median": 0.015439503942616284,
+            "minimum": 0.015285814995877445,
+            "maximum": 0.015609654947184026,
+            "median_absolute_deviation": 0.00015368894673883915
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 0.5278341990197077,
+            "minimum": 0.5263683419907466,
+            "maximum": 0.5296196460258216,
+            "median_absolute_deviation": 0.0014658570289611816
+          }
+        }
+      },
+      "paired_against_native": {
+        "first": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": -1.6021169984953527,
+              "latency_reduction_percent": -19.847083334302123
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": -1.5949732248461057,
+              "latency_reduction_percent": -19.753961416531578
+            },
+            {
+              "round": 2,
+              "saved_ms_per_token": -1.6024527740814989,
+              "latency_reduction_percent": -19.844069008697396
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": -1.6021169984953527,
+            "minimum": -1.6024527740814989,
+            "maximum": -1.5949732248461057,
+            "median_absolute_deviation": 0.00033577558614616976
+          },
+          "latency_reduction_percent": {
+            "median": -19.844069008697396,
+            "minimum": -19.847083334302123,
+            "maximum": -19.753961416531578,
+            "median_absolute_deviation": 0.0030143256047274747
+          }
+        },
+        "candidate": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": 0.10543842349321686,
+              "latency_reduction_percent": 1.3061750044925848
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": 0.10999790467922654,
+              "latency_reduction_percent": 1.362339085750117
+            },
+            {
+              "round": 2,
+              "saved_ms_per_token": 0.10531996902559015,
+              "latency_reduction_percent": 1.3042360855443154
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": 0.10543842349321686,
+            "minimum": 0.10531996902559015,
+            "maximum": 0.10999790467922654,
+            "median_absolute_deviation": 0.0001184544676267052
+          },
+          "latency_reduction_percent": {
+            "median": 1.3061750044925848,
+            "minimum": 1.3042360855443154,
+            "maximum": 1.362339085750117,
+            "median_absolute_deviation": 0.0019389189482694746
+          }
+        }
+      }
+    },
+    "8192": {
+      "context": 8192,
+      "outputs": 32,
+      "decode_steps": 31,
+      "implementations": {
+        "native": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            8.680501547191412,
+            8.681359708369259,
+            8.701273709565642
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 8.681359708369259,
+            "minimum": 8.680501547191412,
+            "maximum": 8.701273709565642,
+            "median_absolute_deviation": 0.0008581611778470943
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 8.681359708369259,
+            "minimum": 8.675126321313362,
+            "maximum": 8.752591840382065,
+            "median_absolute_deviation": 0.005080060462557157
+          },
+          "model_load_seconds": {
+            "median": 69.31497210799716,
+            "minimum": 67.52230276900809,
+            "maximum": 69.63838257803582,
+            "median_absolute_deviation": 0.3234104700386524
+          },
+          "experimental_setup_seconds": {
+            "median": 0.013069556094706059,
+            "minimum": 0.012905117007903755,
+            "maximum": 0.013154100044630468,
+            "median_absolute_deviation": 8.454394992440939e-05
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 1.0116076639387757,
+            "minimum": 1.0049217520281672,
+            "maximum": 1.0160387209616601,
+            "median_absolute_deviation": 0.004431057022884488
+          }
+        },
+        "first": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            10.335381195369747,
+            10.335836420586753,
+            10.33642093440698
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 10.335836420586753,
+            "minimum": 10.335381195369747,
+            "maximum": 10.33642093440698,
+            "median_absolute_deviation": 0.0004552252170064719
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 10.335836420586753,
+            "minimum": 10.333192970363363,
+            "maximum": 10.362003839785054,
+            "median_absolute_deviation": 0.0013611617407978116
+          },
+          "model_load_seconds": {
+            "median": 68.08316249505151,
+            "minimum": 65.71986404596828,
+            "maximum": 68.13130930904299,
+            "median_absolute_deviation": 0.048146813991479576
+          },
+          "experimental_setup_seconds": {
+            "median": 0.01529623195528984,
+            "minimum": 0.015112576889805496,
+            "maximum": 0.015624615014530718,
+            "median_absolute_deviation": 0.00018365506548434496
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 1.04281049198471,
+            "minimum": 1.0334506160579622,
+            "maximum": 1.045622957055457,
+            "median_absolute_deviation": 0.002812465070746839
+          }
+        },
+        "candidate": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            8.62097722523275,
+            8.620869740092706,
+            8.619647420522186
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 8.620869740092706,
+            "minimum": 8.619647420522186,
+            "maximum": 8.62097722523275,
+            "median_absolute_deviation": 0.00010748514004355059
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 8.620869740092706,
+            "minimum": 8.615516967350437,
+            "maximum": 8.642366486451317,
+            "median_absolute_deviation": 0.0013981630364732212
+          },
+          "model_load_seconds": {
+            "median": 70.24161530891433,
+            "minimum": 68.79149843694177,
+            "maximum": 71.27384855796117,
+            "median_absolute_deviation": 1.0322332490468398
+          },
+          "experimental_setup_seconds": {
+            "median": 0.016119987005367875,
+            "minimum": 0.015738333924673498,
+            "maximum": 0.016827875981107354,
+            "median_absolute_deviation": 0.0003816530806943774
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 0.9886597190052271,
+            "minimum": 0.9822250719880685,
+            "maximum": 1.0227877229917794,
+            "median_absolute_deviation": 0.006434647017158568
+          }
+        }
+      },
+      "paired_against_native": {
+        "first": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": -1.6548796481783352,
+              "latency_reduction_percent": -19.064332160781355
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": -1.6544767122174946,
+              "latency_reduction_percent": -19.05780623998908
+            },
+            {
+              "round": 2,
+              "saved_ms_per_token": -1.6351472248413383,
+              "latency_reduction_percent": -18.792044468659327
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": -1.6544767122174946,
+            "minimum": -1.6548796481783352,
+            "maximum": -1.6351472248413383,
+            "median_absolute_deviation": 0.00040293596084062244
+          },
+          "latency_reduction_percent": {
+            "median": -19.05780623998908,
+            "minimum": -19.064332160781355,
+            "maximum": -18.792044468659327,
+            "median_absolute_deviation": 0.00652592079227432
+          }
+        },
+        "candidate": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": 0.059524321958662085,
+              "latency_reduction_percent": 0.6857244553792086
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": 0.06048996827655273,
+              "latency_reduction_percent": 0.6967798859692154
+            },
+            {
+              "round": 2,
+              "saved_ms_per_token": 0.08162628904345581,
+              "latency_reduction_percent": 0.9380958669731412
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": 0.06048996827655273,
+            "minimum": 0.059524321958662085,
+            "maximum": 0.08162628904345581,
+            "median_absolute_deviation": 0.0009656463178906449
+          },
+          "latency_reduction_percent": {
+            "median": 0.6967798859692154,
+            "minimum": 0.6857244553792086,
+            "maximum": 0.9380958669731412,
+            "median_absolute_deviation": 0.011055430590006798
+          }
+        }
+      }
+    },
+    "long": {
+      "context": 128,
+      "outputs": 256,
+      "decode_steps": 255,
+      "implementations": {
+        "short": {
+          "process_count": 2,
+          "trial_count": 10,
+          "process_medians_ms_per_token": [
+            7.553976183921537,
+            7.5543238941178315
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 7.554150039019684,
+            "minimum": 7.553976183921537,
+            "maximum": 7.5543238941178315,
+            "median_absolute_deviation": 0.0001738550981471576
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 7.554218966477349,
+            "minimum": 7.553834854807778,
+            "maximum": 7.554528140919466,
+            "median_absolute_deviation": 0.0002269728985777597
+          },
+          "model_load_seconds": {
+            "median": 68.94056932104286,
+            "minimum": 68.59523072105367,
+            "maximum": 69.28590792103205,
+            "median_absolute_deviation": 0.3453385999891907
+          },
+          "experimental_setup_seconds": {
+            "median": 0.01564045751001686,
+            "minimum": 0.0155353780137375,
+            "maximum": 0.015745537006296217,
+            "median_absolute_deviation": 0.00010507949627935886
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 2.1283225410152227,
+            "minimum": 2.128317394061014,
+            "maximum": 2.1283276879694313,
+            "median_absolute_deviation": 5.146954208612442e-06
+          }
+        },
+        "native": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            7.6790829453909515,
+            7.6786467330712895,
+            7.6791287961361165
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 7.6790829453909515,
+            "minimum": 7.6786467330712895,
+            "maximum": 7.6791287961361165,
+            "median_absolute_deviation": 4.585074516505472e-05
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 7.6790829453909515,
+            "minimum": 7.675977529702234,
+            "maximum": 7.680830827859395,
+            "median_absolute_deviation": 0.00043621231966195495
+          },
+          "model_load_seconds": {
+            "median": 72.15166867908556,
+            "minimum": 69.1477446189383,
+            "maximum": 73.57488576404285,
+            "median_absolute_deviation": 1.4232170849572867
+          },
+          "experimental_setup_seconds": {
+            "median": 0.013160214060917497,
+            "minimum": 0.013096695067360997,
+            "maximum": 0.013161276001483202,
+            "median_absolute_deviation": 1.0619405657052994e-06
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 2.1953134579816833,
+            "minimum": 2.1936655649915338,
+            "maximum": 2.205327213043347,
+            "median_absolute_deviation": 0.0016478929901495576
+          }
+        },
+        "first": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            9.292883501735096,
+            9.292729760465377,
+            9.292618140998279
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 9.292729760465377,
+            "minimum": 9.292618140998279,
+            "maximum": 9.292883501735096,
+            "median_absolute_deviation": 0.00011161946709847825
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 9.292729760465377,
+            "minimum": 9.289551419936412,
+            "maximum": 9.293713117493134,
+            "median_absolute_deviation": 0.00047994156678399236
+          },
+          "model_load_seconds": {
+            "median": 69.77536144002806,
+            "minimum": 68.68288786802441,
+            "maximum": 73.46139787998982,
+            "median_absolute_deviation": 1.0924735720036551
+          },
+          "experimental_setup_seconds": {
+            "median": 0.015442618983797729,
+            "minimum": 0.01525390800088644,
+            "maximum": 0.01545096398331225,
+            "median_absolute_deviation": 8.344999514520168e-06
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 2.579891322995536,
+            "minimum": 2.5793275699252263,
+            "maximum": 2.583597999997437,
+            "median_absolute_deviation": 0.0005637530703097582
+          }
+        },
+        "candidate": {
+          "process_count": 3,
+          "trial_count": 15,
+          "process_medians_ms_per_token": [
+            7.579643646821234,
+            7.579436984515803,
+            7.579589458912904
+          ],
+          "process_median_distribution_ms_per_token": {
+            "median": 7.579589458912904,
+            "minimum": 7.579436984515803,
+            "maximum": 7.579643646821234,
+            "median_absolute_deviation": 5.4187908330227685e-05
+          },
+          "trial_distribution_ms_per_token": {
+            "median": 7.5794651218708236,
+            "minimum": 7.578853795797947,
+            "maximum": 7.580391776419299,
+            "median_absolute_deviation": 0.00025463911394307814
+          },
+          "model_load_seconds": {
+            "median": 71.58087149600033,
+            "minimum": 71.1754582739668,
+            "maximum": 72.35646697098855,
+            "median_absolute_deviation": 0.4054132220335305
+          },
+          "experimental_setup_seconds": {
+            "median": 0.015955780050717294,
+            "minimum": 0.015529165044426918,
+            "maximum": 0.01615815598051995,
+            "median_absolute_deviation": 0.00020237592980265617
+          },
+          "warmup_capture_generation_seconds": {
+            "median": 2.1471189779695123,
+            "minimum": 2.1446437970735133,
+            "maximum": 2.1538620040519163,
+            "median_absolute_deviation": 0.002475180895999074
+          }
+        }
+      },
+      "paired_against_native": {
+        "short": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": 0.12510676146941435,
+              "latency_reduction_percent": 1.6291888283939484
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": 0.12432283895345808,
+              "latency_reduction_percent": 1.619072256808091
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": 0.12471480021143622,
+            "minimum": 0.12432283895345808,
+            "maximum": 0.12510676146941435,
+            "median_absolute_deviation": 0.0003919612579781351
+          },
+          "latency_reduction_percent": {
+            "median": 1.6241305426010197,
+            "minimum": 1.619072256808091,
+            "maximum": 1.6291888283939484,
+            "median_absolute_deviation": 0.005058285792928663
+          }
+        },
+        "first": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": -1.6138005563441444,
+              "latency_reduction_percent": -21.015537503898962
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": -1.6140830273940878,
+              "latency_reduction_percent": -21.020410021499845
+            },
+            {
+              "round": 2,
+              "saved_ms_per_token": -1.6134893448621623,
+              "latency_reduction_percent": -21.01135933120456
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": -1.6138005563441444,
+            "minimum": -1.6140830273940878,
+            "maximum": -1.6134893448621623,
+            "median_absolute_deviation": 0.0002824710499433891
+          },
+          "latency_reduction_percent": {
+            "median": -21.015537503898962,
+            "minimum": -21.020410021499845,
+            "maximum": -21.01135933120456,
+            "median_absolute_deviation": 0.004178172694402349
+          }
+        },
+        "candidate": {
+          "by_round": [
+            {
+              "round": 0,
+              "saved_ms_per_token": 0.09943929856971767,
+              "latency_reduction_percent": 1.2949371595133239
+            },
+            {
+              "round": 1,
+              "saved_ms_per_token": 0.09920974855548614,
+              "latency_reduction_percent": 1.2920212636973916
+            },
+            {
+              "round": 2,
+              "saved_ms_per_token": 0.09953933722321295,
+              "latency_reduction_percent": 1.296232162081952
+            }
+          ],
+          "saved_ms_per_token": {
+            "median": 0.09943929856971767,
+            "minimum": 0.09920974855548614,
+            "maximum": 0.09953933722321295,
+            "median_absolute_deviation": 0.0001000386534952824
+          },
+          "latency_reduction_percent": {
+            "median": 1.2949371595133239,
+            "minimum": 1.2920212636973916,
+            "maximum": 1.296232162081952,
+            "median_absolute_deviation": 0.001295002568628023
+          }
+        }
+      }
+    }
+  },
+  "checkpoint_revision": "0e9e39f249a16976918f6564b8830bc894c89659",
+  "precision": {
+    "schema_version": 1,
+    "config_id": "gu4_head8_lm_head_hifi2",
+    "weight_groups": {
+      "qkv": "bfloat8_b",
+      "o": "bfloat8_b",
+      "gate_up": "bfloat4_b",
+      "down": "bfloat8_b",
+      "lm_head": "bfloat8_b",
+      "embedding": "bfloat16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "prefill": {
+        "qkv": "LoFi",
+        "o": "LoFi",
+        "gate_up": "LoFi",
+        "down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "decode": {
+        "qkv": "LoFi",
+        "o": "LoFi",
+        "gate_up": "LoFi",
+        "down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "norm_rope": "HiFi4",
+      "sdpa": "HiFi4"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "sampling_token_dtype": "uint32",
+    "norm_weight_policy": "fold_affine_float32_then_bfloat16",
+    "activation_output_dtype": "bfloat16",
+    "accumulation": {
+      "matmul_fp32": false,
+      "norm_rope_fp32": true,
+      "sdpa_fp32": true,
+      "math_approx_mode": false
+    },
+    "runtime": {
+      "supported_context": 131072,
+      "page_size": 128,
+      "cache_layout": "TILE",
+      "residual_layout": "TP4_hidden_sharded",
+      "short_prefill": true
+    },
+    "moe_routing": "not_applicable_dense_model",
+    "lm_head_geometry": {
+      "cores": 8,
+      "block": 4,
+      "readers": 2,
+      "splits": 1
+    }
+  },
+  "sampling": {
+    "top_k": 1,
+    "top_p": 0.0,
+    "temperature": 1.0,
+    "seed": 42
+  },
+  "batch": 1
+}
