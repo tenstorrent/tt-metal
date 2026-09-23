@@ -259,9 +259,22 @@ def test_partial_download_failure_counts_the_failed_request(tmp_path):
 
     env = {**os.environ, "PATH": f"{stub_dir}:{os.environ['PATH']}"}
     r = subprocess.run(
-        ["bash", str(SCRIPT), "--repo", "tenstorrent/tt-metal",
-         "--workflow-run-id", "999", "--attempt-number", "1", "--workflow-name", "X"],
-        cwd=tmp_path, env=env, capture_output=True, text=True,
+        [
+            "bash",
+            str(SCRIPT),
+            "--repo",
+            "tenstorrent/tt-metal",
+            "--workflow-run-id",
+            "999",
+            "--attempt-number",
+            "1",
+            "--workflow-name",
+            "X",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     f = _api_usage_fields(r.stdout)
