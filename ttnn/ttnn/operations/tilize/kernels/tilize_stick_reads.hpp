@@ -83,13 +83,27 @@ struct Walker {
 // n full pushes is base + (n % depth) * slot_bytes; slot addresses are derived
 // from that instead of CB internals. Nothing is pushed after the partial slot,
 // so it cannot break the ring-wrap invariant. Requires read_ahead <= depth and
-// depth <= 15 (one trid per slot).
+// depth <= 15 (one trid per slot). The host keeps a slot's reads within one
+// trid's outstanding-count range (NOC_MAX_TRANSACTION_ID_COUNT).
 //
 // Input pages: interleaved and HEIGHT-sharded Layout::ROW_MAJOR tensors keep one
 // page per stick (pages_per_stick == 1: one NoC read per stick segment). A
 // WIDTH / BLOCK / ND-sharded one cuts each stick into pages of the shard width
 // (`page_bytes` data bytes each; page id = stick * pages_per_stick + k), so a
 // segment is read as one NoC read per page it overlaps (read_paged_segment).
+//
+// Parked perf knobs (host tilize_program_descriptor.py documents the measurements;
+// each default compiles to the plain path above):
+//   noc_split     every noc_split-th stick read of a tile-row goes out on the other NoC
+//                 (0: all on noc_index). Needs the kernel in DM_DYNAMIC_NOC mode.
+//   eager_publish issue_row() first pushes every sealed slot whose reads have already
+//                 landed (non-blocking trid poll), so read_ahead never delays a push.
+//   stride_banks  > 0 on a DRAM-interleaved input: stick p + stride_banks lives in the
+//                 same bank as stick p, one aligned page further, so per core only
+//                 stride_banks addresses come from the accessor (prime()) and every other
+//                 stick address is one of them plus a multiple of the page stride.
+//   bank_major    (with stride_banks) issue a tile-row's sticks bank by bank, so each
+//                 bank sees consecutive addresses back to back.
 template <
     uint32_t cb,
     uint32_t block_width,
@@ -99,12 +113,18 @@ template <
     uint32_t tile_col_bytes,
     uint32_t rows_per_slot,
     uint32_t page_bytes,
-    uint32_t pages_per_stick>
+    uint32_t pages_per_stick,
+    uint32_t noc_split = 0,
+    bool eager_publish = false,
+    uint32_t stride_banks = 0,
+    bool bank_major = false>
 struct StickProducer {
     static_assert((tile_h & (tile_h - 1)) == 0, "tile_h must be a power of two");
     static_assert(read_ahead >= 1 && read_ahead <= depth, "read_ahead must be in [1, depth]");
     static_assert(depth <= 15, "one NoC transaction id per CB slot");
     static_assert(rows_per_slot >= 1, "a slot holds at least one tile-row");
+    static_assert(stride_banks == 0 || pages_per_stick == 1, "bank-stride addressing needs one page per stick");
+    static_assert(!bank_major || stride_banks != 0, "bank-major order needs bank-stride addressing");
     static constexpr uint32_t in_tile_bytes = tile_h * tile_col_bytes;  // tile-sized page: tile_h stick segments
     static constexpr uint32_t row_pages = block_width;                  // pages per tile-row
     static constexpr uint32_t row_bytes = block_width * in_tile_bytes;
@@ -118,8 +138,25 @@ struct StickProducer {
     uint32_t outstanding = 0;  // opened, not yet pushed
     uint32_t open_rows = 0;    // tile-rows already issued into the newest slot (0 = no slot open)
     uint32_t open_base = 0;    // L1 address of the newest slot
+    // stride_banks: NoC addresses of this core's first stride_banks sticks, the first stick and the
+    // input page stride.
+    uint64_t bank_addr[stride_banks != 0 ? stride_banks : 1];
+    uint32_t core_first_stick = 0;
+    uint32_t stick_stride_bytes = 0;
 
     explicit StickProducer(uint32_t rotation) : base_addr(get_write_ptr(cb)), stick_rotation(rotation & (tile_h - 1)) {}
+
+    // stride_banks only: record the per-bank base addresses of this core's sticks.
+    template <typename Accessor>
+    FORCE_INLINE void prime(const Accessor& accessor, uint32_t first_stick, uint32_t stride_bytes) {
+        if constexpr (stride_banks != 0) {
+            core_first_stick = first_stick;
+            stick_stride_bytes = stride_bytes;
+            for (uint32_t r = 0; r < stride_banks; ++r) {
+                bank_addr[r] = accessor.get_noc_addr(first_stick + r);
+            }
+        }
+    }
 
     static uint32_t trid_of(uint32_t slot) { return 1 + (slot % depth); }
 
@@ -128,6 +165,9 @@ struct StickProducer {
 
     template <typename Accessor>
     FORCE_INLINE void issue_row(const Accessor& accessor, uint32_t row, uint32_t first_col, uint32_t valid_width) {
+        if constexpr (eager_publish) {
+            publish_landed();
+        }
         if (open_rows == 0) {
             if (outstanding == read_ahead) {
                 complete_oldest();
@@ -135,6 +175,9 @@ struct StickProducer {
             cb_reserve_back(cb, slot_pages * (outstanding + 1));
             open_base = base_addr + (next_slot % depth) * slot_bytes;
             noc_async_read_set_trid(trid_of(next_slot));
+            if constexpr (noc_split != 0) {
+                noc_async_read_set_trid(trid_of(next_slot), 1 - noc_index);
+            }
             ++next_slot;
             ++outstanding;
         }
@@ -142,17 +185,71 @@ struct StickProducer {
         const uint32_t segment_bytes = valid_width * tile_col_bytes;
         const uint32_t segment_offset = first_col * tile_col_bytes;
         const uint32_t first_stick = row * tile_h;
-        for (uint32_t s = 0; s < tile_h; ++s) {
-            const uint32_t stick = (s + stick_rotation) & (tile_h - 1);
-            const uint32_t l1_dst = l1_base + stick * block_stick_bytes;
-            if constexpr (pages_per_stick == 1) {
-                noc_async_read(accessor.get_noc_addr(first_stick + stick, segment_offset), l1_dst, segment_bytes);
-            } else {
-                read_paged_segment(accessor, first_stick + stick, segment_offset, l1_dst, segment_bytes);
+        if constexpr (stride_banks != 0) {
+            issue_row_bank_stride(first_stick, l1_base, segment_offset, segment_bytes);
+        } else {
+            for (uint32_t s = 0; s < tile_h; ++s) {
+                const uint32_t stick = (s + stick_rotation) & (tile_h - 1);
+                const uint32_t l1_dst = l1_base + stick * block_stick_bytes;
+                if constexpr (pages_per_stick == 1) {
+                    const uint8_t noc =
+                        (noc_split != 0 && (s % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
+                    noc_async_read(
+                        accessor.get_noc_addr(first_stick + stick, segment_offset, noc), l1_dst, segment_bytes, noc);
+                } else {
+                    read_paged_segment(accessor, first_stick + stick, segment_offset, l1_dst, segment_bytes);
+                }
             }
         }
         if (++open_rows == rows_per_slot) {
             open_rows = 0;  // slot sealed; it completes lazily
+        }
+    }
+
+    // The tile_h stick reads of one tile-row from the primed per-bank addresses: stick at distance
+    // d from core_first_stick is bank_addr[d % stride_banks] + (d / stride_banks) * stride.
+    FORCE_INLINE void issue_row_bank_stride(
+        uint32_t first_stick, uint32_t l1_base, uint32_t segment_offset, uint32_t segment_bytes) {
+        const uint32_t row_d = first_stick - core_first_stick;
+        const uint32_t row_q = row_d / stride_banks;
+        const uint32_t row_r = row_d - row_q * stride_banks;
+        const uint32_t row_off = row_q * stick_stride_bytes + segment_offset;
+        if constexpr (bank_major) {
+            constexpr uint32_t banks_per_row = stride_banks < tile_h ? stride_banks : tile_h;
+            uint32_t first = stick_rotation % banks_per_row;  // in-row index of the bank's first stick
+            for (uint32_t b = 0; b < banks_per_row; ++b) {
+                uint32_t r = row_r + first;
+                uint32_t off = row_off;
+                if (r >= stride_banks) {
+                    r -= stride_banks;
+                    off += stick_stride_bytes;
+                }
+                for (uint32_t idx = first; idx < tile_h; idx += stride_banks, off += stick_stride_bytes) {
+                    noc_async_read(bank_addr[r] + off, l1_base + idx * block_stick_bytes, segment_bytes);
+                }
+                if (++first == banks_per_row) {
+                    first = 0;
+                }
+            }
+        } else {
+            uint32_t idx = stick_rotation;  // in-row stick index, visited rotated like the plain path
+            uint32_t r = row_r + idx;
+            uint32_t off = row_off;
+            while (r >= stride_banks) {
+                r -= stride_banks;
+                off += stick_stride_bytes;
+            }
+            for (uint32_t s = 0; s < tile_h; ++s) {
+                noc_async_read(bank_addr[r] + off, l1_base + idx * block_stick_bytes, segment_bytes);
+                if (++idx == tile_h) {
+                    idx = 0;
+                    r = row_r;
+                    off = row_off;
+                } else if (++r == stride_banks) {
+                    r = 0;
+                    off += stick_stride_bytes;
+                }
+            }
         }
     }
 
@@ -172,11 +269,30 @@ struct StickProducer {
         }
     }
 
+    // Non-blocking: push every sealed slot, oldest first, whose reads have all landed.
+    FORCE_INLINE void publish_landed() {
+        while (outstanding > 0 && !(outstanding == 1 && open_rows != 0)) {
+            const uint32_t trid = trid_of(next_slot - outstanding);
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
+                return;
+            }
+            if constexpr (noc_split != 0) {
+                if (!ncrisc_noc_read_with_transaction_id_flushed(1 - noc_index, trid)) {
+                    return;
+                }
+            }
+            complete_oldest();
+        }
+    }
+
     FORCE_INLINE void complete_oldest() {
         const uint32_t oldest = next_slot - outstanding;
         // Only the newest slot can be partial, and only at kernel end (complete_all).
         const bool partial = outstanding == 1 && open_rows != 0;
         noc_async_read_barrier_with_trid(trid_of(oldest));
+        if constexpr (noc_split != 0) {
+            noc_async_read_barrier_with_trid(trid_of(oldest), 1 - noc_index);
+        }
         cb_push_back(cb, partial ? open_rows * row_pages : slot_pages);
         if (partial) {
             open_rows = 0;
@@ -189,6 +305,9 @@ struct StickProducer {
             complete_oldest();
         }
         noc_async_read_set_trid(0);
+        if constexpr (noc_split != 0) {
+            noc_async_read_set_trid(0, 1 - noc_index);
+        }
     }
 };
 
@@ -347,8 +466,15 @@ FORCE_INLINE void retile_source_of(
 // The writes of one tile-row start at column `col_rotation % valid_width` and
 // wrap (the write twin of the reader's stick rotation): when every Tensix core
 // holds the same few tile-rows at once, concurrent first writes would otherwise
-// all land on the banks of column 0.
-template <uint32_t cb_output_tiles, uint32_t block_width, uint32_t out_tile_bytes, typename Accessor, typename Walk>
+// all land on the banks of column 0. `noc_split` (parked, 0 = off): every
+// noc_split-th write of a tile-row goes out on the other NoC (DM_DYNAMIC_NOC).
+template <
+    uint32_t cb_output_tiles,
+    uint32_t block_width,
+    uint32_t out_tile_bytes,
+    uint32_t noc_split = 0,
+    typename Accessor,
+    typename Walk>
 FORCE_INLINE void store_rows(
     const Accessor& accessor, Walk& walk, uint32_t tiles_per_row, uint32_t num_rows, uint32_t col_rotation) {
     const uint32_t pages = num_rows * block_width;
@@ -359,7 +485,9 @@ FORCE_INLINE void store_rows(
         const uint32_t valid_width = walk.valid_width();
         uint32_t t = col_rotation % valid_width;
         for (uint32_t n = 0; n < valid_width; ++n) {
-            noc_async_write(l1_row_addr + t * out_tile_bytes, accessor.get_noc_addr(row_tile_idx + t), out_tile_bytes);
+            const uint8_t noc = (noc_split != 0 && (n % noc_split) == noc_split - 1) ? 1 - noc_index : noc_index;
+            noc_async_write(
+                l1_row_addr + t * out_tile_bytes, accessor.get_noc_addr(row_tile_idx + t, 0, noc), out_tile_bytes, noc);
             if (++t == valid_width) {
                 t = 0;
             }
@@ -367,7 +495,77 @@ FORCE_INLINE void store_rows(
         l1_row_addr += block_width * out_tile_bytes;
     }
     noc_async_writes_flushed();
+    if constexpr (noc_split != 0) {
+        noc_async_writes_flushed(1 - noc_index);
+    }
     cb_pop_front(cb_output_tiles, pages);
 }
+
+// store_block with a write-ahead window (the write twin of StickProducer's read-ahead): up to
+// `write_ahead` CB quanta of tile-page writes in flight, each quantum tagged with its own NoC
+// transaction id; the oldest quantum is flushed (its L1 source reads done) and popped only when
+// the window is full or at the end. write_ahead == 1 is store_rows' behavior. Every quantum but
+// the kernel's last is the nominal rows_per_slot * block_width pages, so quantum k sits at
+// base + (k % depth) * slot_bytes in the CB ring. Requires write_ahead <= depth <= 15.
+template <
+    uint32_t cb,
+    uint32_t block_width,
+    uint32_t out_tile_bytes,
+    uint32_t depth,
+    uint32_t write_ahead,
+    uint32_t rows_per_slot>
+struct TileStorer {
+    static_assert(write_ahead >= 1 && write_ahead <= depth && depth <= 15, "one write trid per CB slot");
+    static constexpr uint32_t slot_pages = rows_per_slot * block_width;
+    static constexpr uint32_t slot_bytes = slot_pages * out_tile_bytes;
+    uint32_t base_addr;
+    uint32_t next_slot = 0;
+    uint32_t outstanding = 0;
+    uint32_t last_pages = slot_pages;  // pages of the newest slot (only the final one may be short)
+
+    TileStorer() : base_addr(get_read_ptr(cb)) {}
+    static uint32_t trid_of(uint32_t slot) { return 1 + (slot % depth); }
+
+    template <typename Accessor, typename Walk>
+    FORCE_INLINE void store(
+        const Accessor& accessor, Walk& walk, uint32_t tiles_per_row, uint32_t num_rows, uint32_t col_rotation) {
+        if (outstanding == write_ahead) {
+            complete_oldest();
+        }
+        const uint32_t pages = num_rows * block_width;
+        cb_wait_front(cb, outstanding * slot_pages + pages);
+        const uint32_t trid = trid_of(next_slot);
+        uint32_t l1_row_addr = base_addr + (next_slot % depth) * slot_bytes;
+        for (uint32_t j = 0; j < num_rows; ++j, walk.advance()) {
+            const uint32_t row_tile_idx = walk.row() * tiles_per_row + walk.first_col();
+            const uint32_t valid_width = walk.valid_width();
+            uint32_t t = col_rotation % valid_width;
+            for (uint32_t n = 0; n < valid_width; ++n) {
+                noc_async_write_one_packet_with_trid(
+                    l1_row_addr + t * out_tile_bytes, accessor.get_noc_addr(row_tile_idx + t), out_tile_bytes, trid);
+                if (++t == valid_width) {
+                    t = 0;
+                }
+            }
+            l1_row_addr += block_width * out_tile_bytes;
+        }
+        last_pages = pages;
+        ++next_slot;
+        ++outstanding;
+    }
+
+    FORCE_INLINE void complete_oldest() {
+        const uint32_t oldest = next_slot - outstanding;
+        noc_async_write_flushed_with_trid(trid_of(oldest));
+        cb_pop_front(cb, outstanding == 1 ? last_pages : slot_pages);
+        --outstanding;
+    }
+
+    FORCE_INLINE void complete_all() {
+        while (outstanding > 0) {
+            complete_oldest();
+        }
+    }
+};
 
 }  // namespace tilize_dataflow

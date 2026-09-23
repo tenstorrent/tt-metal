@@ -49,7 +49,10 @@ void kernel_main() {
     constexpr bool output_resident = get_compile_time_arg_val(11) != 0;  // cb_output_tiles backed on the shard
     constexpr uint32_t page_bytes = get_compile_time_arg_val(12);        // data bytes per input page
     constexpr uint32_t pages_per_stick = get_compile_time_arg_val(13);   // input pages per logical stick
-    constexpr auto output_args = TensorAccessorArgs<14>();
+    constexpr uint32_t write_noc_split = get_compile_time_arg_val(14);   // parked: 0, else other-NoC write period
+    constexpr uint32_t depth_out = get_compile_time_arg_val(15);         // cb_output_tiles slots (quanta)
+    constexpr uint32_t write_ahead = get_compile_time_arg_val(16);       // CB quanta of tile writes in flight
+    constexpr auto output_args = TensorAccessorArgs<17>();
     constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -118,10 +121,24 @@ void kernel_main() {
             store_next();
             ++stored;
         }
+    } else if constexpr (write_ahead > 1) {
+        tilize_dataflow::
+            TileStorer<cb_output_tiles, block_width, out_tile_bytes, depth_out, write_ahead, rows_per_quantum>
+                storer;
+        for (uint32_t done = 0; done < num_positions; done += rows_per_quantum) {
+            const uint32_t remaining = num_positions - done;
+            storer.store(
+                output_accessor,
+                store_walk,
+                tiles_per_row,
+                remaining < rows_per_quantum ? remaining : rows_per_quantum,
+                stick_rotation);
+        }
+        storer.complete_all();
     } else {
         for (uint32_t done = 0; done < num_positions; done += rows_per_quantum) {
             const uint32_t remaining = num_positions - done;
-            tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes>(
+            tilize_dataflow::store_rows<cb_output_tiles, block_width, out_tile_bytes, write_noc_split>(
                 output_accessor,
                 store_walk,
                 tiles_per_row,
@@ -130,4 +147,7 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+    if constexpr (write_noc_split != 0) {
+        noc_async_write_barrier(1 - noc_index);
+    }
 }

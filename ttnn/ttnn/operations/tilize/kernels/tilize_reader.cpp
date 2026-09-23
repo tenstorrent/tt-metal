@@ -161,7 +161,10 @@ void kernel_main() {
     constexpr uint32_t cb_retile_staging = get_compile_time_arg_val(14);
     constexpr uint32_t retile_stage_depth = get_compile_time_arg_val(15);    // retile: staged units (ring slots)
     constexpr bool retile_facewalk_noc = get_compile_time_arg_val(16) != 0;  // retile: face rows moved by NoC
-    constexpr auto input_args = TensorAccessorArgs<17>();
+    constexpr uint32_t read_noc_split = get_compile_time_arg_val(17);        // parked: 0, else other-NoC stick period
+    constexpr bool eager_publish = get_compile_time_arg_val(18) != 0;        // parked: push landed slots early
+    constexpr uint32_t bank_stride = get_compile_time_arg_val(19);  // parked: 0 off, 1 bank-stride, 2 bank-major
+    constexpr auto input_args = TensorAccessorArgs<20>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
@@ -217,8 +220,13 @@ void kernel_main() {
         tile_col_bytes,
         rows_per_quantum,
         page_bytes,
-        pages_per_stick>
+        pages_per_stick,
+        read_noc_split,
+        eager_publish,
+        bank_stride ? NUM_DRAM_BANKS : 0,
+        bank_stride == 2>
         producer(stick_rotation);
+    producer.prime(input_accessor, row_start * tile_h, stick_page_bytes);
 
     const uint32_t num_positions = walk.num_positions();
     for (uint32_t seq = 0; seq < num_positions; ++seq, walk.advance()) {

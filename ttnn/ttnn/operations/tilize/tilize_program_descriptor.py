@@ -28,13 +28,15 @@ or RT arg (every dependent quantity derives from it):
   tile_col  axis  ->  block_width  = balanced_width(core_col_tiles_max, block_width_cap)   (CT)
                       num_col_groups = 1 (Phase 0; grid_2d_split refinement turns it)
   depth knobs     ->  DEPTH_IN, DEPTH_OUT   (CB total_size and per_col_tile_bytes only)
+  in-flight       ->  read_ahead / write_ahead = CB quanta covering READ_WINDOW_MIN_TILES /
+                      WRITE_WINDOW_MIN_TILES; depth_in / depth_out = max(DEPTH_*, window)
   L1 budget       ->  CB_BUDGET_BYTES[low_l1]
 
 Per Tensix core the kernels process the output-tile rectangle
 [row_start, row_start + core_row_tiles) x [col_start, col_start + core_col_tiles),
 cut into ceil(core_col_tiles / block_width) column blocks; the walk over them is
 streamed rows_per_quantum tile-rows (rows_per_quantum * block_width tiles) per CB
-quantum through two depth-2 CBs.
+quantum through two CBs of depth_in / depth_out quanta (2 at the default knobs).
 """
 
 from __future__ import annotations
@@ -116,6 +118,53 @@ NUM_COL_GROUPS = 1
 # writes, and the writes alone are DRAM-throughput-bound (~130 GB/s aggregate).
 # Parked disabled; what still has to shorten first is the write path.
 SPLIT_READER_MAX_SEGMENT_BYTES = 0
+
+# ---- Refinement 3 levers (block-quantum / depth / NoC co-tune). Measured on WH B0, 64 Tensix
+# cores, [1,1,16384,64] bf16 DRAM interleaved (the perf-focus shape), median device-kernel ns,
+# baseline 25.3-25.6 us. The shape is bound by aggregate DRAM throughput for its access mix:
+# half the Tensix cores (32) is only 17 % slower; reads-only 16.1 us, writes-only 19.2 us and
+# the no-transfer floor 8.1 us nearly add up (ablations). Every lever below is correct
+# (bit-exact) and parked at its trivial default, which leaves the compiled kernels on the
+# pre-Refinement-3 path; each stays a live tunable.
+
+# In-flight windows, in full 32-row tile equivalents: read_ahead (reader) and write_ahead
+# (writer) become the CB quanta that cover the window, and DEPTH_IN / DEPTH_OUT grow to hold
+# them. Only a small quantum (a narrow tile-row) opens a window wider than one quantum.
+# 0 = one quantum (READ_AHEAD, write_ahead 1). Measured with QUANTUM_MIN_TILES = 2 and both
+# windows at 8: [1,1,16384,64] 25.4 -> 24.7..25.0 us in four runs, but 25.8 vs 25.5 us in a
+# fifth (noise band); [1,1,16384,32] 18.0 -> 19.7-20.0, [1,1,32768,64] 51.7 -> 54.4-54.7,
+# [1,1,4096,64] 7.7 -> 7.9-8.0 us; wide rows flat; only [4,3,256,96] (1-2 tile-rows per core)
+# wins clearly, 9.0 -> 8.1 us. Not adopted: no shape rule separates that win from the losses.
+READ_WINDOW_MIN_TILES = 0
+WRITE_WINDOW_MIN_TILES = 0
+MAX_WINDOW_QUANTA = 8  # <= 15: one NoC transaction id per CB slot on each side
+# Outstanding reads one NoC transaction id can count (noc_parameters.h); caps a slot's reads.
+NOC_MAX_TRANSACTION_ID_COUNT = 255
+
+# Eager publish: the reader pushes every slot whose reads have landed before it issues the next
+# tile-row (non-blocking trid poll), so a deep read_ahead never holds finished rows back. Without
+# it, read_ahead == the core's slot count serializes the core (all reads, then tilize, then
+# writes: 27.4 us at 1-row quanta, depth 8). With it that case is 25.1 us; at the default
+# schedule it is flat (25.5 vs 25.3 us).
+EAGER_PUBLISH = False
+
+# Split one stream across both NoCs: every READ_NOC_SPLIT-th stick read of a tile-row (every
+# WRITE_NOC_SPLIT-th tile write) leaves on the other NoC; the data-movement kernels then run in
+# DM_DYNAMIC_NOC (dynamic mode alone, nothing moved: 26.4 vs 25.9 us). 0 = off. Reads on NoC1
+# and writes on NoC0 run against the DRAM geometry here: reads 1-in-2 68.8 -> 36.0 us once the
+# kernel NoCs were right, 1-in-8 33.4 us, 1-in-32 ~ +18 %; writes 1-in-2 45.4 us, 1-in-8 26.2
+# (flat). Parked off.
+READ_NOC_SPLIT = 0
+WRITE_NOC_SPLIT = 0
+
+# Reader address generation on a DRAM-interleaved input: 1 = bank-stride reuse (stick p + NB
+# is stick p's bank, one aligned page further, so only NB accessor calls per core), 2 = the
+# same plus bank-major issue order within a tile-row. 0 = one accessor call per stick. The
+# reader issues ~42 cycles per 128-byte read uncontended, ~23 of them address math, yet
+# cheaper issue made reads-only SLOWER (16.1 -> 18.9 us for 1, 19.5 us for 2: faster request
+# issue congests the DRAM banks) and the full op flat (25.2 / 25.8 vs 25.4 us). Parked off; it
+# is the addressing a bank-coalesced read (Refinement 6) builds on.
+BANK_STRIDE = 0
 
 
 def _div_up(a, b):
@@ -318,17 +367,19 @@ def create_program_descriptor(
     # ---------------- block knobs ----------------
     col_align_tiles = _col_align_tiles(input_tensor, in_elem_bytes)
 
-    def _per_col_tile_bytes(num_input_cbs, *, input_resident=False, output_resident=False):
+    def _per_col_tile_bytes(
+        num_input_cbs, *, input_resident=False, output_resident=False, depth_in=DEPTH_IN, depth_out=DEPTH_OUT
+    ):
         """Bytes of STREAMED CBs per tile-column of one tile-row (resident CBs are the tensor's own L1)."""
         if retile:
             # cb_input_sticks always streams (the face walk fills it); a resident input backs
             # only cb_retile_staging, which otherwise holds RETILE_STAGE_DEPTH units.
-            streamed_in = DEPTH_IN * in_tile_bytes
+            streamed_in = depth_in * in_tile_bytes
             if not input_resident:
                 streamed_in += RETILE_STAGE_DEPTH * unit_in_rows * in_page_bytes
         else:
-            streamed_in = 0 if input_resident else num_input_cbs * DEPTH_IN * in_tile_bytes
-        streamed_out = 0 if output_resident else DEPTH_OUT * out_tile_bytes
+            streamed_in = 0 if input_resident else num_input_cbs * depth_in * in_tile_bytes
+        streamed_out = 0 if output_resident else depth_out * out_tile_bytes
         return streamed_in + streamed_out
 
     # ---------------- core assignment (op_design.md -> Regimes, selection function) ----------------
@@ -356,7 +407,7 @@ def create_program_descriptor(
         # The split's unit is row_align tile-rows (1 except retile), so an input tile-row
         # never straddles two Tensix cores.
         assert R % row_align == 0
-        (_n, all_cores, core_group_1, core_group_2, units_g1, units_g2) = ttnn.split_work_to_cores(
+        _n, all_cores, core_group_1, core_group_2, units_g1, units_g2 = ttnn.split_work_to_cores(
             grid, R // row_align, row_wise=True
         )
         assignment = []
@@ -414,6 +465,16 @@ def create_program_descriptor(
     # tile's bytes and per-quantum costs are per handshake, so the floor scales with 32 / tile_h
     # (at tile_h = 1 one "tile" is a single stick segment).
     quantum_min_tiles = QUANTUM_MIN_TILES * (FULL_TILE_HEIGHT // tile_h)
+    # The stick reader (StickProducer) streams cb_input_sticks with NoC reads; a resident input only
+    # publishes pages, retile face-walks, and the split reader has its own schedule.
+    stick_reader = not (input_resident or retile or split_reader)
+    # One NoC transaction id counts at most NOC_MAX_TRANSACTION_ID_COUNT outstanding reads, and a
+    # stick slot's reads share one id: cap the slot's read count (tile_h per tile-row, times the
+    # pages a stick segment can straddle on a paged input).
+    reads_per_row = tile_h * (
+        1 if pages_per_stick == 1 else _div_up(block_width * TILE_WIDTH * in_elem_bytes, in_page_bytes) + 1
+    )
+    max_rows_per_trid = NOC_MAX_TRANSACTION_ID_COUNT // reads_per_row if stick_reader else max_positions
     if split_reader:
         rows_per_quantum = 1
     else:
@@ -423,12 +484,59 @@ def create_program_descriptor(
                 _div_up(quantum_min_tiles, block_width),
                 max_positions // DEPTH_IN,
                 CB_BUDGET_BYTES[low_l1] // max(1, per_row_bytes),
+                max_rows_per_trid,
             ),
         )
+    quantum_tiles = rows_per_quantum * block_width  # pages per CB push / pop on a streamed CB
+
+    # In-flight windows (op_design.md perf lamp "Read in-flight depth"), in CB quanta: enough quanta
+    # to keep READ_WINDOW_MIN_TILES / WRITE_WINDOW_MIN_TILES full-tile equivalents in flight, never
+    # more than the walk has, and each CB deep enough to hold its window. A window of one quantum
+    # (every wide tile-row, every resident side) leaves the depth and handshake schedule as before.
+    def _window_quanta(min_tiles):
+        full_tiles_per_quantum = max(1, quantum_tiles // (FULL_TILE_HEIGHT // tile_h))
+        return max(1, min(MAX_WINDOW_QUANTA, max_positions, _div_up(min_tiles, full_tiles_per_quantum)))
+
+    read_ahead = max(READ_AHEAD, _window_quanta(READ_WINDOW_MIN_TILES)) if stick_reader else READ_AHEAD
+    write_ahead = _window_quanta(WRITE_WINDOW_MIN_TILES) if not (output_resident or split_reader) else 1
+    depth_in = max(DEPTH_IN, read_ahead)
+    depth_out = max(DEPTH_OUT, write_ahead)
+    # The windows only deepen CBs whose quantum is small; keep the streamed total inside the budget.
+    while quantum_tiles * _per_col_tile_bytes(
+        num_input_cbs,
+        input_resident=input_resident,
+        output_resident=output_resident,
+        depth_in=depth_in,
+        depth_out=depth_out,
+    ) > CB_BUDGET_BYTES[low_l1] and (read_ahead > READ_AHEAD or write_ahead > 1):
+        if read_ahead >= write_ahead and read_ahead > READ_AHEAD:
+            read_ahead -= 1
+        else:
+            write_ahead -= 1
+        depth_in, depth_out = max(DEPTH_IN, read_ahead), max(DEPTH_OUT, write_ahead)
+
+    # Parked NoC levers (see their knobs). A NoC split moves the side's kernel to DM_DYNAMIC_NOC;
+    # the write-ahead window's per-quantum trids live on the writer's own NoC only, so a write
+    # split keeps one write quantum in flight. Bank-stride addressing needs an interleaved DRAM
+    # input with one page per stick, read on the reader's own NoC.
+    read_noc_split = READ_NOC_SPLIT if stick_reader and pages_per_stick == 1 else 0
+    write_noc_split = WRITE_NOC_SPLIT if not (output_resident or split_reader) else 0
+    if write_noc_split != 0:
+        write_ahead = 1
+    dynamic_noc = read_noc_split != 0 or write_noc_split != 0
+    in_mc = input_tensor.memory_config()
+    bank_stride = (
+        BANK_STRIDE
+        if stick_reader
+        and read_noc_split == 0
+        and pages_per_stick == 1
+        and in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        and in_mc.buffer_type == ttnn.BufferType.DRAM
+        else 0
+    )
 
     # ---------------- circular buffers ----------------
     tile_desc = ttnn.TileDescriptor(tile_h, TILE_WIDTH)
-    quantum_tiles = rows_per_quantum * block_width  # pages per CB push / pop on a streamed CB
     input_format = ttnn.CBFormatDescriptor(
         buffer_index=CB_INPUT_STICKS,
         data_format=input_tensor.dtype,
@@ -449,7 +557,7 @@ def create_program_descriptor(
         cb_input_sticks.format_descriptors = [input_format]
     else:
         cb_input_sticks = ttnn.CBDescriptor(
-            total_size=DEPTH_IN * quantum_tiles * in_tile_bytes,
+            total_size=depth_in * quantum_tiles * in_tile_bytes,
             core_ranges=all_cores,
             format_descriptors=[input_format],
         )
@@ -476,7 +584,7 @@ def create_program_descriptor(
     if split_reader:
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=DEPTH_IN * quantum_tiles * in_tile_bytes,
+                total_size=depth_in * quantum_tiles * in_tile_bytes,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
@@ -496,7 +604,7 @@ def create_program_descriptor(
         cb_output_tiles = ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor, core_ranges=all_cores)
     else:
         cb_output_tiles = ttnn.CBDescriptor(
-            total_size=DEPTH_OUT * quantum_tiles * out_tile_bytes,
+            total_size=depth_out * quantum_tiles * out_tile_bytes,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -512,7 +620,7 @@ def create_program_descriptor(
     # CT args: config only (dtype pair, tile, block_width, residency, accessor args) ->
     # program-cache friendly; buffer addresses ride on RT args and on the resident CBs.
     tile_col_bytes = TILE_WIDTH * in_elem_bytes
-    assert 1 <= READ_AHEAD <= DEPTH_IN
+    assert 1 <= read_ahead <= depth_in and 1 <= write_ahead <= depth_out <= MAX_WINDOW_QUANTA
     reader_ct_args = [
         CB_INPUT_STICKS,
         block_width,
@@ -520,8 +628,8 @@ def create_program_descriptor(
         tile_col_bytes,
         stick_page_bytes,
         int(split_reader),
-        DEPTH_IN,
-        READ_AHEAD,
+        depth_in,
+        read_ahead,
         rows_per_quantum,
         int(input_resident),
         in_page_bytes,
@@ -531,6 +639,9 @@ def create_program_descriptor(
         CB_RETILE_STAGING,
         RETILE_STAGE_DEPTH,
         int(RETILE_FACEWALK_NOC),
+        read_noc_split,
+        int(EAGER_PUBLISH and stick_reader),
+        bank_stride,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     writer_ct_args = [
@@ -542,12 +653,15 @@ def create_program_descriptor(
         tile_h,
         tile_col_bytes,
         stick_page_bytes,
-        DEPTH_IN,
-        READ_AHEAD,
+        depth_in,
+        read_ahead,
         rows_per_quantum,
         int(output_resident),
         in_page_bytes,
         pages_per_stick,
+        write_noc_split,
+        depth_out,
+        write_ahead,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -596,14 +710,26 @@ def create_program_descriptor(
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
-        config=ttnn.ReaderConfigDescriptor(),  # NCRISC / NoC0
+        config=(
+            ttnn.DataMovementConfigDescriptor(
+                ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0, ttnn.NOC_MODE.DM_DYNAMIC_NOC
+            )
+            if dynamic_noc
+            else ttnn.ReaderConfigDescriptor()
+        ),  # NCRISC / NoC0
     )
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
-        config=ttnn.WriterConfigDescriptor(),  # BRISC / NoC1
+        config=(
+            ttnn.DataMovementConfigDescriptor(
+                ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1, ttnn.NOC_MODE.DM_DYNAMIC_NOC
+            )
+            if dynamic_noc
+            else ttnn.WriterConfigDescriptor()
+        ),  # BRISC / NoC1
     )
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),

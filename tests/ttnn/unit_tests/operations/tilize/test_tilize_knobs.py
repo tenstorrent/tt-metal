@@ -6,7 +6,9 @@ The default path is covered by test_tilize.py; this turns the host knobs in
 tilize_program_descriptor.py (READ_AHEAD, SPLIT_READER_MAX_SEGMENT_BYTES,
 CB_BUDGET_BYTES -> block_width) so the ragged column block, multi-column-block
 walks, the transaction-id read-ahead and the split reader (odd/even walk
-positions over two input CBs) are all exercised. Output must be bit-identical.
+positions over two input CBs) are all exercised, as are the Refinement 3 levers
+(in-flight windows / write-ahead, eager publish, NoC split, bank-stride
+addressing). Output must be bit-identical.
 """
 import pytest
 import torch
@@ -49,6 +51,32 @@ CONFIGS = {
     "quantum_depth3_ra3": dict(QUANTUM_MIN_TILES=64, DEPTH_IN=3, READ_AHEAD=3),
     # split reader must pin the quantum to one tile-row
     "quantum_split": dict(QUANTUM_MIN_TILES=64, SPLIT_READER_MAX_SEGMENT_BYTES=1 << 20),
+    # Refinement 3 levers (parked at defaults; every one must stay bit-exact when turned).
+    # In-flight windows: 1-row quanta, read_ahead / write_ahead windows deepen the CBs.
+    "windows8": dict(QUANTUM_MIN_TILES=2, READ_WINDOW_MIN_TILES=8, WRITE_WINDOW_MIN_TILES=8),
+    "write_window_only": dict(WRITE_WINDOW_MIN_TILES=32),
+    # the budget loop must shrink the windows back inside the CB budget
+    "windows_tiny_budget": dict(
+        QUANTUM_MIN_TILES=1,
+        READ_WINDOW_MIN_TILES=64,
+        WRITE_WINDOW_MIN_TILES=64,
+        CB_BUDGET_BYTES={False: 3 * 8192, True: 3 * 8192},
+    ),
+    # eager publish with a read-ahead as deep as the CB (the lazy-completion worst case)
+    "eager_full_read_ahead": dict(EAGER_PUBLISH=True, QUANTUM_MIN_TILES=2, DEPTH_IN=8, READ_AHEAD=8),
+    "eager_windows": dict(EAGER_PUBLISH=True, QUANTUM_MIN_TILES=1, READ_WINDOW_MIN_TILES=8),
+    # stream split across both NoCs (DM_DYNAMIC_NOC kernels); a write split pins write_ahead to 1
+    "noc_split_read2": dict(READ_NOC_SPLIT=2),
+    "noc_split_write2": dict(WRITE_NOC_SPLIT=2),
+    "noc_split_both3_windows": dict(
+        READ_NOC_SPLIT=3, WRITE_NOC_SPLIT=3, QUANTUM_MIN_TILES=2, READ_WINDOW_MIN_TILES=8, WRITE_WINDOW_MIN_TILES=8
+    ),
+    # bank-stride addressing / bank-major order, incl. multi-column-block walks (segment offsets)
+    "bank_stride": dict(BANK_STRIDE=1),
+    "bank_major": dict(BANK_STRIDE=2),
+    "bank_major_tiny_budget_ra2": dict(
+        BANK_STRIDE=2, READ_AHEAD=2, EAGER_PUBLISH=True, CB_BUDGET_BYTES={False: 3 * 8192, True: 3 * 8192}
+    ),
 }
 
 

@@ -112,7 +112,7 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - **Retile.** `read_retile` (`retile_l1_facewalk`) reads whole tiles into a prefetching staging ring, or reads a resident TILE shard in place. It face-walks them into `cb_input_sticks` with NoC loopback reads (`RETILE_FACEWALK_NOC`), which measured 2.4× faster than the RISC-V copy the design named. Retile 32→16 on [1,1,16384,64] (64 Tensix cores, WH) went from 93.5 to 38.3 µs; tiny 16 / 8 take 24.0 / 24.9 µs; the perf-focus path is unchanged at 25.5 µs.
 - **What is left.** Retile is face-walk-issue bound (NCRISC 31 µs vs 17 µs for the reads alone). 1→32 is bound by its 64-byte input page reads; tile_h = 1 is bound by its 64-byte output page writes.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile (block-quantum / depth / NoC co-tune)
+### [x] Refinement 3 — Speed up the perf-flagged profile (block-quantum / depth / NoC co-tune)
 
 **Type**: perf
 
@@ -127,6 +127,15 @@ The L1-interleaved `buffer` values and ranks 2/3/5/6 need no kernel change per t
 - No SUPPORTED change.
 
 **Done when**: measured device-ns improves on [1,1,16384,64] at this exact config, with the core count reported (64 on WH). The golden suite stays green, and there is no regression across the config-spanning guard set: one representative per distinct kernel path × layout × placement that exists at that point, i.e. narrow- and wide-row interleaved DRAM, L1 interleaved, sharded resident, sharded accessor, tiny tile and retile.
+**Outcome**: measured null, levers parked. [1,1,16384,64] runs at 25.2 → 25.0 µs on 64 Tensix cores (WH), within noise; the 7-path guard set is unchanged within noise.
+- **Bottleneck.** Aggregate DRAM throughput for this transaction mix (128-byte stick reads plus 2 KiB tile writes, about 165 GB/s including fixed costs). Evidence: 32 Tensix cores take 30.0 µs, only 17 % slower. Reads only (16.1 µs) plus writes only (19.2 µs) minus the no-transfer floor (8.1 µs) ≈ the full 25.4 µs.
+- **Levers.** Each named lever was built, verified bit-exact, measured, and parked at a default that leaves the default path's kernel code and CB sizes unchanged:
+  - quantum × depth × read-ahead windows, with write-ahead as the write-side batching twin;
+  - eager publish;
+  - splitting either stream across both NoCs;
+  - bank-stride read addressing.
+- **Results.** Every lever is flat or slower on the perf shape. The one apparent 2 % gain (1-row quanta, 4-deep windows) did not reproduce and regressed [1,1,16384,32] by 9 %. NoC1 reads cost +30–40 %. Cheaper read issue made reads-only slower, because it congests the DRAM banks.
+- **Next.** Fewer, larger DRAM reads (Refinement 6's bank-coalesced reads: sticks `p`, `p + 12`, `p + 24` are contiguous in one bank). The parked bank-stride addressing already computes them. Not done here because it is Refinement 6's scope.
 
 ### [ ] Refinement 4 — Padding: auto / explicit pad, all fill signs, non-aligned H / W, rank 0 / 1
 

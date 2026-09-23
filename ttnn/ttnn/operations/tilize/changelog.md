@@ -121,3 +121,47 @@
   - tiny tile DRAM and sharded;
   - retile DRAM, H-padded, L1, resident shards (with residency assertions), crossovers;
   - a retile knob matrix, program-cache cases, and a perf-shape case for `--profile`.
+
+## Refinement 3 — Speed up the perf-flagged profile (block-quantum / depth / NoC co-tune)
+- **Date**: 2026-09-23
+- **What was done**: I built and measured every lever the refinement names, plus two the measurements pointed to. The perf-focus shape, [1,1,16384,64] bf16 DRAM interleaved on 64 Tensix cores (WH B0), did not get faster. Every lever is correct (bit-exact), parked at a default that leaves the default path's kernel code and CB sizes unchanged, and still a live knob in `tilize_program_descriptor.py`, which records its numbers. All figures below are median device-kernel ns over 5–10 dispatches.
+  - **Classification (ablations, payload stubbed, synchronization kept).** Full 25.4 µs; reads only 16.1 µs; writes only 19.2 µs; no transfers 8.1 µs. The no-transfer floor is mostly NCRISC address generation: 6.5 µs for 256 stick addresses per Tensix core. Reads and writes nearly add up, on separate NoCs, so they share a resource. On 32 Tensix cores the op takes 30.0 µs, only 17 % slower than on 64 (48 cores: 28.7 µs; 56: 25.3 µs). The shape is bound by aggregate DRAM throughput for its transaction mix: 128-byte stick reads plus 2 KiB tile writes, about 165 GB/s including the fixed costs. The per-core schedule does not bind.
+  - **Zones.** The reader issues about 42 cycles per 128-byte read uncontended ([1,1,256,64], 8 cores) and about 53 at 64 cores; its barrier waits total only 1.8 µs. The writer's first write waits on the first CB quantum. `/perf-ceiling-dm`: the DRAM floor is 4 MiB / 288 GB/s = 14.6 µs (15.8 µs at 92 %). The `noc_estimate` binary is not built on this box, so the contended DRAM keys came straight from `noc_latencies.yaml`: `ALL_FROM_ALL` for 256 × 128-byte reads is about 18.8k cycles and `ALL_TO_ALL` for 16 × 2 KiB writes about 29k cycles, both slower than measured. The practical reference is the `double_buffer` example's 190.8 GB/s for a 64-core copy (reads plus writes of 2 KiB tiles), which puts this shape at about 88 % of what its transaction mix can reach.
+  - **Quantum × depth × read-ahead co-tune** (new knobs `READ_WINDOW_MIN_TILES` / `WRITE_WINDOW_MIN_TILES`). Each window becomes `read_ahead` / `write_ahead` CB quanta; `depth_in` / `depth_out` grow to hold them, and a budget loop keeps them inside `CB_BUDGET_BYTES`. Sweep on the perf shape:
+
+    | Tile-rows per quantum | Depth | Read-ahead | Median |
+    |---|---|---|---|
+    | 1 | 4 | 4 | 24.7–25.1 µs |
+    | 1 | 8 | 8 | 27.5 µs |
+    | 2 | 4 | 4 | 27.1 µs |
+    | 4 (baseline) | 2 | 1 | 25.0–25.9 µs |
+
+    The best windowed rule (1 tile-row per quantum, windows at 8 full tiles) measured 24.7–25.0 µs against a 25.3–25.5 µs baseline in four runs, then 25.8 vs 25.5 µs in a fifth. On other shapes it regressed: [1,1,16384,32] 18.0 → 19.7 µs, [1,1,32768,64] 51.7 → 54.4 µs, [1,1,4096,64] 7.7 → 8.0 µs. Only [4,3,256,96] won clearly (9.0 → 8.1 µs). Parked at 0.
+  - **Eager publish** (`EAGER_PUBLISH`). The reader pushes slots whose reads have landed with a non-blocking transaction-id poll. It fixes a real pathology: `StickProducer` completes slots only when forced, so a read-ahead equal to the core's slot count serializes the core (all reads, then tilize, then writes). That case goes from 27.4 to 25.1 µs. At the default schedule it is flat (25.5 vs 25.3 µs). Parked.
+  - **Write-side batching** (the write-ahead window, `TileStorer`). Up to `write_ahead` quanta of tile writes are in flight, each tagged with its own NoC transaction id and flushed oldest-first. It is the write twin of the read-ahead and was measured together with it: 24.7–25.3 µs vs 25.3–25.6 µs, flat. I also tried write bank spreading (rotating the write order across the quantum), which cut the simulated worst-case per-bank load from 12 to 6 Tensix cores: flat (25.2 vs 25.5 µs), so I removed it.
+  - **NoC / stream placement: one stream split across both NoCs** (`READ_NOC_SPLIT` / `WRITE_NOC_SPLIT`, with the data-movement kernels in `DM_DYNAMIC_NOC`). Dynamic mode alone is neutral (26.4 vs 25.9 µs) once each kernel's NoC is set explicitly; `NOC.RISCV_1_default` is NoC1, which first put the reader on the wrong NoC at 55 µs. Reads on NoC1 run against the DRAM geometry: 1 in 2 sticks 36.0 µs, 1 in 8 33.4 µs. Writes on NoC0: 1 in 2 tiles 45.4 µs, 1 in 8 26.2 µs. Parked at 0.
+  - **Read issue cost** (`BANK_STRIDE`). Stick `p + NB` sits in stick `p`'s bank, one aligned page further, so each Tensix core needs only NB accessor calls; mode 2 also issues each tile-row bank by bank. The no-transfer floor dropped 8.1 → 7.2 µs, but reads only got slower (16.1 → 18.9 µs; 19.5 µs bank-major), because faster request issue congests the DRAM banks. The full op stayed flat (25.2 / 25.8 vs 25.4 µs). Parked; it is the addressing a Refinement 6 bank-coalesced read can build on.
+  - **Correctness guard.** One NoC transaction id counts at most 255 outstanding reads, so the stick reader now caps `rows_per_quantum` at `255 // (tile_h × reads per stick segment)`. The cap does not bind on any measured shape.
+  - Reused: `StickProducer`, `store_rows`, `Walker`, the CB slots, `rows_per_quantum` / `balanced_width`. Added: the window / depth derivation, `TileStorer`, `publish_landed`, `issue_row_bank_stride`, the NoC-split paths, and five knobs.
+- **Accuracy achieved**: bit-exact (`torch.equal`, PCC = 1.0, atol = rtol = 0) on every knob setting across the 7 knob-matrix shapes (168 cases), and at defaults on every unit test.
+- **Golden test progress**: `test_golden.py -k test_op_loose` 8 passed / 3 xfailed / 0 failed, covering the perf-focus cell and the sharded / fp32 LOOSE_CASES. The unit regression net is all green: `test_tilize.py` 22, `test_tilize_knobs.py` 168, `test_tilize_sharded.py` 26, `test_tilize_tile_geometry.py` 102, registry 3, precision 5, perf shapes 5.
+- **Perf, no regression at defaults** (WH B0, device-kernel ns, median of 7; before → after):
+
+  | Guard path | Before | After |
+  |---|---|---|
+  | Narrow DRAM [1,1,16384,64] | 25186 | 24963 |
+  | Wide DRAM [1,1,8192,256] | 44410 | 44294 |
+  | L1 interleaved [1,1,4096,64] | 5651 | 5691 |
+  | Sharded resident, HEIGHT same spec [1,1,2048,512] | 1908 | 1930 |
+  | Sharded accessor, HEIGHT in → DRAM | 16761 | 16350 |
+  | Tiny tile 16 [1,1,16384,64] | 24351 | 24209 |
+  | Retile 32→16 [1,1,16384,64] | 38026 | 38110 |
+
+  All on 64 Tensix cores, all within noise. The perf-focus shape stays at about 25.0–25.5 µs, below the 25998 ns WH reference.
+- **Issues encountered**:
+  - Device-kernel time on this shape varies ±3 % from run to run. Single-run "wins" of 2–3 % did not survive repeats, so every decision above rests on 10-rep medians in both orders.
+  - `ttnn.NOC.RISCV_1_default` is NoC1, not the reader's NoC0.
+  - Retile's `read_retile` issues `unit_in_rows × valid_width` reads under one transaction id, which can exceed 255 in principle (for example 1→32 on a wide row). It is not a failure seen so far; it is noted for a later refinement.
+- **Tests added**:
+  - `test_tilize_knobs.py`: 12 Refinement 3 configs (windows, write-ahead, budget shrink, eager publish, NoC splits, bank stride / bank-major).
+  - `test_tilize_r3_perf.py`: the device-ns harness. Variants and shapes come from env vars, plus a `_GRID` core-count probe and the 7-path guard set `test_r3_guard`.
