@@ -79,11 +79,10 @@ void kernel_main() {
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
-    constexpr uint32_t SCALARS = 1;
-    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(SCALARS + 0);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(SCALARS + 1);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(SCALARS + 2);
-    constexpr auto in_args = TensorAccessorArgs<SCALARS + 3>();
+    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(3);
+    constexpr auto in_args = TensorAccessorArgs<4>();
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
@@ -128,9 +127,8 @@ void kernel_main() {
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
-    constexpr uint32_t SCALARS = 1;
-    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(SCALARS + 0);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(SCALARS + 1);
+    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(2);
 
     Noc noc;
     CircularBuffer cin(cb_in);

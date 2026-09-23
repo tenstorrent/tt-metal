@@ -70,7 +70,7 @@ std::vector<size_t> validate_targets(
 #define ADD_RESERVED(P, field) reserved.push_back(spec_name(P, #field));
     TT_MCAST_SPEC_METADATA(ADD_RESERVED, prefix)
 #undef ADD_RESERVED
-    for (auto field :
+    for (const auto* field :
          {"tag",
           "rt_base",
           "data_ready",

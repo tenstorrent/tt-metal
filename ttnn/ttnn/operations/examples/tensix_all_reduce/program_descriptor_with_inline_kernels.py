@@ -414,11 +414,10 @@ using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t scalars = 2;
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
-    constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
-    constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 3);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t group_size = get_compile_time_arg_val(4);
+    constexpr uint32_t kernel_iters = get_compile_time_arg_val(5);
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -468,12 +467,11 @@ using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t scalars = 2;
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
-    constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
-    constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 3);
-    constexpr uint32_t progress_sem_id = get_compile_time_arg_val(scalars + 4);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t group_size = get_compile_time_arg_val(4);
+    constexpr uint32_t kernel_iters = get_compile_time_arg_val(5);
+    constexpr uint32_t progress_sem_id = get_compile_time_arg_val(6);
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -539,13 +537,12 @@ using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
     constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
-    constexpr uint32_t scalars = 2;
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
-    constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
-    constexpr uint32_t num_workers = get_compile_time_arg_val(scalars + 3);
-    constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 4);
-    constexpr uint32_t progress_sem_id = get_compile_time_arg_val(scalars + 5);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t group_size = get_compile_time_arg_val(4);
+    constexpr uint32_t num_workers = get_compile_time_arg_val(5);
+    constexpr uint32_t kernel_iters = get_compile_time_arg_val(6);
+    constexpr uint32_t progress_sem_id = get_compile_time_arg_val(7);
     constexpr uint32_t coords_base = 5;
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
@@ -744,14 +741,13 @@ using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
     constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
-    constexpr uint32_t scalars = 2;
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
-    constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
-    constexpr uint32_t num_workers = get_compile_time_arg_val(scalars + 3);
-    constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 4);
-    constexpr uint32_t progress_sem_id = get_compile_time_arg_val(scalars + 5);
-    constexpr uint32_t gather_sem_id = get_compile_time_arg_val(scalars + 6);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t group_size = get_compile_time_arg_val(4);
+    constexpr uint32_t num_workers = get_compile_time_arg_val(5);
+    constexpr uint32_t kernel_iters = get_compile_time_arg_val(6);
+    constexpr uint32_t progress_sem_id = get_compile_time_arg_val(7);
+    constexpr uint32_t gather_sem_id = get_compile_time_arg_val(8);
     constexpr uint32_t coords_base = 5;
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
@@ -855,14 +851,13 @@ void kernel_main() {
     constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
     constexpr uint32_t cb_stage2 = get_compile_time_arg_val(2);
     constexpr uint32_t cb_output = get_compile_time_arg_val(3);
-    constexpr uint32_t scalars = 4;
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
-    constexpr uint32_t rows = get_compile_time_arg_val(scalars + 2);
-    constexpr uint32_t cols = get_compile_time_arg_val(scalars + 3);
-    constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 4);
-    constexpr uint32_t stage1_sem_id = get_compile_time_arg_val(scalars + 5);
-    constexpr uint32_t stage2_sem_id = get_compile_time_arg_val(scalars + 6);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t rows = get_compile_time_arg_val(6);
+    constexpr uint32_t cols = get_compile_time_arg_val(7);
+    constexpr uint32_t kernel_iters = get_compile_time_arg_val(8);
+    constexpr uint32_t stage1_sem_id = get_compile_time_arg_val(9);
+    constexpr uint32_t stage2_sem_id = get_compile_time_arg_val(10);
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -1014,13 +1009,6 @@ def _mcast_family(device, layout, *, rotating, sem_ids, first_root=False):
     return family
 
 
-def _attach_mcast(family, dataflow, compute, semaphores, cbs):
-    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
-    family.attach(descriptor, "mcast", [dataflow])
-    descriptor.kernels = [dataflow, compute]
-    return descriptor
-
-
 def _compute_kernel(core_ranges, runtime_by_core, output_cb=CB_OUTPUT):
     runtime_args = ttnn.RuntimeArgs()
     for (x, y), values in runtime_by_core.items():
@@ -1133,7 +1121,10 @@ def _create_mcast_all_gather_descriptor(input_tensor, output_tensor, layout, num
         ttnn.ReaderConfigDescriptor(),
     )
     compute = _compute_kernel(layout.core_ranges, compute_rt)
-    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
+    family.attach(descriptor, "mcast", [dataflow])
+    descriptor.kernels = [dataflow, compute]
+    return descriptor
 
 
 def _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
@@ -1178,7 +1169,10 @@ def _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tile
         ttnn.ReaderConfigDescriptor(),
     )
     compute = _compute_kernel(root_ranges, compute_rt)
-    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
+    family.attach(descriptor, "mcast", [dataflow])
+    descriptor.kernels = [dataflow, compute]
+    return descriptor
 
 
 def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
@@ -1236,7 +1230,10 @@ def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_t
         ttnn.ReaderConfigDescriptor(),
     )
     compute = _compute_kernel(worker_ranges, compute_rt, output_cb=CB_PARTIAL)
-    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
+    family.attach(descriptor, "mcast", [dataflow])
+    descriptor.kernels = [dataflow, compute]
+    return descriptor
 
 
 def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
@@ -1291,7 +1288,10 @@ def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, 
         ttnn.ReaderConfigDescriptor(),
     )
     compute = _compute_kernel(worker_ranges, compute_rt, output_cb=CB_PARTIAL)
-    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
+    family.attach(descriptor, "mcast", [dataflow])
+    descriptor.kernels = [dataflow, compute]
+    return descriptor
 
 
 def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
@@ -1361,7 +1361,10 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
         compute_rt,
         ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
     )
-    return _attach_mcast(family, dataflow, compute, semaphores, cbs)
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
+    family.attach(descriptor, "mcast", [dataflow])
+    descriptor.kernels = [dataflow, compute]
+    return descriptor
 
 
 def create_program_descriptor(
