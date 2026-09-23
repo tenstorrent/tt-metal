@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/sockets/d2h2h2d_socket.hpp>
+#include "tt_metal/distributed/d2h2h2d_socket.hpp"
 
 #include <fmt/format.h>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_rdma_window.hpp>
+#include "tt_metal/distributed/host_rdma_window.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -35,7 +35,7 @@ D2H2H2DSocket::D2H2H2DSocket() : impl_(std::make_unique<Impl>()) {}
 D2H2H2DSocket::~D2H2H2DSocket() {
     impl_->h2h.reset();
     if (impl_->region != nullptr) {
-        HostRegion::release();
+        impl_->region->release();
     }
 }
 
@@ -75,7 +75,8 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
             return false;
         }
 
-        uint8_t* const base = HostRegion::reserved_base();
+        HostRegion& region = HostRegion::storage();
+        uint8_t* const base = region.reserved_base(cfg.cores);
 
         // 1. Both legs first: they allocate their sockets and MAP_FIXED the rings over the
         //    arenas, which must happen before anything pins those pages.
@@ -104,20 +105,15 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
 
         // 2. Now pin and publish.
         try {
-            im.region = &HostRegion::provision(
+            region.provision(
                 mesh, cfg.chip, cfg.cores, cfg.topo, HostRegion::Grid{cfg.grid_width, cfg.grid_height});
+            im.region = &region;
         } catch (const std::exception& ex) {
             err = std::string("host region unavailable: ") + ex.what();
             return false;
         }
         if (const std::string e = im.region->verify_header(); !e.empty()) {
             err = "region header check failed: " + e;
-            return false;
-        }
-        if (im.region->base() != base) {
-            err =
-                "the region was provisioned somewhere other than the reserved base; the overlays "
-                "were built against the wrong address";
             return false;
         }
         return true;
