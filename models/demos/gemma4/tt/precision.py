@@ -47,6 +47,9 @@ _ARCH_KEYS = ("wormhole_b0", "blackhole")
 
 def _current_arch_key():
     """Arch key for per-arch override objects."""
+    # Imported per call on purpose: test_precision_overrides monkeypatches
+    # ``models.common.utility_functions.is_blackhole``, which a module-level
+    # import would not see.
     from models.common.utility_functions import is_blackhole
 
     return "blackhole" if is_blackhole() else "wormhole_b0"

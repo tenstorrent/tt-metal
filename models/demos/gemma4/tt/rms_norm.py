@@ -132,8 +132,7 @@ class RMSNorm(nn.Module):
 
     def _build_sharded_cfg(self, dim, height=None):
         height = ttnn.TILE_SIZE if height is None else int(height)
-        spec = width_shard_spec(self.mesh_device, dim, height)
-        return spec
+        return width_shard_spec(self.mesh_device, dim, height)
 
     def _forward_sharded(self, x, already_sharded=False, keep_sharded=False, interleaved_memory_config=None):
         """Width-sharded decode RMSNorm with optional L1 handoffs."""
@@ -207,19 +206,18 @@ class RMSNorm(nn.Module):
                     self._sharded_height = padded_height
                     self._sharded_cfg = self._build_sharded_cfg(dim, padded_height)
                 if self._sharded_cfg:
-                    keep = keep_sharded
                     if x.is_sharded():
                         if x.memory_config() == self._sharded_cfg[0]:
                             return self._forward_sharded(
                                 x,
                                 already_sharded=True,
-                                keep_sharded=keep,
+                                keep_sharded=keep_sharded,
                                 interleaved_memory_config=interleaved_memory_config,
                             )
                     else:
                         return self._forward_sharded(
                             x,
-                            keep_sharded=keep,
+                            keep_sharded=keep_sharded,
                             interleaved_memory_config=interleaved_memory_config,
                         )
 

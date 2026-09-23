@@ -8,6 +8,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.dram_sharded import is_t3k_mesh
+from models.demos.gemma4.tt.rms_norm import activation_physical_height, width_shard_input_memcfg
 
 # CCL all_gather allocates barrier semaphores in L1_SMALL when this is > 0
 # (see all_gather_multicast_factory.cpp). Demo and unit meshes must open with
@@ -354,14 +355,6 @@ class CCLManager:
 _RS_TUNING_WH_T3K_DECODE = (4, 2, 8)
 
 
-def _physical_tile_padded_height(tensor) -> int:
-    """Flatten B*S-style leading dimensions and tile-pad the collective height."""
-    height = 1
-    for index in range(len(tensor.shape) - 1):
-        height *= int(tensor.shape[index])
-    return ((height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-
-
 def _decode_l1_gather_memcfg(tensor, ccl_manager):
     """Width-sharded L1 gather layout for the decode all-reduce, or None.
 
@@ -372,8 +365,6 @@ def _decode_l1_gather_memcfg(tensor, ccl_manager):
         shape = tensor.shape
         if len(shape) != 4:
             return None
-        from models.demos.gemma4.tt.rms_norm import width_shard_input_memcfg
-
         return width_shard_input_memcfg(ccl_manager.mesh_device, shape[-1], ttnn.TILE_SIZE)
     except (AttributeError, RuntimeError, TypeError, ValueError) as error:
         logger.debug(f"Gemma4 L1 gather unavailable ({error}); using caller layout")
@@ -443,7 +434,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     # ourselves so the reduce_scatter takes its swept worker/chunk/buffer tuning
     # and the all_gather can land in the residual island's L1 width-shard. Every
     # other mesh, model and height keeps the fused ttnn.all_reduce below.
-    if ccl_manager.tuned_decode and _physical_tile_padded_height(tensor) == ttnn.TILE_SIZE:
+    if ccl_manager.tuned_decode and activation_physical_height(tensor.shape) == ttnn.TILE_SIZE:
         rs_workers, rs_chunks, rs_buffers = _RS_TUNING_WH_T3K_DECODE
         # Only choose the gather layout when the caller did not: an explicit
         # memory_config is a requirement, not a default to improve on.

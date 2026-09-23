@@ -91,13 +91,6 @@ def create_tt_model(
     if num_layers is not None:
         model_args.num_hidden_layers = num_layers
 
-    # The swept decode matmul table loops 31B's 128k answer into a repetition
-    # collapse (quote A, then ``la'`` to the token limit) while main is clean at
-    # the same length and the same Linear topology. precision_overrides.json
-    # records both halves of the pair -- "Linear+sweep DEGENERATES (546 chars,
-    # 39x loop)" -- and ``ccl_topology`` only fixes the Ring half. Scoped to the
-    # measured configuration: 31B, Wormhole, at or above the same 128k threshold
-    # the Linear pin uses. 12B keeps the table at every length.
     # Multi-user decode tuning wedges the mesh; see
     # dram_sharded.decode_tuning_enabled. 31B batch-32 hung 6 of 11 runs and
     # batch-8 3 of 3, at iterations 31/118/166 -- a race, not a fixed-capacity
@@ -107,6 +100,13 @@ def create_tt_model(
     # built so every decode gate reads the same answer.
     model_args.gemma4_decode_tuning_disabled = bool(max_batch_size is not None and int(max_batch_size) > 1)
 
+    # The swept decode matmul table loops 31B's 128k answer into a repetition
+    # collapse (quote A, then ``la'`` to the token limit) while main is clean at
+    # the same length and the same Linear topology. precision_overrides.json
+    # records both halves of the pair -- "Linear+sweep DEGENERATES (546 chars,
+    # 39x loop)" -- and ``ccl_topology`` only fixes the Ring half. Scoped to the
+    # measured configuration: 31B, Wormhole, at or above the same 128k threshold
+    # the Linear pin uses. 12B keeps the table at every length.
     model_args.gemma4_swept_decode_disabled = bool(
         not is_blackhole()
         and normalize_gemma4_model_key(model_path) == "31B"

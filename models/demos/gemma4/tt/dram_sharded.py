@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
 
 TILE_SIZE = 32
 # P150 Blackhole DRAM bank count. Wormhole meshes differ — can_dram_shard is
@@ -676,10 +677,10 @@ def interleaved_mlp_prefill_config(m, k, n):
 
 # ── Tuned decode matmul path: dense Gemma4 12B / 31B on a Wormhole T3K ───────
 #
-# Ported from ign/gemma-4_12B_31B_optim_exps. Like the prefill path above,
-# everything here is reached only through ``is_t3k_dense_target`` (threaded to
-# the call sites as a ``tuned_decode`` flag), so every other (SKU, variant)
-# keeps the program config it picks today.
+# Like the prefill path above, everything here is reached only through
+# ``swept_decode_enabled`` / ``decode_tuning_enabled`` (threaded to the call
+# sites as a ``tuned_decode`` flag), so every other (SKU, variant) keeps the
+# program config it picks today.
 
 # Swept decode matmul program configs for Wormhole T3K (1x8), keyed by the
 # per-device (K, N) of each decode projection.
@@ -705,7 +706,8 @@ def interleaved_mlp_prefill_config(m, k, n):
 #   31B (bfp8 everywhere)
 #     qkv sliding   5376x2048   65.6 -> 59.1 us   (-10%)
 #
-# 31B's gate_up / down_proj / o_proj / qkv-global are deliberately ABSENT: they
+# 31B has no entries. Its qkv-sliding one was removed (see the note in the
+# table); its gate_up / down_proj / o_proj / qkv-global were never added: they
 # already stream at ~209 GB/s (73% of Wormhole peak) and every swept arm tied or
 # lost to what ships. The 12B entries exist because its bf16 weights only reach
 # ~188 GB/s (65%), which is where the headroom is. Do not "complete" this table
@@ -731,14 +733,13 @@ _WH_T3K_DECODE_1D = {
 }
 
 
-def wh_t3k_decode_progcfg(mesh_device, k, n, tuned_decode=None):
+def wh_t3k_decode_progcfg(mesh_device, k, n, tuned_decode=False):
     """Swept 1D-mcast decode program config for ``(k, n)``, or ``None``.
 
-    ``tuned_decode`` is the caller's resolved ``is_t3k_dense_target``; passing
-    ``None`` falls back to the mesh-only half of that gate, which is all the
-    swept table itself needs (its keys are 12B/31B per-device shapes).
+    ``tuned_decode`` is the caller's resolved decode gate
+    (``swept_decode_enabled``); a shape not in the table also returns ``None``.
     """
-    if not (is_t3k_mesh(mesh_device) if tuned_decode is None else tuned_decode):
+    if not tuned_decode:
         return None
     entry = _WH_T3K_DECODE_1D.get((int(k), int(n)))
     if entry is None:
@@ -760,7 +761,7 @@ def wh_t3k_decode_progcfg(mesh_device, k, n, tuned_decode=None):
 def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE, dest_acc=None, tuned_decode=False):
     """Tuned narrow-N decode config, or ``None`` to keep ttnn's auto pick.
 
-    ``tuned_decode`` is the ``is_t3k_dense_target`` gate. It is required rather
+    ``tuned_decode`` is the ``swept_decode_enabled`` gate. It is required rather
     than inferred: the generic picker below is shape-driven and would otherwise
     fire on N150/N300/Blackhole meshes, where it is unmeasured. The E2B numbers
     in the accumulator note came from exactly that.
@@ -805,8 +806,6 @@ def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE, dest_acc=None, tuned
     # fixed fp32_dest_acc_en overrode the per-model policy on exactly the meshes
     # 1x1 could not catch. That cost E2B's via-harness 0.9884 -> 0.9802 at
     # 1x2/1x8 while 1x1, where this config does not fire, was untouched.
-    from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
-
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -848,12 +847,12 @@ def wide_vocab_lm_head_ckc(weight):
 def lm_head_decode_config(mesh_device, m, k, n, weight=None, tuned_decode=False):
     """Tuned last-token LM head with safe HiFi3 + fp32 destination accumulation.
 
-    Gated on ``is_t3k_dense_target`` like the rest of the decode path: the LM
+    Gated on ``swept_decode_enabled`` like the rest of the decode path: the LM
     head runs on every SKU and this fidelity pairing was measured on a T3K.
     """
     if not tuned_decode:
         return None, None, None
-    if max(1, math.ceil(m / TILE_SIZE)) > 1:
+    if int(m) > TILE_SIZE:
         return None, None, None
     if n > 64 * 1024:
         # Too wide for the 1D-mcast program config; keep an explicit fidelity.

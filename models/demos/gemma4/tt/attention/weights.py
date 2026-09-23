@@ -51,9 +51,10 @@ class AttentionWeights:
     # operations.py. False everywhere else, which keeps every other SKU and
     # variant on the plain ttnn.linear it runs today.
     tuned_prefill: bool = False
-    # Same gate, for the tuned decode matmul path. Held separately from
-    # ``tuned_prefill`` only for readability -- both resolve to
-    # ``is_t3k_dense_target``.
+    # Swept decode matmul path. Both fields currently follow
+    # ``swept_decode_enabled`` (see ``load_attention_weights``); SharedMLP keeps
+    # ``_tuned_prefill`` on ``is_t3k_dense_target`` so 31B 128k still gets
+    # tuned prefill MLP. Do not split these without re-checking that load site.
     tuned_decode: bool = False
     # fp32 destination accumulation on the m<=32 projections; see
     # single_tile_matmul_ckc. Per model, and only consulted on the tuned target.
