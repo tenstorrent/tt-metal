@@ -61,6 +61,8 @@ class FusedMLP:
             not fuse_prepare or gu_workers != 8 or self.tuning.reader == "original"
         ):
             raise ValueError("Weight staging requires a complete GU8 loop with a tuned reader")
+        if self.tuning.alias_projection_cbs and (not fuse_prepare or gu_workers != 8 or reuse_scratch):
+            raise ValueError("Static projection aliasing requires the complete GU8 layer loop")
         self.gu_workers = gu_workers
         self.layers = tuple(layers)
         self.reuse_scratch = reuse_scratch
@@ -334,6 +336,22 @@ class FusedMLP:
         if self.fuse_output:
             cb(6, 4 * self.tuning.buffers, ttnn.bfloat16, self.projection_grid)
             cb(7, 64 * self.tuning.buffers, ttnn.bfloat8_b, self.projection_grid)
+        if self.tuning.alias_projection_cbs:
+            # The dependent O/GU/down phases have disjoint lifetimes. Reserve
+            # static storage once; the loop installs each index's exact ring
+            # capacity before its first use. No persistent prefill allocation.
+            for group in ((0, 4, 6), (1, 3, 7), (24, 25)):
+                shared = [item for item in cbs if item.core_ranges == self.projection_grid
+                          and item.format_descriptors[0].buffer_index in group]
+                if len(shared) != len(group):
+                    raise ValueError("Incomplete projection CB alias group")
+                from math import lcm
+                alignment = lcm(*(item.format_descriptors[0].page_size for item in shared))
+                size = max(item.total_size for item in shared)
+                cbs = [item for item in cbs if item not in shared]
+                cbs.append(ttnn.CBDescriptor(total_size=((size + alignment - 1) // alignment) * alignment,
+                    core_ranges=self.projection_grid,
+                    format_descriptors=[item.format_descriptors[0] for item in shared]))
         cb(31, 1, ttnn.uint32, self.projection_grid)
         for index in (0, 1, 2):
             cb(index, 4, ttnn.bfloat16, self.sfpu_grid)

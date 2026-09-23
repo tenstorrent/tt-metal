@@ -110,6 +110,13 @@ class FusedHead:
                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)],
                 )
             )
+        if self.tuning.alias_projection_cbs:
+            # Final-block reload consumes each partial subblock before the
+            # output pack overwrites that same subblock. Both rings are64 tiles.
+            partial = next(item for item in cbs if item.format_descriptors[0].buffer_index == 24)
+            output = next(item for item in cbs if item.format_descriptors[0].buffer_index == 16)
+            partial.format_descriptors = [*partial.format_descriptors, *output.format_descriptors]
+            cbs.remove(output)
         program.kernels = [*program.kernels, *kernels]
         program.cbs = [*program.cbs, *cbs]
         program.semaphores = [

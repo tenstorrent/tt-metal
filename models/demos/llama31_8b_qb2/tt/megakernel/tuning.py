@@ -15,6 +15,7 @@ class ProjectionTuning:
     bank_vc: bool = False
     prefetch_gu_blocks: int = 0
     prefetch_down_blocks: int = 0
+    alias_projection_cbs: bool = False
 
     def __post_init__(self):
         if any(n not in (0, 2, 4, 6) for n in (self.prefetch_gu_blocks, self.prefetch_down_blocks)):
@@ -31,6 +32,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("ALIAS_PROJECTION_CBS", str(int(self.alias_projection_cbs))),
             ("PROJECTION_READER", str(("original", "coalesced", "pipelined", "pipelined_rows").index(self.reader))),
             ("PROJECTION_HOIST_PACK", str(int(self.hoist_pack_config))),
             ("PROJECTION_BANK_VC", str(int(self.bank_vc))),

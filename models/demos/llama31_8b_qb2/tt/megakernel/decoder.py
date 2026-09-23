@@ -241,6 +241,8 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
     is_loop = mode in ("decoder_loop", "decoder_loop_embedding", "decoder_loop_head", "decode_token")
     if tuning is not None and (tuning.prefetch_gu_blocks or tuning.prefetch_down_blocks) and not is_loop:
         raise ValueError("Weight staging requires a device layer loop")
+    if tuning is not None and tuning.alias_projection_cbs and not is_loop:
+        raise ValueError("Static projection aliasing requires the device layer loop")
     if is_loop and kv_cache is None:
         raise ValueError("The loop must bind all KV allocations before warmup and capture")
     model.layers = experimental_layers(

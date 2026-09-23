@@ -89,6 +89,22 @@ void kernel_main() {
     const uint32_t count = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 6);
 #if defined(COMPILE_FOR_NCRISC)
     snapshot_buffers(state, get_arg_val<uint32_t>(LOOP_RT_OFFSET + 1), get_arg_val<uint32_t>(LOOP_RT_OFFSET + 2));
+#if ALIAS_PROJECTION_CBS && defined(PROJECTION)
+    // A multi-format static allocation has one physical extent. Give each
+    // phase its original logical ring, preserving exact block wrap points.
+    const auto capacity = [&](uint32_t cb, uint32_t pages) {
+        state[4 * cb + 1] = pages * state[4 * cb + 3];
+        state[4 * cb + 2] = pages;
+    };
+    capacity(0, 8 * PROJECTION_BUFFERS);
+    capacity(4, 7 * PROJECTION_BUFFERS);
+    capacity(6, 4 * PROJECTION_BUFFERS);
+    capacity(1, 224 * PROJECTION_BUFFERS);
+    capacity(3, 112 * PROJECTION_BUFFERS);
+    capacity(7, 64 * PROJECTION_BUFFERS);
+    capacity(24, 28);
+    capacity(25, 16);
+#endif
 #if defined(PROFILE_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
     state[482] = 0;
 #endif
@@ -122,6 +138,11 @@ void kernel_main() {
         layer_barrier();
 #endif
         unified_kernels::sync_riscs_exit<>(start_sync);
+#if ALIAS_PROJECTION_CBS && defined(PROJECTION)
+        // Start release guarantees NCRISC finished the configuration snapshot.
+        // Later layers already reconfigure at the preceding end boundary.
+        if (layer == 0) { unified_kernels::reconfig_cb_interfaces(state); }
+#endif
         auto* rt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(0));
 #if LOOP_PATCH == 1
         rt[6] = first + layer;  // MLP/O weight row
