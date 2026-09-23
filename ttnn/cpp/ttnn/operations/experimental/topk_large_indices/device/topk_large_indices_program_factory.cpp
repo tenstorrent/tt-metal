@@ -5,11 +5,15 @@
 #include "topk_large_indices_program_factory.hpp"
 #include "kernels/topk_large_indices_runtime_args.hpp"
 
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <bit>
+#include <limits>
 #include <optional>
 #include <tuple>
 
@@ -46,7 +50,7 @@ RuntimeShapeArgs get_runtime_shape_args(const Tensor& input, std::optional<uint3
     const uint32_t n = shape[shape.rank() - 1];
     // Number of columns to actually read and scan per row. Defaults to the full physical width n; a
     // valid_length bounds it to the real prefix so the stale tail is never read or ranked. The row STRIDE
-    // (input_row_bytes) stays n so per-row addressing is unchanged — only how much we pull from each row shrinks.
+    // (input_row_bytes) stays n so per-row addressing is unchanged; only how much we pull from each row shrinks.
     const uint32_t search_len = valid_length.value_or(n);
     return RuntimeShapeArgs{
         .num_rows = flattened_rows_excluding_last_dim(shape),
@@ -74,6 +78,49 @@ uint32_t rows_for_core(
     return 0;
 }
 
+uint32_t max_tree_rounds_for(uint32_t num_cores) {
+    uint32_t rounds = 0;
+    while ((2u << rounds) <= num_cores) {
+        ++rounds;
+    }
+    return rounds;
+}
+
+// Merge tree of one row's column segments: in round r segment i with i % 2^(r+1) == 0 receives the
+// survivors of segment i + 2^r. Segment 0 receives in every round and writes the row.
+struct TreePosition {
+    uint32_t num_recv_rounds = 0;
+    bool sends_survivor = false;
+    CoreCoord parent_physical{0, 0};
+    std::vector<CoreCoord> child_physical;
+};
+
+TreePosition tree_position(
+    const std::vector<CoreRowAssignment>& assignments,
+    uint32_t core_index,
+    uint32_t max_tree_rounds,
+    const tt::tt_metal::IDevice& device) {
+    TreePosition position;
+    position.child_physical.assign(max_tree_rounds, CoreCoord{0, 0});
+    const auto& assignment = assignments[core_index];
+    if (assignment.num_rows == 0 || assignment.num_segments == 1) {
+        return position;
+    }
+    const uint32_t rounds = static_cast<uint32_t>(std::countr_zero(assignment.num_segments));
+    const uint32_t segment = assignment.segment_index;
+    position.num_recv_rounds = segment == 0 ? rounds : static_cast<uint32_t>(std::countr_zero(segment));
+    position.sends_survivor = segment != 0;
+    if (position.sends_survivor) {
+        position.parent_physical =
+            device.worker_core_from_logical_core(assignments[core_index - (1u << position.num_recv_rounds)].core);
+    }
+    for (uint32_t round = 0; round < position.num_recv_rounds; ++round) {
+        position.child_physical[round] =
+            device.worker_core_from_logical_core(assignments[core_index + (1u << round)].core);
+    }
+    return position;
+}
+
 void set_runtime_args(
     tt::tt_metal::Program& program,
     TopkLargeIndicesSharedVariables& shared,
@@ -85,29 +132,59 @@ void set_runtime_args(
     reader_args[topk_common_args::input_row_bytes] = runtime_args.input_row_bytes;
     tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id)[topk_common_args::compute_search_length] =
         runtime_args.search_len;
-    // Width and prefix changes do not change the row assignment.
-    if (shared.num_rows == runtime_args.num_rows) {
+    // The row assignment depends on the row count and, through the column split, on the searched chunk count.
+    const uint32_t num_chunks = tt::div_up(runtime_args.search_len, shared.llk_k);
+    if (shared.num_rows == runtime_args.num_rows && shared.num_chunks == num_chunks) {
         return;
     }
-    const auto assignments = derive_core_row_assignments(shared.core_grid, runtime_args.num_rows);
+    const auto assignments = derive_core_row_assignments(shared.core_grid, runtime_args.num_rows, num_chunks);
     TT_FATAL(
         assignments.size() == shared.cores.size(),
         "topk_large_indices runtime assignment core count {} differs from compiled core count {}",
         assignments.size(),
         shared.cores.size());
+    const auto* device = input.device();
     for (uint32_t i = 0; i < assignments.size(); ++i) {
-        const auto& [core, start_row, rows] = assignments[i];
+        const auto& assignment = assignments[i];
         TT_FATAL(
-            core == shared.cores[i],
+            assignment.core == shared.cores[i],
             "topk_large_indices runtime assignment core {} differs from compiled core {} at position {}",
-            core,
+            assignment.core,
             shared.cores[i],
             i);
-        tt::tt_metal::SetRuntimeArgs(program, shared.reader_kernel_id, core, {start_row, rows});
-        tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, core, {rows});
-        tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, {start_row, rows});
+        const auto position = tree_position(assignments, i, shared.max_tree_rounds, *device);
+        const uint32_t num_recv_rounds = position.num_recv_rounds;
+        const uint32_t sends_survivor = position.sends_survivor ? 1u : 0u;
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            shared.reader_kernel_id,
+            assignment.core,
+            {assignment.start_row, assignment.num_rows, assignment.seg_first_chunk, assignment.seg_end_chunk});
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            shared.compute_kernel_id,
+            assignment.core,
+            {assignment.num_rows,
+             assignment.seg_first_chunk,
+             assignment.seg_end_chunk,
+             num_recv_rounds,
+             sends_survivor});
+        // Fixed length: runtime argument counts cannot change between launches of a cached program.
+        std::vector<uint32_t> writer_args = {
+            assignment.start_row,
+            assignment.num_rows,
+            num_recv_rounds,
+            sends_survivor,
+            static_cast<uint32_t>(position.parent_physical.x),
+            static_cast<uint32_t>(position.parent_physical.y)};
+        for (const auto& child : position.child_physical) {
+            writer_args.push_back(static_cast<uint32_t>(child.x));
+            writer_args.push_back(static_cast<uint32_t>(child.y));
+        }
+        tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, assignment.core, writer_args);
     }
     shared.num_rows = runtime_args.num_rows;
+    shared.num_chunks = num_chunks;
 }
 
 }  // namespace
@@ -128,7 +205,45 @@ ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::FusedSegmented;
 }
 
-std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows) {
+std::vector<CoreRowAssignment> derive_core_row_assignments(
+    const CoreRangeSet& core_grid, uint32_t num_rows, uint32_t num_chunks) {
+    TT_FATAL(num_rows > 0, "topk_large_indices requires at least one row of work");
+    TT_FATAL(num_chunks > 0, "topk_large_indices requires at least one chunk per row");
+    const auto cores = corerange_to_cores(core_grid, std::nullopt, true);
+    const uint64_t num_cores = cores.size();
+
+    // Largest power-of-two column split that still gives every (row, segment) its own core and every
+    // segment at least one whole K chunk. Rows that are not fewer than the cores keep the row split.
+    uint32_t num_segments = 1;
+    while (static_cast<uint64_t>(num_rows) * (2ull * num_segments) <= num_cores && 2u * num_segments <= num_chunks) {
+        num_segments *= 2;
+    }
+
+    std::vector<CoreRowAssignment> assignments;
+    assignments.reserve(cores.size());
+    if (num_segments > 1) {
+        const uint64_t num_units = static_cast<uint64_t>(num_rows) * num_segments;
+        for (uint64_t unit = 0; unit < cores.size(); ++unit) {
+            if (unit >= num_units) {
+                assignments.push_back(CoreRowAssignment{.core = cores[unit]});
+                continue;
+            }
+            const uint32_t segment = static_cast<uint32_t>(unit % num_segments);
+            // Whole chunks split as evenly as possible; the last segment's last chunk carries the row tail.
+            const uint64_t seg_first_chunk = static_cast<uint64_t>(segment) * num_chunks / num_segments;
+            const uint64_t seg_end_chunk = static_cast<uint64_t>(segment + 1) * num_chunks / num_segments;
+            assignments.push_back(CoreRowAssignment{
+                .core = cores[unit],
+                .start_row = static_cast<uint32_t>(unit / num_segments),
+                .num_rows = 1,
+                .seg_first_chunk = static_cast<uint32_t>(seg_first_chunk),
+                .seg_end_chunk = static_cast<uint32_t>(seg_end_chunk),
+                .segment_index = segment,
+                .num_segments = num_segments});
+        }
+        return assignments;
+    }
+
     const auto work_split = tt::tt_metal::split_work_to_cores(core_grid, num_rows, true);
     const auto num_active_cores = std::get<0>(work_split);
     const auto& core_group_1 = std::get<2>(work_split);
@@ -137,9 +252,6 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& c
     const auto num_rows_per_core_group_2 = std::get<5>(work_split);
     TT_FATAL(num_active_cores > 0, "topk_large_indices requires at least one row of work");
 
-    const auto cores = corerange_to_cores(core_grid, std::nullopt, true);
-    std::vector<CoreRowAssignment> assignments;
-    assignments.reserve(cores.size());
     uint32_t start_row = 0;
     for (const auto& core : cores) {
         const uint32_t rows =
@@ -149,7 +261,12 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& c
             "topk_large_indices assigned {} rows to a core, expected at most {}",
             rows,
             num_rows_per_core_group_1);
-        assignments.push_back(CoreRowAssignment{.core = core, .start_row = start_row, .num_rows = rows});
+        assignments.push_back(CoreRowAssignment{
+            .core = core,
+            .start_row = start_row,
+            .num_rows = rows,
+            .seg_first_chunk = 0,
+            .seg_end_chunk = std::numeric_limits<uint32_t>::max()});
         start_row += rows;
     }
     TT_FATAL(start_row == num_rows, "topk_large_indices assigned {} rows, expected {}", start_row, num_rows);
@@ -181,6 +298,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
     // Reader-to-compute mailbox for the derived chunk count and tail length. It also receives the metadata read.
     constexpr uint32_t cb_meta = tt::CBIndex::c_3;
+    // Column-split merge tree: a child's unfused [values, indices] survivor tiles land here (one slot, so the
+    // address is identical on every core), and leave a sending core through cb_send.
+    constexpr uint32_t cb_landing = tt::CBIndex::c_4;
+    constexpr uint32_t cb_send = tt::CBIndex::c_5;
 
     const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
@@ -190,6 +311,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t indices_slice_bytes = row_slice_elements * indices.element_size();
     const uint32_t indices_row_bytes = k * indices.element_size();
     const uint32_t indices_cb_row_bytes = llk_k * indices.element_size();
+    constexpr uint32_t survivor_tile_bytes = tt::constants::TILE_HW * sizeof(uint32_t);
+    const uint32_t survivor_tiles = 2 * tiles_per_sequence;
+    const uint32_t survivor_bytes = survivor_tiles * survivor_tile_bytes;
 
     const uint32_t cb_depth = 2;
     const auto input_cb_config =
@@ -220,6 +344,19 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         tt::tt_metal::CreateCircularBuffer(program, all_cores, meta_cb_config);
     }
 
+    const auto create_survivor_cb = [&](uint8_t cb) {
+        const auto survivor_cb_config =
+            // Raw 32 bit words: the index tiles are integers and must not pass through the float packer.
+            tt::tt_metal::CircularBufferConfig(survivor_bytes, {{cb, tt::DataFormat::UInt32}})
+                .set_page_size(cb, survivor_tile_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, survivor_cb_config);
+    };
+    create_survivor_cb(cb_landing);
+    create_survivor_cb(cb_send);
+
+    const uint32_t credit_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    const uint32_t data_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
     std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
     interleaved_accessor_args(input).append_to(reader_compile_args);
     // Keep this block fixed-width so the kernel can use direct compile-argument offsets. The scalar path's
@@ -239,6 +376,12 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);
+    compute_compile_args.push_back(cb_landing);
+    compute_compile_args.push_back(cb_send);
+    // Landed survivors are raw 32-bit words; the default Float32 unpack path would round them through Tf32.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    unpack_to_dest_mode[cb_landing] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
@@ -248,6 +391,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .fp32_dest_acc_en = true,
             // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
             .dst_full_sync_en = true,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_args});
 
     std::vector<uint32_t> writer_compile_args = {
@@ -258,6 +402,12 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         output_slices_per_row,
         indices_slice_bytes};
     interleaved_accessor_args(indices).append_to(writer_compile_args);
+    writer_compile_args.push_back(cb_landing);
+    writer_compile_args.push_back(cb_send);
+    writer_compile_args.push_back(credit_semaphore_id);
+    writer_compile_args.push_back(data_semaphore_id);
+    writer_compile_args.push_back(survivor_tiles);
+    writer_compile_args.push_back(survivor_bytes);
 
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -272,7 +422,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .core_grid = all_cores,
         .cores = cores,
         .input_shape = input.logical_shape(),
-        .valid_length = operation_attributes.valid_length};
+        .valid_length = operation_attributes.valid_length,
+        .llk_k = llk_k,
+        .max_tree_rounds = max_tree_rounds_for(static_cast<uint32_t>(cores.size()))};
     const uint32_t meta_addr =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel, {input.buffer()->address(), meta_addr, 0, 0});
@@ -304,7 +456,7 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
 
     // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
     // are runtime controls: update their common arguments when either changes, and
-    // rebuild the per-core row assignment only when the flattened row count changes.
+    // rebuild the per-core assignment only when the row or searched chunk count changes.
     if (shared.input_shape == input.logical_shape() && shared.valid_length == operation_attributes.valid_length) {
         return;
     }
