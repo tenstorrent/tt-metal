@@ -1,8 +1,8 @@
 # CosyVoice2 TTNN bring-up — status handoff
 
-Written 2026-09-18, last updated 2026-09-22, for a future Claude Code session
+Written 2026-09-18, last updated 2026-09-23, for a future Claude Code session
 picking this up (this one may not survive). **Start with "STATE AS OF
-2026-09-22" right below the header block; where it conflicts with anything
+2026-09-23" right below the header block; where it conflicts with anything
 further down, it wins.** Everything below is grounded in
 real, verified repo/test state — verify it again yourself before trusting it,
 same discipline this whole bring-up has used. Don't take this file's claims
@@ -35,7 +35,448 @@ the reference repo" below, this matters a lot for where to look next.
 freshly this session, matters for both hardware-bug sections below (both are
 Wormhole-specific or Wormhole-relevant).
 
-## STATE AS OF 2026-09-22 (read this first; supersedes conflicting text below, including the 2026-09-21 section)
+## STATE AS OF 2026-09-23 (read this first; supersedes conflicting text below, including the 2026-09-22 section)
+
+Three items from the 2026-09-22 "not started" list closed out this round: SineGen2
+cumsum-vs-mod-1 (closed, no code change), torch-LLM silence check (**stayed open — real
+finding, not a close**, see below), and `release_caches()` for the DRAM leak (done,
+validated, committed). This round's scripts are in `scripts/perf_2026_09_23/`.
+
+### Git state
+
+Committed this round (2026-09-23), NOT pushed: `tt/geometry_cache.py` (new),
+`tt/hifigan/conv.py`, `tt/hifigan/upsample.py`, `tests/pcc/test_geometry_cache.py`,
+`scripts/perf_2026_09_23/dram_growth_check.py`. **Deliberately NOT committed** (no code
+change, doc-only per the user's instruction this round): `scripts/perf_2026_09_23/
+sinegen2_cumsum_mod1_check.py`, `torch_llm_silence_check.py`,
+`torch_llm_silence_decode_check.py`, and this file's edits. Check `git log`/`git status`
+before trusting either list.
+
+### Item 1: SineGen2 cumsum-vs-mod-1 — CLOSED, no code change
+
+Real-hardware `TtSineGen2._upsample`, monkey-patched to insert `ttnn.subtract(phase,
+ttnn.floor(phase))` before the existing centering-trick upsample, compared against the
+same `torch_reference` the existing passing test uses, at mel_frames 250/2000/3500:
+explicit mod-1 wrapping **consistently hurt** accuracy at every length (no-mod1 PCC
+0.9987/0.9973/0.9822 vs mod1 PCC 0.9339/0.9291/0.9159). The existing centering trick
+(subtract the window's own center value before the matmul, add back after) already
+mitigates the unbounded-phase-magnitude precision issue better than literal mod-1
+wrapping would. No production change needed.
+
+### Item 2: torch-LLM silence check — NOT CLOSED, a real finding instead
+
+The 2026-09-22 open lead ("untested: whether a torch LLM would also emit the trailing
+silence" for the 4.36s "Please close the door..." / 0.554-speaker-similarity utterance)
+was first checked by GENERATED TOKEN COUNT alone (torch-CPU 119 vs TT 109, ratio 1.09x)
+and reported as "same regime" — **that was wrong methodology**: token count doesn't
+distinguish extra speech from extra silence. Decoding both token sequences through the
+same real flow+HiFT pipeline (bf16 flow w/ force-patched bf16 embedding, fp32 HiFT —
+this round's validated pipeline, same shape as `wer_repro_and_stage_breakdown.py`) and
+measuring trailing silence directly (20ms-frame RMS envelope, -40dB relative to the
+waveform's own peak frame) gives a different answer:
+
+- TT tokens (109 tok): 4.36s total audio, **1.74s trailing silence**.
+- torch-CPU tokens (105 tok, real fine-tuned backbone via `HF_MODEL`, same RAS sampling,
+  seed=0, reproducible bit-for-bit across two runs in the same process): 4.20s total
+  audio, **only 0.16s trailing silence**.
+
+These are NOT comparable. The direct audio-level check does not confirm the
+model+prompt-property hypothesis — if anything it points the other way: a fresh,
+real-backbone, fp32 CPU generation of the identical fine-tuned weights does not
+reproduce anything like TT's trailing silence for this prompt/target. **Open lead, not
+scoped further this round**: something in the TT generation path specifically (bf16
+backbone precision affecting RAS/nucleus sampling's borderline choices at each step,
+cascading into a longer, more silence-prone token sequence — unverified, just the
+likeliest mechanism given everything else in this pipeline that's already known to be
+bf16-sensitive) is the more likely candidate now, not an inherent property of the
+model+prompt combination. Also noted but not chased: torch-CPU generation was NOT
+reproducible ACROSS separate process runs (119 tokens on 2026-09-22, 105 tokens today,
+same seed/code) even though it IS perfectly reproducible WITHIN one process (two runs,
+same loaded weights, byte-identical token sequences) — likely multi-threaded CPU BLAS
+reduction-order non-determinism flipping a borderline RAS choice and cascading, but this
+is unverified and secondary to the main finding above.
+
+Scripts: `torch_llm_silence_check.py` (the superseded token-count-only check, kept for
+the record) and `torch_llm_silence_decode_check.py` (the real answer, above). Neither is
+committed — no code change resulted, per the user's instruction this round.
+
+#### Same-day follow-up: is the gap bf16-caused, and is it narrow or systemic?
+
+Two small, scoped checks before leaving this as an open lead:
+
+**fp32 TT backbone comparison — not attempted, no cheap lever exists.** Investigated
+whether `TtQwen2LM`/`ModelArgs` can run the decoder in fp32 instead of bf16 for a
+one-off comparison. They can't, cleanly: `TtQwen2LM`'s `dtype=` constructor arg is
+overridden by `ModelArgs.optimizations`'s `DecodersPrecision.accuracy(...)` preset,
+whose `PrecisionSetting` enum only spans `{BFP4, BFP8, BF16}` — no FP32 member exists
+anywhere in `tt_transformers`' precision system for a plain (non-Llama-family) model.
+`attention.py` also has several hardcoded `ttnn.typecast(..., bfloat16)` calls around
+RoPE and a hardcoded `bfloat4_b` for TG selection matrices, independent of any dtype
+argument. Getting real fp32 would mean adding an `FP32` `PrecisionSetting` member, a
+custom `DecodersPrecision`, and patching the hardcoded RoPE/embedding/norm casts —
+moderate, multi-file surgery in `models/tt_transformers/`, not a one-line flag. Given
+the instruction to keep this scoped small, **not attempted**; the bf16 hypothesis stays
+an unverified guess, not confirmed or ruled out.
+
+**Multi-sentence trailing-silence comparison — mixed picture, genuinely unresolved, not
+"narrow."** Same TT-vs-torch-CPU method
+(`scripts/perf_2026_09_23/trailing_silence_multi_sentence.py`), run on this round's
+regular four-sentence set (the original 4.36s clip re-confirmed, plus three sentences of
+increasing length never tested this way before):
+
+| clip | text (truncated) | length | TT trailing | torch trailing | gap (TT − torch) | TT/torch ratio |
+|---|---|---|---|---|---|---|
+| 1 | "Please close the door..." | 4.36s | 1.74s | 0.16s | +1.58s | ~10.9x |
+| 2 | "We are going to the park..." | 6.32s | 0.40s | 0.48s | −0.08s | ~0.83x |
+| 3 | "The weather was nice yesterday..." | 7.36s | 0.60s | 0.38s | +0.22s | ~1.58x |
+| 4 | "My sister called me last night..." | 11.36s | 0.54s | 0.02s | +0.52s | ~27x |
+
+An earlier pass through this data called it "narrow, not systemic" by absolute gap size
+alone — that rounds off two things the data actually shows, and is corrected here:
+
+- **Directional, not random scatter, even at n=4.** 3 of 4 clips have a positive gap
+  (TT trailing silence exceeds torch's); only clip 2 is negative, and only slightly
+  (−0.08s). A small sample, but not a coin flip either.
+- **Absolute and relative rankings disagree.** By absolute gap, clip 1 (+1.58s) is the
+  clear outlier and clip 4 (+0.52s) looks minor. By ratio, it inverts: clip 4's torch-side
+  trailing silence is nearly zero (0.02s), so its modest absolute excess is a **~27x**
+  relative mismatch — larger in ratio than clip 1's ~11x. Clip 1 is not uniquely
+  bad; it's just the clip where the absolute gap happens to be largest.
+
+**Conclusion: this is a genuine, unresolved loose end, not a closed "clip-specific"
+finding.** A directional trend across most of a small sample, with absolute and relative
+views that disagree on which clip is "worst," is not evidence of a systemic TT-vs-torch
+divergence, but it is not evidence of a narrow one-clip anomaly either — the data doesn't
+support rounding either way. No new investigation this round (none was asked for); flagged
+for whoever picks this up later. No code change, nothing blocking streaming.
+
+Cross-process torch-CPU non-determinism (119 tokens on 2026-09-22 vs 105 tokens on
+2026-09-23, same seed/code, only reproducible within a single process) is a known loose
+end, flagged, no action taken.
+
+### Item 3: DRAM leak (`release_caches()`) — DONE, validated, committed
+
+`TtConv1d`/`TtConvTranspose1d` cached prepared conv weights (and the resolved
+`(weight, bias, compute_config)` triple) per `(input_length, batch_size)` geometry with
+no eviction — measured 90.9 → 134.1 MB/bank of unbounded growth across four utterance
+lengths in the 2026-09-21 regression run. Fixed with a new `GeometryWeightCache`
+(`tt/geometry_cache.py`): LRU, **threshold-based eviction on real free-DRAM pressure**
+(not a per-utterance schedule, per explicit instruction — checks
+`ttnn.get_memory_view(device, ttnn.BufferType.DRAM).total_bytes_free_per_bank` on every
+`put()`, default floor `COSYVOICE2_DRAM_FREE_THRESHOLD_MB=150`), designed to be reused
+as-is by streaming's future chunk-shape churn, not a one-off patch. Both conv classes
+refactored onto it (`_prep_cache`, `_verified_config`, careful `discard()` vs `pop()`
+ownership-transfer logic where the two caches can alias the same tensors — see
+`TtConv1d._resolve`'s docstring), with `release_caches()` added to both for an explicit,
+all-at-once release at a session boundary.
+
+Validation, not just design:
+- 6 new tests in `tests/pcc/test_geometry_cache.py`: host-tier LRU/eviction logic, and
+  device-tier forced-eviction-then-correct-reprepare on real `TtConv1d`/
+  `TtConvTranspose1d` (byte-exact thresholds, not MB-rounded — a rounding-slack bug in an
+  earlier draft silently swallowed a tiny test tensor and made the eviction path never
+  fire; fixed).
+- The refactor broke 2 pre-existing tests (`test_conv1d_resolver_rejects_a_corrupted_
+  prepared_weight`, `test_conv_transpose1d_resolver_rejects_a_corrupted_prepared_weight`)
+  that indexed the old raw dict with `cache[key]`; fixed by adding `__getitem__` to
+  `GeometryWeightCache`. Full suite: **148/148 pass** after the fix.
+- Real DRAM measurement, two passes over the actual four-sentence regression set (real
+  LLM+flow+HiFT, real checkpoints, real whisper WER), `scripts/perf_2026_09_23/
+  dram_growth_check.py`:
+  - Default threshold (150 MB/bank free floor): growth +59.6 MB/bank (80.8→140.5),
+    WER `[0%, 0%, 0%, 2.78%]`. Eviction never fires — expected, this short a session
+    never gets DRAM-tight enough on a ~1 GB/bank device (12 banks) to cross a 150 MB
+    floor. The mechanism behaving correctly, not failing to bound anything.
+  - Aggressive threshold (forced to the post-construction free level, 882 MB/bank):
+    eviction genuinely fired, growth capped at +50.6 MB/bank, free DRAM bottomed out
+    right at the floor instead of continuing to fall. **WER identical to the
+    default-threshold pass** — proves eviction + re-prepare + re-verify does not corrupt
+    real synthesis under actual model-in-the-loop pressure, not just the synthetic
+    unit-test probes.
+- Honest caveat: at the shipped default (150 MB), this specific 4-sentence workload
+  doesn't exercise eviction at all. The safety net is proven correct but won't visibly
+  engage until DRAM usage grows further (longer sessions, or streaming's larger geometry
+  churn). Lowering the default is a tuning call, not a correctness one — not done this
+  round, nobody asked for it.
+
+### Streaming design, round 1: chunk-shape decision made, sized, boundary risk checked
+
+**Decision: bucketed padding + masks, not a fixed window.** Upstream CosyVoice2 streaming
+attends over the whole growing token prefix (not a bounded recent window) under
+chunk-causal masks; a fixed window would change the real per-chunk receptive field, an
+architectural deviation from upstream that would need its own accuracy validation to
+justify, not just TT-friendliness. Bucketing preserves the true receptive field while
+bounding the number of distinct device geometries (trace capture and
+`prepare_conv_weights`/the conv resolver both key on exact `(input_length, batch_size)`
+geometry — a raw growing-prefix implementation produces one new geometry per chunk,
+forever, defeating both). This is exactly the churn `GeometryWeightCache` (item 3, above)
+was built to absorb.
+
+**Item 1 — bucket sizing, real numbers** (`scripts/perf_2026_09_23/
+bucket_sizing_simulation.py`, pure Python, drives the real `GeometryWeightCache` class
+with a synthetic access trace — not a re-implementation). Real parameters: 25 Hz speech
+token rate, 25-token streaming hop, prompt ≈100 tokens (representative, not universal —
+flagged as a free parameter). Over a 30s utterance (30 chunks, prefix 125→850 tokens):
+
+| bucket scheme | distinct buckets hit | avg padding waste | max padding waste |
+|---|---|---|---|
+| linear step=32 | 24 | 14.9 tok (4.0%) | 31 tok (13.8%) |
+| linear step=64 | 13 | 30.9 tok (8.1%) | 62 tok (28.0%) |
+| linear step=128 | 7 | 62.9 tok (16.1%) | 121 tok (70.7%) |
+| geometric ×1.25 | 10 | 60.5 tok (11.7%) | 181 tok (24.2%) |
+| geometric ×1.5 | 6 | 120.8 tok (24.9%) | 344 tok (49.5%) |
+
+Doubles to 47/24/13/13/7 distinct buckets over 60s (60 chunks). **Recommend linear
+step=64 or geometric ×1.25** as the starting point — both land around 10-13 buckets per
+30s utterance with worst-case padding under 30%, a reasonable point on the
+bucket-count-vs-waste curve; final choice is a tuning call, not decided here.
+
+**PROVISIONAL — built entirely on an estimated, not measured, per-bucket DRAM cost; plan
+to re-measure for real once a bucketed encoder path actually exists.** Fed the real
+per-utterance bucket sequence (5 back-to-back 30s utterances, one session) into the real
+`GeometryWeightCache`, with the per-bucket DRAM cost estimated two ways (conservative:
+~1.0047 MB/bank, scaled down from the 2026-09-21 measurement's 14.4 MB/geometry by the
+fraction of convs this bucketing actually touches [3 of ~43 conv instances, i.e. ×3/43];
+pessimistic: the full 14.4 MB/geometry figure unscaled). **Result: 91-93% hit rate, zero
+eviction-caused re-misses, at BOTH estimates** — bucket reuse across utterances works, not
+just within one.
+
+Swept the per-bucket cost upward to find the actual breaking point where eviction starts
+hurting, and the arithmetic behind it (a correction to an earlier draft of this section,
+which stated a "4.7-13x" margin that does not reconcile with the numbers below — the "13"
+was a mistaken carry-over of the linear-64 bucket *count*, not a real margin figure):
+
+```
+total DRAM         = 1021 MB/bank        (measured, this round's device)
+threshold floor     =  150 MB/bank        (GeometryWeightCache's real default)
+available budget    = 1021 - 150 = 871 MB/bank
+
+linear step=64,      13 distinct buckets/30s  ->  871 / 13 = 67.0 MB/bucket breaking point
+geometric ×1.25,     10 distinct buckets/30s  ->  871 / 10 = 87.1 MB/bucket breaking point
+```
+(Both figures independently confirmed empirically by the sweep, not just this formula:
+hit rate stays 91.3%/93.3% with zero extra misses right up to 67.0/87.1 MB/bucket, then
+drops to 56.7%/66.7% at the next probed point above it.)
+
+```
+safety margin = breaking point / per-bucket cost estimate
+
+                          conservative (1.0047 MB)   pessimistic (14.4 MB)
+linear step=64  (67.0 MB)     67.0/1.0047 = 66.7x        67.0/14.4 = 4.65x
+geometric ×1.25 (87.1 MB)     87.1/1.0047 = 86.7x        87.1/14.4 = 6.05x
+```
+
+**Correct range: 4.65x to 86.7x**, not the earlier "4.7-13x". Even at the pessimistic
+per-bucket estimate, both candidate schemes stay comfortably under the point where
+eviction would start causing extra re-captures within a 5-utterance session — but again,
+this whole calculation rests on an ESTIMATED per-bucket cost, not a measurement, and
+should be re-run against a real number once a bucketed encoder path exists to measure.
+
+**Item 2 — causal-conv padding boundary correctness, v1 then v2** (both scripts kept for
+the record; v2 supersedes v1's masking scheme specifically — see below). Neither modifies
+`tt/flow/encoder.py` or adds production bucketing code — both drive the encoder's existing
+public sub-modules directly from an external script, for verification only.
+
+**v1** (`bucket_padding_boundary_check.py`) confirmed the real risk —
+`PreLookaheadLayer.conv1` is a genuine 3-token LOOK-AHEAD (right-padded conv, not causal),
+reads INTO whatever fills the padding region near a chunk's true boundary, and attention
+masking does nothing to protect a conv's local receptive field — using a SINGLE-ROW mask
+(every query position gets the identical "keys [0,200) valid" boundary). Confirmed
+directly, by re-reading the code, that this mask was IDENTICAL between its naive-zero-pad
+and lookahead-aware variants (`run_encoder_padded(xs, true_len=T_TRUE, ...)` called with
+the same `T_TRUE=200` in both) — so v1's 0.804→0.983 PCC improvement is cleanly
+attributable to padding CONTENT alone (real lookahead tokens vs. zero), not any masking
+difference between the two variants. **However**, v1's *masking scheme itself* (same
+single boundary for every query) does not match real upstream chunk-causal masking (see
+v2) — its "ground truth" (full, non-causal attention over the whole sequence) and its
+padded variants (attention masked at the true boundary) are architecturally different
+computations, so v1's residual 0.983-vs-0.99 gap was contaminated by that mismatch, not
+purely a padding-content measurement. Superseded by v2 below, not deleted.
+
+**v2** (`bucket_padding_boundary_check_v2.py`) rebuilt this properly after fetching REAL
+upstream source directly from `github.com/FunAudioLLM/CosyVoice` (network access
+confirmed available) — `cosyvoice/utils/mask.py`'s real `subsequent_chunk_mask`
+(transcribed verbatim) and `cosyvoice/transformer/upsample_encoder.py`'s real
+`UpsampleConformerEncoder.forward`/`PreLookaheadLayer.forward`, plus the real
+`cosyvoice2.yaml` (fetched from the actual `FunAudioLLM/CosyVoice2-0.5B` HF repo):
+`chunk_size: 25` (token-rate), `token_mel_ratio: 2` (so up-rate chunk size is 50),
+`num_decoding_left_chunks: -1` (unlimited left context, confirming "whole growing
+prefix"). Real upstream's `subsequent_chunk_mask(L, chunk_size)` gives EACH query i its
+OWN valid-key window `[0, (i//chunk_size + 1) * chunk_size)` — depends only on `i` and
+`chunk_size`, NOT on the total sequence length — which is exactly the property that makes
+recompute-the-whole-growing-prefix-every-chunk valid: an early position's output becomes
+stable once its own chunk is complete, and appending more tokens later never changes it
+retroactively. v1's single-row mask does not have this property. Also confirmed from real
+`flow.py`: mid-stream (`finalize=False`) calls split `token, context =
+token[:, :-pre_lookahead_len], token[:, -pre_lookahead_len:]` — the real next 3 tokens are
+fed ONLY into `PreLookaheadLayer`'s own conv (never part of the attention-visible
+sequence), exactly matching v1's "lookahead-aware" design intent, now implemented under
+the correct mask.
+
+Rebuilt as upstream's OWN self-consistency test (found at the bottom of the real
+`flow.py`): a full `F=256`-token sequence computed once with the real chunk-causal mask
+(`finalize=True` ground truth) vs. a `T=200`-token chunk computed the same way
+(`finalize=False`), compared at the shared span:
+
+- **Variant A, naive zero-lookahead** (chunk-causal mask, no real lookahead tokens):
+  boundary PCC **0.832**, max|diff| **1.137**. Confirms the risk is real under the correct
+  mask too.
+- **Variant B, real lookahead context** (chunk-causal mask, real next 3 tokens fed to
+  `pre_lookahead_layer` only): boundary PCC **0.999919**, max|diff| **0.047** — clears the
+  0.99 gate with a wide margin, and the earlier v1 residual gap is gone: interior max|diff|
+  dropped to 0.047 (consistent with ordinary bf16 rounding noise between two separately-
+  built computation graphs, not a structural mismatch).
+
+**This resolves what v1 left open.** The earlier ~0.017 gap under 0.99 (v1's 0.983) was a
+test-methodology artifact — comparing chunk-causal output against a non-causal, full-
+attention reference — not a real architectural tax on streaming quality. Once both sides
+of the comparison use the SAME correct chunk-causal semantics, bucket+mask+real-lookahead
+clears 0.99 comfortably (0.9999).
+
+**What correctness bar is actually appropriate, and why**: **0.99 PCC — the same gate used
+everywhere else in this codebase (`GATE_BF16`, the conv resolver's tie-break, etc.), not a
+relaxed one.** The earlier instinct that streaming might need a looser bar came from v1's
+flawed reference, not from any real property of chunk-causal attention itself — v2's clean
+comparison (same masking scheme on both sides) shows the mechanism can clear the standard
+bar with room to spare (0.9999 vs. 0.99), so there's no principled reason to lower it for
+a real bucketed implementation. Recommend holding a real implementation to 0.99 against a
+`subsequent_chunk_mask`-based reference, same as everything else in this port.
+
+No production code changed. Nothing committed.
+
+**Two confirmations recorded before round 2 started, both checked out clean:**
+1. **v1's wrong single-boundary mask was confined to the diagnostic harness only.**
+   `git diff --stat HEAD -- models/demos/audio/cosyvoice2/tt/` is empty — zero production
+   code touched all session. A repo-wide grep for the pattern (`bias1[:,:,:,true_len:]`,
+   `run_encoder_padded`) outside `scripts/perf_2026_09_23/` returns nothing.
+2. **v2's 0.999919 result used real encoder weights**, not synthetic — `load_checkpoint_
+   file("flow.pt")` -> `sub_state_dict(..., "encoder.")` -> `UpsampleConformerEncoderRef.
+   from_checkpoint(...)`, the same real-checkpoint pattern used throughout this bring-up.
+   Only the input token IDs are random (identity doesn't matter for this numerical check);
+   model weights are 100% real.
+
+### Streaming design, round 2: encoder-level chunking/bucketing implementation — DONE
+
+Built directly on round 1's verified findings, in `tt/flow/encoder.py`:
+
+- **`subsequent_chunk_mask_torch`/`chunk_causal_bias_torch`**: the real upstream mask
+  (verbatim, `num_left_chunks=-1` baked in), ported from a one-off diagnostic script into
+  a permanent utility. `CHUNK_SIZE=25`/`CHUNK_SIZE_UP=50` are now real module constants
+  (from `cosyvoice2.yaml`), not hardcoded in a test.
+- **`bucket_length()`**: linear step=64, the decided scheme.
+- **`PreLookaheadLayerRef`/`TtPreLookaheadLayer`**: real `context` support (real upstream
+  signature). `TtPreLookaheadLayer.conv1`'s pad changed from a baked-in `(0,
+  pre_lookahead_len)` to `(0, 0)` -- the caller now explicitly concatenates real `context`
+  or zeros before calling it, matching real upstream's own unified concat-then-pad design
+  exactly (and more efficient than an earlier diagnostic script's approach, which computed
+  and discarded a few extra positions).
+- **`UpsampleConformerEncoderRef.forward`/`TtUpsampleConformerEncoder.__call__`**: real
+  `context`/`streaming` params. `streaming=False` (default) is byte-for-byte the original
+  behavior -- every existing non-streaming caller is unaffected (confirmed, not assumed --
+  see regression results below).
+- **`valid_length` (bucketing), a real design gap caught before it shipped**: naively
+  passing the bucket size straight through to `pre_lookahead_layer` would place `context`
+  at the wrong position (right after the bucket's padding, not right after the true
+  content). `TtUpsampleConformerEncoder.__call__` now takes `length` (the bucket/geometry
+  size, what `TtConv1d`/`GeometryWeightCache` key on) separately from `valid_length` (the
+  true content length, defaults to `length` when not bucketing): `pre_lookahead_layer`
+  only ever sees `[0, valid_length)` + `context`; its output is padded back out to the
+  full bucket width afterward. `valid_length` must be a multiple of `CHUNK_SIZE` for the
+  mask to correctly exclude the padding region (real chunk boundaries always are).
+
+**Validated, not just implemented** — 4 new tests in `tests/pcc/test_upsample_conformer_
+encoder.py` (random-init weights, matching this file's own convention; the real-checkpoint
+number is round 1's verified 0.999919):
+- `test_subsequent_chunk_mask_matches_real_upstream_example` -- the ported mask function
+  against real upstream's own docstring example.
+- `test_bucket_length_rounds_up_to_step`.
+- `test_device_streaming_encoder_naive_lookahead_corrupts_real_lookahead_recovers` --
+  real lookahead context clears 0.99 (robust regardless of weight scale); naive
+  zero-lookahead is asserted WORSE than it (a relative claim, not an absolute gate --
+  random-init weights' small magnitude makes the absolute corruption signal much weaker
+  than the real checkpoint's 0.832, so an absolute `<0.99` assertion here would have been
+  fragile; caught this during the first test run, fixed before treating it as done).
+- `test_device_bucketed_encoder_matches_exact_length` -- exact length vs. bucketed
+  (`valid_length` decoupling) match at PCC 0.999990. **Random-init weights** (matching
+  this test file's own convention) -- flagged explicitly below, this alone was not
+  sufficient given this bring-up's track record.
+
+**Full regression: 152/152 pass** (148 previous + 4 new), zero breakage to the existing
+non-streaming path from the `TtPreLookaheadLayer` pad refactor or any other change.
+
+**Pre-commit verification round -- four checks, run before trusting this enough to
+commit** (the user's explicit gate; this bring-up's track record -- `TtStft`, the conv
+resolver, the original single-boundary mask mistake -- says "structural test passes, real
+numeric path at a real shape doesn't" is exactly where bugs hide, so none of these were
+taken on faith):
+
+1. **`streaming=False` RTF regression risk -- checked directly, not assumed.** The
+   `attn_bias` construction for `streaming=False` is unchanged code (confirmed via `git
+   diff`). But `TtPreLookaheadLayer.__call__` DOES now do extra work even in the default
+   (`context=None`) case -- a host-upload + concat + 2 deallocates that the old code didn't
+   need (`conv1`'s pad used to be baked in; now the caller builds the padded tensor
+   explicitly). Measured directly: real Stage 1 RTF benchmark
+   (`scripts/perf_2026_09_22/wer_repro_and_stage_breakdown.py`), same 4 sentences, old code
+   (`git stash`) vs. new code --
+
+   | utt | encoder OLD | encoder NEW | RTF OLD | RTF NEW |
+   |---|---|---|---|---|
+   | 0 | 0.166s | 0.154s | 0.521 | 0.522 |
+   | 1 | 0.199s | 0.227s | 0.455 | 0.462 |
+   | 2 | 0.256s | 0.246s | 0.452 | 0.450 |
+   | 3 | 0.648s | 0.638s | 0.444 | 0.442 |
+
+   All differences within normal run-to-run noise (a single run's own r1/r2/r3 reps
+   already spread ~0.01 RTF at fixed code). No regression. Also: a direct component-level
+   comparison (same seed/input, old vs. new code, `scripts/perf_2026_09_23/
+   streaming_false_old_vs_new_check.py`) came back **`torch.equal: True`, max|diff|=0.0 --
+   literally bit-exact**. End-to-end WER/hypothesis text on the real 4-sentence pipeline
+   was character-identical between old and new code too.
+2. **The 0.999990 bucketing test used random-init weights, not real checkpoint --
+   corrected, then closed with a real-checkpoint run.** Flagged honestly rather than left
+   standing: round 1's real-checkpoint validation (v2) predates the `valid_length` API and
+   never exercised the actual bucketing code path. Closed with a dedicated real-checkpoint
+   check (`scripts/perf_2026_09_23/real_checkpoint_bucketing_check.py`, real `flow.pt`
+   weights, the actual `valid_length=` production parameter, not a hand-rolled harness) at
+   TWO real bucket boundaries from the decided linear-step=64 scheme (not one arbitrary
+   length): `T=150 -> bucket 192`: PCC **0.999987**; `T=325 -> bucket 384`: PCC
+   **0.999965**. Both clear the 0.99 gate with a wide margin.
+3. **Which test asserts `streaming=False` is bit-exact to pre-change behavior: none of the
+   152 do a literal old-vs-new diff** (regression tests check against a stable reference,
+   not a saved prior version) -- answered instead by check 1's direct comparison above
+   (`torch.equal: True`).
+4. **`CHUNK_SIZE=25`/`CHUNK_SIZE_UP=50` vs. the bucket-sizing simulation's assumptions --
+   consistent.** `CHUNK_SIZE=25` is read from the same real `cosyvoice2.yaml` value that
+   grounded the simulation's `HOP_TOKENS=25` -- same number, same source. `CHUNK_SIZE_UP=50`
+   wasn't separately modeled in the standalone simulation (token-rate buckets only), but
+   `bucket_length()` scales both stages in lockstep (up-rate bucket = token-rate bucket x
+   stride, always, via the same `length`/`length*stride` relationship `_call_eager` already
+   uses) -- the same bucket-count/hit-rate numbers apply to both stages. `PROMPT_TOKENS=100`
+   was only the simulation's growing-prefix starting point, unrelated to either constant's
+   correctness.
+
+All four checks clean. Committed.
+
+**What round 2 does NOT cover, scoped out deliberately**: this is the flow ENCODER's
+chunk-shape/masking support only -- nothing calls it from a real streaming entry point
+yet. `tt/flow/flow.py`'s `TtCausalMaskedDiffWithXvec.inference` is unchanged (still
+`finalize=True` only). The CFM decoder's own `streaming=True` mode, HiFT's
+`cache_source`/Hamming-crossfade streaming, and the LLM's incremental `generate()` with
+per-chunk yields are all still "entirely unbuilt" (see that section below) -- separate,
+larger, not-yet-designed pieces, not silently folded into this round.
+
+Nothing committed yet.
+
+### Next steps (2026-09-23)
+
+All three of the 2026-09-22 "not started" items are resolved (one stays open as a real
+finding, see item 2 above). Streaming design rounds 1 (chunk-shape decision, sizing,
+boundary-risk check) and 2 (encoder-level chunking/bucketing implementation, validated,
+152/152 regression) are both done. **Next: wire this into a real streaming call path**
+(`flow.py`'s `inference`, and ultimately the CFM decoder / HiFT / LLM streaming pieces
+listed above) -- not started, not decided how yet.
+
+## STATE AS OF 2026-09-22 (superseded by the 2026-09-23 section above; kept for history)
 
 Everything here was measured on the N150 in the 2026-09-22 session unless it says
 "estimate" or "projected". Re-verify before trusting, as always. This round's scripts are

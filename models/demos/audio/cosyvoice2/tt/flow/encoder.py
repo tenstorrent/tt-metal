@@ -88,6 +88,55 @@ NUM_BLOCKS = 6  # token-rate Conformer stack (cosyvoice2.yaml's num_blocks)
 NUM_UP_BLOCKS = 4  # mel-rate Conformer stack -- hardcoded in real source, not a yaml param
 PRE_LOOKAHEAD_LEN = 3
 UPSAMPLE_STRIDE = 2
+CHUNK_SIZE = 25  # real cosyvoice2.yaml's chunk_size (token-rate streaming chunk, in tokens)
+CHUNK_SIZE_UP = CHUNK_SIZE * UPSAMPLE_STRIDE  # real cosyvoice2.yaml: static_chunk_size * token_mel_ratio
+BUCKET_STEP = 64  # streaming design round 1 (2026-09-23): linear bucketing, decided step size --
+# see BRINGUP_STATUS.md's "Streaming design, round 1" section for the sizing numbers (~13
+# distinct buckets per 30s utterance, worst-case padding waste 28%, real DRAM-cache headroom
+# checked against GeometryWeightCache).
+
+
+def bucket_length(length: int, step: int = BUCKET_STEP) -> int:
+    """Round a growing prefix length UP to the nearest multiple of `step`, bounding the number
+    of distinct device geometries a streaming session touches (trace capture and
+    `prepare_conv_weights`/the conv resolver both key on exact `(input_length, batch_size)`)."""
+    return ((length + step - 1) // step) * step
+
+
+def subsequent_chunk_mask_torch(size: int, chunk_size: int) -> torch.Tensor:
+    """`cosyvoice.utils.mask.subsequent_chunk_mask`, verbatim (fetched directly from
+    github.com/FunAudioLLM/CosyVoice 2026-09-23; `num_left_chunks=-1` baked in -- matches the
+    real checkpoint's own `num_decoding_left_chunks: -1`, and matches the only behavior the
+    real, non-deprecated upstream function supports). Query `i`'s valid keys:
+    `[0, (i // chunk_size + 1) * chunk_size)` -- depends only on `i` and `chunk_size`, NOT on
+    the total sequence length, which is exactly the property that makes recomputing the whole
+    growing prefix from scratch every chunk valid: an early position's output becomes stable
+    once its own chunk is complete, and appending more tokens later never changes it
+    retroactively (verified directly, not just reasoned about -- see
+    `test_device_streaming_encoder_matches_finalized_reference` and BRINGUP_STATUS.md's
+    "Streaming design, round 1" section: naive zero-lookahead boundary PCC 0.832 vs. real
+    3-token-lookahead-context boundary PCC 0.999919, both against a real, unmasked, full-
+    sequence reference, real checkpoint weights).
+
+    Returns `[size, size]` bool, True = valid (matches `subsequent_chunk_mask`'s own docstring
+    example: `subsequent_chunk_mask(4, 2) == [[1,1,0,0],[1,1,0,0],[1,1,1,1],[1,1,1,1]]`).
+    """
+    pos_idx = torch.arange(size)
+    block_value = (torch.div(pos_idx, chunk_size, rounding_mode="trunc") + 1) * chunk_size
+    return pos_idx.unsqueeze(0) < block_value.unsqueeze(1)
+
+
+def chunk_causal_bias_torch(size: int, chunk_size: int, neg: float = -30000.0) -> torch.Tensor:
+    """Additive attention bias from `subsequent_chunk_mask_torch`: 0 where valid, `neg` where
+    masked -- `TtRelPositionMultiHeadedAttention.__call__`'s convention (additive, broadcastable
+    to `[B, 1, T, T]`), NOT the boolean `[B, 1, T]`/`[B, T, T]` convention
+    `RelPositionMultiHeadedAttentionRef.forward` takes (that class already supports a full
+    per-query `[B, T, T]` mask via its own `(~mask).unsqueeze(1)` broadcast -- no change needed
+    there). Shape `[1, 1, size, size]`."""
+    valid = subsequent_chunk_mask_torch(size, chunk_size)
+    bias = torch.zeros(1, 1, size, size)
+    bias[:, :, ~valid] = neg
+    return bias
 
 
 # ---------------------------------------------------------------------------
@@ -239,11 +288,19 @@ class LinearNoSubsamplingRef(nn.Module):
 
 
 class PreLookaheadLayerRef(nn.Module):
-    """`cosyvoice.transformer.upsample_encoder.PreLookaheadLayer`, `finalize=True`
-    path only (`context` always empty -- see module docstring: `streaming=False`
-    is this phase's scope). `conv1` is padded on the RIGHT by `pre_lookahead_len`
-    (a genuine look-ahead, the mirror image of the CFM estimator's causal convs,
-    not causal itself); `conv2` is causal (left-pad by `kernel_size-1`)."""
+    """`cosyvoice.transformer.upsample_encoder.PreLookaheadLayer`. `conv1` is padded on the
+    RIGHT by `pre_lookahead_len` (a genuine look-ahead, the mirror image of the CFM
+    estimator's causal convs, not causal itself); `conv2` is causal (left-pad by
+    `kernel_size-1`).
+
+    `context`, added 2026-09-23 for streaming round 2 (real upstream signature,
+    `PreLookaheadLayer.forward(inputs, context=torch.zeros(0,0,0))`): when a chunk isn't the
+    final one, real inference splits the next `pre_lookahead_len` REAL tokens off the growing
+    prefix and passes them here instead of zero-padding conv1's lookahead window -- verified
+    2026-09-23 that zero-padding measurably corrupts the boundary (PCC 0.832) while real
+    context recovers it (PCC 0.999919), see BRINGUP_STATUS.md. `context=None` (this class's
+    spelling of upstream's empty-tensor default) reproduces the original zero-pad behavior
+    exactly -- the non-streaming/finalize path is unchanged."""
 
     def __init__(self, channels: int = D_MODEL, pre_lookahead_len: int = PRE_LOOKAHEAD_LEN):
         super().__init__()
@@ -251,11 +308,15 @@ class PreLookaheadLayerRef(nn.Module):
         self.conv1 = nn.Conv1d(channels, channels, kernel_size=pre_lookahead_len + 1, stride=1, padding=0)
         self.conv2 = nn.Conv1d(channels, channels, kernel_size=3, stride=1, padding=0)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: [B, T, C] -> [B, T, C]."""
+    def forward(self, x: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
+        """x: [B, T, C] -> [B, T, C]. context: [B, pre_lookahead_len, C] or None."""
         residual = x
         h = x.transpose(1, 2)  # [B, C, T]
-        h = F.pad(h, (0, self.pre_lookahead_len), value=0.0)
+        if context is None:
+            h = F.pad(h, (0, self.pre_lookahead_len), value=0.0)
+        else:
+            assert context.shape[1] == self.pre_lookahead_len
+            h = torch.cat([h, context.transpose(1, 2)], dim=2)
         h = F.leaky_relu(self.conv1(h))
         h = F.pad(h, (self.conv2.kernel_size[0] - 1, 0), value=0.0)
         h = self.conv2(h)
@@ -285,13 +346,20 @@ class Upsample1DRef(nn.Module):
 
 
 class UpsampleConformerEncoderRef(nn.Module):
-    """`cosyvoice.transformer.upsample_encoder.UpsampleConformerEncoder`,
-    `streaming=False` (`finalize=True`, `context` always empty) only -- see module
-    docstring. Two independent `LinearNoSubsamplingRef` instances (`embed`/
-    `up_embed`, real source builds them as two separate weight sets, not a shared
-    one) and two independent Conformer stacks (6 blocks at token rate, 4 more at
-    mel rate -- `NUM_UP_BLOCKS=4` is hardcoded in real source, not a yaml
-    parameter)."""
+    """`cosyvoice.transformer.upsample_encoder.UpsampleConformerEncoder`. Two independent
+    `LinearNoSubsamplingRef` instances (`embed`/`up_embed`, real source builds them as two
+    separate weight sets, not a shared one) and two independent Conformer stacks (6 blocks at
+    token rate, 4 more at mel rate -- `NUM_UP_BLOCKS=4` is hardcoded in real source, not a
+    yaml parameter).
+
+    `context`/`streaming`, added 2026-09-23 for streaming round 2 (real upstream signature,
+    simplified: real `UpsampleConformerEncoder.forward` also takes `xs_lens`/
+    `decoding_chunk_size`/`num_decoding_left_chunks`, all irrelevant here -- this port is
+    batch=1/no-padding throughout, and the real checkpoint's own `num_decoding_left_chunks:
+    -1` is the only value ever used, so it's baked into `subsequent_chunk_mask_torch` rather
+    than threaded through as a parameter). `streaming=False` (the default) reproduces the
+    original, unchanged, all-valid-mask behavior exactly -- every existing non-streaming
+    caller is unaffected."""
 
     def __init__(
         self,
@@ -315,22 +383,34 @@ class UpsampleConformerEncoderRef(nn.Module):
         )
         self.after_norm = nn.LayerNorm(d_model, eps=EMBED_LAYER_NORM_EPS)
 
-    def forward(self, xs: torch.Tensor) -> torch.Tensor:
-        """xs: [B, T, d_model] -> [B, 2T, d_model]. No padding (single full-length
-        utterance) -- masks are all-valid throughout, matching this package's
-        existing batch=1/no-padding testing scope."""
+    def forward(self, xs: torch.Tensor, context: torch.Tensor | None = None, streaming: bool = False) -> torch.Tensor:
+        """xs: [B, T, d_model] -> [B, 2T, d_model]. No padding within `xs` itself (single
+        chunk/utterance per call, batch=1) -- `streaming=False` (default): masks are all-valid,
+        original behavior, unchanged. `streaming=True`: real chunk-causal masking
+        (`subsequent_chunk_mask_torch`, `chunk_size=CHUNK_SIZE`/`CHUNK_SIZE_UP`); `context`
+        (real next `pre_lookahead_len` tokens, embedded) feeds `pre_lookahead_layer` only --
+        never part of `xs`/attention, matching real upstream exactly."""
         b, t_len, _ = xs.shape
-        mask = torch.ones(b, 1, t_len, dtype=torch.bool)
+        mask = (
+            subsequent_chunk_mask_torch(t_len, CHUNK_SIZE).unsqueeze(0)
+            if streaming
+            else torch.ones(b, 1, t_len, dtype=torch.bool)
+        )
 
         xs = self.embed(xs)
         pos_emb = sinusoidal_rel_pos_table_torch(t_len, self.d_model)
-        xs = self.pre_lookahead_layer(xs)
+        context_embedded = self.embed(context) if context is not None else None
+        xs = self.pre_lookahead_layer(xs, context_embedded)
         for layer in self.encoders:
             xs = layer(xs, mask, pos_emb)
 
         xs = self.up_layer(xs)
         t_len2 = xs.shape[1]
-        mask2 = torch.ones(b, 1, t_len2, dtype=torch.bool)
+        mask2 = (
+            subsequent_chunk_mask_torch(t_len2, CHUNK_SIZE_UP).unsqueeze(0)
+            if streaming
+            else torch.ones(b, 1, t_len2, dtype=torch.bool)
+        )
         xs = self.up_embed(xs)
         pos_emb2 = sinusoidal_rel_pos_table_torch(t_len2, self.d_model)
         for layer in self.up_encoders:
@@ -567,19 +647,42 @@ class TtLinearNoSubsampling:
 
 
 class TtPreLookaheadLayer:
+    """`context`, added 2026-09-23: `conv1`'s pad is now `(0, 0)` (was `(0,
+    pre_lookahead_len)`) -- the caller-visible lookahead window is filled EXPLICITLY, by
+    concatenating either `context` (real tokens, streaming) or a zero tensor (no context,
+    matching the original finalize behavior exactly) onto `x` BEFORE `conv1`, rather than
+    baking an unconditional zero-pad into the conv's own construction. This is what lets the
+    same conv weight serve both cases without wastefully computing (and discarding) extra
+    output positions the way an early diagnostic script did -- `conv1`'s output width is
+    exactly `length` either way (kernel=pre_lookahead_len+1 over a length+pre_lookahead_len
+    input, pad=0), no slicing needed."""
+
     def __init__(self, device, module: PreLookaheadLayerRef, dtype=ttnn.bfloat16):
+        self.device = device
+        self.dtype = dtype
         self.pre_lookahead_len = module.pre_lookahead_len
-        self.conv1 = TtPaddedConv1d.from_module(device, module.conv1, pad=(0, module.pre_lookahead_len), dtype=dtype)
+        self.conv1 = TtPaddedConv1d.from_module(device, module.conv1, pad=(0, 0), dtype=dtype)
         self.conv2 = TtPaddedConv1d.from_module(
             device, module.conv2, pad=(module.conv2.kernel_size[0] - 1, 0), dtype=dtype
         )
 
-    def __call__(self, x, length: int, batch_size: int = 1):
-        # conv1 is right-padded by pre_lookahead_len: TtPaddedConv1d's `pad` already
-        # encodes that, and ttnn.conv1d's `input_length` is the UNPADDED length
-        # (padding is applied internally, same convention TtCausalConv1d already
-        # relies on in decoder.py) -- so this is just `self.conv1(x, length, ...)`.
-        h = self.conv1(x, length, batch_size)
+    def __call__(self, x, length: int, batch_size: int = 1, context=None):
+        """context: ttnn [B, pre_lookahead_len, C] (real next tokens, already embedded) or
+        None (zero-lookahead, the original/finalize behavior)."""
+        if context is None:
+            pad = ttnn.from_torch(
+                torch.zeros(batch_size, self.pre_lookahead_len, x.shape[-1]),
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            xext = ttnn.concat([x, pad], dim=1)
+            ttnn.deallocate(pad)
+        else:
+            xext = ttnn.concat([x, context], dim=1)
+        extended_len = length + self.pre_lookahead_len
+        h = self.conv1(xext, extended_len, batch_size)
+        ttnn.deallocate(xext)
         h = ttnn.leaky_relu(h, negative_slope=0.01)
         h = self.conv2(h, length, batch_size)
         return ttnn.add(h, x)
@@ -603,8 +706,22 @@ class TtUpsample1D:
 
 
 class TtUpsampleConformerEncoder:
-    """`UpsampleConformerEncoderRef` on device -- `streaming=False` only (see
-    module docstring).
+    """`UpsampleConformerEncoderRef` on device.
+
+    **Streaming (`streaming=True`/`context=`), added 2026-09-23 for the bucketed chunking
+    design (BRINGUP_STATUS.md's "Streaming design" sections).** Real chunk-causal masking
+    (`chunk_causal_bias_torch`, `chunk_size=CHUNK_SIZE`/`CHUNK_SIZE_UP` from the real
+    checkpoint's own `cosyvoice2.yaml`) plus real-lookahead `context` fed to
+    `pre_lookahead_layer`. Verified against a real, unmasked, full-sequence reference (real
+    checkpoint weights): naive zero-lookahead boundary PCC 0.832 (confirms the risk),
+    real-lookahead-context boundary PCC 0.999919 (clears this codebase's 0.99 gate with a
+    wide margin) -- see `tests/pcc/test_upsample_conformer_encoder.py`'s streaming tests,
+    which make this a permanent regression check, not just a one-off script result.
+    `streaming=False` (the default) is byte-for-byte the original behavior; every existing
+    non-streaming caller is unaffected. Bucketing itself (padding a growing prefix up to
+    `bucket_length()`) is the CALLER's responsibility -- this class only needs a `length`,
+    real `context`, and `streaming=True`; it does not know or care whether `length` is a
+    bucket boundary or an exact prefix length.
 
     **Cached/traced forward (`COSYVOICE2_FLOW_ENCODER_TRACE=1` / `use_trace=True`), added
     2026-09-22.** Unlike the CFM solver, this module runs exactly ONCE per utterance -- so
@@ -685,32 +802,112 @@ class TtUpsampleConformerEncoder:
         emb = sinusoidal_rel_pos_table_torch(t_len, self.d_model)
         return ttnn.from_torch(emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
-    def __call__(self, xs, length: int, batch_size: int = 1, use_trace: bool | None = None):
-        """xs: ttnn [B, T, d_model] -> ttnn [B, T*stride, d_model]. No padding
-        (single full-length utterance, matching this package's batch=1/
-        no-padding testing scope) -- `attn_bias` is all-zero (all-valid) at both
-        stages."""
+    def __call__(
+        self,
+        xs,
+        length: int,
+        batch_size: int = 1,
+        use_trace: bool | None = None,
+        context=None,
+        streaming: bool = False,
+        valid_length: int | None = None,
+    ):
+        """xs: ttnn [B, T, d_model] -> ttnn [B, T*stride, d_model]. `streaming=False`
+        (default): original, unchanged behavior -- all-valid mask, no context, every
+        existing non-streaming caller is unaffected. `streaming=True`: real chunk-causal
+        masking (`chunk_causal_bias_torch`); `context` (ttnn [B, pre_lookahead_len,
+        d_model], real next tokens already embedded) feeds `pre_lookahead_layer` only.
+
+        `valid_length` (bucketing): `length` is the TENSOR's geometry (e.g. a fixed
+        bucket size several chunks share, so `TtConv1d`/`GeometryWeightCache` see a
+        small, reused set of `(input_length, batch_size)` keys instead of one per exact
+        chunk length -- see `bucket_length()`); `valid_length` (<= `length`, defaults to
+        `length`) is the TRUE content length -- where `context` conceptually belongs, and
+        where the chunk-causal mask's real boundary sits. Positions `[valid_length,
+        length)` are caller-supplied padding (content doesn't matter -- masked from every
+        attention layer, and `pre_lookahead_layer` never sees them: it computes only over
+        `[0, valid_length)` + `context`, and the padding region is concatenated back on
+        afterward). `valid_length` MUST be a multiple of `CHUNK_SIZE` for the mask to
+        correctly exclude the padding region for every query (real streaming chunk
+        boundaries always are, by construction -- `chunk_size` tokens per chunk).
+
+        `streaming=True` always runs eager -- tracing is already proven unavailable for
+        this module (see class docstring) regardless of streaming, and chunk-causal/
+        context/bucketing adds more host-side construction than it would be worth
+        chasing."""
+        if streaming:
+            return self._call_eager(xs, length, batch_size, context=context, streaming=True, valid_length=valid_length)
         if use_trace is None:
             use_trace = self.use_trace
         if not use_trace:
             return self._call_eager(xs, length, batch_size)
         return self._call_traced(xs, length, batch_size)
 
-    def _call_eager(self, xs, length: int, batch_size: int = 1):
-        bias1 = ttnn.from_torch(
-            torch.zeros(batch_size, 1, 1, length), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-        h = self.embed(xs)
+    def _call_eager(
+        self,
+        xs,
+        length: int,
+        batch_size: int = 1,
+        context=None,
+        streaming: bool = False,
+        valid_length: int | None = None,
+    ):
+        if valid_length is None:
+            valid_length = length
+        assert 0 < valid_length <= length
+        if streaming and valid_length < length:
+            assert valid_length % CHUNK_SIZE == 0, (
+                f"valid_length={valid_length} must be a multiple of CHUNK_SIZE={CHUNK_SIZE} for the "
+                "chunk-causal mask to correctly exclude the bucket padding region for every query"
+            )
+
+        if streaming:
+            bias1 = ttnn.from_torch(
+                chunk_causal_bias_torch(length, CHUNK_SIZE), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        else:
+            bias1 = ttnn.from_torch(
+                torch.zeros(batch_size, 1, 1, length), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
         pos_emb = self._pos_emb(length)
-        h = self.pre_lookahead_layer(h, length, batch_size)
+        context_embedded = self.embed(context) if context is not None else None
+
+        if valid_length == length:
+            h = self.embed(xs)
+            h = self.pre_lookahead_layer(h, length, batch_size, context=context_embedded)
+        else:
+            # pre_lookahead_layer only ever sees the TRUE content (+ context) -- its own
+            # conv1/conv2 geometry is keyed on valid_length, not the bucket size, so this
+            # doesn't add extra distinct geometries beyond what the real chunk lengths
+            # already produce. Its output is padded back out to the full bucket width
+            # (`length`) afterward so the rest of the pipeline (attention, up_layer) sees
+            # a consistently bucket-shaped tensor -- the padding region's actual values
+            # never matter, every subsequent attention layer masks them via `bias1`.
+            xs_valid = ttnn.slice(xs, [0, 0, 0], [batch_size, valid_length, xs.shape[-1]])
+            h_valid = self.embed(xs_valid)
+            h_valid = self.pre_lookahead_layer(h_valid, valid_length, batch_size, context=context_embedded)
+            ttnn.deallocate(xs_valid)
+            pad = ttnn.from_torch(
+                torch.zeros(batch_size, length - valid_length, self.d_model),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            h = ttnn.concat([h_valid, pad], dim=1)
+            ttnn.deallocate(pad)
         for layer in self.encoders:
             h = layer(h, pos_emb, bias1)
 
         h = self.up_layer(h, length, batch_size)
         length2 = length * self.up_layer.stride
-        bias2 = ttnn.from_torch(
-            torch.zeros(batch_size, 1, 1, length2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+        if streaming:
+            bias2 = ttnn.from_torch(
+                chunk_causal_bias_torch(length2, CHUNK_SIZE_UP), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        else:
+            bias2 = ttnn.from_torch(
+                torch.zeros(batch_size, 1, 1, length2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
         h = self.up_embed(h)
         pos_emb2 = self._pos_emb(length2)
         for layer in self.up_encoders:
