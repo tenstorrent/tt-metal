@@ -20,8 +20,11 @@ class ProjectionTuning:
     head_prefetch_targets: str = "both"
     projection_placement: str = "row"
     coalesce_input: bool = False
+    share_qkv_workers: bool = False
 
     def __post_init__(self):
+        if self.share_qkv_workers and (not self.alias_projection_cbs or self.reader == "original" or self.prefetch_head_workers or self.prefetch_gu_blocks or self.prefetch_down_blocks):
+            raise ValueError("Shared QKV workers require static aliases and currently exclude helper prefetch")
         if self.head_prefetch_targets not in ("both", "qkv", "o"):
             raise ValueError("Head staging targets must be both, qkv or o")
         if self.head_prefetch_targets != "both" and not self.prefetch_head_workers:
@@ -46,6 +49,7 @@ class ProjectionTuning:
     @property
     def defines(self):
         return [
+            ("SHARED_QKV", str(int(self.share_qkv_workers))),
             ("PROJECTION_COALESCE_INPUT", str(int(self.coalesce_input))),
             ("DRAM_NEAR_PROJECTION", str(int(self.projection_placement == "dram"))),
             ("ALIAS_PROJECTION_CBS", str(int(self.alias_projection_cbs))),

@@ -38,7 +38,7 @@ class FusedNorm:
             )
         )
 
-    def append(self, program, input_tensor, projection_cores=(), *, wait_for_gather=False):
+    def append(self, program, input_tensor, projection_cores=(), *, wait_for_gather=False, ready_semaphore=6):
         if tuple(input_tensor.shape) != (1, 1, 1, 4096) or input_tensor.dtype != ttnn.bfloat16:
             raise ValueError("Norm requires batch-one BF16 width4096")
         coords = [self.mesh.worker_core_from_logical_core(c) for c in self.cores]
@@ -62,7 +62,7 @@ class FusedNorm:
                     core_ranges=self.grid,
                     compile_time_args=ct,
                     runtime_args=rt,
-                    defines=[(role, "1")]
+                    defines=[(role, "1"), ("NORM_READY_SEMAPHORE", str(ready_semaphore))]
                     + ([("FUSE_NORM", "1")] if projection_cores else [])
                     + ([("FUSE_GATHER", "1")] if wait_for_gather else []),
                     config=config,

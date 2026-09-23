@@ -82,7 +82,7 @@ void QB2_ENTRY() {
     cb_pop_front(16,16);
 #ifdef FUSE_NORM
     const uint32_t coord_x=get_arg_val<uint32_t>(20), coord_y=get_arg_val<uint32_t>(21);
-    noc_semaphore_inc(get_noc_addr(coord_x,coord_y,get_semaphore(6)),1);
+    noc_semaphore_inc(get_noc_addr(coord_x,coord_y,get_semaphore(NORM_READY_SEMAPHORE)),1);
     noc_async_atomic_barrier();
 #endif
 #endif

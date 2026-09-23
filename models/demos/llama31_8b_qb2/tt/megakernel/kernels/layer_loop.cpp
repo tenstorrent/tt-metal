@@ -104,6 +104,11 @@ void kernel_main() {
     capacity(7, 64 * PROJECTION_BUFFERS);
     capacity(24, 28);
     capacity(25, 16);
+#if SHARED_QKV
+    capacity(8, 16 * PROJECTION_BUFFERS);
+    capacity(9, 96 * PROJECTION_BUFFERS);
+    capacity(26, 6);
+#endif
 #endif
 #if defined(PROFILE_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
     state[482] = 0;

@@ -53,6 +53,9 @@ void release_workers(uint32_t id, uint32_t begin, uint32_t end) {
     noc_async_atomic_barrier();
 }
 
+#if SHARED_QKV && defined(PROJECTION)
+#include "shared_qkv.hpp"
+#endif
 #if defined(PROJECTION) && defined(READER)
 #include "projection_reader.hpp"
 #ifdef HEAD_PREFETCH_RECEIVER
@@ -113,6 +116,9 @@ void QB2_ENTRY() {
     noc_async_read(table.get_noc_addr(get_arg_val<uint32_t>(6)), scratch, 128);
     noc_async_read_barrier();
     const auto* addresses = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+#if SHARED_QKV
+    shared_qkv_read(bank, addresses[3]);
+#endif
 #ifdef FUSE_OUTPUT
     if (bank < 8) {
 #ifdef FUSE_ATTENTION
@@ -167,6 +173,9 @@ void QB2_ENTRY() {
 }
 #elif defined(PROJECTION) && defined(WRITER)
 void QB2_ENTRY() {
+#if SHARED_QKV
+    shared_qkv_write(get_arg_val<uint32_t>(0));
+#endif
     const uint32_t bank = get_arg_val<uint32_t>(0);
 #ifdef FUSE_OUTPUT
     if (bank < 8) {
@@ -281,8 +290,14 @@ using namespace ckernel;
 #include "api/compute/matmul.h"
 
 #include "projection.hpp"
+#if SHARED_QKV
+#include "shared_qkv.hpp"
+#endif
 
 void QB2_ENTRY() {
+#if SHARED_QKV
+    shared_qkv_compute();
+#endif
 #ifdef FUSE_OUTPUT
     if (get_arg_val<uint32_t>(0) < 8) {
         DeviceZoneScopedN("MLP-O-MATH");

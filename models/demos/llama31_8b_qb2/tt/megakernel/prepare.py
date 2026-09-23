@@ -14,11 +14,12 @@ class FusedPreparation:
         layer = body.layers[0]
         if body.gu_workers != 8 or self.mesh.compute_with_storage_grid_size().x < 11:
             raise ValueError("Complete layer composition requires GU8 and eleven worker columns")
-        self.projection_cores = [ttnn.CoreCoord(x, 2) for x in range(8)]
+        self.packed_cores = [ttnn.CoreCoord(x, 2) for x in range(8)]
+        self.projection_cores = body.projection_cores if body.tuning.share_qkv_workers else self.packed_cores
         self.norm_cores = body.placement.map([ttnn.CoreCoord(x, 4) for x in range(2, 10)])
         self.rope_cores = [ttnn.CoreCoord(8, 2), ttnn.CoreCoord(9, 2)]
         self.cache_cores = [ttnn.CoreCoord(9, 3), ttnn.CoreCoord(10, 3)]
-        self.cores = self.projection_cores + self.norm_cores + self.rope_cores + self.cache_cores
+        self.cores = ([] if body.tuning.share_qkv_workers else self.projection_cores) + self.norm_cores + self.rope_cores + self.cache_cores
         self.normalizer = FusedNorm(
             self.mesh,
             layer.decode_inputs["qkv"],
@@ -31,7 +32,7 @@ class FusedPreparation:
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh,
-            memory_config=_width_memory(self.projection_cores, 1536),
+            memory_config=_width_memory(self.packed_cores, 1536),
         )
         self.heads = []
         for core, heads in zip(self.rope_cores, (8, 2)):
@@ -78,10 +79,12 @@ class FusedPreparation:
             or page_table.shape[1] < 1
         ):
             raise ValueError("Expected the native batch-one row-major int32 page table")
-        program = self.normalizer.append(program, self.body.gather_output, self.projection_cores, wait_for_gather=True)
+        program = self.normalizer.append(program, self.body.gather_output, self.projection_cores, wait_for_gather=True,
+            ready_semaphore=8 if self.body.tuning.share_qkv_workers else 6)
         program.semaphores = [
             *program.semaphores,
-            *[ttnn.SemaphoreDescriptor(id=i, core_ranges=_grid(self.cores), initial_value=0) for i in range(13)],
+            *[ttnn.SemaphoreDescriptor(id=i, core_ranges=_grid(self.cores), initial_value=0)
+              for i in range(13)],
         ]
         kernels, cbs = list(program.kernels), list(program.cbs)
         source = Path(__file__).with_name("kernels")
@@ -114,41 +117,59 @@ class FusedPreparation:
                 )
             )
 
-        rt = ttnn.RuntimeArgs()
-        coords = physical(self.projection_cores + self.rope_cores + self.cache_cores[1:])
-        for rank, core in enumerate(self.projection_cores):
-            rt[core.x][core.y] = [
-                rank,
-                self.normalizer.output.buffer_address(),
-                self.body.address_table.buffer_address(),
-                layer_index,
-                *coords,
-            ]
-        ct = (
-            accessor(self.normalizer.output)
-            + accessor(self.body.layers[0].decode_weights["qkv"])
-            + accessor(self.body.address_table)
-        )
-        for role, config in (
-            ("READER", ttnn.ReaderConfigDescriptor()),
-            ("WRITER", ttnn.WriterConfigDescriptor()),
-            (
-                "COMPUTE",
-                ttnn.ComputeConfigDescriptor(
-                    math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False
+        if self.body.tuning.share_qkv_workers:
+            # Extend the existing O/GU/down kernels with the preceding QKV phase.
+            # Packed storage stays in its original row-major layout; writers
+            # scatter bank-ordered columns before notifying RoPE/cache readers.
+            for item in kernels:
+                if Path(item.kernel_source).name != "mlp.cpp" or "PROJECTION" not in dict(item.defines):
+                    continue
+                extra = [self.packed.buffer_address(), *physical(self.rope_cores + self.cache_cores[1:])]
+                args, offsets = item.runtime_args, set()
+                for core in self.projection_cores:
+                    values = list(args[core.x][core.y]); offsets.add(len(values))
+                    args[core.x][core.y] = [*values, *extra]
+                assert len(offsets) == 1
+                item.runtime_args = args
+                item.defines = [*item.defines, ("SHARED_QKV_RT", str(offsets.pop())),
+                                ("SHARED_QKV_CT", str(len(item.compile_time_args)))]
+                item.compile_time_args = [*item.compile_time_args,
+                    *accessor(self.body.layers[0].decode_weights["qkv"]), *accessor(self.packed)]
+        else:
+            rt = ttnn.RuntimeArgs()
+            coords = physical(self.projection_cores + self.rope_cores + self.cache_cores[1:])
+            for rank, core in enumerate(self.projection_cores):
+                rt[core.x][core.y] = [
+                    rank,
+                    self.normalizer.output.buffer_address(),
+                    self.body.address_table.buffer_address(),
+                    layer_index,
+                    *coords,
+                ]
+            ct = (
+                accessor(self.normalizer.output)
+                + accessor(self.body.layers[0].decode_weights["qkv"])
+                + accessor(self.body.address_table)
+            )
+            for role, config in (
+                ("READER", ttnn.ReaderConfigDescriptor()),
+                ("WRITER", ttnn.WriterConfigDescriptor()),
+                (
+                    "COMPUTE",
+                    ttnn.ComputeConfigDescriptor(
+                        math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False
+                    ),
                 ),
-            ),
-        ):
-            kernel("qkv.cpp", self.projection_cores, config, ct, rt, [(role, "1")])
-        for index, count, dtype in (
-            (0, 16 * self.body.tuning.buffers, ttnn.bfloat16),
-            (1, 96 * self.body.tuning.buffers, ttnn.bfloat8_b),
-            (24, 6, ttnn.bfloat16),
-            (31, 1, ttnn.uint32),
-        ):
-            cb([index], count, dtype, self.projection_cores)
-        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(16, self.packed))
-
+            ):
+                kernel("qkv.cpp", self.projection_cores, config, ct, rt, [(role, "1")])
+            for index, count, dtype in (
+                (0, 16 * self.body.tuning.buffers, ttnn.bfloat16),
+                (1, 96 * self.body.tuning.buffers, ttnn.bfloat8_b),
+                (24, 6, ttnn.bfloat16),
+                (31, 1, ttnn.uint32),
+            ):
+                cb([index], count, dtype, self.projection_cores)
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(16, self.packed))
         for role, core, head_tensor in zip(("QUERY", "KEY"), self.rope_cores, self.heads):
             rt = ttnn.RuntimeArgs()
             destination = self.rope_cores[0] if role == "QUERY" else self.cache_cores[0]

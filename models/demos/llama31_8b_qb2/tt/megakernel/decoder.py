@@ -270,6 +270,10 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
                     + body.preparation.cores
                 )
             }
+            if body.tuning.share_qkv_workers:
+                # Keep terminal placement fixed while measuring QKV reuse.
+                # The freed workers still own the original packed tensor.
+                occupied.update((c.x, c.y) for c in body.preparation.packed_cores)
             grid = model.mesh_device.compute_with_storage_grid_size()
             free = [
                 ttnn.CoreCoord(x, y)
