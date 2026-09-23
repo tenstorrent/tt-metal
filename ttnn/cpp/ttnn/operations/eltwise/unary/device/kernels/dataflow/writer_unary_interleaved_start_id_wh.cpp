@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 kernel. The binding names below (dfb::out, tensor::dst) and the named argument set are this
-// kernel's interface: every consumer inherits them, so they are taken from the kernel's own vocabulary
-// rather than any one op's locals, and are not renamed once a consumer exists. The BACKWARDS compile
-// define is preserved for consumers that use the untilize direction.
-
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"

@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 kernel. The binding names below (dfb::in, dfb::staging, tensor::src) and the named argument
-// set are this kernel's interface: every consumer inherits them, so they are taken from the kernel's own
-// vocabulary rather than any one op's locals, and are not renamed once a consumer exists.
-
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"

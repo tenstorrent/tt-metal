@@ -89,8 +89,6 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    // ---- Metal 2.0 spec resource names (function-local: the op's factories are unity-built, and
-    // same-named anonymous-namespace constants across them would redefine) ----
     const DFBSpecName IN_FULL{"in_full"};
     const DFBSpecName STAGING_FULL{"staging_full"};
     const DFBSpecName OUT_FULL{"out_full"};
