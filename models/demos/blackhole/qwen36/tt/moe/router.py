@@ -22,6 +22,48 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 _FUSED_GATE_TOPK = (4, 6, 8)
 
 
+# TTMoEGate allocates four PERSISTENT SHARDED L1 buffers per instance -- tt_bias, tt_input_indices
+# and the two preallocated output buffers -- and one instance is built PER MoE LAYER. Each is a
+# single tile per core (2,048 B/bank, already the floor: shrinking batch_per_device cannot go below
+# one tile), so at 40 MoE layers they MEASURED 327,680 B/bank of permanently reserved L1
+# (1,152 -> 328,832 before the first prefill). That pushes the L1 buffer floor down to 523,136 and
+# collides with the GDN prefill circular-buffer region, which ends at 572,640:
+#     "Statically allocated circular buffers in program 90 clash with L1 buffers"
+# -- bisected to "Phase 2 moe otpimizations", and reproducible with the GDN layer reverted.
+#
+# All four are layer-INDEPENDENT: tt_bias is built from the phantom-expert _PAD_NEG padding plus a
+# zero real-bias (Qwen3.6 routing has no score-correction bias, which is exactly why the fused gate
+# is eligible here), tt_input_indices is a constant arange of global expert ids, and the two output
+# buffers are scratch the op fills in place and the caller consumes before the next layer's gate
+# runs. So one set serves every layer: 40 x 8,192 -> 8,192 B/bank.
+#
+# Keyed on everything the buffer CONTENTS depend on. Sharing is done here rather than inside
+# models/common/modules/moe/tt_moe_gate.py so no other model's gate changes behaviour.
+_GATE_BUF_NAMES = ("tt_bias", "tt_input_indices", "tt_output", "tt_output_indices")
+_SHARED_GATE_BUFS = {}
+
+
+def _share_gate_buffers(gate, mesh_device, config):
+    """Point ``gate`` at the process-wide buffer set for its shape, freeing its own copies."""
+    key = (
+        id(mesh_device),
+        config.num_experts,
+        config.top_k,
+        config.hidden_size,
+        getattr(gate, "_buffer_rows", None),
+        getattr(gate, "num_blocks", None),
+    )
+    shared = _SHARED_GATE_BUFS.get(key)
+    if shared is None:
+        _SHARED_GATE_BUFS[key] = {n: getattr(gate, n) for n in _GATE_BUF_NAMES}
+        return
+    for n in _GATE_BUF_NAMES:
+        own = getattr(gate, n)
+        setattr(gate, n, shared[n])
+        if own is not None:
+            ttnn.deallocate(own)
+
+
 class Qwen36Router:
     def __init__(self, mesh_device, config, state_dict, tensor_cache_path=None, dtype=ttnn.bfloat16):
         self.num_experts = config.num_experts
@@ -87,6 +129,7 @@ class Qwen36Router:
                 ),
                 state_dict["weight"].to(torch.float32).transpose(-2, -1).contiguous(),
             )
+            _share_gate_buffers(self.decode_gate, mesh_device, config)
 
     def __call__(self, hidden_states):
         """hidden_states: [1,1,S,H] (replicated full hidden). Returns [1,1,S,E]."""
