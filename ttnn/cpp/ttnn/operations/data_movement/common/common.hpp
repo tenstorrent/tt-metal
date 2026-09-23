@@ -207,7 +207,9 @@ bool is_enough_space(
     uint32_t reserved_l1_bytes_per_core = 0);
 
 // Per-core L1 footprint that `output_memory_config` will require for a tensor of
-// `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1.
+// `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1. Mirrors what the L1
+// allocator will actually take for the buffer (see the definition), so that a routing decision
+// made on this reservation is never more permissive than the program factory it predicts.
 //
 // If the TensorSpec cannot be constructed (unsupported dtype/layout combination) and
 // `require_constructible` is false, this falls back to reserving nothing -- the pre-existing
@@ -222,6 +224,14 @@ uint32_t get_pending_l1_output_reservation(
     DataType output_dtype,
     Layout output_layout,
     bool require_constructible = false);
+
+// The dtype the untilize family (untilize, untilize_with_unpadding and the codegen untilize) emits
+// for `input_dtype`: block floats cannot exist in ROW_MAJOR, so a BFLOAT8_B input is written out as
+// BFLOAT16. The device operations' compute_output_specs and the composites' L1 accounting (output
+// tile size, pending L1 output reservation) must all agree on this, so they all go through here.
+constexpr DataType untilize_output_dtype(DataType input_dtype) {
+    return input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
+}
 
 ttnn::Tensor pad_to_tile_vol(
     const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);

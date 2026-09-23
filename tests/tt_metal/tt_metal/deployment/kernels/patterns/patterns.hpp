@@ -27,11 +27,11 @@ enum {
 static uint32_t num_passes_for_pattern(uint32_t pattern_id) {
     switch (pattern_id) {
         case DRAM_PATTERN_CHECKERBOARD: return 2u;
-        case DRAM_PATTERN_MARCHING_ONES: return 32u;
+        case DRAM_PATTERN_MARCHING_ONES:
         case DRAM_PATTERN_MARCHING_ZEROES: return 32u;
-        case DRAM_PATTERN_TOGGLE_BITS: return 2u;
+        case DRAM_PATTERN_TOGGLE_BITS:
         case DRAM_PATTERN_SATURATION: return 2u;
-        case DRAM_PATTERN_MARCHING_ONE_BITS: return 33u;
+        case DRAM_PATTERN_MARCHING_ONE_BITS:
         case DRAM_PATTERN_MARCHING_ZERO_BITS: return 33u;
         default: return 1u;
     }
@@ -161,14 +161,12 @@ static inline uint32_t dram_pattern_saturation(uint32_t pass, uint32_t word_inde
 
     if (word_in_pattern < padding_length * channel_width) {
         return padding_word;
-    } else {
-        const uint32_t test_word_index = word_in_pattern % channel_width;
-        if (test_word_index == test_bit_word) {
-            return (1u << (test_bit_index % 32u)) ^ padding_word;
-        } else {
-            return padding_word;
-        }
     }
+    const uint32_t test_word_index = word_in_pattern % channel_width;
+    if (test_word_index == test_bit_word) {
+        return (1u << (test_bit_index % 32u)) ^ padding_word;
+    }
+    return padding_word;
 }
 
 static inline uint32_t dram_pattern_marching_one_bits(uint32_t pass) {
