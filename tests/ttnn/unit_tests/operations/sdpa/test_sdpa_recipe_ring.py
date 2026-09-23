@@ -192,13 +192,15 @@ def test_recipe_ring(
             assert observed["l2_pct"] < {"C": 2, "D": 0.4}[variant]
         for key, value in observed.items():
             record_property(f"chip{chip}_{key}", value)
+    # Ring chunks primary and joint queries as separate Q segments. Non-Q256 chunk
+    # boundaries set rounding order, so the dense reference chunks each segment alone.
     ordered = [[], [], []]
+    query_segments = [[], []]
     for chip in range(2):
-        query = host[0].chunk(2, dim=2)[chip]
+        query_segments[0].append(host[0].chunk(2, dim=2)[chip])
         if joint_host:
             jq = joint_host[0].chunk(2, dim=2)[chip] if joint_kind == "sharded" else joint_host[0]
-            query = torch.cat([query, jq], dim=2)
-        ordered[0].append(query)
+            query_segments[1].append(jq)
         for index in [1, 2]:
             chunks = []
             for rank in [chip, 1 - chip]:
@@ -210,17 +212,22 @@ def test_recipe_ring(
                 elif joint_kind == "replicated" and rank == 1:
                     chunks.append(joint_host[index])
             ordered[index].append(torch.cat(chunks, dim=2))
-    dense_inputs = upload([torch.cat(x, dim=0) for x in ordered], ttnn.ShardTensorToMesh(mesh, dim=0))
-    dense_output = ttnn.transformer.scaled_dot_product_attention(
-        *dense_inputs,
-        is_causal=False,
-        precision=getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")),
-        inputs_prepared=variant.startswith("E_"),
-        program_config=ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(batch * heads, 1), q_chunk_size=q_chunk, k_chunk_size=512
-        ),
-    )
-    dense = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(dense_output)]
+    dense_segments = []
+    for queries in (x for x in query_segments if x):
+        dense_inputs = upload(
+            [torch.cat(x, dim=0) for x in (queries, ordered[1], ordered[2])], ttnn.ShardTensorToMesh(mesh, dim=0)
+        )
+        dense_output = ttnn.transformer.scaled_dot_product_attention(
+            *dense_inputs,
+            is_causal=False,
+            precision=getattr(ttnn.SDPAPrecision, PRECISIONS.get(variant, "LOW_PRECISION")),
+            inputs_prepared=variant.startswith("E_"),
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(batch * heads, 1), q_chunk_size=q_chunk, k_chunk_size=512
+            ),
+        )
+        dense_segments.append([ttnn.to_torch(x) for x in ttnn.get_device_tensors(dense_output)])
+    dense = [torch.cat([segment[chip] for segment in dense_segments], dim=2) for chip in range(2)]
     for chip in range(2):
         got = torch.cat([actual[chip], joint_actual[chip]], dim=2) if joint_kind else actual[chip]
         equal = digest(got) == digest(dense[chip])
