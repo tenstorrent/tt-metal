@@ -1075,9 +1075,6 @@ class ModelOptimisations1024x1024BH:
         return mask, negative_mask, gamma, beta
 
     def _get_groupnorm_config(self, module_path):
-        if module_path == "unet.norm":
-            # Reduce final-normalization scale bias that accumulates across denoising steps.
-            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_WELFORD"]
         if "up_blocks.2" in module_path and "norm1" in module_path:
             return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
         if "resnets" in module_path:
