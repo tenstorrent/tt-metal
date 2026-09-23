@@ -546,6 +546,18 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### bs16 fused-SwiGLU matmul blocks 4,8,8 / 1×4 (2026-09-23)
+
+A `minimal_matmul` block/subblock sweep with model-faithful weights (bfp4, DRAM
+width-sharded; packed w13 interleaved as the model stores it) found the fused-SwiGLU
+kernel at M=8192 prefers `M,K,N = 4,8,8` with `subblock 1×4`: 2945 vs 3133 µs for the
+default 8,8,8 / 1×8 (−6.0%). Same-chip A/B (chip 8): bs16 **237.0 → 231.8 ms (−2.2%)**.
+`apply_workload_env` sets `QWEN_MM_BLOCK_FF13=4,8,8` and `QWEN_MM_SUBBLOCK_FF13=1,4` for
+bs16/ISL512 only: at bs8 the default is already the best of the sweep, and bs32 runs the
+unfused path, where the defaults win for every projection. The same sweep says the plain
+bs8 matmuls want other blocks (FF2 16,8,8 −16%, QKV 8,4,8 −15%, WO 16,8,8 −12%
+standalone) — e2e A/B in progress. Full table: `perf_csv/NEGATIVE_RESULTS.md` §29.
+
 ### Fused residual add + RMSNorm (bs16+) — landed (2026-09-23)
 
 `custom_ops/fused_add_rmsnorm`: one `generic_op` computes ``sum = a + b`` (the next
