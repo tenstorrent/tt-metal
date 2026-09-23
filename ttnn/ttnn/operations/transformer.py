@@ -225,15 +225,27 @@ ttnn.attach_golden_function(
 
 
 def _preprocess_sparse_sdpa_golden_inputs(function_args, function_kwargs):
+    function_args = list(function_args)
+    function_kwargs = dict(function_kwargs)
+    if function_kwargs.get("block_cyclic_sp_axis") is not None:
+        query = function_args[0] if function_args else function_kwargs["q"]
+        mesh_device = query.device()
+        if mesh_device is None:
+            raise ValueError("Block-cyclic sparse SDPA comparison requires the query's mesh device")
+        function_kwargs["_ttnn_sparse_sdpa_mesh_shape"] = tuple(int(dimension) for dimension in mesh_device.shape)
+
     if function_kwargs.get("kv_format") == SparseKVFormat.SCALED_FP8:
-        function_args = list(function_args)
         if len(function_args) > 1:
-            function_args[1] = ttnn.decorators.to_torch_for_comparison(function_args[1], preserve_fp8_bytes=True)
+            packed_kv = ttnn.decorators.to_torch_for_comparison(function_args[1], preserve_fp8_bytes=True)
+            function_args[1] = packed_kv
         elif "kv" in function_kwargs:
-            function_kwargs = dict(function_kwargs)
-            function_kwargs["kv"] = ttnn.decorators.to_torch_for_comparison(
-                function_kwargs["kv"], preserve_fp8_bytes=True
-            )
+            packed_kv = ttnn.decorators.to_torch_for_comparison(function_kwargs["kv"], preserve_fp8_bytes=True)
+            function_kwargs["kv"] = packed_kv
+        else:
+            raise ValueError("Scaled-FP8 sparse SDPA comparison requires a KV tensor")
+        # Global preprocessing converts the original FP8 argument independently. The wrapper's metadata merge
+        # copies this operation-scoped override into the global golden call so packed mixed-format rows stay bytes.
+        function_kwargs["_ttnn_sparse_sdpa_packed_kv"] = packed_kv
     return ttnn.decorators.default_preprocess_golden_function_inputs(function_args, function_kwargs)
 
 

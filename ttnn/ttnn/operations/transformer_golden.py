@@ -13,6 +13,8 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+from ttnn.decorators import set_golden_comparison_config
+
 
 # Head dims (k_dim, v_dim) are supplied by each test, not baked in here. MASKED_INDEX is the op's sentinel.
 MASKED_INDEX = 0xFFFFFFFF  # sentinel: a masked slot (scores -inf, contributes 0); a contiguous tail per row
@@ -479,7 +481,7 @@ def _decode_attention(
     for batch_index in range(batch):
         position = int(positions[batch_index % len(positions)])
         if position < 0:
-            outputs.append(torch.zeros_like(query[batch_index : batch_index + 1]))
+            outputs.append(query.new_zeros((1, num_heads, 1, input_tensor_v.shape[-1])))
             continue
         cache_batch = 0 if share_cache or input_tensor_k.shape[0] == 1 else batch_index
         key = input_tensor_k[cache_batch : cache_batch + 1, :, : position + 1]
@@ -579,7 +581,7 @@ def _paged_circular_decode_attention(
         position = int(positions[batch_index % len(positions)])
         query_row = query[batch_index : batch_index + 1]
         if position < 0:
-            outputs.append(torch.zeros_like(query_row))
+            outputs.append(query_row.new_zeros((*query_row.shape[:-1], input_tensor_v.shape[-1])))
             continue
 
         logical_start = max(0, position + 1 - window)
@@ -826,6 +828,61 @@ def _unpack_scaled_fp8_kv(kv, latent_dim, rope_dim):
     return torch.cat((scaled.to(torch.bfloat16), rope), dim=-1)
 
 
+def _remap_block_cyclic_sparse_indices(
+    indices,
+    cache_length,
+    *,
+    block_cyclic_sp_axis,
+    block_cyclic_chunk_local,
+    block_cyclic_cache_tp_sharded,
+    mesh_shape,
+):
+    """Map natural token indices onto the physical slab-major cache order used by sparse SDPA."""
+    import torch
+
+    if block_cyclic_sp_axis is None:
+        if block_cyclic_chunk_local is not None or block_cyclic_cache_tp_sharded:
+            raise ValueError("Block-cyclic chunk/TP metadata requires block_cyclic_sp_axis")
+        return indices
+    if block_cyclic_chunk_local is None:
+        raise ValueError("block_cyclic_sp_axis and block_cyclic_chunk_local must be supplied together")
+    if mesh_shape is None:
+        raise ValueError("Block-cyclic sparse SDPA golden requires mesh-shape metadata from preprocessing")
+
+    mesh_shape = tuple(int(dimension) for dimension in mesh_shape)
+    sp_axis = int(block_cyclic_sp_axis)
+    if not 0 <= sp_axis < len(mesh_shape):
+        raise ValueError(f"block_cyclic_sp_axis {sp_axis} is outside mesh shape {mesh_shape}")
+    sp = mesh_shape[sp_axis]
+    tp = math.prod(mesh_shape) // sp
+    chunk_local = int(block_cyclic_chunk_local)
+    stripes = sp
+    stripe_chunk = chunk_local
+    if block_cyclic_cache_tp_sharded:
+        if chunk_local % tp != 0:
+            raise ValueError(f"block_cyclic_chunk_local {chunk_local} must be divisible by TP size {tp}")
+        stripes = sp * tp
+        stripe_chunk = chunk_local // tp
+    if stripes <= 0 or stripe_chunk <= 0 or cache_length % stripes != 0:
+        raise ValueError(
+            f"Invalid block-cyclic layout: cache length {cache_length}, stripes {stripes}, chunk {stripe_chunk}"
+        )
+    shard_length = cache_length // stripes
+    if shard_length % stripe_chunk != 0:
+        raise ValueError(f"Block-cyclic chunk {stripe_chunk} must divide per-stripe cache length {shard_length}")
+
+    logical_indices = indices.to(torch.int64)
+    valid = (logical_indices >= 0) & (logical_indices != MASKED_INDEX)
+    if bool(torch.any(logical_indices[valid] >= cache_length)):
+        raise ValueError(f"Sparse SDPA index is outside cache length {cache_length}")
+    safe_indices = torch.where(valid, logical_indices, torch.zeros_like(logical_indices))
+    block_index = safe_indices // stripe_chunk
+    slab = block_index // stripes
+    stripe = block_index - slab * stripes
+    physical_indices = safe_indices + stripe * (shard_length - stripe_chunk) - slab * stripe_chunk * (stripes - 1)
+    return torch.where(valid, physical_indices, logical_indices)
+
+
 def sparse_sdpa_golden(
     q,
     kv,
@@ -836,15 +893,30 @@ def sparse_sdpa_golden(
     scale=None,
     cache_batch_idx=None,
     attention_sink=None,
-    **_,
+    **execution_options,
 ):
     import torch
 
+    block_cyclic_sp_axis = execution_options.get("block_cyclic_sp_axis")
+    block_cyclic_chunk_local = execution_options.get("block_cyclic_chunk_local")
+    block_cyclic_cache_tp_sharded = execution_options.get("block_cyclic_cache_tp_sharded", False)
+    mesh_shape = execution_options.get("_ttnn_sparse_sdpa_mesh_shape")
+    packed_kv = execution_options.get("_ttnn_sparse_sdpa_packed_kv")
     scale = q.shape[-1] ** -0.5 if scale is None else scale
     cache_batch_idx = int(_scalar(cache_batch_idx, 0))
     if getattr(kv_format, "name", kv_format) == "SCALED_FP8":
+        if packed_kv is not None:
+            kv = packed_kv
         kv = _unpack_scaled_fp8_kv(kv, int(v_dim), q.shape[-1] - int(v_dim))
     kvpe = kv[cache_batch_idx, 0]
+    indices = _remap_block_cyclic_sparse_indices(
+        indices,
+        kvpe.shape[0],
+        block_cyclic_sp_axis=block_cyclic_sp_axis,
+        block_cyclic_chunk_local=block_cyclic_chunk_local,
+        block_cyclic_cache_tp_sharded=block_cyclic_cache_tp_sharded,
+        mesh_shape=mesh_shape,
+    )
     if attention_sink is not None and attention_sink.shape[-1] == q.shape[1]:
         attention_sink = attention_sink.permute(0, 3, 1, 2)
     return sparse_mla(q, kvpe, indices.to(torch.int64), scale, v_dim, attention_sink)
@@ -1143,6 +1215,17 @@ def _ring_attention_with_lse(
     return output, torch.logsumexp(logits, dim=-1, keepdim=True)
 
 
+def _ring_stats_scratch(input_tensor_q, joint_tensor_q=None):
+    """Return a shape-correct placeholder for the device's private running-max/running-sum scratch output."""
+    tile_width = 32
+    padded_query_length = math.ceil(input_tensor_q.shape[-2] / tile_width) * tile_width
+    padded_joint_length = (
+        math.ceil(joint_tensor_q.shape[-2] / tile_width) * tile_width if joint_tensor_q is not None else 0
+    )
+    stats = input_tensor_q.new_zeros((*input_tensor_q.shape[:2], 2 * (padded_query_length + padded_joint_length), 1))
+    return set_golden_comparison_config(stats, method="skip", scope="all")
+
+
 def _ring_joint_golden(
     input_tensor_q,
     input_tensor_k,
@@ -1180,6 +1263,7 @@ def _ring_joint_golden(
             "use a logically ordered cache or omit comparison for this mode"
         )
 
+    stats = _ring_stats_scratch(input_tensor_q, joint_tensor_q)
     input_tensor_k, input_tensor_v, actual_kv_length = _ring_runtime_cache_selection(
         input_tensor_k,
         input_tensor_v,
@@ -1218,7 +1302,7 @@ def _ring_joint_golden(
     if has_joint and query_start is not None:
         raise NotImplementedError("kv_actual_isl with joint tensors is not modeled by the ring golden")
 
-    output, lse = _ring_attention_with_lse(
+    output, _ = _ring_attention_with_lse(
         query,
         key,
         value,
@@ -1229,7 +1313,7 @@ def _ring_joint_golden(
         query_start=query_start,
     )
     joint_output = output[..., input_length:, :] if has_joint else output[..., :0, :]
-    return output[..., :input_length, :], joint_output, lse
+    return output[..., :input_length, :], joint_output, stats
 
 
 def ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
@@ -1255,8 +1339,6 @@ def ring_mla_golden(
     kv_cache_layer_idx=None,
     **_,
 ):
-    import torch
-
     input_tensor_kv, _, actual_kv_length = _ring_runtime_cache_selection(
         input_tensor_kv,
         input_tensor_kv,
@@ -1291,19 +1373,7 @@ def ring_mla_golden(
         scale=scale,
         query_start=actual_kv_length,
     )
-    scores = torch.matmul(
-        input_tensor_q.float(), _repeat_kv_heads(key, input_tensor_q.shape[1]).transpose(-2, -1).float()
-    )
-    scores *= input_tensor_q.shape[-1] ** -0.5 if scale is None else scale
-    mask = _window_mask(
-        input_tensor_q.shape[-2],
-        key.shape[-2],
-        is_causal=True,
-        query_start=actual_kv_length,
-        device=input_tensor_q.device,
-    )
-    lse = torch.logsumexp(scores.masked_fill(~mask.reshape(1, 1, *mask.shape), float("-inf")), dim=-1, keepdim=True)
-    return output, torch.cat([lse, lse], dim=-2)
+    return output, _ring_stats_scratch(input_tensor_q)
 
 
 def ring_distributed_scaled_dot_product_attention_golden(

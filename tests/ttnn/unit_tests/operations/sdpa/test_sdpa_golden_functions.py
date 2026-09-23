@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from ttnn.operations.transformer import _preprocess_sparse_sdpa_golden_inputs
 from ttnn.operations.transformer_golden import sparse_mla
 
 
@@ -237,6 +238,84 @@ def test_sparse_sdpa_golden_decodes_packed_scaled_fp8_kv():
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("use_keyword_kv", [False, True], ids=["positional-kv", "keyword-kv"])
+def test_sparse_sdpa_wrapper_pipeline_preserves_packed_fp8_for_global_golden(use_keyword_kv, monkeypatch, tmp_path):
+    # Exercise the wrapper's local-to-global preprocessing path so packed mixed-format KV rows remain raw bytes
+    # even though ordinary global FP8 inputs are value-converted.
+    class TransportTensor:
+        def __init__(self, value, dtype):
+            self.value = value
+            self.dtype = dtype
+            self.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
+
+        @property
+        def shape(self):
+            return self.value.shape
+
+        def device(self):
+            return None
+
+        def tensor_topology(self):
+            raise RuntimeError("Transport stand-in has no mesh topology")
+
+    torch.manual_seed(19)
+    latent_dim, rope_dim, tokens = 512, 64, 3
+    latent = torch.randn(1, 1, tokens, latent_dim).to(torch.float8_e4m3fn)
+    scales = torch.ones(1, 1, tokens, latent_dim // 128)
+    rope = torch.randn(1, 1, tokens, rope_dim).to(torch.bfloat16)
+    packed = _pack_scaled_fp8_kv(latent, scales, rope)
+    query = torch.randn(1, 2, 1, latent_dim + rope_dim).to(torch.bfloat16)
+    indices = torch.tensor([[[[0, 2]]]], dtype=torch.int64)
+    query_transport = TransportTensor(query, ttnn.bfloat16)
+    kv_transport = TransportTensor(packed, ttnn.DataType.FP8_E4M3)
+    indices_transport = TransportTensor(indices, ttnn.uint32)
+
+    monkeypatch.setattr(ttnn, "Tensor", TransportTensor)
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda _: [])
+    monkeypatch.setattr(ttnn, "is_tensor_storage_on_device", lambda _: False)
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor, **_: tensor.value)
+    monkeypatch.setattr(
+        ttnn,
+        "to_dtype",
+        lambda tensor, dtype: TransportTensor(tensor.value.float(), dtype),
+    )
+
+    common_kwargs = {"kv_format": ttnn.transformer.SparseKVFormat.SCALED_FP8}
+    if use_keyword_kv:
+        function_args = ()
+        function_kwargs = {
+            "q": query_transport,
+            "kv": kv_transport,
+            "indices": indices_transport,
+            "v_dim": latent_dim,
+            **common_kwargs,
+        }
+    else:
+        function_args = (query_transport, kv_transport, indices_transport, latent_dim)
+        function_kwargs = common_kwargs
+
+    tensor_ids = [query_transport.tensor_id, kv_transport.tensor_id, indices_transport.tensor_id]
+    try:
+        local_inputs = _preprocess_sparse_sdpa_golden_inputs(function_args, function_kwargs)
+        with ttnn.manage_config("report_path", str(tmp_path)):
+            global_inputs = ttnn.decorators.preprocess_global_golden_function_inputs(function_args, function_kwargs)
+        global_inputs = ttnn.decorators._merge_local_golden_metadata_into_global_inputs(local_inputs, global_inputs)
+        local_args, local_kwargs = local_inputs
+        global_args, global_kwargs = global_inputs
+
+        assert global_kwargs["_ttnn_sparse_sdpa_packed_kv"].dtype == torch.float8_e4m3fn
+        value_converted_global_kv = global_kwargs["kv"] if use_keyword_kv else global_args[1]
+        assert value_converted_global_kv.dtype == torch.float32
+
+        golden = ttnn.get_golden_function(ttnn.transformer.sparse_sdpa)
+        local_output = golden(*local_args, **local_kwargs)
+        global_output = golden(*global_args, **global_kwargs)
+        torch.testing.assert_close(global_output, local_output, rtol=0, atol=0)
+    finally:
+        for tensor_id in tensor_ids:
+            ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(tensor_id, None)
+
+
 def test_sparse_sdpa_golden_rejects_value_converted_scaled_fp8_kv(expect_error):
     query = torch.randn(1, 1, 1, 576)
     packed = torch.zeros(1, 1, 2, 656)
@@ -245,6 +324,50 @@ def test_sparse_sdpa_golden_rejects_value_converted_scaled_fp8_kv(expect_error):
     golden = ttnn.get_golden_function(ttnn.transformer.sparse_sdpa)
     with expect_error(ValueError, "packed bytes"):
         golden(query, packed, indices, 512, kv_format=ttnn.transformer.SparseKVFormat.SCALED_FP8)
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, chunk_local, cache_tp_sharded, stripes, stripe_chunk",
+    [
+        ((2, 1), 32, False, 2, 32),
+        ((2, 2), 64, True, 4, 32),
+    ],
+    ids=["sp-only", "sp-tp-sharded"],
+)
+def test_sparse_sdpa_golden_remaps_natural_indices_for_block_cyclic_cache(
+    mesh_shape, chunk_local, cache_tp_sharded, stripes, stripe_chunk
+):
+    # Encode token IDs in a physically block-cyclic cache to prove natural sparse indices are remapped before
+    # gathering, including the finer SP×TP-striped layout.
+    cache_length = 256
+    natural_tokens = torch.arange(cache_length, dtype=torch.float32)
+    natural_cache = torch.stack((natural_tokens, torch.zeros_like(natural_tokens)), dim=-1)
+    natural_indices = torch.arange(cache_length, dtype=torch.int64)
+    block_index = natural_indices // stripe_chunk
+    slab = block_index // stripes
+    stripe = block_index.remainder(stripes)
+    shard_length = cache_length // stripes
+    physical_indices = natural_indices + stripe * (shard_length - stripe_chunk) - slab * stripe_chunk * (stripes - 1)
+    physical_cache = torch.empty_like(natural_cache)
+    physical_cache[physical_indices] = natural_cache
+
+    query = torch.zeros(1, 1, 1, 2)
+    indices = torch.tensor([[[[32, 0xFFFFFFFF]]]], dtype=torch.int64)
+    golden = ttnn.get_golden_function(ttnn.transformer.sparse_sdpa)
+    actual = golden(
+        query,
+        physical_cache.reshape(1, 1, cache_length, 2),
+        indices,
+        1,
+        kv_format=ttnn.transformer.SparseKVFormat.BF16,
+        scale=1.0,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=chunk_local,
+        block_cyclic_cache_tp_sharded=cache_tp_sharded,
+        _ttnn_sparse_sdpa_mesh_shape=mesh_shape,
+    )
+
+    torch.testing.assert_close(actual, torch.tensor([[[[32.0]]]]))
 
 
 def test_ring_distributed_golden_returns_rank_query_chunks():
@@ -288,15 +411,25 @@ def test_joint_sdpa_golden_splits_combined_output():
     torch.testing.assert_close(joint_output, expected[..., 3:, :])
 
 
-def test_ring_joint_golden_uses_the_same_sink_logits_for_output_and_lse():
+@pytest.mark.parametrize(
+    "operation",
+    [
+        ttnn.transformer.ring_joint_scaled_dot_product_attention,
+        ttnn.transformer.exp_ring_joint_scaled_dot_product_attention,
+    ],
+    ids=["ring-joint", "experimental-ring-joint"],
+)
+def test_ring_joint_golden_uses_sink_logits_and_marks_stats_as_scratch(operation):
+    # Keep validating sink-aware attention numerics while asserting that the non-semantic device stats output is
+    # represented by a correctly shaped, explicitly skipped scratch tensor.
     query = torch.tensor([[[[1.0, 0.0], [0.0, 1.0]], [[0.5, 0.5], [1.0, -1.0]]]])
     key = torch.tensor([[[[1.0, 0.0], [0.0, 1.0]], [[1.0, 1.0], [1.0, -1.0]]]])
     value = torch.tensor([[[[2.0, 1.0], [4.0, 3.0]], [[1.0, 5.0], [2.0, 6.0]]]])
     sink = torch.tensor([[[[0.25]], [[-0.5]]]])
     scale = 0.75
 
-    golden = ttnn.get_golden_function(ttnn.transformer.ring_joint_scaled_dot_product_attention)
-    output, joint_output, lse = golden(
+    golden = ttnn.get_golden_function(operation)
+    output, joint_output, stats = golden(
         query,
         key,
         value,
@@ -313,11 +446,51 @@ def test_ring_joint_golden_uses_the_same_sink_logits_for_output_and_lse():
     logits = torch.cat([scores, sink_logits], dim=-1)
     expected_probabilities = torch.softmax(logits, dim=-1)[..., :2]
     expected_output = torch.matmul(expected_probabilities, value)
-    expected_lse = torch.logsumexp(logits, dim=-1, keepdim=True)
 
     torch.testing.assert_close(output, expected_output)
     assert joint_output.shape[-2] == 0
-    torch.testing.assert_close(lse, expected_lse)
+    assert stats.shape == (1, 2, 64, 1)
+    assert stats._ttnn_comparison_config.method == "skip"
+    assert stats._ttnn_comparison_config.scope == "all"
+
+
+def test_ring_joint_stats_scratch_uses_padded_query_and_joint_lengths():
+    # The device allocates running-max/running-sum scratch from tile-padded Q and joint lengths; comparison must
+    # skip only that leaf while continuing to check both semantic outputs.
+    torch.manual_seed(17)
+    query = torch.randn(1, 2, 3, 4)
+    key = torch.randn(1, 2, 3, 4)
+    value = torch.randn(1, 2, 3, 4)
+    joint_query = torch.randn(1, 2, 5, 4)
+    joint_key = torch.randn(1, 2, 5, 4)
+    joint_value = torch.randn(1, 2, 5, 4)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.ring_joint_scaled_dot_product_attention)
+    output, joint_output, stats = golden(
+        query,
+        key,
+        value,
+        joint_query,
+        joint_key,
+        joint_value,
+        logical_n=3,
+        logical_l=5,
+    )
+
+    assert output.shape[-2] == 3
+    assert joint_output.shape[-2] == 5
+    assert stats.shape == (1, 2, 128, 1)
+    runtime_outputs = (output.clone(), joint_output.clone(), torch.ones(1, 2, 1, 1))
+    ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(runtime_outputs), force=True)
+    records = ttnn.decorators.compare_tensors_using_pcc(
+        "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+        (output, joint_output, stats),
+        runtime_outputs,
+        desired_pcc=0.99,
+        level="locally",
+        fail_on_bad_comparison=True,
+    )
+    assert len(records) == 2
 
 
 def test_ring_joint_golden_resolves_indexed_layer_metadata():
@@ -499,6 +672,64 @@ def test_sdpa_decode_golden_keeps_query_batch_with_shared_cache():
     torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.parametrize("paged", [False, True], ids=["unpaged", "paged-circular"])
+@pytest.mark.parametrize(
+    "positions",
+    [(1, 1), (1, -1), (-1, -1)],
+    ids=["active", "mixed", "inactive"],
+)
+def test_mla_decode_golden_sizes_inactive_rows_from_value_width(paged, positions):
+    # MLA uses wider Q/K than V, so skipped users must emit V-width zeros that concatenate with active rows for
+    # both unpaged and paged-circular decode.
+    torch.manual_seed(18)
+    batch, heads, query_width, value_width, cache_length = 2, 2, 576, 512, 2
+    query = torch.randn(1, batch, heads, query_width)
+    key = torch.randn(batch, 1, cache_length, query_width)
+    value = torch.randn(batch, 1, cache_length, value_width)
+    positions_tensor = torch.tensor(positions)
+
+    if paged:
+        page_table = torch.tensor([[0], [1]], dtype=torch.int64)
+        golden = ttnn.get_golden_function(ttnn.transformer.paged_flash_multi_latent_attention_decode)
+        actual = golden(
+            query,
+            key,
+            value,
+            head_dim_v=value_width,
+            page_table_tensor=page_table,
+            cur_pos_tensor=positions_tensor,
+            cache_position_modulo=cache_length,
+            sliding_window_size=cache_length,
+        )
+    else:
+        golden = ttnn.get_golden_function(ttnn.transformer.flash_multi_latent_attention_decode)
+        actual = golden(
+            query,
+            key,
+            value,
+            head_dim_v=value_width,
+            cur_pos_tensor=positions_tensor,
+        )
+
+    query_by_batch = query.permute(1, 2, 0, 3)
+    expected_rows = []
+    for user, position in enumerate(positions):
+        if position < 0:
+            expected_rows.append(query.new_zeros((1, heads, 1, value_width)))
+        else:
+            expected_rows.append(
+                torch.nn.functional.scaled_dot_product_attention(
+                    query_by_batch[user : user + 1],
+                    key[user : user + 1, :, : position + 1].repeat_interleave(heads, dim=1),
+                    value[user : user + 1, :, : position + 1].repeat_interleave(heads, dim=1),
+                )
+            )
+    expected = torch.cat(expected_rows).permute(2, 0, 1, 3)
+
+    assert actual.shape == (1, batch, heads, value_width)
+    torch.testing.assert_close(actual, expected)
+
+
 def test_paged_decode_golden_converts_circular_mask_layout():
     query = torch.tensor([[[[1.0], [2.0]]]])
     page_table = torch.tensor([[0, 1]], dtype=torch.int64)
@@ -535,12 +766,14 @@ def test_paged_decode_golden_converts_circular_mask_layout():
 
 
 def test_ring_mla_golden_selects_cache_slot_when_batch_sizes_match():
+    # Validate indexed cache-slot selection and ensure ring MLA exposes its second output as skipped device scratch
+    # rather than a fabricated final LSE.
     torch.manual_seed(3)
     query = torch.randn(4, 2, 3, 6)
     kv = torch.randn(4, 1, 3, 6)
 
     golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
-    output, _ = golden(query, kv, head_dim_v=3, logical_n=3, kv_cache_batch_idx=2)
+    output, stats = golden(query, kv, head_dim_v=3, logical_n=3, kv_cache_batch_idx=2)
 
     key = kv[2:3, :, :3, :]
     value = key[..., :3]
@@ -551,6 +784,8 @@ def test_ring_mla_golden_selects_cache_slot_when_batch_sizes_match():
         is_causal=True,
     )
     torch.testing.assert_close(output, expected)
+    assert stats.shape == (4, 2, 64, 1)
+    assert stats._ttnn_comparison_config.method == "skip"
 
 
 def test_ring_mla_golden_uses_runtime_slot_and_logical_prefix():
