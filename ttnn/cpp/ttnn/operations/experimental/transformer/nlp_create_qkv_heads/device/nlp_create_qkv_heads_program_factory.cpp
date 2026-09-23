@@ -33,6 +33,10 @@ struct InterleavedWorkSplit {
     // Q-only head creation with fewer sequence blocks than cores splits the work per (batch, head) instead:
     // a block is then one head row rather than one full input row.
     bool head_parallel = false;
+    // Otherwise, without transpose_k_heads or the Q head split, a block is one tile of the flattened (tile row,
+    // tile in row) space (*_tiles.cpp kernels) instead of a whole tile row, so shapes with few tile rows still fill
+    // the grid.
+    bool tile_split = false;
 };
 
 InterleavedWorkSplit build_interleaved_work_split(
@@ -44,12 +48,18 @@ InterleavedWorkSplit build_interleaved_work_split(
     // Split heads only when the Q-only sequence split would leave cores idle.
     const bool head_parallel = operation_attributes.num_kv_heads == 0 && operation_attributes.num_q_heads > 1 &&
                                !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y;
-    const uint32_t num_blocks = sequence_blocks * (head_parallel ? operation_attributes.num_q_heads : 1);
+    const bool tile_split =
+        !head_parallel && !operation_attributes.transpose_k_heads && !operation_attributes.q_head_split.has_value();
+    const uint32_t row_tiles = (operation_attributes.num_q_heads + 2 * operation_attributes.num_kv_heads) *
+                               (operation_attributes.head_dim / TILE_WIDTH);
+    const uint32_t num_blocks = tile_split ? sequence_blocks * row_tiles
+                                           : sequence_blocks * (head_parallel ? operation_attributes.num_q_heads : 1);
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_blocks);
 
     InterleavedWorkSplit split;
     split.head_parallel = head_parallel;
+    split.tile_split = tile_split;
     split.all_cores = std::move(all_cores);
     split.core_group_1 = std::move(core_group_1);
     split.core_group_2 = std::move(core_group_2);
@@ -285,6 +295,21 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
             .accessor_name = "input_kv",
         });
     }
+    constexpr uint32_t tile_chunk = 8;  // *_tiles.cpp kernels: tiles per NoC barrier (the DFB holds 2 chunks)
+    if (split.tile_split) {
+        reader.source =
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+            "reader_tm_tile_layout_nlp_create_qkv_heads_tiles.cpp";
+        reader.compile_time_args.insert({"in0_w_tiles", in0_w_tiles});
+        reader.compile_time_args.insert({"in1_w_tiles", in1_w_tiles});
+        reader.compile_time_args.insert({"chunk", tile_chunk});
+        reader.runtime_arg_schema.runtime_arg_names = {"num_tiles", "start_tile"};
+        writer.source =
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+            "writer_tm_tile_layout_nlp_create_qkv_heads_tiles.cpp";
+        writer.compile_time_args.insert({"chunk", tile_chunk});
+        writer.runtime_arg_schema.runtime_arg_names = {"num_tiles", "start_tile"};
+    }
 
     // Dataflow buffers
     // Four-tile capacity: quadruple buffering for the one-tile paths, one batched head transfer otherwise.
@@ -292,7 +317,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
 
     // TODO: Investigate perf allocating full in0_w_tiles with double buffer
     // uint32_t qv_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes
-    uint32_t qv_num_tiles = dfb_num_tiles;
+    uint32_t qv_num_tiles = split.tile_split ? 2 * tile_chunk : dfb_num_tiles;
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{
             .unique_id = QV,
@@ -397,6 +422,19 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
+        if (split.tile_split) {
+            // here a block is one tile: the core owns tiles [num_blocks_written, + num_blocks_per_core)
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"num_tiles", num_blocks_per_core}, {"start_tile", num_blocks_written}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"num_tiles", num_blocks_per_core}, {"start_tile", num_blocks_written}});
+            num_blocks_written += num_blocks_per_core;
+            continue;
+        }
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
         uint32_t q_out_tensor_tile_id =
             (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
