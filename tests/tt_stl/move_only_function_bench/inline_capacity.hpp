@@ -7,26 +7,34 @@
 #include <cstddef>
 #include <functional>
 
-// The inline capacity every contender is pinned to: whatever std::function actually gets in this
-// configuration, so no side is handed a larger buffer than the baseline.
+// The inline capacity every contender is pinned to: whatever std::function actually has in the
+// current configuration, so no side is handed a larger buffer than the baseline.
 //
 // The buffer belongs to the standard library, not the compiler, so clang with libstdc++ matches
-// gcc. It cannot be derived from sizeof: libstdc++ is 32 B with a 16 B buffer (2 pointers of
-// overhead) while libc++ is 48 B with a 24 B buffer (3 pointers), so any `sizeof - N * sizeof(void*)`
-// formula is right for one and wrong for the other.
+// gcc. Both libraries size it in pointers rather than bytes, which is how it is expressed here:
 //
-// These constants are therefore measured, not computed. sbo_probe verifies them at runtime and
-// fails if a standard library moves the boundary.
+//   libstdc++  2 pointers  - _Any_data is a union whose widest member is a pointer to member
+//                            function, two pointers wide under the Itanium ABI
+//   libc++     3 pointers  - __buf_ is declared as char[3 * sizeof(void*)]
+//
+// So the byte figures are target dependent: 16 and 24 on LP64, 8 and 12 on a 32-bit target.
+// Tenstorrent only ships 64-bit hosts, so that is all this harness is built and validated on; the
+// pointer-relative form simply avoids baking in an assumption we never stated.
+//
+// Note the capacity cannot be recovered from sizeof(std::function): the overhead differs between
+// the two implementations (2 pointers vs 3), so any `sizeof - N * sizeof(void*)` rule is correct
+// for one and wrong for the other. These values are measured instead, and sbo_probe verifies them
+// at runtime and fails if a standard library, or a target, moves the boundary.
 namespace bench_config {
 
 #if defined(_LIBCPP_VERSION)
-inline constexpr std::size_t kInlineBytes = 24;  // libc++
+inline constexpr std::size_t kInlinePointers = 3;  // libc++
 inline constexpr const char* kStdlibName = "libc++";
 #else
-inline constexpr std::size_t kInlineBytes = 16;  // libstdc++
+inline constexpr std::size_t kInlinePointers = 2;  // libstdc++
 inline constexpr const char* kStdlibName = "libstdc++";
 #endif
 
-inline constexpr std::size_t kInlinePointers = kInlineBytes / sizeof(void*);
+inline constexpr std::size_t kInlineBytes = kInlinePointers * sizeof(void*);
 
 }  // namespace bench_config

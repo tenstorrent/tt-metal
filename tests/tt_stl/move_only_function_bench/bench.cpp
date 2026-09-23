@@ -52,8 +52,8 @@ struct SmallCapture {
 };
 static_assert(sizeof(SmallCapture) <= kInlineBytes);
 
-// 24 bytes: inline under libc++, heap under libstdc++. Probes exactly the band where the two
-// standard libraries disagree.
+// Three 64-bit words. On LP64 that is 24 bytes: inline under libc++ (3-pointer buffer), heap under
+// libstdc++ (2-pointer buffer), so it probes exactly the band where the two disagree.
 struct BoundaryCapture {
     std::uint64_t a = 1;
     std::uint64_t b = 2;
