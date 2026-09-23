@@ -6,14 +6,16 @@
 
 #include <cstdint>
 
+#include "api/debug/waypoint.h"
 #include "fds_functions.hpp"
 #include "interrupt_defines.h"
+#include "risc_common.h"
 
 namespace overlay::fds_signalling {
 
 // Cycles a go/done must be stable through the deglitcher before capture.
 // Dispatch (done) and worker (go) must use the same window.
-inline constexpr uint32_t filter_length = 8;
+inline constexpr uint32_t filter_length_cycles = 8;
 
 // Group 0 is the idle value on the wire, so payload groups start at 1.
 inline constexpr uint32_t idle_group_id = 0;
@@ -32,14 +34,38 @@ inline constexpr uint32_t dispatch_done_threshold = 0;
 // A worker fires on the first go from any enabled dispatch lane.
 inline constexpr uint32_t worker_go_threshold = 1;
 
-// Neither dispatch nor worker startup arms FDS interrupts: dispatch polls done counts,
-// and the worker arms its go interrupt mask only after groups are programmed.
+// Neither dispatch nor worker startup arms FDS interrupts: dispatch polls done counts, and the
+// worker arms its go interrupt mask only after auto dispatch is enabled and groups are programmed.
 inline constexpr uint32_t interrupts_disabled = 0;
 
-// Placeholder pending measurement: hold each strobe level until every worker captures it.
-// Must stay well above filter_length (filter + clock-domain crossing + ISR latency).
-inline constexpr uint32_t go_strobe_hold_cycles = 512;
-inline constexpr uint32_t init_go_clear_hold_cycles = 4096;
+// The four cycle counts below are temporary placeholders and will be updated to their actual values later.
+
+// At init, dispatch writes idle to the go wire directly and holds it this long before enabling
+// auto dispatch. Worker filters capture only when the wire value changes, so every worker has to
+// capture idle first; otherwise a first go that repeats the group the previous run left on the wire
+// is never seen. The hold must exceed the filter length.
+inline constexpr uint32_t init_go_park_hold_cycles = 4096;
+
+// Init normally waits for the previous run's queue to drain at the previous run's cycle count. A
+// count of 0 means one release every 2^32 cycles, so when the previous run left auto dispatch enabled
+// with a count of 0, init waits this long instead.
+inline constexpr uint32_t unbounded_drain_fallback_cycles = 4096;
+
+// Auto dispatch pacing on dispatch: queued gos go out one every count + 1 cycles, so each go stays on
+// the wire long enough for every worker's filter to capture it before the next value replaces it.
+// The same value sizes the wait for queued gos to go out before auto dispatch is disabled.
+inline constexpr uint32_t dispatch_auto_dispatch_pacing_cycle_count = 512;
+
+// Auto dispatch pacing on the worker: queued values go out one every count + 1 cycles. A short kernel
+// can queue the round's idle clear and its done back to back, so the spacing keeps idle on the wire
+// long enough for dispatch to capture it, and the done then arrives as a change.
+inline constexpr uint32_t worker_auto_dispatch_pacing_cycle_count = 512;
+
+inline void wait_cycles(uint32_t cycles) {
+    const uint32_t start_timestamp = get_timestamp_32b();
+    while (get_timestamp_32b() - start_timestamp < cycles) {
+    }
+}
 
 // Sub-device i is signalled with FDS group i + 1, since group 0 is idle.
 constexpr uint32_t go_group_for_sub_device(uint32_t sub_device_index) { return sub_device_index + 1; }
@@ -48,10 +74,7 @@ constexpr uint32_t sub_device_from_go_group(uint32_t group_id) { return group_id
 // One interrupt bit per payload group, shifted past the idle group 0.
 constexpr uint32_t go_interrupt_mask(uint32_t num_go_groups) { return ((uint32_t{1} << num_go_groups) - 1) << 1; }
 
-inline void dispatch_disable_auto_dispatch() { FdsDispatch::fds_disable_auto_dispatch(); }
-
-// A crossing-FIFO write can be acknowledged and dropped when the receiver is not ready, so every
-// write below that must land is reissued until a readback shows the expected value.
+// This readback retry is valid only while auto dispatch does not intercept the target register.
 template <typename WriteFunction, typename ReadFunction>
 inline void write_until_readback_matches(WriteFunction write, ReadFunction read, uint32_t expected) {
     do {
@@ -59,7 +82,41 @@ inline void write_until_readback_matches(WriteFunction write, ReadFunction read,
     } while (read() != expected);
 }
 
-inline uint32_t dispatch_read_filter_length() { return FDS_INTF_READ(TT_FDS_DISPATCH_FILTER_COUNT_THRESHOLD_REG_ADDR); }
+inline uint32_t dispatch_read_auto_dispatch_enable() { return FdsDispatch::fds_read_auto_dispatch_enable(); }
+
+inline uint32_t dispatch_read_auto_dispatch_cycle_count() { return FdsDispatch::fds_read_auto_dispatch_cycle_count(); }
+
+inline uint32_t dispatch_read_auto_dispatch_fifo_full() { return FdsDispatch::fds_read_auto_dispatch_fifo_full(); }
+
+inline void dispatch_disable_auto_dispatch() {
+    write_until_readback_matches(
+        [] { FdsDispatch::fds_disable_auto_dispatch(); },
+        [] { return dispatch_read_auto_dispatch_enable(); },
+        uint32_t{0});
+}
+
+inline void dispatch_enable_auto_dispatch() {
+    write_until_readback_matches(
+        [] { FdsDispatch::fds_enable_auto_dispatch(); },
+        [] { return dispatch_read_auto_dispatch_enable(); },
+        uint32_t{1});
+}
+
+inline void dispatch_config_auto_dispatch_pacing(uint32_t cycle_count) {
+    write_until_readback_matches(
+        [=] { FdsDispatch::fds_config_auto_dispatch_pacing(cycle_count); },
+        [] { return dispatch_read_auto_dispatch_cycle_count(); },
+        cycle_count);
+}
+
+inline void dispatch_config_auto_dispatch_outbox(uint32_t address) {
+    write_until_readback_matches(
+        [=] { FdsDispatch::fds_config_auto_dispatch_outbox(address); },
+        [] { return FdsDispatch::fds_read_auto_dispatch_outbox_address(); },
+        address);
+}
+
+inline uint32_t dispatch_read_filter_length() { return FdsDispatch::fds_read_filter_length(); }
 
 inline void dispatch_config_filter_length(uint32_t threshold) {
     write_until_readback_matches(
@@ -74,9 +131,13 @@ inline void dispatch_config_group(uint32_t group_id, uint32_t lane_mask, uint32_
     FdsDispatch::fds_config_groupid(group_id, lane_mask, count_threshold);
 }
 
-inline void dispatch_write_go(uint32_t value) { FdsDispatch::fds_go(/*ad_enable=*/false, value); }
+// This write is intercepted by auto dispatch.
+inline void dispatch_write_go(uint32_t value) { FdsDispatch::fds_go(value); }
 
-inline uint32_t dispatch_read_go() { return FDS_INTF_READ(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR); }
+// Direct-path go write, valid only while auto dispatch is disabled.
+inline void dispatch_write_go_direct(uint32_t value) {
+    write_until_readback_matches([=] { FdsDispatch::fds_go(value); }, [] { return FdsDispatch::fds_read_go(); }, value);
+}
 
 inline uint32_t dispatch_read_group_status(uint32_t group_id) { return FdsDispatch::fds_read_group_status(group_id); }
 
@@ -96,9 +157,35 @@ inline constexpr uint32_t plic_fds_priority = 1;
 constexpr uint32_t plic_source_for_go_group(uint32_t group_id) { return plic_source_base + group_id; }
 constexpr uint32_t go_group_from_plic_source(uint32_t source) { return source - plic_source_base; }
 
-inline void worker_disable_auto_dispatch() { FdsNeo::fds_disable_auto_dispatch(); }
+inline uint32_t worker_read_auto_dispatch_enable() { return FdsNeo::fds_read_auto_dispatch_enable(); }
 
-inline uint32_t worker_read_filter_length() { return FDS_INTF_READ(TT_FDS_TENSIXNEO_FILTER_COUNT_THRESHOLD_REG_ADDR); }
+inline uint32_t worker_read_auto_dispatch_cycle_count() { return FdsNeo::fds_read_auto_dispatch_cycle_count(); }
+
+inline void worker_disable_auto_dispatch() {
+    write_until_readback_matches(
+        [] { FdsNeo::fds_disable_auto_dispatch(); }, [] { return worker_read_auto_dispatch_enable(); }, uint32_t{0});
+}
+
+inline void worker_enable_auto_dispatch() {
+    write_until_readback_matches(
+        [] { FdsNeo::fds_enable_auto_dispatch(); }, [] { return worker_read_auto_dispatch_enable(); }, uint32_t{1});
+}
+
+inline void worker_config_auto_dispatch_pacing(uint32_t cycle_count) {
+    write_until_readback_matches(
+        [=] { FdsNeo::fds_config_auto_dispatch_pacing(cycle_count); },
+        [] { return worker_read_auto_dispatch_cycle_count(); },
+        cycle_count);
+}
+
+inline void worker_config_auto_dispatch_outbox(uint32_t address) {
+    write_until_readback_matches(
+        [=] { FdsNeo::fds_config_auto_dispatch_outbox(address); },
+        [] { return FdsNeo::fds_read_auto_dispatch_outbox_address(); },
+        address);
+}
+
+inline uint32_t worker_read_filter_length() { return FdsNeo::fds_read_filter_length(); }
 
 inline void worker_config_filter_length(uint32_t threshold) {
     write_until_readback_matches(
@@ -115,15 +202,27 @@ inline uint32_t worker_read_group_status(uint32_t group_id) { return FdsNeo::fds
 
 inline void worker_clear_dispatch_status(uint32_t dispatch_lane) { FdsNeo::fds_clear_de_status(dispatch_lane); }
 
-inline uint32_t worker_read_done() { return FdsNeo::fds_read_done(); }
+inline void worker_wait_for_auto_dispatch_queue_space() {
+    WAYPOINT("FADW");
+    while (FdsNeo::fds_read_auto_dispatch_fifo_full() != 0) {
+    }
+    WAYPOINT("FADD");
+}
+
+// Direct-path clear, valid only while auto dispatch is disabled.
+inline void worker_clear_done_direct() {
+    write_until_readback_matches(
+        [] { FdsNeo::fds_done(idle_group_id); }, [] { return FdsNeo::fds_read_done(); }, idle_group_id);
+}
 
 inline void worker_clear_done() {
-    write_until_readback_matches([] { FdsNeo::fds_clear_done(); }, [] { return worker_read_done(); }, idle_group_id);
+    worker_wait_for_auto_dispatch_queue_space();
+    FdsNeo::fds_done(idle_group_id);
 }
 
 inline void worker_signal_done(uint32_t group_id) {
-    write_until_readback_matches(
-        [=] { FdsNeo::fds_done(/*ad_enable=*/false, group_id); }, [] { return worker_read_done(); }, group_id);
+    worker_wait_for_auto_dispatch_queue_space();
+    FdsNeo::fds_done(group_id);
 }
 
 }  // namespace overlay::fds_signalling

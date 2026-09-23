@@ -64,10 +64,12 @@ inline status_ptr begin_dispatch(uint32_t l1_address, uint32_t num_slots) {
     // teardown would leave the output multiplexer on the queue path, turning every later direct
     // write on this engine into silence far from the fault. The outbox parks on the output bus,
     // so that even a mistimed enable diverts only writes that were headed for the wire anyway.
-    // This is everything software can reset. The pacing counter is unreachable and keeps running
-    // across kernels, and one test process shares one device, so pacing state from an earlier
-    // test is still live here. The pacing register is therefore left alone: writing it while the
-    // counter is mid-interval strands the queue until a 32 bit wrap.
+    // The pacing register is left alone: the AD kernels wait the drain bound before disabling, so
+    // the counter is at rest at exit even though its register value persists across kernels, and
+    // writing it mid-interval would strand the queue until a 32 bit wrap.
+    // Disabling auto dispatch here is the opposite of the production steady state on both tiles;
+    // that is safe only because the FDS fixture runs in slow dispatch mode, where the production
+    // firmware is built without FDS.
     overlay::FdsDispatch::fds_disable_auto_dispatch();
     overlay::FdsDispatch::fds_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
     overlay::FdsDispatch::fds_config_filter_length(kNoDeglitchFilter);
@@ -79,10 +81,9 @@ inline status_ptr begin_worker(uint32_t l1_address, uint32_t num_slots) {
     // Same defensive interrupt disable as begin_dispatch, for the same reason: this register map
     // has its own enable register and its own all-zero reset state.
     overlay::FdsNeo::fds_config_interrupt_en(0);
-    // Same defensive disable as begin_dispatch, and the same limit on what it can reset. The
-    // outbox park matters more on this map: zero is input register 0, and a stale zero outbox
-    // under a mistimed enable would divert a status-clearing write into the queue and emit it as
-    // an outgoing done.
+    // Same defensive disable and pacing handling as begin_dispatch. The outbox park matters more
+    // on this map: zero is input register 0, and a stale zero outbox under a mistimed enable would
+    // divert a status-clearing write into the queue and emit it as an outgoing done.
     overlay::FdsNeo::fds_disable_auto_dispatch();
     overlay::FdsNeo::fds_config_auto_dispatch_outbox(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
     overlay::FdsNeo::fds_config_filter_length(kNoDeglitchFilter);

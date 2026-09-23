@@ -100,6 +100,6 @@ void kernel_main() {
 
     // The last ready token is still on the done wire, so this is a change the engine will capture.
     if (result == kComplete) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kGroupId);
+        overlay::FdsNeo::fds_done(kGroupId);
     }
 }

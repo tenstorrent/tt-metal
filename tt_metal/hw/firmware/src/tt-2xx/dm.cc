@@ -122,13 +122,28 @@ inline void init_go_signalling() {
     // Registering a handler stores a jump instruction into the trap vector table, so the icache has
     // to be invalidated before the first go interrupt fetches through that entry.
     invalidate_l1_icache();
+    const uint32_t previous_auto_dispatch_cycle_count =
+        overlay::fds_signalling::worker_read_auto_dispatch_cycle_count();
+    const uint32_t previous_auto_dispatch_enabled = overlay::fds_signalling::worker_read_auto_dispatch_enable();
     overlay::fds_signalling::worker_disable_auto_dispatch();
-    overlay::fds_signalling::worker_config_filter_length(overlay::fds_signalling::filter_length);
+    overlay::fds_signalling::worker_config_filter_length(overlay::fds_signalling::filter_length_cycles);
     overlay::fds_signalling::worker_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
-    overlay::fds_signalling::worker_clear_done();
+    overlay::fds_signalling::worker_clear_done_direct();
     for (uint32_t dispatch_lane = 0; dispatch_lane < overlay::fds_signalling::num_dispatch_lanes; ++dispatch_lane) {
         overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
     }
+    if (previous_auto_dispatch_cycle_count == 0 && previous_auto_dispatch_enabled != 0) {
+        overlay::fds_signalling::wait_cycles(overlay::fds_signalling::unbounded_drain_fallback_cycles);
+    } else {
+        overlay::fds_signalling::wait_cycles(overlay::auto_dispatch_drain_cycles(
+            overlay::worker_auto_dispatch_queue_depth, previous_auto_dispatch_cycle_count));
+    }
+    WAYPOINT("FACW");
+    overlay::fds_signalling::worker_config_auto_dispatch_pacing(
+        overlay::fds_signalling::worker_auto_dispatch_pacing_cycle_count);
+    overlay::fds_signalling::worker_config_auto_dispatch_outbox(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
+    overlay::fds_signalling::worker_enable_auto_dispatch();
+    WAYPOINT("FACD");
     for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
          ++go_group_id) {
         overlay::fds_signalling::worker_config_group(
@@ -522,10 +537,7 @@ extern "C" uint32_t _start1() {
 
             // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
             // are readable when the host wakes on RUN_MSG_DONE.
-            uint32_t go_message_index = mailboxes->go_message_index;
-            if (worker_completion_group != 0) {
-                go_message_index = worker_completion_group - 1;
-            }
+            const uint32_t go_message_index = mailboxes->go_message_index;
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
