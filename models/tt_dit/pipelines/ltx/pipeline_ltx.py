@@ -239,7 +239,12 @@ class LTXPipeline:
         lora_enabled: bool = False,
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
+        """``sdpa_precision``/``sdpa_kv_dtype`` opt into a named streaming SDPA recipe for the D128
+        video denoiser attentions (audio paths stay legacy); omit them to keep the model's existing
+        attention configuration."""
         # Host affinity, explicit (not an import side effect): in a process re-execed by
         # ``reexec_pinned_before_torch`` this only caps torch's pool to the narrowed mask; otherwise it narrows
         # the threads still carrying the full mask. tt-metal's own single-CPU placements are left alone.
@@ -272,6 +277,8 @@ class LTXPipeline:
         # Linears (weight.data += A@B), not the host-fuse+reload path used by
         # extra_transformer_variants.
         self.lora_enabled = lora_enabled
+        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = sdpa_kv_dtype
         # How many registered adapters keep their A/B factors resident on device
         # (per-Linear LRU). Larger = fewer host re-uploads on swap and after each
         # dynamic_load page-in, at the cost of holding that many rank-sized factor
@@ -534,6 +541,8 @@ class LTXPipeline:
             image_conditioning=bool(self.vae is not None and self.vae.encoder_blocks and self._image_conditioning),
             quant_config=getattr(self, "_quant_config", None),
             lora_enabled=self.lora_enabled,
+            sdpa_precision=getattr(self, "sdpa_precision", None),
+            sdpa_kv_dtype=getattr(self, "sdpa_kv_dtype", None),
         )
 
     def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
