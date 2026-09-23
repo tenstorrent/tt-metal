@@ -534,6 +534,13 @@ def build_single_device_model(mesh_device, batch_size: int, seq_len: int):
         attention_class=PplxBidirectionalAttention,
         mlp_class=PplxFusedSwigluMLP,
     )
+    if os.getenv("QWEN_FUSED_ADD_NORM", "1") == "1":
+        # Residual add + RMSNorm pairs -> one generic_op each (bs16+ prefill; see tt/decoder_fusion.py).
+        # E2E same-chip A/B: bs16 239.6->234.8 (-2.0%), bs32 450.6->443.5 (-1.6%); bs8 regressed
+        # (+1.7%) and bs1 is slower standalone, both keep the stock ops via the row threshold.
+        from models.demos.blackhole.pplx_embed_4b.tt.decoder_fusion import install_decoder_fusion
+
+        install_decoder_fusion(model)
 
     kv_caches = [[layer.attention.layer_past for layer in model.layers]]
     generator = Generator(

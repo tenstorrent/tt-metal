@@ -546,6 +546,43 @@ bs8 156.6 vs 156.4, bs16 290.8 vs 290.9, **bs32 563.7 vs 557.8 (+1.1%)**. SDPA o
 bf16 Q (2× the Q bytes and Q-chunk CB) costs what the cast saved. Reverted; the
 real fix is emitting Q in bfp8 from the producer (part of the fused QKV epilogue).
 
+### Fused residual add + RMSNorm (bs16+) — landed (2026-09-23)
+
+`custom_ops/fused_add_rmsnorm`: one `generic_op` computes ``sum = a + b`` (the next
+residual, in the residual dtype) and ``rmsnorm(sum) * gamma`` in a single pass over
+`[M, dim]` — a and b read once, both outputs written once (4 DRAM passes instead of
+the stock add's 3 + the norm's 2). Per tile-row the compute adds, packs the sum twice
+(residual dtype + a bfp8 working copy, so the norm sees exactly what the stock
+add→norm path saw), squares, row-reduces with a 1/W scaler tile, rsqrt(+eps), then
+scales and applies gamma on the DST tile. Rows are split with the fewest cores that
+keep the same per-core maximum. `tt/decoder_fusion.py` installs it by wrapping each
+layer's `forward`: the two residual-shaped `ttnn.add`s of a layer are intercepted and
+the following `ff_norm` / the *next* layer's `attention_norm` hand back the
+precomputed tensor (so both pairs per layer fuse, including the cross-layer one).
+
+Standalone (bfp8 in/out, W=2560): M=16384 add+rms_norm 595.8 → fused 529.9 µs
+(−11%, roofline 415), M=4096 183 → 177, M=512 53 → 63 (only 16 rows → 16 cores).
+Accuracy vs torch fp32 at M=16384: PCC 0.99890 (fused) vs 0.99879 (stock path) —
+both bfp8-limited, fused marginally closer. Same-chip A/B (chips 4/6/7/8):
+
+| batch | H200 | before | **after** | Δ | × H200 |
+|---|---|---|---|---|---|
+| bs1  | 5.437   | 23.3  | 23.3  | (stock ops) | 4.29× |
+| bs8  | 33.081  | 126.2 | 126.2 | (stock ops; fused measured +1.7%) | 3.81× |
+| bs16 | 67.225  | 239.6 | **234.8** | **−2.0%** | 3.49× |
+| bs32 | 139.150 | 450.6 | **443.5** | **−1.6%** | 3.19× |
+
+`QWEN_FUSED_ADD_NORM=1` (default), `QWEN_FUSED_ADD_NORM_MIN_ROWS=8192` (flattened
+rows below which the stock ops are kept). `QWEN_FUSED_ADD_NORM_VERIFY=1` runs the stock
+add + norm next to every fused call on the live model tensors and prints the PCCs: at bs16
+all 72 calls of a forward gave sum ≥ 0.99988 and norm ≥ 0.9993 (most 1.0000).
+
+A measurement caveat found on the way: comparing raw last-token hidden states between two
+runs is *not* a usable equivalence metric on this bfp8 pipeline — a known-benign kernel
+change (the v2 head-split compute, per-op PCC 0.9995, STS-B unchanged) moves them to
+cos 0.87–0.97 after 36 layers. Compare final-normed, L2-normalised embeddings and the
+agreement of the sentence similarity matrix instead (what retrieval depends on).
+
 ### Batched SDPA on all 120 workers with one K chunk (2026-09-23)
 
 Standalone at the model's exact SDPA config (LoFi, exp approx, Q/K/V bfp8, non-causal,
