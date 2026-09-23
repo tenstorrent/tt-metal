@@ -3,9 +3,9 @@
 
 """Host-side guards for the ULP gate in ``passed_test(max_ulp=...)``.
 
-No kernel, no device: ``passed_test`` takes two tensors and returns a bool. It has ~295
-call sites, and the property every one of them relies on is that ``max_ulp=None`` changes
-nothing. The rest is what the gate is *for*: two tests build results the tolerance check
+No kernel, no device: ``passed_test`` takes two tensors and returns a bool. It has ~165
+call sites outside this file, and the property every one of them relies on is that
+``max_ulp=None`` changes nothing. The rest is what the gate is *for*: two tests build results the tolerance check
 and PCC respectively wave through, and show the step budget catching them.
 """
 
@@ -90,7 +90,7 @@ def _step(tensor, steps):
 
 @pytest.mark.parametrize("fmt", FLOAT_FORMATS, ids=lambda f: f.name)
 def test_without_max_ulp_the_verdict_is_unchanged(fmt):
-    """The property all ~295 call sites rely on."""
+    """The property all ~165 call sites outside this file rely on."""
     golden = _tile(1.0, fmt)
     assert passed_test(golden, golden.clone(), fmt)
     assert passed_test(golden, golden + 0.01, fmt)  # inside the per-format atol of 0.05
@@ -101,19 +101,31 @@ def test_without_max_ulp_the_verdict_is_unchanged(fmt):
 
 
 def test_an_argument_only_the_ulp_arm_reads_is_refused_without_a_budget():
-    """The tolerance arm is ``torch.isclose``, which has no flush concept and no floor, so
-    either of these without a budget was accepted and did nothing at all."""
+    """The tolerance arm is ``torch.isclose``, which has no flush concept, no floor and no
+    lane selection, so any of these without a budget was accepted and did nothing at all.
+    A silently ignored ``mask`` is the worst of the three: it judges every lane."""
     fmt = DataFormat.Float16
     golden = _tile(1.0, fmt)
-    for kwargs in ({"near_zero_atol": 1e-6}, {"flush_subnormals": True}):
+    for kwargs in (
+        {"near_zero_atol": 1e-6},
+        {"flush_subnormals": True},
+        {"mask": torch.ones_like(golden, dtype=torch.bool)},
+    ):
         with _refuses("does nothing on its own"):
             passed_test(golden, golden.clone(), fmt, **kwargs)
     with _refuses("flush_subnormals and near_zero_atol are read only"):
         passed_test(
             golden, golden.clone(), fmt, near_zero_atol=1e-6, flush_subnormals=True
         )
-    # With a budget both are accepted, so the guard has not swallowed the feature.
+    # With a budget all three are accepted, so the guard has not swallowed the feature.
     assert passed_test(golden, golden.clone(), fmt, max_ulp=0, flush_subnormals=True)
+    assert passed_test(
+        golden,
+        golden.clone(),
+        fmt,
+        max_ulp=0,
+        mask=torch.ones_like(golden, dtype=torch.bool),
+    )
 
 
 @pytest.mark.parametrize("budget", [-1, -128], ids=str)
@@ -453,10 +465,18 @@ def test_a_budget_past_the_meaningful_ceiling_warns_but_still_gates(budget, warn
     values differ by more than a binade. A warning, not an error: the verdict stands."""
     fmt = DataFormat.Float16_b
     golden = _tile(1.0, fmt)
+    verdict = []
     logged = "\n".join(
-        _logs_for(lambda: passed_test(golden, _step(golden, 3), fmt, max_ulp=budget))
+        _logs_for(
+            lambda: verdict.append(
+                passed_test(golden, _step(golden, 3), fmt, max_ulp=budget)
+            )
+        )
     )
     assert ("exceeds the largest meaningful ULP budget" in logged) is warns
+    # The half the name promises: 3 steps is inside both budgets, so a warning that
+    # short-circuited the gate to False would show up here.
+    assert verdict == [True]
 
 
 @pytest.mark.parametrize(
@@ -506,14 +526,38 @@ def test_a_mask_narrows_the_gate_to_the_lanes_it_selects():
         passed_test(golden, result, fmt, max_ulp=0, mask=torch.ones_like(golden))
 
 
-TORCH_INT_DTYPES = (
-    torch.int8,
-    torch.uint8,
-    torch.int16,
-    torch.int32,
-    torch.int64,
-    torch.bool,
-)
+def test_a_masked_out_lane_stays_out_of_the_summary(captured_logs):
+    """The verdict already ignored the excluded lanes; the message did not, so the worst
+    lane the log named could be one the gate had been told not to judge."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = _step(golden, 3)
+    result.reshape(-1)[0] = _step(golden, 40).reshape(-1)[0]
+
+    keep = torch.ones_like(golden, dtype=torch.bool)
+    keep.reshape(-1)[0] = False
+    assert not passed_test(golden, result, fmt, max_ulp=1, mask=keep, print_errors=True)
+    logged = "\n".join(captured_logs)
+    assert "max 3 ULP" in logged
+    assert "max 40 ULP" not in logged
+
+
+def test_the_near_zero_band_follows_the_mask_through_passed_test():
+    """`dynamic_range` is the one verdict input that is not elementwise, so an unscoped
+    max let a large masked-*out* golden widen the floor over the lanes masked *in* --
+    and made `passed_test` disagree with `within_ulp` on identical arguments."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = golden + 0.02
+    golden.reshape(-1)[0] = 1e6
+    result.reshape(-1)[0] = 1e6
+
+    keep = torch.ones_like(golden, dtype=torch.bool)
+    keep.reshape(-1)[0] = False
+    kwargs = dict(max_ulp=0, near_zero_atol=0.05, print_errors=False)
+    # Unmasked, 1e6 stretches the band past 1.0 and the floor rescues every lane.
+    assert passed_test(golden, result, fmt, **kwargs)
+    assert not passed_test(golden, result, fmt, mask=keep, **kwargs)
 
 
 # ── Integers are not ULP territory ──────────────────────────────────────────
@@ -583,6 +627,70 @@ def test_the_report_raises_an_enrolled_pass_out_of_debug():
     assert any(
         "ULP within budget" in record and "max 1 ULP" in record for record in records
     )
+
+
+def test_a_non_finite_failure_names_itself_in_the_log(captured_logs):
+    """A NaN lane is unmeasurable and drops out of the statistics, so this verdict used to
+    log "max 0 ULP (budget 0)" -- accurate and useless. The disagreement now leads."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    golden[7] = float("nan")
+    result = golden.clone()
+    result[7] = 1.0
+
+    assert not passed_test(golden, result, fmt, max_ulp=0, print_errors=False)
+    logged = "\n".join(captured_logs)
+    assert "non-finite disagreement @ [7]" in logged and "1 such lane(s)" in logged
+
+
+def test_a_failure_logs_the_worst_lane_ahead_of_the_tile_dump(captured_logs):
+    """In that order: the headline names the point, then the tile dump shows context."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = golden.clone()
+    result[42] = _step(golden, 9)[42]
+
+    assert not passed_test(golden, result, fmt, max_ulp=1, print_errors=True)
+    logged = "\n".join(captured_logs)
+    assert "max 9 ULP @ [42]" in logged
+    assert logged.index("ULP budget exceeded") < logged.index("Result tile")
+
+
+@pytest.mark.parametrize("print_errors", [True, False], ids=["reported", "silenced"])
+def test_print_errors_controls_the_level_not_the_message(print_errors):
+    """``print_errors=False`` asks for silence, but the ULP headline sat outside that
+    guard -- and its sink appends to the ``test_errors.log`` CI uploads. The line is
+    still emitted either way so it stays assertable; only its level drops. An ERROR sink
+    is what pins that: a TRACE sink cannot tell ``logger.error`` from ``logger.debug``.
+    """
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = _step(golden, 9)
+
+    def verdict():
+        passed_test(golden, result, fmt, max_ulp=1, print_errors=print_errors)
+
+    assert bool(_logs_for(verdict, "ERROR")) is print_errors
+    assert "ULP budget exceeded" in "\n".join(_logs_for(verdict))
+
+
+def test_a_silenced_failure_is_reported_at_info_under_the_report_flag():
+    """The branch ``--ulp-report`` inserts into that ladder. A reporting sweep that
+    dropped the failures would derive its budget from the lanes that passed, so the line
+    is raised from DEBUG to INFO -- but not to ERROR, which is the level the caller
+    asked to be spared."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = _step(golden, 9)
+
+    def verdict():
+        passed_test(golden, result, fmt, max_ulp=1, print_errors=False)
+
+    with _ulp_report_enabled():
+        assert not _logs_for(verdict, "ERROR")
+        assert "ULP budget exceeded" in "\n".join(_logs_for(verdict, "INFO"))
+    # And without the flag it stays below INFO, so the flag is what moved it.
+    assert not _logs_for(verdict, "INFO")
 
 
 @pytest.mark.parametrize("fmt", FLOAT_FORMATS, ids=lambda f: f.name)

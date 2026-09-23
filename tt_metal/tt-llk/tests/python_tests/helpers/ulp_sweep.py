@@ -16,12 +16,12 @@ it has no enumerable value set of its own.
 
 from __future__ import annotations
 
+import math
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Set, Tuple
 
 import torch
 from helpers.format_config import DataFormat
-from helpers.llk_params import MathOperation
 from helpers.stimuli_generator import StimuliSpec
 
 #: The formats this harness can enumerate. Bfp8_b rides on the bfloat16 value set: the
@@ -55,19 +55,21 @@ def sweep_spec() -> StimuliSpec:
     Deliberately not clipped to the op's domain. ``exclude_undefined`` expresses a domain
     as ``intervals``, which ULP_SWEEP does not read -- and clipping would also stop the
     undefined inputs reaching hardware at all. They are swept and then masked out of the
-    statistics by :func:`defined_mask`, so the run still exercises them.
+    statistics by :func:`measurable_mask`, so the run still exercises them.
     """
     return StimuliSpec.ulp_sweep(low=-_INF, high=_INF)
 
 
 def measurable_mask(
-    op: MathOperation,
     src: torch.Tensor,
     golden: torch.Tensor,
     result: torch.Tensor,
     input_format: DataFormat,
 ) -> torch.Tensor:
     """Lanes of an all-finite-input sweep that a *step count* can describe.
+
+    Op-agnostic on purpose: an op undefined at an input lands in the NaN kind on its
+    own, so there is nothing per-op to look up.
 
     The sweep feeds every non-special value of the format, with no per-op domain
     clipping -- an op is measured wherever its format can reach. Three lane kinds come
@@ -90,6 +92,10 @@ def measurable_mask(
     Subnormal *outputs* stay in. Where the golden underflows and the hardware writes
     zero the count is large but the lane is a real one the op produced -- Silu at
     ``x=-87.5`` is that case, and it is the op's own tail, not the unpack path.
+
+    The second kind is a *failure*, not a non-question, and dropping it here is only
+    sound because :func:`nonfinite_failures` reports it separately: a caller that ranks
+    this mask and nothing else would let a hardware overflow produce a clean budget.
     """
     # The threshold is the *stimuli* format's, not the golden's. Taking it from the
     # golden dtype silently passed every fp16 subnormal through on a Float16->Float16_b
@@ -112,6 +118,91 @@ def measurable_mask(
     return both_measurable & ~nonfinite_mismatches(golden, result) & normal_input
 
 
+def _within_safe_domain(
+    op, src: torch.Tensor, input_format: DataFormat
+) -> torch.Tensor:
+    """Lanes whose input is inside the domain ``sfpu_domains`` registers for *op*.
+
+    The sweep deliberately runs outside it -- that is the whole point, and the budget is
+    measured over everything. This is used only to judge *non-finite* answers, where the
+    distinction matters: outside the registered domain an op is not claiming anything,
+    and ``sin(2.6e28)`` returning ``inf`` against a golden of ``-1`` is an argument
+    reduction giving up, not a regression.
+    """
+    from helpers.sfpu_domains import exclude_undefined, for_op
+
+    spec = exclude_undefined(op, for_op(op, input_format).spec_A)
+    magnitude = src.detach().to(torch.float32)
+    inside = torch.ones_like(magnitude, dtype=torch.bool)
+    if spec.low is not None:
+        inside &= magnitude >= spec.low
+    if spec.high is not None:
+        inside &= magnitude <= spec.high
+    intervals = getattr(spec, "intervals", None)
+    if intervals:
+        covered = torch.zeros_like(inside)
+        for low, high in intervals:
+            covered |= (magnitude >= low) & (magnitude <= high)
+        inside &= covered
+    return inside
+
+
+def nonfinite_failures(
+    op,
+    src: torch.Tensor,
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+) -> torch.Tensor:
+    """The lanes :func:`measurable_mask` drops that are a *failure* rather than a
+    non-question: the two sides disagreeing about being non-finite where the output
+    format could have held the answer.
+
+    ``passed_test`` rejects these positionally whatever the budget says, but the sweep
+    driver ranks a distance rather than calling it, so it has to ask separately -- a
+    hardware overflow or an unexpected NaN would otherwise leave the statistics clean
+    and both emit and gate would pass.
+
+    Three exclusions, all of them the sweep's own doing rather than the op's:
+
+    * **subnormal inputs**, on the same grounds as in the mask -- the unpack path
+      flushes them and the golden does not, so a disagreement there is the flush.
+    * **a golden past the output format's finite range.** A full-range sweep feeds
+      every value of a 16-bit input, and ``relu_min`` passes most of them straight
+      through, so a bf16 input against a Float16 output reaches magnitudes fp16 cannot
+      represent -- 14,334 lanes of it. Saturating there is the store doing what it must
+      (on WH an fp16 destination overflow packs NaN, not Inf), not the kernel being
+      wrong, and no budget on any op could be met.
+    * **an input outside the op's registered safe domain.** ``Sin`` and ``Cos`` are
+      registered over ``[-pi, pi]`` and disagree on ~21,000 bf16 lanes far outside it,
+      which is the case ``measurable_mask``'s own docstring cites. The budget is still
+      measured over the whole format; it is only the *non-finite* answer that needs the
+      op to have been claiming something.
+
+    What is left is the case the mask would otherwise hide: an op returning ``inf`` or
+    ``NaN`` where it is defined, the input is normal, and the output could have held
+    the answer.
+    """
+    from helpers.llk_params import format_dict
+
+    from .ulp import nonfinite_mismatches
+
+    stimuli_dtype = format_dict[stimuli_format_for(input_format)]
+    magnitude = src.detach().to(torch.float32).abs()
+    normal_input = (magnitude >= torch.finfo(stimuli_dtype).smallest_normal) | (
+        magnitude == 0
+    )
+    output_max = torch.finfo(format_dict[stimuli_format_for(output_format)]).max
+    in_range = golden.detach().to(torch.float32).abs() <= output_max
+    return (
+        nonfinite_mismatches(golden, result)
+        & normal_input
+        & in_range
+        & _within_safe_domain(op, src, input_format)
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Folding a sweep back into the table
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,7 +220,15 @@ EMIT_HEADROOM = 1.1
 
 
 def record(op_name: str, key: Tuple[str, str, str, str], max_ulp: int) -> None:
-    MEASURED.setdefault(op_name, {})[key] = max_ulp
+    """Fold one measurement into the cell *key* names, keeping the *worst* lane.
+
+    The key is four-dimensional and a driver enumerates more than four axes --
+    ``fast_mode`` and ``input_dimensions`` are both multi-valued -- so one cell is
+    recorded several times per emit run. Last-write-wins would keep whichever variant
+    ran last, which is the polarity that can hide error; ``max`` is the one that cannot.
+    """
+    cells = MEASURED.setdefault(op_name, {})
+    cells[key] = max(cells.get(key, 0), max_ulp)
 
 
 def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
@@ -161,7 +260,7 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         # Bfp8_b output from random mixed-magnitude blocks and 3 from the sorted sweep.
         # Enrolling the second number would gate nothing and hide the first.
         return ("block", measured)
-    budget = 0 if measured == 0 else -(-measured * 11 // 10)
+    budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
     if budget > usable_budget_ceiling(DataFormat[out_fmt]):
         return ("tolerance", measured)
     return ("ulp", budget)
@@ -193,7 +292,20 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
 
     merged: Dict[Tuple, Tuple] = {}
     for key, value in decided.items():
-        merged[tuple(key[i] for i in keep)] = value
+        collapsed = tuple(key[i] for i in keep)
+        if merged.get(collapsed, value) != value:
+            # `approx` and `dest` droppability is decided independently above, which is
+            # sound on a full 2x2 grid -- both dropped implies all four agree. On an
+            # anti-diagonal (only (No,No) and (Yes,Yes) recorded) each axis sees only
+            # singletons, both get dropped, and one measurement would silently overwrite
+            # the other. `_render` writes the survivor's own figure into the provenance
+            # comment, so the budget audit could not catch it either.
+            raise ValueError(
+                f"collapsing {axes} to {[axes[i] for i in keep]} merges two different "
+                f"measurements onto {collapsed}: {merged[collapsed]} and {value}. The "
+                "recorded cells do not form a full grid -- emit from a complete run."
+            )
+        merged[collapsed] = value
 
     rows = []
     for key, (verdict, measured) in sorted(merged.items()):
@@ -237,18 +349,77 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     return out
 
 
+#: A ``name: value`` pair inside an inline row, with the value unquoted.
+_ROW_FIELD = re.compile(r'([A-Za-z_]\w*)\s*:\s*"?([^,}"]*)"?')
+
+#: What `_render` can put back. A row carrying anything else -- a `near_zero_atol`
+#: floor, an `atol`/`rtol` pair -- cannot be regenerated from a measurement, so it is
+#: preserved rather than replaced even when this sweep covers its cell.
+_RENDERABLE_FIELDS = frozenset({"in", "out", "approx", "dest", "max_ulp", "metric"})
+
+
+def _row_fields(line: str) -> Dict[str, str]:
+    """The inline row's fields, parsed. Substring matching is not enough: ``in:
+    Float16`` is a substring of ``in: Float16_b``."""
+    body = line.split("#", 1)[0]
+    if "{" not in body:
+        return {}
+    return dict(_ROW_FIELD.findall(body[body.index("{") + 1 : body.rindex("}")]))
+
+
+def _covered(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
+    """Whether this run measured the ``(in, out)`` cell *line* declares.
+
+    Only the cells actually in ``MEASURED`` for this op, never the static
+    ``SWEEP_FORMATS`` cross-product: a partial run -- ``-k``, an interrupt, a driver
+    skip -- must replace what it measured and leave the rest alone, rather than
+    rendering a whole op block from an incomplete session.
+    """
+    fields = _row_fields(line)
+    return (
+        bool(fields)
+        and (
+            fields.get("in", ""),
+            fields.get("out", ""),
+        )
+        in emitted_cells
+    )
+
+
+def _replaceable(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
+    """Whether this run's output supersedes *line*.
+
+    A row that pins ``arch`` is never replaceable. This sweep runs on one architecture,
+    and the table's own header says to re-measure on Blackhole; specificity lets the two
+    rows coexist, so regenerating one arch must not erase the other's contract.
+
+    Nor is a row carrying a field ``_render`` cannot put back -- a ``near_zero_atol``
+    floor, an ``atol``/``rtol`` pair. Those are refused at :func:`write_table` rather
+    than quietly replaced or quietly duplicated.
+    """
+    fields = _row_fields(line)
+    if "arch" in fields or set(fields) - _RENDERABLE_FIELDS:
+        return False
+    return _covered(line, emitted_cells)
+
+
 def write_table(path, suffix: str) -> int:
     """Replace every swept op's block in the YAML with what the sweep measured.
 
     Line-oriented on purpose. The table's comments *are* its provenance, and a load and
     re-dump through PyYAML would drop every one of them, including for the ops this
     sweep never touched.
+
+    Raises if an op in ``MEASURED`` has no key line to write into: the measurement would
+    otherwise be dropped in silence, and the sampled rows it was meant to replace would
+    stay in place looking measured -- the failure the ``_OP_KEY`` comment below records
+    biting once already.
     """
     import pathlib as _pathlib
 
     path = _pathlib.Path(path)
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    out, i, rewritten = [], 0, 0
+    out, i, written = [], 0, set()
     while i < len(lines):
         line = lines[i]
         # A top-level key by shape, not by trailing colon: an op whose key line carries a
@@ -266,26 +437,48 @@ def write_table(path, suffix: str) -> int:
             while j - 1 > i and not lines[j - 1].strip():
                 trailing.insert(0, lines[j - 1])
                 j -= 1
-            swept = {f.name for f in SWEEP_FORMATS}
-            kept = [
+            emitted_cells = {(k[0], k[1]) for k in MEASURED[name]}
+            rows = [l for l in lines[i + 1 : j] if l.strip().startswith("- ")]
+            unrenderable = [
                 l
-                for l in lines[i + 1 : j]
-                if l.strip().startswith("- ")
-                and not (
-                    any(f"in: {f}" in l for f in swept)
-                    and any(f"out: {f}" in l for f in swept)
-                )
+                for l in rows
+                if "arch" not in _row_fields(l)
+                and set(_row_fields(l)) - _RENDERABLE_FIELDS
+                and _covered(l, emitted_cells)
             ]
+            if unrenderable:
+                # Emitting over it would drop the floor; keeping it as well would give
+                # the cell two equally specific keys, which `_load_table` refuses. So
+                # neither, loudly, here: the row is a judgement a measurement cannot
+                # re-derive, and the cell has to be settled by hand.
+                raise ValueError(
+                    f"{path.name}: {name} has {len(unrenderable)} row(s) this sweep "
+                    "covers but cannot regenerate -- they carry a field beyond "
+                    f"{sorted(_RENDERABLE_FIELDS)}:\n"
+                    + "".join(unrenderable)
+                    + "Settle the cell by hand, or drop the extra field, before "
+                    "emitting."
+                )
+            kept = [l for l in rows if not _replaceable(l, emitted_cells)]
             out.extend(_render(line, _collapse(_decide(MEASURED[name])), suffix))
-            # Rows for formats this sweep does not reach -- Float32, Bfp4_b, and any
-            # arch-keyed entry -- are the measurement of a different run and stay as
-            # they are. Replacing a whole op block deleted them.
+            # Rows this run did not supersede -- a format it does not reach, an
+            # arch-keyed entry, a floor `_render` cannot re-derive -- are the
+            # measurement of a different run and stay as they are. Replacing a whole op
+            # block deleted them.
             out.extend(kept)
             out.extend(trailing)
-            rewritten += 1
+            written.add(name)
             i = j
             continue
         out.append(line)
         i += 1
+    missing = sorted(set(MEASURED) - written)
+    if missing:
+        raise ValueError(
+            f"{path.name}: measured {', '.join(missing)} but found no key line to "
+            "write into. Add the op's block to the table first -- the key line is "
+            "passed through verbatim so a header comment survives, and cannot be "
+            "generated here."
+        )
     path.write_text("".join(out), encoding="utf-8")
-    return rewritten
+    return len(written)

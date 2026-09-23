@@ -1407,7 +1407,7 @@ Gelu:
 
 
 GeluAppx:
-  - {metric: tolerance, atol: 0.13, rtol: 0.05}
+  - &coarse_lut_tolerance {metric: tolerance, atol: 0.13, rtol: 0.05}
 
 GeluDerivative:
   - {in: Bfp8_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 9280 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-22
@@ -3372,7 +3372,7 @@ Sigmoid:
 # would produce. The two share one number because they share one cause, so a retune
 # cannot move SigmoidAppx and leave GeluAppx behind without the diff saying so.
 SigmoidAppx:
-  - {metric: tolerance, atol: 0.13, rtol: 0.05}
+  - *coarse_lut_tolerance
 
 # Sign and Heaviside are exact on every lane except -0.0, and there they diverge by
 # hardware design, not drift: WH SFPSETCC compares bit patterns, so -0.0 reads as
