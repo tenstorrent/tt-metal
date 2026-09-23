@@ -1,5 +1,5 @@
-"""DeepSeek-V4-Flash full model: pipeline placement, weight loading, eager decode and
-the traced multi-session decode path.
+"""DeepSeek-V4-Flash full model: pipeline placement, weight loading and the traced,
+paged multi-session decode path.
 
 ttnn port of ``DeepseekV4Model`` from ``modular_deepseek_v4.py``: the embedding, the stack
 of :class:`DeepSeekV4DecoderLayer`, the final :class:`DeepSeekV4HyperHead` stream collapse
@@ -23,9 +23,9 @@ Three deviations from the reference, all forced by the on-device decode scope:
   interpreter -- see ``test_full_model_decode_demo.py``), not an owned
   ``DeepseekV4RotaryEmbedding``: ttnn has no rope-init. The traced path rebuilds the
   equivalent rows on device from the position (:meth:`DeepSeekV4Model._device_rope`).
-* The additive sliding-window / compressed-window masks are host-built for the eager
-  path, since device attention consumes a plain additive mask; the traced path generates
-  them on device from constant index tables (:meth:`DeepSeekV4Model._device_mask`).
+* The additive compressed-window masks are generated on device from constant index
+  tables (:meth:`DeepSeekV4Model._device_mask`), since device attention consumes a plain
+  additive mask.
 * Every layer's weights are resident at once (the reference holds the whole stack too),
   so the real 43-layer checkpoint wants a populated weight ``cache`` or ``max_layers``.
 """
@@ -42,12 +42,12 @@ import ttnn
 from loguru import logger
 
 from .attention import (
+    CSA_MAX_COMPRESSED_ENTRIES,
+    PAGED_KV_LAYER_TYPES,
     _StaticLayerCache,
     build_static_layer_cache,
-    decode_sdpa_bounds,
-    host_decode_mask,
-    int32_pos_tensor,
-    make_rope_table,
+    dense_kv_context_limit,
+    dense_kv_rows,
 )
 from .attention_csa import _scatter_window_rows
 from .decode_prefetch import make_decode_prefetch_buffers
@@ -59,7 +59,7 @@ from .paged_cache import (
     build_groups,
     plan_pool_blocks,
 )
-from .common import DeepSeekV4Module, _MASK_NEG, _profile, _region, _trace_capture_guard
+from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard
 from .decoder_layer import DeepSeekV4DecoderLayer
 from .embedding import DeepSeekV4Embedding
 from .hyperconnection import DeepSeekV4HyperHead
@@ -68,7 +68,7 @@ from .moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from .quant import dequantize_weight
 from .system_config import SystemConfig, load_system_config, set_active_system_config
 from .weight_cache import WeightCache, _as_cache
-from .weight_loader import DeepseekV4WeightLoader, hf_to_checkpoint_name
+from .weight_loader import DeepseekV4WeightLoader
 
 
 def plan_layer_placement(num_layers: int, num_devices: int, group_size: int) -> list[int]:
@@ -174,9 +174,7 @@ def _dspark_enabled() -> bool:
     idle otherwise taps layers 40-42 into a packed tensor, sends it over a D2D socket and
     replays an extra recv submesh on the idle row -- which only the DSpark drafting tests
     use (``test_dspark_flash_accept_rate.py`` reads it back with
-    :meth:`DeepSeekV4Model.read_mtp_hiddens`). Note this is *not*
-    ``DEEPSEEK_V4_LOAD_MTP``: that one only gates the ttnn MTP *stack* built on top of
-    this link, which the reference-drafter accept-rate test deliberately leaves off.
+    :meth:`DeepSeekV4Model.read_mtp_hiddens`).
     """
     return os.environ.get("DEEPSEEK_V4_DSPARK", "1") not in ("0", "", "false", "False")
 
@@ -366,17 +364,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # tensor and sent as a single socket payload, which the drafting test reads back
         # with :meth:`read_mtp_hiddens`. Built only when the mesh is larger than the
         # target pipeline (Galaxy 32-chip TP4 leaves 24 chips idle) and all three tap
-        # layers share a submesh. The env-gated MTP *stack* below reuses this link.
+        # layers share a submesh.
         self.mtp_submesh = None
         self._mtp_sender = None
         self._mtp_receiver = None
         self._mtp_pack = None
         self._mtp_hiddens = None
-        self.mtp_layers: list[DeepSeekV4DecoderLayer] = []
-        self.mtp_kv_caches: list[_StaticLayerCache] = []
-        self.mtp_hc_head: Optional[DeepSeekV4HyperHead] = None
-        self.mtp_norm: Optional[DeepSeekV4RMSNorm] = None
-        self._mtp_logit_heads: Optional[dict] = None
         self._dspark_tap_ids = tuple(i for i in (40, 41, 42) if i < self.num_layers)
         if (
             _dspark_enabled()
@@ -444,16 +437,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if self.layer_devices:
             self.last_device = self.layer_devices[-1]
 
-        # Per-layer decode state (in-place sliding K=V + optional compressor projections).
         self.sliding_window = config.sliding_window
         self._decode_max_seq: Optional[int] = None
-        self.kv_caches: list[_StaticLayerCache] = []
-        # Paged multi-session decode (traced path; see :meth:`prepare_static_decode`).
+        # Tokens the dense CSA KV buffers can hold (None: no CSA layer, or not prepared).
+        self._context_limit: Optional[int] = None
+        # Paged multi-session decode state (see :meth:`prepare_static_decode`).
         self._paged: Optional[PagedKVManager] = None
         # Traced-decode replay state. :meth:`prepare_static_decode` fills in the buffers
         # and re-arms capture, but the thread handle and its queue are owned here so that
         # :meth:`shutdown` stays callable on a model that never prepared a traced decode
-        # (the eager path) or that failed part-way through preparing one -- creating them
+        # or that failed part-way through preparing one -- creating them
         # in ``prepare_static_decode`` would make the unwind itself raise and mask the
         # error being unwound.
         self._traced_captured = False
@@ -500,8 +493,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.norm = DeepSeekV4RMSNorm(
             self._thunk("norm.weight"), config.rms_norm_eps, self.last_device, cache.file("norm"), sharded=True
         )
-        if os.environ.get("DEEPSEEK_V4_LOAD_MTP") == "1" and self.mtp_submesh is not None:
-            self.ensure_mtp_stack()
 
     # -- weight plumbing (lazy dequant; a populated tile cache skips the read) -- #
     def _thunk(self, name: str):
@@ -511,22 +502,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         tile-cache hit avoids the read entirely."""
         loader = self.loader
         return lambda: dequantize_weight(loader.get_tensor(name), loader.get_scale(name))
-
-    def _thunk_native(self, ckpt_name: str):
-        """Lazy dequant of a native checkpoint name (no HF ``layers.N`` rewrite); same
-        ``[K, N]`` host tensor contract as :meth:`_thunk`."""
-        loader = self.loader
-        return lambda: dequantize_weight(
-            loader.get_tensor(ckpt_name, translate=False),
-            loader.get_scale(ckpt_name, translate=False),
-        )
-
-    def _mtp_hf_thunk(self, stage: int, hf_suffix: str):
-        """Map an HF decoder-layer key onto ``mtp.{stage}.*`` native names, so an
-        ``mtp.N`` weight is read by its HF-relative ``[K, N]`` name."""
-        dummy = f"layers.0.{hf_suffix}"
-        ckpt = hf_to_checkpoint_name(dummy).replace("layers.0.", f"mtp.{stage}.", 1)
-        return self._thunk_native(ckpt)
 
     @staticmethod
     def _attn_keys(layer_type: str) -> list[str]:
@@ -588,26 +563,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 weights[f"{hc}.{p}"] = self._thunk(f"layers.{layer_idx}.{hc}.{p}")
         for k in ("input_layernorm.weight", "post_attention_layernorm.weight"):
             weights[k] = self._thunk(f"layers.{layer_idx}.{k}")
-        return weights
-
-    def _build_mtp_layer_weights(self, stage: int) -> dict:
-        """Decoder-layer weight dict for checkpoint ``mtp.{stage}`` (sliding + sparse MoE).
-
-        Same ``[K, N]`` name -> thunk mapping as :meth:`_build_layer_weights`, but read
-        from the native ``mtp.N.*`` checkpoint names. Used only by the env-gated MTP stack
-        (:meth:`ensure_mtp_stack`)."""
-        weights: dict = {}
-        for k in self._attn_keys("sliding_attention"):
-            weights[f"self_attn.{k}"] = self._mtp_hf_thunk(stage, f"self_attn.{k}")
-        weights["mlp.gate.weight"] = self._mtp_hf_thunk(stage, "mlp.gate.weight")
-        weights["mlp.gate.e_score_correction_bias"] = self._mtp_hf_thunk(stage, "mlp.gate.e_score_correction_bias")
-        for k in ("gate_proj.weight", "up_proj.weight", "down_proj.weight"):
-            weights[f"mlp.shared_experts.{k}"] = self._mtp_hf_thunk(stage, f"mlp.shared_experts.{k}")
-        for hc in ("attn_hc", "ffn_hc"):
-            for p in ("fn", "base", "scale"):
-                weights[f"{hc}.{p}"] = self._mtp_hf_thunk(stage, f"{hc}.{p}")
-        for k in ("input_layernorm.weight", "post_attention_layernorm.weight"):
-            weights[k] = self._mtp_hf_thunk(stage, k)
         return weights
 
     def _create_socket_pair(self, from_submesh, to_submesh):
@@ -705,7 +660,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Host copy of the packed layer-40/41/42 residuals, ``[B, 3, hc, D]``.
 
         Rank 0 of the MTP submesh (residuals are replicated across the 1xTP stage).
-        Valid after a decode step that ran the tap (eager or traced).
+        Valid after a traced decode step that ran the tap.
         """
         if self._mtp_hiddens is None:
             raise RuntimeError("MTP hidden tap is not allocated (need idle chips and layers 40-42)")
@@ -713,222 +668,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         copies = ttnn.to_torch(packed, mesh_composer=ttnn.ConcatMeshToTensor(self.mtp_submesh, dim=0))
         b = packed.shape[0]
         return copies[:b].contiguous()
-
-    def _mtp_expert_provider(self, stage: int):
-        """Host expert provider for checkpoint ``mtp.{stage}``'s sparse MoE (MTP stack):
-        ``(gate_up [2I, D], down [D, I])`` per expert id."""
-
-        def provider(e: int):
-            """Expert ``e`` as ``(gate_up [2I, D], down [D, I])`` host float32 tensors, gate
-            and up concatenated on dim 0 to match the fused experts op's layout."""
-            base = f"mtp.{stage}.ffn.experts.{e}"
-            gate = self._thunk_native(f"{base}.w1.weight")()
-            up = self._thunk_native(f"{base}.w3.weight")()
-            down = self._thunk_native(f"{base}.w2.weight")()
-            return torch.cat([gate, up], dim=0).float(), down.float()
-
-        return provider
-
-    def ensure_mtp_stack(self) -> None:
-        """Load the three checkpoint ``mtp.*`` decoder stages onto the idle MTP submesh.
-
-        **Not on any deployed path.** The only calls are the ``DEEPSEEK_V4_LOAD_MTP=1``
-        branch of :meth:`__init__` -- that value is set nowhere in the repo, and the
-        accept-rate test pins it to ``0`` -- and :meth:`mtp_greedy_token`, which no test
-        invokes. Everything it builds is otherwise dead weight, which is why it is lazy:
-        the 32-chip greedy demo does not pay three extra MoE layers on top of the 43-layer
-        target. Distinct from the MTP/DSpark *link*, which is live.
-
-        Uses native MLA + 256-expert MoE (``translate=False``), not the dense host DSpark
-        stand-in. Prefetch is off so this can run after the target prefetcher session is
-        already open. Each stage then runs :meth:`_mtp_decode_pos` on ``[B, 1, hc, D]``
-        residual streams against its own sliding KV cache.
-        """
-        if self.mtp_layers:
-            return
-        if self.mtp_submesh is None:
-            raise RuntimeError("MTP stack needs the idle-chip MTP submesh (32-chip TP4)")
-        sliding_idx = next(i for i, t in enumerate(self.config.layer_types) if t == "sliding_attention")
-        device = self.mtp_submesh
-        logger.info("Loading checkpoint mtp.0/1/2 MLA+MoE onto the MTP submesh")
-        for stage in range(3):
-            layer_cache = self.cache.sub(f"mtp.{stage}")
-            experts = DeepSeekV4PreloadedExperts(
-                self.config,
-                self._mtp_expert_provider(stage),
-                device,
-                dtype=self.weight_dtype,
-                cache=layer_cache.sub("mlp"),
-                tp_size=self.tp_size,
-            )
-            self.mtp_layers.append(
-                DeepSeekV4DecoderLayer(
-                    self.config,
-                    sliding_idx,
-                    self._build_mtp_layer_weights(stage),
-                    device,
-                    experts=experts,
-                    gate=None,
-                    cache=layer_cache,
-                    weight_dtype=self.weight_dtype,
-                    use_prefetcher=False,
-                    prefetch_buffers=None,
-                    tp_size=self.tp_size,
-                )
-            )
-            _profile(device)
-        self.mtp_hc_head = DeepSeekV4HyperHead(
-            self.config,
-            {
-                "hc_fn": self._thunk_native("mtp.2.hc_head_fn"),
-                "hc_base": self._thunk_native("mtp.2.hc_head_base"),
-                "hc_scale": self._thunk_native("mtp.2.hc_head_scale"),
-            },
-            device,
-            cache=self.cache.sub("mtp.2.hc_head"),
-        )
-        self.mtp_norm = DeepSeekV4RMSNorm(
-            self._thunk_native("mtp.2.norm.weight"),
-            self.config.rms_norm_eps,
-            device,
-            self.cache.file("mtp.2.norm"),
-            sharded=True,
-        )
-        logger.info("Checkpoint mtp.0/1/2 resident on the MTP submesh")
-
-    def _reset_mtp_kv(self) -> None:
-        """Allocate one empty dense ``_StaticLayerCache`` per MTP layer on the MTP submesh
-        (MTP stack): the sliding ring ``[B, 1, W, Dh]`` each. Requires ``_decode_max_seq``,
-        so call :meth:`prepare_static_decode` or :meth:`reset_caches` first."""
-        if self.mtp_submesh is None or not self.mtp_layers:
-            return
-        if self._decode_max_seq is None:
-            raise RuntimeError("call prepare_static_decode or reset_caches before MTP decode")
-        self.mtp_kv_caches = [
-            build_static_layer_cache(
-                self.mtp_submesh,
-                self.sliding_window,
-                "sliding_attention",
-                self.config.head_dim,
-                self._decode_max_seq,
-                self.config.compress_rates,
-                paged=False,
-                batch=self._decode_batch,
-            )
-            for _ in range(len(self.mtp_layers))
-        ]
-
-    def _mtp_logit_tensors(self) -> dict:
-        """Host tensors the MTP draft head needs, loaded once: the fused 40/41/42
-        projections (``main_proj`` ``[D, 3*D]`` / ``main_norm`` ``[D]``), the ``[V, D]``
-        embedding and ``[V, D]`` lm_head in bf16, and the ``[V, r]`` ``markov_head``
-        bias pair."""
-        if self._mtp_logit_heads is None:
-
-            def dq(n: str):
-                """Dequantized native checkpoint weight ``n`` as a host float32 tensor at its
-                checkpoint ``[K, N]`` shape (scale applied)."""
-                return dequantize_weight(
-                    self.loader.get_tensor(n, translate=False),
-                    self.loader.get_scale(n, translate=False),
-                )
-
-            def raw(n: str):
-                """Raw (unscaled) native checkpoint weight ``n`` as a bf16 host tensor at its
-                checkpoint ``[V, D]``-style shape."""
-                return self.loader.get_tensor(n, translate=False).to(torch.bfloat16)
-
-            self._mtp_logit_heads = {
-                "main_proj": dq("mtp.0.main_proj.weight"),
-                "main_norm": raw("mtp.0.main_norm.weight"),
-                "embed": raw("embed.weight"),
-                "lm_head": raw("head.weight"),
-                "markov_w1": raw("mtp.2.markov_head.markov_w1.weight"),
-                "markov_w2": raw("mtp.2.markov_head.markov_w2.weight"),
-            }
-        return self._mtp_logit_heads
-
-    def _mtp_streams_from_hidden(self, hidden_b1d: torch.Tensor) -> ttnn.Tensor:
-        """``[B, 1, D]`` → HC residual ``[B, 1, hc, D]`` on the MTP submesh."""
-        b, _, d = hidden_b1d.shape
-        hc = self.config.hc_mult
-        streams_h = hidden_b1d.unsqueeze(2).expand(b, 1, hc, d).contiguous().to(torch.bfloat16)
-        return self._to_tt(streams_h, self.mtp_submesh)
-
-    def _mtp_decode_pos(self, streams, pos: int, rope: dict, kv_caches, chain: bool, rope_pos: int | None = None):
-        """Run MTP layers at cache slot ``pos``. ``rope_pos`` selects the rotary row (defaults to ``pos``).
-
-        ``streams`` is the HC residual ``[B, 1, hc, D]`` TILE bf16 on the MTP submesh;
-        ``kv_caches`` the per-layer ``_StaticLayerCache`` list from :meth:`_reset_mtp_kv`;
-        ``rope`` the full host bundle (only the ``"main"``/sliding rows are used). Returns
-        the last layer's residual when ``chain`` is True, else ``streams`` unchanged --
-        ``chain=False`` still writes each layer's KV, but from the same input residual,
-        which is what makes it useful as a context-only pass.
-        """
-        device = self.mtp_submesh
-        w = self.sliding_window
-        rope_idx = pos if rope_pos is None else rope_pos
-        rope_cache: dict = {}
-        cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
-            rope, rope_idx, "sliding_attention", None, rope_cache, device
-        )
-        mask, sdpa_cur_pos = decode_sdpa_bounds(
-            w, "sliding_attention", None, pos, self._decode_max_seq, device, batch=self._decode_batch
-        )
-        sliding_pos = int32_pos_tensor(pos % w, device)
-        compress_pos = int32_pos_tensor(pos, device)
-        out = streams
-        for i, layer in enumerate(self.mtp_layers):
-            src = out if chain else streams
-            stepped = layer.decode(
-                src,
-                cos_tt,
-                sin_tt,
-                neg_sin_tt,
-                cos_win_tt,
-                sin_win_tt,
-                mask,
-                kv_caches[i],
-                sliding_pos,
-                compress_pos,
-                pool_compressor=False,
-                sdpa_cur_pos=sdpa_cur_pos,
-            )
-            if chain:
-                out = stepped
-        return out if chain else streams
-
-    def mtp_greedy_token(self, pack: torch.Tensor, anchor_id: int, pos: int, rope: dict) -> int:
-        """First draft token: fused 40/41/42 as extra K/V, ``embed(anchor)`` as the query.
-
-        MTP-stack only (see :meth:`ensure_mtp_stack`; no caller in the repo). ``pack`` is
-        the host tap tensor from :meth:`read_mtp_hiddens`, ``[B, 3, hc, D]``; ``anchor_id``
-        the token to draft from; ``rope`` the host bundle. ``pos`` is unused (the two MTP
-        slots are 0 and 1). Returns the drafted token id as a Python int.
-
-        Causal S=1 stand-in for DSpark's first block position. Cache slots are 0
-        (context) then 1 (query) on a fresh MTP window so SDPA does not attend zeros.
-        """
-        from models.experimental.deepseek_v4_flash.dspark import fuse_flash_mtp_pack, markov_bias
-
-        del pos
-        self.ensure_mtp_stack()
-        self._reset_mtp_kv()
-        heads = self._mtp_logit_tensors()
-        fused = fuse_flash_mtp_pack(pack, heads["main_proj"], heads["main_norm"], self.config.rms_norm_eps)
-        b = fused.shape[0]
-        device = self.mtp_submesh
-        ctx = self._mtp_streams_from_hidden(fused)
-        self._mtp_decode_pos(ctx, 0, rope, self.mtp_kv_caches, chain=False)
-        q = heads["embed"][anchor_id].float().view(b, 1, -1)
-        streams = self._mtp_streams_from_hidden(q)
-        streams = self._mtp_decode_pos(streams, 1, rope, self.mtp_kv_caches, chain=True)
-        hidden = self.mtp_norm(self.mtp_hc_head(streams))
-        copies = ttnn.to_torch(hidden, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
-        h = copies[:b].reshape(b, -1).float()
-        logits = h @ heads["lm_head"].float().T
-        logits = logits + markov_bias(torch.tensor([anchor_id]), heads["markov_w1"], heads["markov_w2"])
-        return int(logits[0].argmax().item())
 
     def _submesh_id_for_layer(self, layer_idx: int) -> int:
         """The submesh layer ``layer_idx`` lives on -- an index into ``submeshes``, i.e.
@@ -1048,7 +787,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
     # tokens, and the block-bias exposes entries ``w < (pos+1)//compress_rate`` --
     # constant between two window closures. So the pool runs only on the steps that
     # close a window, and pools *only* that window's projections into one new entry of
-    # the layer's combined buffer (:class:`_StaticLayerCache`). Together that makes a
+    # the layer's paged KV axis. Together that makes a
     # step ``O(compress_rate)`` instead of ``O(max_seq)``, so throughput is flat in
     # ``max_seq``. Pooling off-closure is not merely slower but wrong -- the window
     # buffer is only fully written at a closure -- so there is no A/B switch here.
@@ -1056,7 +795,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
     # -- SDPA masking mode ------------------------------------------------------- #
     #
     # Once the sliding ring is full, a CSA/HCA layer's valid KV set is a contiguous
-    # prefix (see :func:`sdpa_causal_ok`), so SDPA-decode can be bounded by a single
+    # prefix, so SDPA-decode can be bounded by a single
     # ``cur_pos`` in causal mode instead of an additive mask; the causal kernel then
     # derives its chunk range from the position and skips the rest. Sub-window steps
     # (whose valid set has a hole) keep the mask. The mask is *data*, not control flow,
@@ -1093,7 +832,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
     def _compressor_pool_due(self, layer_type: str, pos: int) -> bool:
         """Does the step at absolute ``pos`` close a window for ``layer_type`` -- i.e.
-        append one ``[Dh]`` entry to that layer's combined KV buffer?"""
+        append one ``[Dh]`` entry to that layer's paged KV axis?"""
         if layer_type == "sliding_attention":
             return False
         return (pos + 1) % self.config.compress_rates[layer_type] == 0
@@ -1259,30 +998,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
             index_sparse and bool(sm.get("has_csa")),
         )
 
-    # -- decode KV-cache state -------------------------------------------------- #
-    def reset_caches(self, max_seq: int) -> None:
-        """Allocate empty fixed-size dense decode buffers for a fresh sequence (the
-        eager :meth:`decode` path; the traced path uses :meth:`prepare_static_decode`).
-
-        ``max_seq`` is the longest absolute position + 1 the caller will decode
-        (prompt + generation), padded to tile / compress-rate multiples as needed. Each
-        layer gets a sliding ring ``[B, 1, W, Dh]`` plus, on a CSA/HCA layer, the packed
-        compressor windows and the ``[B, 1, W + cap//cr, Dh]`` combined axis.
-        """
-        self._decode_max_seq = max_seq
-        self.kv_caches = [
-            build_static_layer_cache(
-                self.layer_devices[li],
-                self.sliding_window,
-                self.config.layer_types[li],
-                self.config.head_dim,
-                max_seq,
-                self.config.compress_rates,
-                index_head_dim=self._indexer_head_dim(li),
-            )
-            for li in range(self.num_layers)
-        ]
-
     # ------------------------------------------------------------------ #
     # Paged multi-session decode
     #
@@ -1314,7 +1029,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def _require_paged(self) -> PagedKVManager:
         """The paged manager, or a raise naming the call that would have created it."""
         if self._paged is None:
-            raise RuntimeError("call prepare_static_decode(..., num_sessions=N) for paged multi-session decode")
+            raise RuntimeError("call prepare_static_decode() before using sessions")
         return self._paged
 
     def open_session(self) -> int:
@@ -1433,6 +1148,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         paged = self._require_paged()
         if not self._resident or None in self._resident:
             raise RuntimeError("call activate_sessions() before decoding")
+        if self._context_limit is not None and pos >= self._context_limit:
+            raise PagedCacheFull(
+                f"position {pos} exceeds the {self._context_limit}-token context the dense CSA KV "
+                f"({CSA_MAX_COMPRESSED_ENTRIES} compressed entries) can hold"
+            )
         # Every session is grown before anything is written: a table refresh publishes
         # all of its rows at once, so a short-circuit here would leave the rest of the
         # batch pointing at blocks it has not been given yet.
@@ -1445,14 +1165,20 @@ class DeepSeekV4Model(DeepSeekV4Module):
         pools, for status reporting."""
         return self._require_paged().usage()
 
+    @property
+    def context_limit(self) -> Optional[int]:
+        """Longest per-session context the dense CSA KV buffers allow, or ``None`` when
+        unbounded by them (no CSA layer). Set by :meth:`prepare_static_decode`."""
+        return self._context_limit
+
     def session_tokens_left(self) -> int:
         """Tokens the shared pool can still admit across all open sessions."""
         return self._require_paged().tokens_left()
 
     # -- paged device state ----------------------------------------------------- #
     def _paged_view(self, sm: dict, li: int, causal: bool = True) -> Optional[PagedLayerView]:
-        """The pool + page table layer ``li`` reads its KV through, or ``None`` when
-        this model runs the dense caches. The view carries the layer's pool
+        """The pool + page table layer ``li`` reads its KV through, or ``None`` for a
+        sliding / CSA layer, whose KV is the dense ``scache.kv``. The view carries the layer's pool
         ``[num_blocks, 1, block_size, Dh]``, its ``[B, logical_blocks]`` page-table row for
         this trace family, and the ring's ``position_modulo``.
 
@@ -1461,9 +1187,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         views share the same pool, and :meth:`_write_page_tables` keeps the prefix
         in sync with the full row.
         """
-        if self._paged is None:
+        group = self._paged_groups.get(self.config.layer_types[li])
+        if group is None:
             return None
-        group = self._paged_groups[self.config.layer_types[li]]
         tables = sm["page_tables"] if causal else sm["page_tables_masked"]
         return PagedLayerView(sm["pools"][li], tables[group.layer_type], group.position_modulo)
 
@@ -1500,14 +1226,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     ttnn.copy_host_to_device_tensor(short_row, short)
 
     def _compressor_slots(self):
-        """``(submesh, layer, buffer name)`` for every per-session compressor buffer the
-        layer actually allocated, in a fixed order. CSA keeps all four
+        """``(submesh, layer, buffer name)`` for every per-session buffer the layer actually
+        allocated, in a fixed order: the dense KV ``kv`` (sliding / CSA, TILE DRAM
+        ``[1, 1, rows, Dh]``), then the compressor windows. CSA keeps all four
         (``win_kv``/``win_gate``/``prev_kv``/``prev_gate``, ROW_MAJOR L1 WIDTH_SHARDED
         ``[B*cr, 1, 1, 2*Dh]``); HCA keeps only ``win_kv``/``win_gate`` (TILE DRAM
         ``[B, 1, cr, Dh]``); sliding layers keep none."""
         for sm in self.submeshes_io:
             for li, scache in sm["scaches"].items():
                 for name in (
+                    "kv",
                     "win_kv",
                     "win_gate",
                     "prev_kv",
@@ -1517,7 +1245,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     "idx_prev_kv",
                     "idx_prev_gate",
                     "idx_key_cache",
-                    "combined",
                 ):
                     if getattr(scache, name) is not None:
                         yield sm, li, name
@@ -1557,8 +1284,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def _state_mesh_mapper(self, name: str, device):
         """Mesh placement of a held-aside copy of buffer ``name``.
 
-        Compressor buffers, including the index-key cache and the dense
-        combined-KV mirror, are replicated across the TP mesh.
+        Compressor buffers, including the index-key cache, are replicated across
+        the TP mesh. Paged KV lives in the block pool, not in one of these copies.
         """
         del name
         if self.tp_size <= 1:
@@ -1715,219 +1442,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for sm, li, name in self._compressor_slots():
             self._copy_window(state[(sm["index"], li, name)], getattr(sm["scaches"][li], name))
 
-    # -- per-layer RoPE tables / masks ------------------------------------------ #
-    def _to_tt(self, t: torch.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
-        """Upload a host tensor (e.g. the ``[1,1,1,Rd]`` RoPE row) as TILE bf16 on
-        ``device``, replicated across the TP ranks when ``tp_size > 1`` since the rows
-        describe one position for the whole batch."""
-        _profile(device)
-
-        return ttnn.from_torch(
-            t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.tp_size > 1 else None,
-        )
-
-    def _rope_rows_decode(
-        self, rope: dict, pos: int, layer_type: str, compress_rate: Optional[int], cache: dict, device: ttnn.MeshDevice
-    ):
-        """Single-position RoPE rows for a decode step.
-
-        Returns ``(cos, sin, neg_sin, cos_win, sin_win)``, all one ``[1,1,1,Rd]`` TILE
-        bf16 row on ``device``: ``cos/sin/neg_sin`` at absolute ``pos``, and
-        ``cos_win/sin_win`` at the window closing at ``pos`` (``None`` for sliding
-        layers). Incremental pooling emits a single compressed entry per closure, so a
-        single window row is all it needs. ``cache`` is the caller's per-step memo, keyed
-        by (rope family, device), so every layer sharing a family uploads one set of rows.
-        """
-        key = f'{"sliding" if layer_type == "sliding_attention" else compress_rate}_{device.id()}'
-        if key in cache:
-            return cache[key]
-        cos_h, sin_h = rope["main"] if layer_type == "sliding_attention" else rope["compress"]
-        cos_row, sin_row = cos_h[pos : pos + 1], sin_h[pos : pos + 1]
-        cos_full, sin_full = make_rope_table(cos_row, sin_row)
-        cos_tt = self._to_tt(cos_full, device)
-        sin_tt = self._to_tt(sin_full, device)
-        neg_sin_tt = self._to_tt(-sin_full, device)
-
-        cos_win_tt = sin_win_tt = None
-        if layer_type != "sliding_attention":
-            assert self._decode_max_seq is not None
-            if self._decode_max_seq // compress_rate > 0:
-                # ``rope["win"][cr]`` row w is the "compress" family at position w*cr;
-                # clamp because before the first closure there is no window to pool.
-                wi = max(_window_indices(compress_rate, pos)[1], 0)
-                cw_h, sw_h = rope["win"][compress_rate]
-                cw, sw = make_rope_table(cw_h[wi : wi + 1], sw_h[wi : wi + 1])
-                cos_win_tt = self._to_tt(cw, device)
-                sin_win_tt = self._to_tt(sw, device)
-        out = (cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt)
-        cache[key] = out
-        return out
-
-    def _copy_streams_between_submeshes(self, streams, from_submesh_id: int, to_submesh_id: int):
-        """Move the decode residual streams ``[B, 1, hc, D]`` between two adjacent submeshes
-        over the pre-created socket pair — device-to-device, with no host round-trip.
-
-        Used by the eager :meth:`decode` path: untilize the residual, allocate a
-        row-major tensor on the target submesh, receive into it, tilize, and return
-        it (the loop reassigns ``streams``). The traced path instead folds the same
-        layout conversion plus send/recv into each submesh's trace
-        (see :meth:`_decode_submesh_static`).
-        """
-        to_submesh = self.submeshes[to_submesh_id]
-        sender_socket, receiver_socket = self.submesh_socket_pairs[(from_submesh_id, to_submesh_id)]
-        # Tile layout pads decode streams (height ``B * hc_mult``, typically 4) up to 32,
-        # so the socket payload is much smaller in row-major. Untilize for the hop,
-        # then tilize again so the next layer sees the usual TILE residual.
-        with _region("PIPELINE_HANDOFF"):
-            streams_rm = ttnn.to_layout(streams, ttnn.ROW_MAJOR_LAYOUT)
-            output_rm = ttnn.allocate_tensor_on_device(streams_rm.spec, to_submesh)
-            ttnn.experimental.send_direct_async(streams_rm, sender_socket)
-            ttnn.experimental.recv_direct_async(output_rm, receiver_socket)
-            output_tensor = ttnn.to_layout(output_rm, ttnn.TILE_LAYOUT)
-        streams.deallocate(True)
-        streams_rm.deallocate(True)
-        output_rm.deallocate(True)
-        return output_tensor
-
-    def decode(self, token_id: int, pos: int, rope: dict) -> ttnn.Tensor:
-        """Generate one step: feed ``token_id`` at absolute position ``pos`` against
-        the running KV cache; returns ``[B, 1, 1, D]`` (apply ``lm_head`` for logits).
-
-        ``rope`` is the *full* (max-length) host bundle; the needed rows are sliced
-        per layer. The prompt is prefilled by calling this once per prompt token at
-        ascending positions, so the cache holds positions ``0 .. pos - 1``. Requires
-        :meth:`reset_caches` and, for the prefetched projections, an open
-        :meth:`prefetcher_session`. The eager twin of the traced path; the token is a
-        scalar (one user) here, batched decode is traced-only.
-        """
-        ids = torch.tensor([[token_id]], dtype=torch.long)
-        ids_tt = ttnn.from_torch(
-            ids.to(torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.first_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.first_device) if self.tp_size > 1 else None,
-        )
-        with _region("EMBED"):
-            inputs_embeds = self.embed_tokens(ids_tt)  # [B, 1, D]
-            b, s, d = inputs_embeds.shape
-            streams = ttnn.reshape(inputs_embeds, [b, s, 1, d])
-            streams = ttnn.repeat(streams, ttnn.Shape([1, 1, self.config.hc_mult, 1]))  # [B, 1, hc_mult, D]
-
-        rope_cache: dict = {}
-        # Per-step tensors, keyed as the traced path keys them: positions by device,
-        # masks / window indices by (layer type, device). Built once and shared by every
-        # layer that reads them (what :meth:`_decode_submesh_static` does with its
-        # per-submesh ``step_ctx``). Rebuilding them per layer instead leaves a step's
-        # worth of short-lived L1 allocations behind the MoE, whose static circular
-        # buffers then have nowhere to land.
-        pos_cache: dict = {}
-        step_cache: dict = {}
-        last_submesh_id = 0
-        w = self.sliding_window
-        if not self.kv_caches:
-            raise RuntimeError("call reset_caches(max_seq) before decode()")
-        index_sparse = self._index_sparse_step(pos)
-        if index_sparse:
-            logger.info(f"indexer trace pos={pos}")
-        for li, layer in enumerate(self.layers):
-            if self.use_submeshes:
-                current_submesh_id = self._submesh_id_for_layer(li)
-                if current_submesh_id != last_submesh_id:
-                    streams = self._copy_streams_between_submeshes(streams, last_submesh_id, current_submesh_id)
-                this_device = self.submeshes[current_submesh_id]
-            else:
-                this_device = self.first_device
-            layer_type = self.config.layer_types[li]
-            compress_rate = None if layer_type == "sliding_attention" else self.config.compress_rates[layer_type]
-            cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
-                rope, pos, layer_type, compress_rate, rope_cache, this_device
-            )
-            step_key = f'{"sliding" if layer_type == "sliding_attention" else compress_rate}_{this_device.id()}'
-            if step_key not in step_cache:
-                mask, sdpa_cur_pos = (
-                    decode_sdpa_bounds(
-                        w, layer_type, compress_rate, pos, self._decode_max_seq, this_device, batch=self._decode_batch
-                    )
-                    if layer_type == "sliding_attention" or self._SDPA_CAUSAL
-                    else (host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device), None)
-                )
-                win_slot = win_row = None
-                if compress_rate is not None:
-                    slot, wi = _window_indices(compress_rate, pos)
-                    win_slot = int32_pos_tensor(slot, this_device)
-                    win_row = int32_pos_tensor(w + max(wi, 0), this_device)
-                step_cache[step_key] = (mask, sdpa_cur_pos, win_slot, win_row)
-            mask, sdpa_cur_pos, win_slot, win_row = step_cache[step_key]
-            device_key = this_device.id()
-            if device_key not in pos_cache:
-                pos_cache[device_key] = (
-                    int32_pos_tensor(pos % w, this_device),
-                    int32_pos_tensor(pos, this_device),
-                )
-            sliding_pos, compress_pos = pos_cache[device_key]
-            streams = layer.decode(
-                streams,
-                cos_tt,
-                sin_tt,
-                neg_sin_tt,
-                cos_win_tt,
-                sin_win_tt,
-                mask,
-                self.kv_caches[li],
-                sliding_pos,
-                compress_pos,
-                input_ids=ids,
-                pool_compressor=self._compressor_pool_due(layer_type, pos),
-                win_slot=win_slot,
-                win_row=win_row,
-                sdpa_cur_pos=sdpa_cur_pos,
-                index_sparse=index_sparse and layer_type == "compressed_sparse_attention",
-            )
-            if self.mtp_submesh is not None and li in self._dspark_tap_ids:
-                self._ensure_mtp_buffers(self._decode_batch)
-                self._slice_write_mtp_hidden(streams, self._dspark_tap_ids.index(li))
-                if li == self._dspark_tap_ids[-1]:
-                    self._send_mtp_pack()
-                    self._recv_mtp_pack()
-            if self.use_submeshes:
-                last_submesh_id = current_submesh_id
-            _profile(this_device)
-            # Stage the next layer's weights on this device while it is otherwise idle,
-            # but only where the traced path stages them: as the stack leaves this
-            # submesh, so the transfers overlap the handoff rather than the layer that
-            # follows immediately (see :meth:`_decode_submesh_static`). Under a contiguous
-            # placement that means no hoist at all -- the next layer runs straight away,
-            # and holding its weights through this layer's MoE is what leaves the fused
-            # expert op's static circular buffers without L1. ``LinearDecode.forward``
-            # queues its own request when nobody hoisted, so this is an overlap
-            # optimization, not a correctness requirement. Under the prefetcher the layers
-            # on a device share GCBs, so this must stay in layer order: each buffer is a
-            # FIFO and the matmuls pop it in the order queued.
-            leaves_submesh = (
-                self.use_submeshes
-                and li + 1 < self.num_layers
-                and self._submesh_id_for_layer(li + 1) != current_submesh_id
-            )
-            if leaves_submesh:
-                next_on_device = self._next_layer_on_submesh(li)
-                if next_on_device is not None:
-                    self.layers[next_on_device].prefetch_weights(index_sparse=index_sparse)
-        with _region("HC_HEAD"):
-            hidden = self.hc_head(streams)
-        with _region("FINAL_NORM"):
-            return self.norm(hidden)
-
     # ------------------------------------------------------------------ #
     # Traced decode (one reusable trace per submesh / device)
     #
-    # The eager :meth:`decode` is host-bound: every step re-dispatches ~43 layers' worth of
-    # ops, rebuilds the RoPE rows / masks from host, reads the MoE routing weights back to
-    # host, and host-copies the residual streams across submeshes. The traced path captures
+    # Decode is traced: a host-dispatched step would re-dispatch ~43 layers' worth of ops,
+    # rebuild the RoPE rows / masks from host, read the MoE routing weights back to host,
+    # and host-copy the residual streams across submeshes. Instead the model captures
     # one ``ttnn`` trace per submesh (so each device replays its own slice of the stack)
     # and, between replays, writes the tiny per-step inputs onto submesh 0 *only*, fused
     # into ONE fixed-shape INT32 packet (tokens + the two cache positions). RoPE rows and
@@ -1940,21 +1460,18 @@ class DeepSeekV4Model(DeepSeekV4Module):
     # ------------------------------------------------------------------ #
 
     def _build_static_layer_cache(self, li: int, device: ttnn.MeshDevice) -> "_StaticLayerCache":
-        """Allocate layer ``li``'s fixed-size in-place caches *empty* (all-zero) for
-        ``_decode_max_seq`` and ``_decode_batch`` users, as :func:`build_static_layer_cache`
-        does: the sliding ring ``[B, 1, W, Dh]``, the compressor windows
-        (``[B*cr, 1, 1, 2*Dh]`` ROW_MAJOR L1 WIDTH_SHARDED on CSA) and the combined
-        ``[B, 1, W + cap//cr, Dh]`` axis. Paged mode owns only the windows here; the KV is
-        in the block pools instead."""
-        assert self._decode_max_seq is not None, "set max_seq via reset_caches or prepare_static_decode first"
+        """Allocate layer ``li``'s compressor window buffers *empty* for ``_decode_batch``
+        users, as :func:`build_static_layer_cache` does (``[B*cr, 1, 1, 2*Dh]`` ROW_MAJOR L1
+        WIDTH_SHARDED on CSA, ``[B, 1, cr, Dh]`` TILE DRAM on HCA). The KV is in the block
+        pools (:meth:`_build_block_pool`)."""
+        assert self._decode_max_seq is not None, "set max_seq via prepare_static_decode first"
         return build_static_layer_cache(
             device,
-            self.sliding_window,
             self.config.layer_types[li],
             self.config.head_dim,
             self._decode_max_seq,
             self.config.compress_rates,
-            paged=self._paged is not None,
+            self.sliding_window,
             batch=self._decode_batch,
             index_head_dim=self._indexer_head_dim(li),
         )
@@ -2004,8 +1521,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return full, masked
 
     def reset_static_caches(self) -> None:
-        """Zero every traced-decode cache (sliding ring ``[B, 1, W, Dh]``, compressor
-        windows, combined axis) so a fresh sequence can start at position 0.
+        """Zero every compressor window buffer so a fresh sequence can start at position 0.
 
         The captured traces address these buffers directly, so they are zeroed in place:
         reallocating them would invalidate every capture, and even a temporary device
@@ -2017,8 +1533,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         :func:`build_static_layer_cache` allocates it: it gates window 0's absent Ca half,
         which a 0 fill would give real softmax weight instead of none.
 
-        In paged mode this only touches the compressor window buffers (the KV caches live
-        in the block pools); use :meth:`reset_session` to rewind one session.
+        The KV caches live in the block pools; use :meth:`reset_session` to rewind one
+        session.
         """
         if not getattr(self, "submeshes_io", None):
             raise RuntimeError("call prepare_static_decode() before reset_static_caches()")
@@ -2034,7 +1550,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         rope: dict,
         max_seq: int,
         lm_head=None,
-        num_sessions: int = 0,
+        num_sessions: int = 1,
         total_tokens: int | None = None,
         block_size: int = 32,
         batch: int = 1,
@@ -2052,8 +1568,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         submesh's trace, turning its ``[B, 1, 1, D]`` hidden into ``[B, 1, 1, V]`` logits so
         a step returns them directly.
 
-        ``num_sessions`` > 0 switches the KV caches to the paged multi-session layout: each
-        layer gets a ``[num_blocks, 1, block_size, Dh]`` pool instead of a dense buffer,
+        KV is always paged: each layer gets a ``[num_blocks, 1, block_size, Dh]`` pool,
         sized (with ``total_tokens``, defaulting to one full ``max_seq``) for that many
         concurrent conversations sharing the budget. Everything a session needs is allocated
         here, before any trace exists, because allocating on a device that holds a trace is
@@ -2071,40 +1586,51 @@ class DeepSeekV4Model(DeepSeekV4Module):
             raise NotImplementedError("traced decode requires use_submeshes=True")
         if batch < 1:
             raise ValueError(f"batch must be at least 1, got {batch}")
-        if batch > 1 and num_sessions and num_sessions < batch:
+        if num_sessions < 1:
+            raise ValueError(f"paged decode needs at least one session, got num_sessions={num_sessions}")
+        if num_sessions < batch:
             raise ValueError(f"a batch of {batch} needs at least that many sessions, got num_sessions={num_sessions}")
+        if batch != 1:
+            # TODO: batch the dense sliding / CSA KV buffers.
+            raise NotImplementedError(f"the dense sliding / CSA KV supports batch 1 only, got batch={batch}")
         self._decode_batch = batch
         cfg = self.config
         for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}:
             assert max_seq % cr == 0, f"max_seq ({max_seq}) must be a multiple of compress_rate {cr}"
-        if num_sessions > 0:
-            self._paged_groups = build_groups(
-                cfg.layer_types[: self.num_layers],
-                cfg.compress_rates,
-                self.sliding_window,
-                max_seq,
-                block_size=block_size,
+        self._context_limit = dense_kv_context_limit(cfg.layer_types[: self.num_layers], cfg.compress_rates)
+        if self._context_limit is not None and max_seq > self._context_limit:
+            logger.warning(
+                f"max_seq {max_seq} exceeds the {self._context_limit}-token context the dense CSA KV can hold; "
+                "sessions are capped there"
             )
-            pool_blocks = plan_pool_blocks(self._paged_groups, num_sessions, total_tokens or max_seq)
-            self._paged = PagedKVManager(self._paged_groups, pool_blocks)
+        # Only HCA layers are paged; sliding and CSA layers keep a dense ``scache.kv``.
+        self._paged_groups = build_groups(
+            [t for t in cfg.layer_types[: self.num_layers] if t in PAGED_KV_LAYER_TYPES],
+            cfg.compress_rates,
+            self.sliding_window,
+            max_seq,
+            block_size=block_size,
+        )
+        pool_blocks = plan_pool_blocks(self._paged_groups, num_sessions, total_tokens or max_seq)
+        self._paged = PagedKVManager(self._paged_groups, pool_blocks)
+        logger.info(
+            "paged decode: "
+            + ", ".join(
+                f"{name} {pool_blocks[name]} blocks of {g.block_size} rows "
+                f"({g.block_size * (g.compress_rate or 1)} tokens each, {g.logical_blocks} per session, "
+                f"{g.axis_rows}-row axis)"
+                for name, g in self._paged_groups.items()
+            )
+        )
+        if self._SDPA_CAUSAL:
             logger.info(
-                "paged decode: "
+                f"masked SDPA capture max_seqlen={self.sliding_window}: "
                 + ", ".join(
-                    f"{name} {pool_blocks[name]} blocks of {g.block_size} rows "
-                    f"({g.block_size * (g.compress_rate or 1)} tokens each, {g.logical_blocks} per session, "
-                    f"{g.axis_rows}-row axis)"
+                    f"{name} {g.kv_len_for(self.sliding_window)}-row axis "
+                    f"({g.logical_blocks_for(self.sliding_window)} blocks)"
                     for name, g in self._paged_groups.items()
                 )
             )
-            if self._SDPA_CAUSAL:
-                logger.info(
-                    f"masked SDPA capture max_seqlen={self.sliding_window}: "
-                    + ", ".join(
-                        f"{name} {g.kv_len_for(self.sliding_window)}-row axis "
-                        f"({g.logical_blocks_for(self.sliding_window)} blocks)"
-                        for name, g in self._paged_groups.items()
-                    )
-                )
         self._lm_head_traced = lm_head
         self._decode_max_seq = max_seq
         self._pool_crs = self._compress_rates_for(cfg.layer_types[: self.num_layers])
@@ -2179,7 +1705,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 "scaches": {li: self._build_static_layer_cache(li, device) for li in layers_k},
                 # Paged mode: one block pool per layer, and one page table per layer
                 # type (every layer of a type shares the mapping, not the data).
-                "pools": {li: self._build_block_pool(li, device) for li in layers_k} if self._paged else {},
+                "pools": {
+                    li: self._build_block_pool(li, device)
+                    for li in layers_k
+                    if cfg.layer_types[li] in PAGED_KV_LAYER_TYPES
+                },
                 "page_tables": {},
                 "page_tables_masked": {},
                 "pool_crs": self._compress_rates_for(types),
@@ -2188,8 +1718,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 "tids": {},  # global variant key -> trace id
                 "outputs": {},  # global variant key -> persistent output
             }
-            if self._paged:
-                sm["page_tables"], sm["page_tables_masked"] = self._build_page_tables(types, device)
+            sm["page_tables"], sm["page_tables_masked"] = self._build_page_tables(
+                [t for t in types if t in PAGED_KV_LAYER_TYPES], device
+            )
             # Per-family inv_freq constants for the rope families this submesh uses.
             for rt in ({"main"} if "sliding_attention" in types else set()) | ({"compress"} if crs else set()):
                 inv_freq_full, scaling = self._rope_gen[rt]
@@ -2209,34 +1740,30 @@ class DeepSeekV4Model(DeepSeekV4Module):
             masked_max_seq = self._masked_decode_max_seq
             for lt in types:
                 if lt == "sliding_attention":
-                    a = torch.arange(w, dtype=torch.float32)  # slot index 0..W-1
-                    b = None
-                    cr = None
-                else:
-                    cr = cfg.compress_rates[lt]
-                    n_win_cap = masked_max_seq // cr
-                    a = torch.cat([torch.arange(w), torch.full((n_win_cap,), -1)]).float()
-                    b = torch.cat([torch.full((w,), -1), torch.arange(n_win_cap)]).float()
-                # A block wider than the axis leaves a tail of unmapped rows, which SDPA
-                # still reads (it covers whole blocks). Filling A past the axis with a
-                # position no step can reach makes ``A > pos`` true there, so the tail
-                # is masked out however the compressor compare falls.
-                if self._paged:
-                    pad = self._paged_groups[lt].kv_len_for(masked_max_seq) - a.numel()
-                else:
-                    pad = 0
+                    # Always causal (``min(pos, W - 1)``, see ``_build_step_ctx``): no mask.
+                    sm["mask_gen"][lt] = (None, None, None)
+                    continue
+                cr = cfg.compress_rates[lt]
+                dense_rows = dense_kv_rows(lt, w)
+                n_win_cap = masked_max_seq // cr
+                if dense_rows is not None:
+                    n_win_cap = min(n_win_cap, dense_rows - w)
+                a = torch.cat([torch.arange(w), torch.full((n_win_cap,), -1)]).float()
+                b = torch.cat([torch.full((w,), -1), torch.arange(n_win_cap)]).float()
+                # SDPA reads rows past the valid axis -- the rest of a dense buffer, or the
+                # unmapped tail of a paged block. Filling A there with a position no step
+                # can reach makes ``A > pos`` true, so they are masked out however the
+                # compressor compare falls.
+                kv_len = dense_rows if dense_rows is not None else self._paged_groups[lt].kv_len_for(masked_max_seq)
+                pad = kv_len - a.numel()
                 if pad:
                     a = torch.cat([a, torch.full((pad,), float(masked_max_seq))])
-                    b = torch.cat([b, torch.full((pad,), -1.0)]) if b is not None else None
+                    b = torch.cat([b, torch.full((pad,), -1.0)])
                 a_tt = ttnn.from_torch(
                     a.reshape(1, 1, 1, -1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
                 )
-                b_tt = (
-                    None
-                    if b is None
-                    else ttnn.from_torch(
-                        b.reshape(1, 1, 1, -1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
-                    )
+                b_tt = ttnn.from_torch(
+                    b.reshape(1, 1, 1, -1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
                 )
                 sm["mask_gen"][lt] = (a_tt, b_tt, cr)
             # Submesh 0 owns global layer 0, whose per-step inputs (token + positions) stream
@@ -2264,7 +1791,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     self._pkt_socket.set_page_size(self._pkt_page_bytes)
             if any(li > 0 and ids[li - 1] != k for li in layers_k):
                 # Residual handoff is row-major so the socket does not ship tile padding
-                # (see :meth:`_copy_streams_between_submeshes`). Tilized again after recv.
+                # Tilized again after recv.
                 sm["streams_in"] = _dev_zeros([batch, 1, hc, d], device, layout=ttnn.ROW_MAJOR_LAYOUT)
                 sm["pkt_in"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self.submeshes_io.append(sm)
@@ -2364,22 +1891,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def _device_causal_pos(self, cr: int, pos_row_f: ttnn.Tensor) -> ttnn.Tensor:
         """Generate one decode step's causal SDPA ``cur_pos`` on device from the
         absolute position: ``sliding_window + (pos+1)//cr - 1``, the inclusive last
-        valid index on the ``[sliding | compressor]`` KV axis (the device twin of
-        :func:`sdpa_causal_cur_pos`)."""
+        valid index on the ``[sliding | compressor]`` KV axis."""
         thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_row_f, 1.0), 1.0 / cr))  # (pos+1)//cr
         return self._device_index(ttnn.add(thr, float(self.sliding_window - 1)))
-
-    def _device_sliding_cur_pos(self, pos_row_f: ttnn.Tensor) -> ttnn.Tensor:
-        """Dense sliding causal ``cur_pos``: ``min(pos, sliding_window - 1)`` as INT32 ``[batch]``."""
-        cap = float(self.sliding_window - 1)
-        return self._device_index(ttnn.minimum(pos_row_f, cap))
 
     def _device_compressor_indices(self, cr: int, pos_row_f: ttnn.Tensor, pos_f: ttnn.Tensor):
         """Device twins of :func:`_window_indices`, plus the closing window's position.
 
         Returns ``(win_slot, win_row, win_pos_f)``: the INT32 ``[batch]`` slot
         ``pos % cr`` this token's projection is written to in the one-window buffer, the
-        INT32 ``[batch]`` row ``sliding_window + w`` of the combined KV buffer the pooled
+        INT32 ``[batch]`` row ``sliding_window + w`` of the paged KV axis the pooled
         entry lands in, and the FP32 ``[1,1,1,1]`` absolute position ``w * cr`` to RoPE
         that entry at, for the window ``w = (pos+1)//cr - 1`` closing at this step.
 
@@ -2500,12 +2021,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
             win_idx: dict = {}
             for lt, (a, b_tbl, cr) in sm["mask_gen"].items():
                 # Bound the KV axis by a position (causal) where the valid set is a
-                # contiguous prefix, else by the additive mask. Sliding is causal at
-                # every pos (``min(pos, W-1)`` on the dense ring); paged sliding still
-                # ignores this and uses absolute pos + ``sliding_window_size``.
+                # contiguous prefix, else by the additive mask. A sliding ring is always
+                # a prefix: rows ``[0, min(pos, W - 1)]``.
                 if lt == "sliding_attention":
                     masks[lt] = None
-                    curpos[lt] = self._device_sliding_cur_pos(pos_row_f)
+                    curpos[lt] = self._device_index(ttnn.clamp(pos_row_f, max=float(self.sliding_window - 1)))
                 else:
                     use_causal = causal
                     masks[lt] = None if use_causal else self._device_mask(a, b_tbl, cr, pos_f)
@@ -2803,7 +2323,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             # park forever without a page of its own. The packet position has to be one
             # this variant can execute (see :meth:`_capture_packet_pos`).
             packet_pos = self._capture_packet_pos(pos, causal, index_sparse)
-            if self._paged is not None and packet_pos > pos:
+            if packet_pos > pos:
                 self.ensure_session_capacity(packet_pos)
             self._write_packet(token_id, packet_pos)
             for sm in self.submeshes_io:
@@ -2894,8 +2414,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         if not getattr(self, "submeshes_io", None):
             raise RuntimeError("call prepare_static_decode() before decode_traced()")
-        if self._paged is not None:
-            self.ensure_session_capacity(pos)
+        self.ensure_session_capacity(pos)
         # Capture first: the compile runs inside consume a packet each, so pushing this
         # step's packet before them would hand it to a compile run instead of to the
         # replay below.
@@ -2931,10 +2450,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         queued on cq 0 and its output lands in that submesh's persistent trace output
         ``[B, 1, N]`` and, from the last submesh, in the D2H socket.
         """
-        if self._paged is not None:
-            self.ensure_session_capacity(pos)
-            for sid in self._resident:
-                self._session_pos[sid] = pos + 1
+        self.ensure_session_capacity(pos)
+        for sid in self._resident:
+            self._session_pos[sid] = pos + 1
         variant = self._variant_key(pos)
         for sm in self.submeshes_io:
             ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)

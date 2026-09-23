@@ -45,6 +45,7 @@ from .attention import (
     _packed_users,
     _tp_cluster_axis,
     _update_cache_at,
+    _update_kv_at,
 )
 from .common import _profile, _signpost, width_sharded_l1_config
 from .decode_prefetch import (
@@ -298,58 +299,66 @@ class DeepSeekV4CSACompressor:
         compressed = _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
         return _one_row_per_user(compressed)
 
-    def decode_static(
+    def _step(
         self,
         tokens: ttnn.Tensor,
         cos_row: ttnn.Tensor,
         sin_row: ttnn.Tensor,
         scache: "_StaticLayerCache",
-        combined_cache: ttnn.Tensor | None,
         win_slot: ttnn.Tensor,
-        win_row: ttnn.Tensor | None = None,
-        pool: bool = True,
-        paged: PagedLayerView | None = None,
-    ) -> None:
-        """Trace-safe decode: write each user's ``2*Dh`` token projection in place at
-        ``win_slot`` into the one-window ROW_MAJOR L1 WIDTH_SHARDED
-        ``[B*cr, 1, 1, 2*Dh]`` buffers, and -- on the step that closes the window -- pool
-        just that window (Ca/Cb overlap against the retained previous window) and append
-        its single entry at row ``win_row`` of the layer's KV axis (``combined_cache``,
-        or ``paged``'s pool).
+        pool: bool,
+    ) -> ttnn.Tensor | None:
+        """Write each user's ``2*Dh`` token projection in place at ``win_slot`` into the
+        one-window ROW_MAJOR L1 WIDTH_SHARDED ``[B*cr, 1, 1, 2*Dh]`` buffers, and -- on the
+        step that closes the window -- pool just that window (Ca/Cb overlap against the
+        retained previous window).
 
-        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``, already gathered onto
-        the decode activation grid when the caller used
-        :meth:`~.attention.DeepSeekV4Attention.decode_static`; ``cos_row`` / ``sin_row`` are the closing
-        window's RoPE row ``[1, 1, 1, Rd]`` and ``win_slot`` / ``win_row`` INT32 ``[B]``
-        row-index vectors.
-
-        After pooling, the closing window becomes the ``prev_*`` the *next* window
-        will overlap with. See :meth:`~.attention_hca.DeepSeekV4HCACompressor.decode_static`.
+        Returns the pooled entry ``[1, B, 1, Dh]`` for the caller to write and free, or
+        ``None`` when ``pool`` is false. After pooling, the closing window becomes the
+        ``prev_*`` the *next* window will overlap with.
         """
-        _signpost("CSA_START")
         users = _packed_users(tokens)
         win_index = self._win_index(win_slot, users)
         # kv before gate: that is the order :meth:`prefetch_weights` queued them on the
         # shared ring. Each row is freed before the next matmul; see :meth:`_write_projection`.
         self._write_projection(self.kv_proj, tokens, scache.win_kv, win_index)
         self._write_projection(self.gate_proj, tokens, scache.win_gate, win_index)
-        if pool and (combined_cache is not None or paged is not None):
-            pooled = self._pool_window(
-                scache.prev_kv, scache.prev_gate, scache.win_kv, scache.win_gate, cos_row, sin_row
-            )
-            # Paged attention reads the block pool. A dense ``combined_cache`` beside it
-            # is the indexer's ``sparse_sdpa`` mirror and has to see the same entry.
-            if paged is not None:
-                _update_cache_at(None, pooled, win_row, paged=paged)
-            if combined_cache is not None:
-                _update_cache_at(combined_cache, pooled, win_row)
-            ttnn.deallocate(pooled)
-            _retire_window(scache.prev_kv, scache.win_kv)
-            _retire_window(scache.prev_gate, scache.win_gate)
-        if self.indexer is not None and getattr(scache, "idx_key_cache", None) is not None:
-            self.indexer.write_keys(tokens, cos_row, sin_row, scache, win_slot, win_row, pool=pool)
         if win_index is not win_slot:
             ttnn.deallocate(win_index)
+        if not pool:
+            return None
+        pooled = self._pool_window(scache.prev_kv, scache.prev_gate, scache.win_kv, scache.win_gate, cos_row, sin_row)
+        _retire_window(scache.prev_kv, scache.win_kv)
+        _retire_window(scache.prev_gate, scache.win_gate)
+        return pooled
+
+    def decode_static(
+        self,
+        tokens: ttnn.Tensor,
+        cos_row: ttnn.Tensor,
+        sin_row: ttnn.Tensor,
+        scache: "_StaticLayerCache",
+        kv: "PagedLayerView | ttnn.Tensor",
+        win_slot: ttnn.Tensor,
+        win_row: ttnn.Tensor | None = None,
+        pool: bool = True,
+    ) -> None:
+        """Trace-safe decode: :meth:`_step`, then append the pooled entry at row
+        ``win_row`` of the layer's KV axis (``kv``, the dense ``[1, 1, rows, Dh]`` buffer).
+
+        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``, already gathered onto
+        the decode activation grid when the caller used
+        :meth:`~.attention.DeepSeekV4Attention.decode_static`; ``cos_row`` / ``sin_row`` are the closing
+        window's RoPE row ``[1, 1, 1, Rd]`` and ``win_slot`` / ``win_row`` INT32 ``[B]``
+        row-index vectors. See :meth:`~.attention_hca.DeepSeekV4HCACompressor.decode_static`.
+        """
+        _signpost("CSA_START")
+        pooled = self._step(tokens, cos_row, sin_row, scache, win_slot, pool)
+        if pooled is not None:
+            _update_kv_at(kv, pooled, win_row)
+            ttnn.deallocate(pooled)
+        if self.indexer is not None and getattr(scache, "idx_key_cache", None) is not None:
+            self.indexer.write_keys(tokens, cos_row, sin_row, scache, win_slot, win_row, pool=pool)
         _signpost("CSA_END")
 
 
@@ -468,8 +477,6 @@ class DeepSeekV4Indexer:
         self.device = device
         self.tp_size = int(tp_size)
         self.cluster_axis = _tp_cluster_axis(device) if self.tp_size > 1 else None
-        self._k_gathered: ttnn.Tensor | None = None
-        self._ag_semaphores: list | None = None
         self._ag_sub_device_id = None
         self.head_dim = config.index_head_dim
         self.num_heads = config.index_n_heads
@@ -557,35 +564,6 @@ class DeepSeekV4Indexer:
         )
         self._window_ids: ttnn.Tensor | None = None
 
-    def _ensure_ring(self, k_local: ttnn.Tensor) -> None:
-        """Persistent full-T gather buffer and the two AG direction semaphores.
-
-        ``k_local`` is this rank's ``[B, 1, T/tp, D]`` shard. The fused op gathers into
-        a replicated ``[1, 1, T, D]`` scratch (batch-1, matching indexed-cache mode).
-        """
-        t_local, dim = k_local.shape[2], k_local.shape[3]
-        t_full = t_local * self.tp_size
-        if self._k_gathered is None or list(self._k_gathered.shape) != [1, 1, t_full, dim]:
-            self._k_gathered = ttnn.from_torch(
-                torch.zeros(1, 1, t_full, dim, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            )
-        if self._ag_semaphores is None:
-            grid = self.device.compute_with_storage_grid_size()
-            cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-            # Same full-grid worker subdevice the ring-indexer unit tests load: AG cores
-            # stay in that stall group so the fused gather and score wait on each other.
-            if self._ag_sub_device_id is None:
-                mgr = self.device.create_sub_device_manager([ttnn.SubDevice([cores])], 0)
-                self.device.load_sub_device_manager(mgr)
-                self._ag_sub_device_id = ttnn.SubDeviceId(0)
-                self.device.set_sub_device_stall_group([self._ag_sub_device_id])
-            self._ag_semaphores = [ttnn.create_global_semaphore(self.device, cores, 0) for _ in range(2)]
-
     def prefetch_weights(self, *, score: bool = False, q_b: bool = True):
         """Stage compressor kv/gate, and the score projections when ``score`` is set.
 
@@ -622,16 +600,10 @@ class DeepSeekV4Indexer:
         idx_row = win_row
         if pool and win_row is not None:
             idx_row = ttnn.subtract(win_row, self.sliding_window)
-        self.compressor.decode_static(
-            tokens,
-            cos_row,
-            sin_row,
-            _IndexerWindowView(scache),
-            scache.idx_key_cache,
-            win_slot,
-            idx_row,
-            pool=pool,
-        )
+        pooled = self.compressor._step(tokens, cos_row, sin_row, _IndexerWindowView(scache), win_slot, pool)
+        if pooled is not None:
+            _update_cache_at(scache.idx_key_cache, pooled, idx_row)
+            ttnn.deallocate(pooled)
         if idx_row is not win_row and idx_row is not None:
             ttnn.deallocate(idx_row)
 

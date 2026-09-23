@@ -129,7 +129,6 @@ class FakeEngine:
         self.eos_id = EOS
         self.max_seq = 4096
         self.max_new_tokens = 32
-        self.traced = True
         self.rope = None
         self.lm_head = None
         self.paged = True
@@ -143,7 +142,7 @@ class FakeEngine:
     def post_traced(self, user, positions):
         user.activate()
         positions = [int(p) for p in positions]
-        if not self.traced or not positions:
+        if not positions:
             return
         self.model.ensure_session_capacity(positions[-1])
         self.model.replay_traced_ahead(positions)
