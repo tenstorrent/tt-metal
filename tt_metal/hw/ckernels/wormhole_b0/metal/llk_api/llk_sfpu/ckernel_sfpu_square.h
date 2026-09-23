@@ -20,10 +20,6 @@ inline void calculate_square() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat result = v * v;
-        // SFPSTORE truncates fp32->bf16 by default, but torch narrows with IEEE
-        // round-to-nearest-even, biasing every inexact result toward zero by up to
-        // one bfloat16 ULP (e.g. ttnn.square(x) disagreeing with ttnn.mul(x, x)).
-        // mul_binary_tile already rounds the same fp32 product this way; match it.
         if constexpr (!is_fp32_dest_acc_en) {
             result = float32_to_bf16_rne(result);
         }
