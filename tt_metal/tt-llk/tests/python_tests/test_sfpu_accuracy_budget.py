@@ -264,6 +264,51 @@ def test_an_unset_query_dimension_only_matches_a_wildcard():
     )
 
 
+def test_specificity_counts_every_set_dimension():
+    """The only comparison of two *non-DEFAULT* keys: a 2-field key beating a 1-field
+    one, and the 1-field one winning where the 2-field key does not match.
+
+    Load-bearing here as it was not before: the ``Fill`` block now stacks 1-, 2- and
+    4-field keys on one op, and ``resolve_contract`` raises only on an equal-specificity
+    tie -- so a miscount would silently repoint budgets while every bounds-only guard in
+    this file still passed.
+    """
+    table = {
+        BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
+        BudgetKey(
+            output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
+        ): AccuracyContract(max_ulp=8),
+    }
+    resolved = resolve_contract(
+        table,
+        label="op",
+        output_format=DataFormat.Float32,
+        dest_acc=DestAccumulation.No,
+    )
+    assert resolved.max_ulp == 8
+    resolved = resolve_contract(
+        table,
+        label="op",
+        output_format=DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+    )
+    assert resolved.max_ulp == 4
+
+
+def test_a_key_describes_itself_for_an_error_message():
+    assert DEFAULT.describe() == "DEFAULT"
+    described = BudgetKey(
+        output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
+    ).describe()
+    assert "output_format" in described and "dest_acc" in described
+
+
+def test_enrolled_ops_is_sorted_and_stable():
+    ops = enrolled_ops()
+    assert list(ops) == sorted(ops, key=lambda op: op.name)
+    assert len(set(ops)) == len(ops)
+
+
 def test_equally_specific_keys_are_an_error_not_a_tie_break():
     """Two keys, one dimension each, both matching: the table's iteration order must not
     decide a budget."""
@@ -792,11 +837,12 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
         for _, fmt, contract in _every_variant(op)
         if fmt is DataFormat.Bfp8_b and contract.metric == Metric.ULP
     }
-    # Enrolment here is per *cell*, not per op: the same op measures 3 steps in one
-    # variant and 15616 in another, purely from block composition. So the assertion is
-    # not a list of ops but the property that makes one safe -- every enrolled Bfp8_b
-    # budget stays inside the format's usable ceiling, which is what a block-quantized
-    # cell cannot do. Measured: 161 Bfp8_b cells clear it and are enrolled.
+    # The ceiling is necessary but not sufficient, and it is not the guard: every
+    # Bfp8_b cell already passes through `test_no_budget_exceeds_its_formats_usable_
+    # ceiling`, because `ULP_CAPABLE_FORMATS` includes Bfp8_b via `_ULP_PROXY_DTYPES`.
+    # A regeneration enrolling `Abs` at the 3 steps a sorted sweep reads would clear
+    # 25.6, clear provenance, and be exactly the failure this test is named for. So the
+    # bound is on *membership*, and it is an equality.
     ceiling = usable_budget_ceiling(DataFormat.Bfp8_b)
     for op in enrolled_ops():
         for _, fmt, contract in _every_variant(op):
@@ -805,20 +851,23 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
                     f"{op.name} carries a {contract.max_ulp}-step Bfp8_b budget against "
                     f"a {ceiling:.0f}-step ceiling; past it the number gates nothing."
                 )
-    # The integer-valued ops remain the ones that are exact there, by construction.
-    assert {
+    assert enrolled_on_bfp8 == {
         MathOperation.Floor,
         MathOperation.Ceil,
         MathOperation.Trunc,
         # Fill is block-friendly by a different mechanism from the three above, and a
         # stronger one: its output is a single constant, so every block is uniform
         # whatever the input held and the shared exponent is exact by construction.
-        # Threshold is deliberately absent. Its sampled 0 came from uniform(-5, 5)
-        # against THRESHOLD_T=5.0, where the pass-through branch never fires and the
-        # output is likewise the constant 10.0 -- the exhaustive sweep, whose domain
-        # reaches past the threshold, reads 16545, so that 0 described the domain.
+        #
+        # Threshold is deliberately absent, and so is every op enrolled only through a
+        # sampled `{in: Bfp4_b, out: Bfp8_b}` or `{in: Float32, out: Bfp8_b}` row. Those
+        # 0s and 13-to-25s are the block exponent fitting a degenerate or narrow
+        # stimulus, not the op: Threshold's came from uniform(-5, 5) against
+        # THRESHOLD_T=5.0, where the pass-through branch never fires, while the
+        # exhaustive sweep reads 16545. They are recorded as tolerance with their
+        # measurements.
         MathOperation.Fill,
-    } <= enrolled_on_bfp8
+    }, sorted(op.name for op in enrolled_on_bfp8)
 
 
 #: The input formats the unary driver pairs with a Bfp8_b *output* for the three

@@ -148,6 +148,10 @@ def _run_sfpu_binop_scalar(
         mathop,
         output_format=formats.output_format,
         input_format=formats.input_format,
+        # Fixed, because this kernel compiles APPROX_MODE(ApproximationMode.No). Left
+        # unset, a row keyed `approx: "No"` would not match and would fall back to the
+        # default tolerance, and --ulp-measure would tag the reading `approx: null`.
+        approx_mode=ApproximationMode.No,
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )

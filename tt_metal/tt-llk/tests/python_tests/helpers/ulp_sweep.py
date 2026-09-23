@@ -235,7 +235,8 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     """What the table should say for a measured worst lane on *out_fmt*.
 
     ``("ulp", budget)`` while a step budget is still *stronger* than the tolerance it
-    replaces, and ``("tolerance", measured)`` once it is not. The bound is the table's
+    replaces, and ``("tolerance", budget)`` once it is not -- the budget either way, so
+    the row's comment can name the number that actually crossed the line. The bound is the table's
     own ``usable_budget_ceiling``: ~419,430 steps for fp32, 51 for fp16, 6 for bf16, 25
     for Bfp8_b. Decided per cell and before collapsing, because it depends on the output
     format and collapsing may drop it.
@@ -262,7 +263,10 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         return ("block", measured)
     budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
     if budget > usable_budget_ceiling(DataFormat[out_fmt]):
-        return ("tolerance", measured)
+        # The *budget* is what crosses the line, not the measurement: with 1.1x headroom
+        # a measured 6 becomes a budget of 7, past bf16's 6.4. Writing "max 6 ULP, past
+        # this output's usable ceiling" then made a checkable claim that is false.
+        return ("tolerance", budget)
     return ("ulp", budget)
 
 
@@ -342,7 +346,13 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
         pairs = f"{body}, {decided}" if body else decided
         note = f"max {row['measured']} ULP"
         if metric == "tolerance":
-            note += ", past this output's usable ceiling, so tolerance"
+            from helpers.sfpu_accuracy_budget import usable_budget_ceiling
+
+            ceiling = usable_budget_ceiling(DataFormat[row["out"]])
+            note += (
+                f", budget would be {value}, past the {ceiling:.0f}-step point where a "
+                "budget stops being tighter than the tolerance it replaces"
+            )
         elif metric == "block":
             note += ", but a sorted sweep flatters a block format, so tolerance"
         out.append(f"  - {{{pairs}}}  # {note}, {suffix}\n")

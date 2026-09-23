@@ -56,10 +56,26 @@ from .yaml_table import enum_member, load_yaml_table
 #: tolerance metric anywhere else until the sweep has been re-run there.
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
 
-#: The last variant :func:`accuracy_contract` was asked about, as
-#: ``(op, input_format, output_format, approx_mode, dest_acc)``. Written on every call
-#: and read only by the ``--ulp-measure`` collector; nothing here depends on it.
+#: The variant :func:`accuracy_contract` was last asked about and that nothing has
+#: consumed yet, as ``(test_id, op, input_format, output_format, approx_mode,
+#: dest_acc)``. Written on every call and read only by the ``--ulp-measure`` collector;
+#: nothing here depends on it.
+#:
+#: Call order alone cannot associate a reading with a variant -- two lookups followed by
+#: one comparison would file it under the second op, and a lookup with no comparison
+#: would leak into a later test. So the query carries the test it was made in, and a
+#: second lookup arriving before the first is consumed sets :data:`PENDING_AMBIGUOUS`
+#: rather than overwriting silently. The collector then records nothing at all, which
+#: costs a datapoint; filing it under the wrong variant would cost a budget.
 LAST_QUERY: Optional[Tuple[Any, ...]] = None
+PENDING_AMBIGUOUS: bool = False
+
+
+def _current_test() -> str:
+    """The test a query was made in, so a stale one cannot cross a test boundary."""
+    import os
+
+    return os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
 
 
 class Metric(Enum):
@@ -382,8 +398,19 @@ def accuracy_contract(
     # driver resolves a contract immediately before it compares, so this is the exact
     # key the comparison belongs to -- which a test id cannot always give: the dedicated
     # per-op sweeps (div, signbit) name their op in the function, not the parameters.
-    global LAST_QUERY
-    LAST_QUERY = (op.name, input_format, output_format, approx_mode, dest_acc)
+    # Overwriting an unconsumed query means the association is no longer one-to-one; see
+    # LAST_QUERY.
+    global LAST_QUERY, PENDING_AMBIGUOUS
+    if LAST_QUERY is not None:
+        PENDING_AMBIGUOUS = True
+    LAST_QUERY = (
+        _current_test(),
+        op.name,
+        input_format,
+        output_format,
+        approx_mode,
+        dest_acc,
+    )
 
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
