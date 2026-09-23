@@ -102,11 +102,11 @@ struct H2HSocket::Impl {
     }
 
     volatile uint64_t* trailer_guard(uint32_t core, uint32_t slot) const {
-        uint8_t* const page = cfg.region_base + rx_slot_offset(core, slot, cfg.page_bytes);
+        uint8_t* const page = cfg.region_base + rx_slot_offset(core, slot, cfg.page_bytes, cfg.rx_data_offset);
         return reinterpret_cast<volatile uint64_t*>(page + cfg.page_bytes - kFrameTrailerBytes);
     }
     const FrameTrailer* trailer(uint32_t core, uint32_t slot) const {
-        uint8_t* const page = cfg.region_base + rx_slot_offset(core, slot, cfg.page_bytes);
+        uint8_t* const page = cfg.region_base + rx_slot_offset(core, slot, cfg.page_bytes, cfg.rx_data_offset);
         return reinterpret_cast<const FrameTrailer*>(page + cfg.page_bytes - kFrameTrailerBytes);
     }
 };
@@ -149,9 +149,10 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
         err = "H2HSocket: ring_pages must be at least 1";
         return nullptr;
     }
-    if (static_cast<uint64_t>(cfg.ring_pages) * cfg.page_bytes > kArenaBytes) {
-        err = "H2HSocket: ring_pages x page_bytes (" + std::to_string(cfg.ring_pages) + " x " +
-              std::to_string(cfg.page_bytes) + ") exceeds the " + std::to_string(kArenaBytes >> 10) + " KiB arena";
+    if (cfg.rx_data_offset + static_cast<uint64_t>(cfg.ring_pages) * cfg.page_bytes > kArenaBytes) {
+        err = "H2HSocket: rx_data_offset + ring_pages x page_bytes (" + std::to_string(cfg.rx_data_offset) + " + " +
+              std::to_string(cfg.ring_pages) + " x " + std::to_string(cfg.page_bytes) + ") exceeds the " +
+              std::to_string(kArenaBytes >> 10) + " KiB arena";
         return nullptr;
     }
 
@@ -256,7 +257,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                 im.cfg.region_base + t.page_offset,
                 t.page_bytes,
                 host,
-                rx_slot_offset(dest_core, slot, im.cfg.page_bytes),
+                rx_slot_offset(dest_core, slot, im.cfg.page_bytes, im.cfg.rx_data_offset),
                 f.op);
             !e.empty()) {
             im.fail("h2h: " + e);
@@ -301,7 +302,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             DeliverTask d;
             d.core = c;
             d.slot = slot;
-            d.page_offset = rx_slot_offset(c, slot, im.cfg.page_bytes);
+            d.page_offset = rx_slot_offset(c, slot, im.cfg.page_bytes, im.cfg.rx_data_offset);
             d.page_bytes = im.cfg.page_bytes;
             d.dst = static_cast<tt_uva_t>(t->dst);
             d.length = t->length;
