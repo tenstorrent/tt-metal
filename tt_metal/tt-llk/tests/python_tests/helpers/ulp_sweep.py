@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 import re
+from functools import lru_cache
 from typing import Dict, List, Set, Tuple
 
 import torch
@@ -76,11 +77,16 @@ def is_exhaustive(input_format: DataFormat) -> bool:
     return stimuli_format_for(input_format) != DataFormat.Float32
 
 
+@lru_cache(maxsize=None)
 def swept_value_count(input_format: DataFormat) -> int:
     """How many values the sweep actually generates for *input_format*.
 
     Not ``ulp_sweep_value_count``, which answers how many the format *has*: 2**32 for
     float32, where the sweep generates 2**16 of them.
+
+    Cached because the answer is a property of the format and the walk, while finding
+    it enumerates the whole format: 2.4 ms a call, and `padding_lanes` asks twice per
+    variant, which is ~37 s of recomputation across an emit run over five formats.
     """
     from helpers.stimuli_generator.strategies.structured import (
         _enumerate_representable,
@@ -125,7 +131,9 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     padding boundary past the end of the tensor and mask nothing.
     """
     swept = swept_value_count(input_format)
-    flat = torch.zeros(src.numel(), dtype=torch.bool)
+    # On *src*'s device: the mask is composed with tensors derived from it, and a
+    # CPU-only mask would fail that composition for a device-resident sweep.
+    flat = torch.zeros(src.numel(), dtype=torch.bool, device=src.device)
     flat[swept:] = True
     return flat.reshape(src.shape)
 
@@ -590,5 +598,8 @@ def write_table(path, suffix: str) -> int:
             "passed through verbatim so a header comment survives, and cannot be "
             "generated here."
         )
-    path.write_text("".join(out), encoding="utf-8")
+    # Exactly one trailing newline: an op block carries its own trailing blank lines,
+    # and the last block's leave the file ending in several. `end-of-file-fixer` then
+    # rewrites the table on every commit.
+    path.write_text("".join(out).rstrip("\n") + "\n", encoding="utf-8")
     return len(written)
