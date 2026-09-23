@@ -41,7 +41,17 @@ emit_api_usage() {
     # workflow step is a separate +1 (it doubles as the [rate-limit] sample) and is not counted
     # here. artifact_list counts one internal listing per `gh run download`; its pagination is
     # approximated as one page, which is exact for runs with <=100 artifacts.
-    echo "[api-usage] workflow=${workflow_name:-unknown} run_id=${workflow_run_id:-unknown} attempt=${attempt_number:-unknown} total=${total} jobs_list=${jobs_list} artifact_list=${artifact_list} artifact_download=${artifact_download} log_archive=${log_archive} per_job_log=${per_job_log} annotations=${annotations} attempt_meta=${attempt_meta}"
+    # A run name is arbitrary user-controlled text: spaces/brackets (e.g.
+    # "Sanity tests (push) SKUs[WH,Sim]") and in principle double quotes, newlines or CRs. Emit
+    # it as one quoted field and neutralise the characters that would break that quoting or the
+    # one-line-per-record format, so ANY name stays parseable via workflow="([^"]*)".
+    local safe_name=${workflow_name:-unknown}
+    safe_name=${safe_name//$'\r'/}       # drop carriage returns
+    safe_name=${safe_name//$'\n'/ }      # newlines -> space (keep a single line)
+    safe_name=${safe_name//\"/\'}        # double quotes -> single, so the surrounding quotes hold
+    [[ -n "$safe_name" ]] || safe_name=unknown
+    # Every field after the name is space-free key=value.
+    echo "[api-usage] workflow=\"${safe_name}\" run_id=${workflow_run_id:-unknown} attempt=${attempt_number:-unknown} total=${total} jobs_list=${jobs_list} artifact_list=${artifact_list} artifact_download=${artifact_download} log_archive=${log_archive} per_job_log=${per_job_log} annotations=${annotations} attempt_meta=${attempt_meta}"
 }
 
 set_up_dirs() {
