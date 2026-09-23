@@ -259,6 +259,14 @@ def apply_recommended_env(batched_l1: bool) -> None:
     # tt/attention.py:_mllama_rope_prefill.
     os.environ.setdefault("QWEN_ROPE_FIDELITY", "lofi")
     # Inert for 4B (dim=2560 exceeds per-core LN budget) but harmless to set.
+    # Open only the chip this single-device demo uses. Without this, tt-metal
+    # builds its cluster over every chip on the host: on a 32-chip Galaxy that
+    # takes the CHIP_IN_USE lock on all 32 (blocking anyone else on the box) and,
+    # observed 2026-09-23, can fail outright in cluster construction with
+    # "IndexError: unordered_map::at" while the single chip opens fine.
+    # setdefault, so dp32_multiprocess.py's per-process TT_VISIBLE_DEVICES and any
+    # explicit choice of chip still win.
+    os.environ.setdefault("TT_VISIBLE_DEVICES", "0")
     os.environ.setdefault("QWEN_LN_BLOCK_SHARDED", "1")
     # The block-sharded LN path aims for an 8x8 grid, which is inherited from
     # BGE-M3 / 0.6B. On 4B that silently disables it: k_tiles = dim/32 = 80, so
