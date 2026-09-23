@@ -192,6 +192,155 @@ struct StickProducer {
     }
 };
 
+// ---------------------------------------------------------------------------
+// retile_l1_facewalk (op_design.md -> Regimes): `load_block` for a Layout::TILE input.
+// ---------------------------------------------------------------------------
+//
+// A retile UNIT is `row_align` consecutive walk positions (output tile-rows) of one
+// column block whose sticks come from `unit_in_rows` consecutive input tile-rows of
+// ONE image:
+//   * in_tile_h >= tile_h: row_align = in_tile_h / tile_h (1 where the host could not
+//     align), unit_in_rows = 1 -- one input tile-row feeds row_align output tile-rows;
+//   * in_tile_h <  tile_h: row_align = 1, unit_in_rows = tile_h / in_tile_h.
+// The unit's input tiles (unit_in_rows x valid_width, source tile (i, c) at
+// src + (i * block_width + c) * in_page_bytes) are either NoC-read whole into the
+// reader-private staging ring (one page-sized read per tile) or, for a resident input
+// shard, read in place from the shard. FaceWalk then re-lays their face rows into the
+// stick layout of cb_input_sticks on this RISC-V: no DRAM round trip, no ROW_MAJOR
+// tensor materialized. Compute and the writer never see the difference.
+
+// Word copy of `bytes` (a multiple of 4, both ends 4-byte aligned) between L1 addresses.
+template <uint32_t bytes>
+FORCE_INLINE void copy_l1_words(uint32_t dst_addr, uint32_t src_addr) {
+    static_assert(bytes % 4 == 0, "word copy");
+    uint32_t* __restrict__ dst = reinterpret_cast<uint32_t*>(dst_addr);
+    const uint32_t* __restrict__ src = reinterpret_cast<const uint32_t*>(src_addr);
+#pragma GCC unroll 16
+    for (uint32_t w = 0; w < bytes / 4; ++w) {
+        dst[w] = src[w];
+    }
+}
+
+// Face rows of an input tile [in_tile_h, 32] -> sticks of the tilize input layout.
+// A tile is (in_tile_h > 16 ? 2 : 1) face-rows of two faces (left / right 16 columns),
+// each face face_h = min(in_tile_h, 16) rows of 16 elements, stored face after face.
+//
+// Every move is one face row (16 elements) at both ends. `use_noc` selects who moves it:
+//   * true:  a NoC loopback read on this core (local L1 -> local L1). The caller opens the
+//            window with begin() and must complete() it before publishing the destination
+//            or reusing the source; the RISC-V only issues commands.
+//   * false: RISC-V word copies (loads from L1 block the core: ~8 cycles per word measured).
+template <
+    uint32_t in_tile_h,
+    uint32_t tile_h,
+    uint32_t block_width,
+    uint32_t tile_col_bytes,
+    uint32_t in_page_bytes,
+    bool use_noc,
+    uint32_t noc_trid>
+struct FaceWalk {
+    static_assert((in_tile_h & (in_tile_h - 1)) == 0 && in_tile_h <= 32, "in_tile_h: power of two <= 32");
+    static constexpr uint32_t half_row_bytes = tile_col_bytes / 2;  // one face row: 16 elements
+    static constexpr uint32_t face_h = in_tile_h < 16 ? in_tile_h : 16;
+    static constexpr uint32_t face_bytes = face_h * half_row_bytes;
+    static constexpr uint32_t stick_stride = block_width * tile_col_bytes;   // cb_input_sticks bytes per stick
+    static constexpr uint32_t src_row_stride = block_width * in_page_bytes;  // source bytes per input tile-row
+
+    // NoC mode: point the read command buffer at this core with a one-face-row packet, under
+    // the face walk's own transaction id (any NoC read in between must be followed by begin()).
+    static FORCE_INLINE void begin() {
+        if constexpr (use_noc) {
+            noc_async_read_set_trid(noc_trid);
+            noc_async_read_one_packet_set_state(get_noc_addr(0), half_row_bytes);
+        }
+    }
+    // NoC mode: every face row moved since begin() has landed.
+    static FORCE_INLINE void complete() {
+        if constexpr (use_noc) {
+            noc_async_read_barrier_with_trid(noc_trid);
+        }
+    }
+    static FORCE_INLINE void move_face_row(uint32_t dst, uint32_t src) {
+        if constexpr (use_noc) {
+            noc_async_read_one_packet_with_state(src, dst);
+        } else {
+            copy_l1_words<half_row_bytes>(dst, src);
+        }
+    }
+
+    // One output tile-row at dst_row: its tile_h sticks are rows h_off .. h_off + tile_h - 1
+    // of the unit's source tile-rows (row h lives in source tile-row h / in_tile_h).
+    static FORCE_INLINE void tile_row(uint32_t dst_row, uint32_t src, uint32_t h_off, uint32_t valid_width) {
+        for (uint32_t s = 0; s < tile_h; ++s) {
+            const uint32_t h = h_off + s;
+            const uint32_t rr = h % in_tile_h;
+            uint32_t src_left =
+                src + (h / in_tile_h) * src_row_stride + (rr / 16) * 2 * face_bytes + (rr % face_h) * half_row_bytes;
+            uint32_t dst = dst_row + s * stick_stride;
+            for (uint32_t c = 0; c < valid_width; ++c) {
+                move_face_row(dst, src_left);
+                move_face_row(dst + half_row_bytes, src_left + face_bytes);
+                dst += tile_col_bytes;
+                src_left += in_page_bytes;
+            }
+        }
+    }
+};
+
+// Producer of cb_input_sticks slots filled by synchronous L1 writes (no NoC on this side):
+// reserve a slot of rows_per_slot tile-rows, fill it row by row, push it; only the kernel's
+// final slot may be partial (same ring-wrap invariant as StickProducer).
+template <uint32_t cb, uint32_t block_width, uint32_t rows_per_slot, uint32_t row_bytes>
+struct RowSlotWriter {
+    static constexpr uint32_t slot_pages = rows_per_slot * block_width;
+    uint32_t open_rows = 0;
+    uint32_t slot_addr = 0;
+
+    FORCE_INLINE uint32_t open_row() {
+        if (open_rows == 0) {
+            cb_reserve_back(cb, slot_pages);
+            slot_addr = get_write_ptr(cb);
+        }
+        return slot_addr + open_rows * row_bytes;
+    }
+    // True when the row being filled is the last one before a push (its data must have landed).
+    FORCE_INLINE bool row_ends_slot() const { return open_rows + 1 == rows_per_slot; }
+    FORCE_INLINE void close_row() {
+        if (++open_rows == rows_per_slot) {
+            cb_push_back(cb, slot_pages);
+            open_rows = 0;
+        }
+    }
+    FORCE_INLINE void finish() {
+        if (open_rows != 0) {
+            cb_push_back(cb, open_rows * block_width);
+            open_rows = 0;
+        }
+    }
+};
+
+// One retile unit: its first output tile-row and column block, plus where its sticks start
+// in the input tile grid (first input tile-row, row offset inside it).
+struct RetileUnit {
+    uint32_t row, first_col, valid_width, first_in_row, h_off;
+};
+
+// Output tile-row `row` (global over R) -> (first input tile-row, row offset in it), per image:
+// the input's tile-rows per image (in_rows_per_image) count its own H padding.
+FORCE_INLINE void retile_source_of(
+    uint32_t row,
+    uint32_t tile_h,
+    uint32_t in_tile_h,
+    uint32_t out_rows_per_image,
+    uint32_t in_rows_per_image,
+    uint32_t& first_in_row,
+    uint32_t& h_off) {
+    const uint32_t image = row / out_rows_per_image;
+    const uint32_t h0 = (row - image * out_rows_per_image) * tile_h;
+    first_in_row = image * in_rows_per_image + h0 / in_tile_h;
+    h_off = h0 % in_tile_h;
+}
+
 // store_block for `num_rows` consecutive walk positions (one CB quantum): wait
 // num_rows * block_width pages, valid_width tile-page writes per tile-row in
 // flight, one flush (L1 source reads done), pop. `walk` is advanced past them.

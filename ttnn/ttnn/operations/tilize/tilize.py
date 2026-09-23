@@ -218,7 +218,7 @@ SUPPORTED = {
     "pad_value": ["none"],
     "alignment": ["tile_aligned"],
     "tile_height": list(LEGAL_TILE_HEIGHTS),
-    "in_tile_height": ["none"],
+    "in_tile_height": ["none", *LEGAL_TILE_HEIGHTS],
     "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],
 }
 

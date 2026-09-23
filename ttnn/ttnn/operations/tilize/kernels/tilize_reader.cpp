@@ -31,6 +31,118 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tilize_stick_reads.hpp"
 
+// retile_l1_facewalk load_block (tilize_stick_reads.hpp): walk the core's rectangle in
+// units of row_align output tile-rows; per unit, get its input tiles into L1 (a
+// page-sized NoC read per tile into the staging ring with up to stage_depth - 1 units
+// in flight ahead of the face walk, or in place when the input shard is resident),
+// then face-walk them into cb_input_sticks tile-row by tile-row.
+template <
+    uint32_t cb_input_sticks,
+    uint32_t cb_retile_staging,
+    uint32_t block_width,
+    uint32_t tile_h,
+    uint32_t in_tile_h,
+    uint32_t tile_col_bytes,
+    uint32_t in_page_bytes,
+    uint32_t rows_per_quantum,
+    uint32_t row_align,
+    uint32_t stage_depth,
+    bool source_resident,
+    bool facewalk_noc,
+    typename Accessor>
+FORCE_INLINE void read_retile(
+    const Accessor& accessor,
+    uint32_t row_start,
+    uint32_t core_row_tiles,
+    uint32_t col_start,
+    uint32_t core_col_tiles,
+    uint32_t row_rotation,
+    uint32_t tiles_per_row,
+    uint32_t out_rows_per_image,
+    uint32_t in_rows_per_image) {
+    using namespace tilize_dataflow;
+    static_assert(stage_depth >= 1 && stage_depth <= 14, "one NoC transaction id per staging slot + the face walk's");
+    constexpr uint32_t unit_in_rows = tile_h > in_tile_h ? tile_h / in_tile_h : 1;
+    constexpr uint32_t stage_slot_bytes = unit_in_rows * block_width * in_page_bytes;
+    constexpr uint32_t in_tile_bytes = tile_h * tile_col_bytes;
+    // Staging reads use trids 1..stage_depth; the face walk's loopback reads use the next one.
+    using Walk = FaceWalk<in_tile_h, tile_h, block_width, tile_col_bytes, in_page_bytes, facewalk_noc, stage_depth + 1>;
+    RowSlotWriter<cb_input_sticks, block_width, rows_per_quantum, block_width * in_tile_bytes> out;
+
+    // The host keeps row_start, core_row_tiles and row_rotation multiples of row_align, so a
+    // unit never wraps inside the rotated walk and the writer's walk visits the same order.
+    Walker<block_width> walk(row_start, core_row_tiles, col_start, core_col_tiles, row_rotation);
+    const uint32_t num_units = walk.num_positions() / row_align;
+    auto next_unit = [&]() {
+        RetileUnit u{walk.row(), walk.first_col(), walk.valid_width(), 0, 0};
+        retile_source_of(u.row, tile_h, in_tile_h, out_rows_per_image, in_rows_per_image, u.first_in_row, u.h_off);
+        for (uint32_t k = 0; k < row_align; ++k) {
+            walk.advance();
+        }
+        return u;
+    };
+    // Face-walk one unit. On return every face row has landed, so its source slot may be refilled
+    // and every pushed cb_input_sticks slot holds its data.
+    auto face_walk_unit = [&](const RetileUnit& u, uint32_t src) {
+        Walk::begin();
+        for (uint32_t j = 0; j < row_align; ++j) {
+            Walk::tile_row(out.open_row(), src, u.h_off + j * tile_h, u.valid_width);
+            if (out.row_ends_slot()) {
+                Walk::complete();
+            }
+            out.close_row();
+        }
+        Walk::complete();
+    };
+
+    if constexpr (source_resident) {
+        // cb_retile_staging IS this core's input shard ([shard tile-rows] x block_width tiles,
+        // tile-row-major): the unit's tiles are read in place, no NoC traffic.
+        const uint32_t shard_base = get_read_ptr(cb_retile_staging);
+        uint32_t shard_first_in_row, unused_h_off;
+        retile_source_of(
+            row_start, tile_h, in_tile_h, out_rows_per_image, in_rows_per_image, shard_first_in_row, unused_h_off);
+        for (uint32_t k = 0; k < num_units; ++k) {
+            const RetileUnit u = next_unit();
+            face_walk_unit(
+                u,
+                shard_base +
+                    ((u.first_in_row - shard_first_in_row) * block_width + (u.first_col - col_start)) * in_page_bytes);
+        }
+    } else {
+        const uint32_t stage_base = get_write_ptr(cb_retile_staging);
+        RetileUnit pending[stage_depth];
+        auto issue = [&](uint32_t k) {
+            asm volatile("" ::: "memory");  // the slot's earlier face-walk loads precede its overwrite
+            const RetileUnit u = next_unit();
+            pending[k % stage_depth] = u;
+            const uint32_t slot = stage_base + (k % stage_depth) * stage_slot_bytes;
+            noc_async_read_set_trid(1 + (k % stage_depth));
+            for (uint32_t i = 0; i < unit_in_rows; ++i) {
+                const uint32_t first_tile = (u.first_in_row + i) * tiles_per_row + u.first_col;
+                const uint32_t l1_row = slot + i * block_width * in_page_bytes;
+                for (uint32_t c = 0; c < u.valid_width; ++c) {
+                    noc_async_read(accessor.get_noc_addr(first_tile + c), l1_row + c * in_page_bytes, in_page_bytes);
+                }
+            }
+        };
+        const uint32_t prefetch = num_units < stage_depth - 1 ? num_units : stage_depth - 1;
+        for (uint32_t k = 0; k < prefetch; ++k) {
+            issue(k);
+        }
+        for (uint32_t k = 0; k < num_units; ++k) {
+            if (k + stage_depth - 1 < num_units) {
+                issue(k + stage_depth - 1);  // lands in the slot unit k - 1 has already been walked out of
+            }
+            noc_async_read_barrier_with_trid(1 + (k % stage_depth));
+            asm volatile("" ::: "memory");  // the face walk's L1 loads must follow the barrier
+            face_walk_unit(pending[k % stage_depth], stage_base + (k % stage_depth) * stage_slot_bytes);
+        }
+        noc_async_read_set_trid(0);
+    }
+    out.finish();
+}
+
 void kernel_main() {
     constexpr uint32_t cb_input_sticks = get_compile_time_arg_val(0);
     constexpr uint32_t block_width = get_compile_time_arg_val(1);       // tiles per column block (CB quantum)
@@ -44,7 +156,12 @@ void kernel_main() {
     constexpr bool input_resident = get_compile_time_arg_val(9) != 0;   // cb_input_sticks backed on the shard
     constexpr uint32_t page_bytes = get_compile_time_arg_val(10);       // data bytes per input page
     constexpr uint32_t pages_per_stick = get_compile_time_arg_val(11);  // input pages per logical stick
-    constexpr auto input_args = TensorAccessorArgs<12>();
+    constexpr uint32_t in_tile_h = get_compile_time_arg_val(12);        // 0: ROW_MAJOR input; else retile
+    constexpr uint32_t row_align = get_compile_time_arg_val(13);        // retile: output tile-rows per unit
+    constexpr uint32_t cb_retile_staging = get_compile_time_arg_val(14);
+    constexpr uint32_t retile_stage_depth = get_compile_time_arg_val(15);    // retile: staged units (ring slots)
+    constexpr bool retile_facewalk_noc = get_compile_time_arg_val(16) != 0;  // retile: face rows moved by NoC
+    constexpr auto input_args = TensorAccessorArgs<17>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
@@ -53,6 +170,32 @@ void kernel_main() {
     const uint32_t core_col_tiles = get_arg_val<uint32_t>(4);
     const uint32_t row_rotation = get_arg_val<uint32_t>(5);
     const uint32_t stick_rotation = get_arg_val<uint32_t>(6);
+
+    if constexpr (in_tile_h != 0) {
+        read_retile<
+            cb_input_sticks,
+            cb_retile_staging,
+            block_width,
+            tile_h,
+            in_tile_h,
+            tile_col_bytes,
+            page_bytes,
+            rows_per_quantum,
+            row_align,
+            retile_stage_depth,
+            input_resident,
+            retile_facewalk_noc>(
+            TensorAccessor(input_args, src_addr, stick_page_bytes),
+            row_start,
+            core_row_tiles,
+            col_start,
+            core_col_tiles,
+            row_rotation,
+            get_arg_val<uint32_t>(7),   // tiles_per_row: C of the input tile grid
+            get_arg_val<uint32_t>(8),   // output tile-rows per image
+            get_arg_val<uint32_t>(9));  // input tile-rows per image (its own H padding included)
+        return;
+    }
 
     if constexpr (input_resident) {
         // The shard's valid tile-rows, at the nominal (shard-width) block_width pages each.

@@ -47,6 +47,7 @@ FULL_TILE_HEIGHT = 32  # rows of a full (non-tiny) tile; tiny tiles are power-of
 CB_INPUT_STICKS = 0  # reader -> compute: tile_h stick segments per tile-row, block_width tile-sized pages
 CB_OUTPUT_TILES = 1  # compute -> writer: block_width TILE pages per tile-row
 CB_INPUT_STICKS_ODD = 2  # split reader only: BRISC -> compute, the odd tile-rows (one producer per CB)
+CB_RETILE_STAGING = 3  # retile only: reader-private staging of whole input tiles (or the resident input shard)
 
 # Buffer-depth knobs, counted in CB quanta (one quantum = rows_per_quantum tile-rows
 # of block_width pages each).
@@ -60,6 +61,16 @@ DEPTH_OUT = 2
 # 19.8 us on [1,1,16384,32]): the pipeline is DRAM-traffic-bound there, not
 # barrier-bound. Parked at the trivial value; the knob stays live.
 READ_AHEAD = 1
+
+# retile_l1_facewalk: units of whole input tiles the staging ring holds (the reader keeps
+# RETILE_STAGE_DEPTH - 1 units of page-sized tile reads in flight ahead of the face walk).
+# 1 = read, barrier, walk, serially.
+RETILE_STAGE_DEPTH = 2
+
+# retile_l1_facewalk: who moves the face rows (16 elements each) from the staged input
+# tiles into cb_input_sticks. True = NoC loopback reads on the core (the RISC-V only issues
+# commands); False = RISC-V word copies.
+RETILE_FACEWALK_NOC = True
 
 # Minimum CB quantum in tiles along the tile_row streaming window. The reader's read
 # barrier + CB push and the writer's flush + CB pop happen once per quantum of
@@ -219,16 +230,20 @@ def _rects_key(shard_rects):
     return shard_shape, [((core.x, core.y), r0, nr, c0, nc) for core, r0, nr, c0, nc in rects]
 
 
-def _core_assignment(input_tensor, output_tensor, *, rows_total, width, tile_h, max_block_width):
+def _core_assignment(input_tensor, output_tensor, *, rows_total, width, tile_h, max_block_width, input_may_reside=True):
     """(assignment, input_resident, output_resident, shard_block_width).
 
     `assignment` is [(core, row_start, core_row_tiles, col_start, core_col_tiles)]
     over the output tile grid, or None for the interleaved row split. A shard
     wider than `max_block_width` tiles cannot be one resident block (the
     streamed partner CB would not fit the budget), so it is streamed instead.
+    `input_may_reside=False` keeps the input side streamed (a Layout::TILE input
+    whose H padding makes its physical rows differ from the logical fold).
     """
 
     def usable(tensor):
+        if tensor is input_tensor and not input_may_reside:
+            return None
         rects = _shard_rects(tensor, rows_total, width)
         if not _resident_ok(rects, tile_h) or rects[0][1] // TILE_WIDTH > max_block_width:
             return None
@@ -267,18 +282,47 @@ def create_program_descriptor(
     in_elem_bytes = input_tensor.element_size()
     in_tile_bytes = tile_h * TILE_WIDTH * in_elem_bytes  # tile-sized page holding tile_h stick segments
     out_tile_bytes = output_tensor.buffer_page_size()  # one TILE page of the output dtype
-    stick_page_bytes = input_tensor.buffer_aligned_page_size()  # input page stride (a stick, or a shard-width stick)
+    stick_page_bytes = (
+        input_tensor.buffer_aligned_page_size()
+    )  # input page stride (a stick, a shard-width stick, or a tile)
     # A WIDTH / BLOCK / ND-sharded Layout::ROW_MAJOR input cuts every stick into pages of the
     # shard width; a stick-segment read then splits at page boundaries (reader CT args).
     in_page_bytes = input_tensor.buffer_page_size()
     pages_per_stick = _div_up(width * in_elem_bytes, in_page_bytes)
+
+    # retile_l1_facewalk (Layout::TILE input): the reader stages whole input tiles (one
+    # [in_tile_h, 32] page each) and face-walks them into cb_input_sticks. A unit is row_align
+    # output tile-rows fed by unit_in_rows input tile-rows of one image; row_align > 1 only
+    # when every image's H is a whole number of input tile-rows (else each output tile-row
+    # reads its input tile-row whole: correct, in_tile_h / tile_h read amplification).
+    retile = in_tile_h is not None
+    if retile:
+        in_page_bytes = stick_page_bytes  # one input tile, the unit of every retile NoC read
+        pages_per_stick = 1
+        H = int(shape[-2])
+        in_rows_per_image = _div_up(H, in_tile_h)
+        out_rows_per_image = H // tile_h
+        input_whole_tiles = H % in_tile_h == 0
+        row_align = in_tile_h // tile_h if in_tile_h > tile_h and input_whole_tiles else 1
+        unit_in_rows = max(1, tile_h // in_tile_h)
+    else:
+        in_rows_per_image = out_rows_per_image = 0  # unused by the stick reader
+        input_whole_tiles = True
+        row_align = unit_in_rows = 1
 
     # ---------------- block knobs ----------------
     col_align_tiles = _col_align_tiles(input_tensor, in_elem_bytes)
 
     def _per_col_tile_bytes(num_input_cbs, *, input_resident=False, output_resident=False):
         """Bytes of STREAMED CBs per tile-column of one tile-row (resident CBs are the tensor's own L1)."""
-        streamed_in = 0 if input_resident else num_input_cbs * DEPTH_IN * in_tile_bytes
+        if retile:
+            # cb_input_sticks always streams (the face walk fills it); a resident input backs
+            # only cb_retile_staging, which otherwise holds RETILE_STAGE_DEPTH units.
+            streamed_in = DEPTH_IN * in_tile_bytes
+            if not input_resident:
+                streamed_in += RETILE_STAGE_DEPTH * unit_in_rows * in_page_bytes
+        else:
+            streamed_in = 0 if input_resident else num_input_cbs * DEPTH_IN * in_tile_bytes
         streamed_out = 0 if output_resident else DEPTH_OUT * out_tile_bytes
         return streamed_in + streamed_out
 
@@ -293,6 +337,7 @@ def create_program_descriptor(
         width=width,
         tile_h=tile_h,
         max_block_width=max_shard_block_width,
+        input_may_reside=input_whole_tiles,
     )
     any_resident = input_resident or output_resident
 
@@ -303,17 +348,24 @@ def create_program_descriptor(
         col_groups = _column_groups(C, NUM_COL_GROUPS, col_align_tiles)
         col_start, core_col_tiles = col_groups[0]  # NUM_COL_GROUPS == 1: every core owns [0, C)
         grid = device.compute_with_storage_grid_size()
-        (_n, all_cores, core_group_1, core_group_2, rows_g1, rows_g2) = ttnn.split_work_to_cores(grid, R, row_wise=True)
+        # The split's unit is row_align tile-rows (1 except retile), so an input tile-row
+        # never straddles two Tensix cores.
+        assert R % row_align == 0
+        (_n, all_cores, core_group_1, core_group_2, units_g1, units_g2) = ttnn.split_work_to_cores(
+            grid, R // row_align, row_wise=True
+        )
         assignment = []
         row_start = 0
-        for group, rows in ((core_group_1, rows_g1), (core_group_2, rows_g2)):
+        for group, units in ((core_group_1, units_g1), (core_group_2, units_g2)):
             for core in ttnn.corerange_to_cores(group, None, True):
-                assignment.append((core, row_start, rows, col_start, core_col_tiles))
-                row_start += rows
+                assignment.append((core, row_start, units * row_align, col_start, core_col_tiles))
+                row_start += units * row_align
         assert row_start == R, f"row split covered {row_start} of {R} tile-rows"
     else:
         # sharded_resident: the owning shard grid (only the Tensix cores holding data).
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, *_ in assignment])
+        if any(start % row_align or rows % row_align for _, start, rows, _, _ in assignment):
+            row_align = 1  # an output shard cuts inside input tile-rows: each core reads them whole
 
     core_row_tiles_max = max(rows for _, _, rows, _, _ in assignment)
     core_col_tiles_max = max(cols for _, _, _, _, cols in assignment)
@@ -337,6 +389,7 @@ def create_program_descriptor(
     num_col_blocks_max = _div_up(core_col_tiles_max, block_width_split)
     split_reader = (
         not any_resident
+        and not retile
         and split_segment_bytes <= SPLIT_READER_MAX_SEGMENT_BYTES
         and core_row_tiles_max * num_col_blocks_max >= 2
     )
@@ -377,7 +430,7 @@ def create_program_descriptor(
         page_size=in_tile_bytes,
         tile=tile_desc,
     )
-    if input_resident:
+    if input_resident and not retile:
         # Zero-copy: cb_input_sticks IS the input shard. A Layout::ROW_MAJOR shard row has
         # stride shard_w * elem_bytes = block_width * tile_col_bytes, exactly the tilize input
         # layout, so tile_h sticks of the shard are block_width tile-sized pages.
@@ -396,6 +449,25 @@ def create_program_descriptor(
             format_descriptors=[input_format],
         )
     cbs = [cb_input_sticks]
+    if retile:
+        staging_format = ttnn.CBFormatDescriptor(
+            buffer_index=CB_RETILE_STAGING,
+            data_format=input_tensor.dtype,
+            page_size=in_page_bytes,
+            tile=ttnn.TileDescriptor(in_tile_h, TILE_WIDTH),
+        )
+        if input_resident:
+            # Zero-copy: the staging CB IS the input shard; the face walk reads its tiles in place.
+            cb_retile_staging = ttnn.cb_descriptor_from_sharded_tensor(
+                CB_RETILE_STAGING, input_tensor, core_ranges=all_cores
+            )
+            cb_retile_staging.format_descriptors = [staging_format]
+        else:
+            cb_retile_staging = ttnn.CBDescriptor(
+                total_size=RETILE_STAGE_DEPTH * unit_in_rows * block_width * in_page_bytes,
+                core_ranges=all_cores,
+                format_descriptors=[staging_format],
+            )
     if split_reader:
         cbs.append(
             ttnn.CBDescriptor(
@@ -412,6 +484,8 @@ def create_program_descriptor(
             )
         )
     assert len(cbs) == num_input_cbs
+    if retile:
+        cbs.append(cb_retile_staging)  # reader-private: not a compute input
     if output_resident:
         # Zero-copy: compute packs straight into the output shard (TILE pages, shard order).
         cb_output_tiles = ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor, core_ranges=all_cores)
@@ -447,6 +521,11 @@ def create_program_descriptor(
         int(input_resident),
         in_page_bytes,
         pages_per_stick,
+        in_tile_h if retile else 0,
+        row_align,
+        CB_RETILE_STAGING,
+        RETILE_STAGE_DEPTH,
+        int(RETILE_FACEWALK_NOC),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     writer_ct_args = [
@@ -479,7 +558,8 @@ def create_program_descriptor(
         # Per-core traversal rotation (single source for reader AND writer): spreads the
         # cores' concurrent stick reads / tile writes over the DRAM banks. A resident side
         # fixes the tile-row order to shard order, so only the in-tile-row stick order rotates.
-        row_rotation = 0 if any_resident else core_idx
+        # Retile rotates in whole units (row_align tile-rows) so a unit never wraps.
+        row_rotation = 0 if any_resident else core_idx * row_align
         stick_rotation = core_idx
         reader_rt_args[core.x][core.y] = [
             in_addr,
@@ -489,6 +569,9 @@ def create_program_descriptor(
             core_col_tiles,
             row_rotation,
             stick_rotation,
+            C,
+            out_rows_per_image,
+            in_rows_per_image,
         ]
         writer_rt_args[core.x][core.y] = [
             out_addr,
