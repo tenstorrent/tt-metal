@@ -30,6 +30,7 @@
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
@@ -804,7 +805,7 @@ template <typename GlobalNode, typename ResolveGlobals>
 std::size_t add_mgd_asic_position_pinning_constraints(
     MappingConstraints<LogicalChipId, GlobalNode>& constraints,
     const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinnings,
-    ResolveGlobals&& resolve_globals_at_position) {
+    const ResolveGlobals& resolve_globals_at_position) {
     std::size_t constraints_added = 0;
     for (const auto& group : pinnings) {
         std::set<LogicalChipId> mgd_nodes;
@@ -1362,6 +1363,35 @@ std::optional<GroupingInfo> build_mgd_mesh_placement_fallback(
     return std::nullopt;
 }
 
+// MeshGraph is the source of host ranks (get_host_rank_for_chip). Used when the caller did not pass a
+// fabric_node_id_to_mesh_rank map, so get_valid_groupings / MGD fallbacks still enforce host_topology.
+std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank_from_mesh_graph(
+    const MeshGraphDescriptor& mesh_graph_descriptor) {
+    const MeshGraph mesh_graph(mesh_graph_descriptor);
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> mapping;
+    for (const MeshId mesh_id : mesh_graph.get_all_mesh_ids()) {
+        for (const auto& [unused_coord, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            (void)unused_coord;
+            const std::optional<MeshHostRankId> host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+            if (host_rank.has_value()) {
+                mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = *host_rank;
+            }
+        }
+    }
+    return mapping;
+}
+
+const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& resolve_fabric_node_id_to_mesh_rank(
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& storage) {
+    if (!fabric_node_id_to_mesh_rank.empty()) {
+        return fabric_node_id_to_mesh_rank;
+    }
+    storage = fabric_node_id_to_mesh_rank_from_mesh_graph(mesh_graph_descriptor);
+    return storage;
+}
+
 }  // namespace
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
@@ -1381,6 +1411,9 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     bool require_placement,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) const {
     ValidGroupingsMap result;
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> ranks_from_mesh_graph;
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& mesh_ranks =
+        resolve_fabric_node_id_to_mesh_rank(mesh_graph_descriptor, fabric_node_id_to_mesh_rank, ranks_from_mesh_graph);
 
     std::optional<AdjacencyGraph<tt::tt_metal::AsicID>> psd_physical_graph;
     if (physical_system_descriptor != nullptr) {
@@ -1584,12 +1617,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     // 5. The declared host split against the host division this variant sits on, so the match
                     // comes back in an orientation whose ranks each fall inside one of the descriptor's hosts.
                     if (!configure_mgd_pgd_host_alignment_constraints(
-                            mgd_grouping_info,
-                            grouping_info,
-                            device_topo,
-                            constraints,
-                            instance_mesh_id,
-                            fabric_node_id_to_mesh_rank)) {
+                            mgd_grouping_info, grouping_info, device_topo, constraints, instance_mesh_id, mesh_ranks)) {
                         continue;
                     }
 
@@ -1638,7 +1666,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     committed.mesh_node_to_asic_position =
                         compose_mesh_node_to_asic_position_from_pgd_match(committed, match.mapping.target_to_global);
                     committed.mesh_node_to_host_group = compose_mesh_node_to_host_group_from_mgd_match(
-                        device_topo, match.mapping.target_to_global, instance_mesh_id, fabric_node_id_to_mesh_rank);
+                        device_topo, match.mapping.target_to_global, instance_mesh_id, mesh_ranks);
                     return committed;
                 };
 
@@ -1805,9 +1833,10 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 ValidGroupingsMap PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) const {
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings) {
     ValidGroupingsMap result;
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> mesh_ranks =
+        fabric_node_id_to_mesh_rank_from_mesh_graph(mesh_graph_descriptor);
     const AdjacencyGraph<tt::tt_metal::AsicID> psd_physical_graph(
         tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(physical_system_descriptor));
 
@@ -1843,7 +1872,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mg
                 physical_system_descriptor,
                 psd_physical_graph,
                 pinnings_by_mesh,
-                fabric_node_id_to_mesh_rank)) {
+                mesh_ranks)) {
             result["MESH"][instance_name].push_back(std::move(*fallback));
             log_info(
                 tt::LogFabric,
@@ -2368,7 +2397,7 @@ public:
             return it->second;
         }
         const CandidatePool& from_pool = pools.at(from_mesh);
-        const AdjacencyMatrix built =
+        AdjacencyMatrix built =
             AdjacencyMatrix::build(from_pool.candidates(), pools.at(to_mesh).candidates(), from_pool.asic_count());
         return cache_.emplace(key, std::move(built)).first->second;
     }
@@ -2604,6 +2633,37 @@ AssignedMeshes decode_sat_placement(const MappingResult<GlobalMeshId, const Cand
 constexpr std::size_t kGrowBudgetPerVariant = 32;
 constexpr std::size_t kMaxGrowthCycles = 4;
 
+void apply_valid_groupings_map(
+    const ValidGroupingsMap& valid_groupings,
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    const std::vector<MeshId>& mesh_ids,
+    std::map<MeshId, std::vector<GroupingInfo>>& primary) {
+    const std::unordered_map<InstanceName, std::vector<GroupingInfo>>* mesh_groupings = nullptr;
+    if (valid_groupings.contains("MESH")) {
+        mesh_groupings = &valid_groupings.at("MESH");
+    }
+    const auto mesh_id_to_instance_name = mesh_graph_descriptor.mesh_id_to_instance_name();
+    for (const MeshId mesh_id : mesh_ids) {
+        const auto name_it = mesh_id_to_instance_name.find(mesh_id);
+        TT_FATAL(
+            name_it != mesh_id_to_instance_name.end(),
+            "Internal error: SAT placement: mesh {} has no instance name, so its grouping variants cannot be looked up",
+            *mesh_id);
+        TT_FATAL(
+            mesh_groupings != nullptr,
+            "Internal error: SAT placement: mesh '{}' (mesh {}) has no grouping in the provided valid-groupings map",
+            name_it->second,
+            *mesh_id);
+        const auto groupings_it = mesh_groupings->find(name_it->second);
+        TT_FATAL(
+            groupings_it != mesh_groupings->end() && !groupings_it->second.empty(),
+            "Internal error: SAT placement: mesh '{}' (mesh {}) has no grouping in the provided valid-groupings map",
+            name_it->second,
+            *mesh_id);
+        primary.emplace(mesh_id, groupings_it->second);
+    }
+}
+
 }  // namespace
 
 SatPlacementEnumerationSession::SatPlacementEnumerationSession(
@@ -2615,8 +2675,7 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
     bool unique_shapes,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) :
-    physical_system_descriptor_(&physical_system_descriptor), stats_(stats) {
-    unique_shapes_ = unique_shapes;
+    physical_system_descriptor_(&physical_system_descriptor), stats_(stats), unique_shapes_(unique_shapes) {
     using tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph;
 
     const ValidGroupingsMap valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgd(
@@ -2636,8 +2695,8 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
     }
     mesh_level_graph_ = logical.mesh_level_graph_;
 
-    const ValidGroupingsMap mgd_fallbacks_by_key = physical_grouping_descriptor.get_mgd_placement_fallbacks_for_mgd(
-        mesh_graph_descriptor, physical_system_descriptor, pinnings, fabric_node_id_to_mesh_rank);
+    const ValidGroupingsMap mgd_fallbacks_by_key = PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mgd(
+        mesh_graph_descriptor, physical_system_descriptor, pinnings);
     const std::unordered_map<InstanceName, std::vector<GroupingInfo>>* mgd_fallback_mesh = nullptr;
     if (mgd_fallbacks_by_key.contains("MESH")) {
         mgd_fallback_mesh = &mgd_fallbacks_by_key.at("MESH");
@@ -2675,6 +2734,38 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
             mesh_graph_descriptor.is_intra_mesh_policy_relaxed(mesh_id) ? ConnectionValidationMode::RELAXED
                                                                         : ConnectionValidationMode::STRICT);
     }
+    relaxed_inter_mesh_policy_ = mesh_graph_descriptor.is_inter_mesh_policy_relaxed();
+    finish_init(asic_id_to_mesh_rank);
+}
+
+SatPlacementEnumerationSession::SatPlacementEnumerationSession(
+    const ValidGroupingsMap& valid_groupings,
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    PlacementSolveStats* stats,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    bool unique_shapes) :
+    physical_system_descriptor_(&physical_system_descriptor), stats_(stats), unique_shapes_(unique_shapes) {
+    using tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph;
+
+    const auto logical = build_logical_multi_mesh_adjacency_graph(mesh_graph_descriptor);
+    if (logical.mesh_adjacency_graphs_.empty()) {
+        return;
+    }
+    mesh_level_graph_ = logical.mesh_level_graph_;
+
+    std::vector<MeshId> mesh_ids;
+    mesh_ids.reserve(logical.mesh_adjacency_graphs_.size());
+    for (const auto& [mesh_id, unused_graph] : logical.mesh_adjacency_graphs_) {
+        (void)unused_graph;
+        mesh_ids.push_back(mesh_id);
+        sat_intra_mesh_mode_by_mesh_.emplace(
+            mesh_id,
+            mesh_graph_descriptor.is_intra_mesh_policy_relaxed(mesh_id) ? ConnectionValidationMode::RELAXED
+                                                                        : ConnectionValidationMode::STRICT);
+    }
+    apply_valid_groupings_map(valid_groupings, mesh_graph_descriptor, mesh_ids, global_mesh_groupings_);
+    fallbacks_in_ = true;
     relaxed_inter_mesh_policy_ = mesh_graph_descriptor.is_inter_mesh_policy_relaxed();
     finish_init(asic_id_to_mesh_rank);
 }

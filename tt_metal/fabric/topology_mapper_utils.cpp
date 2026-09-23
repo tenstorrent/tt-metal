@@ -1484,13 +1484,10 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         config,
         unique_shapes) {}
 
-MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+::tt::tt_fabric::MeshGraphDescriptor MultiMeshSolutionEnumerator::init_from_parts(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const std::vector<MultiMeshMappingPart>& parts,
-    const TopologyMappingConfig& config,
-    bool unique_shapes) :
-    physical_system_descriptor_(&physical_system_descriptor), config_(config) {
+    std::optional<PinningsByMesh>& session_pinnings) {
     using namespace ::tt::tt_fabric;
 
     std::vector<const MeshGraphDescriptor*> mesh_graph_descriptors;
@@ -1499,9 +1496,8 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         TT_FATAL(part.mesh_graph_descriptor != nullptr, "MultiMeshMappingPart is missing a mesh graph descriptor");
         mesh_graph_descriptors.push_back(part.mesh_graph_descriptor);
     }
-    if (mesh_graph_descriptors.empty()) {
-        return;
-    }
+    TT_FATAL(
+        !mesh_graph_descriptors.empty(), "MultiMeshSolutionEnumerator requires at least one mesh graph descriptor");
 
     validate_shared_inter_mesh_policy(mesh_graph_descriptors);
 
@@ -1570,11 +1566,7 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
     fill_host_and_asic_positions_from_psd();
     flat_graph_ = AdjacencyGraph<tt::tt_metal::AsicID>(build_flat_adjacency_map_from_psd(physical_system_descriptor));
 
-    // One seating per next(); the session lives for the enumerator's lifetime. Intra-mesh failure
-    // forbids that candidate and the next next() re-solves. Successful yields are excluded the same way
-    // so later next() calls continue instead of rebuilding the session.
     // Session keys pinnings by merged/global MeshId (remapped above).
-    std::optional<PinningsByMesh> session_pinnings;
     PinningsByMesh by_mesh = merged.get_pinnings();
     drop_inactive_revision_pinnings(by_mesh, physical_system_descriptor);
     if (!config_.pinnings.empty()) {
@@ -1584,6 +1576,19 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
     if (!by_mesh.empty()) {
         session_pinnings = std::move(by_mesh);
     }
+    return merged;
+}
+
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<MultiMeshMappingPart>& parts,
+    const TopologyMappingConfig& config,
+    bool unique_shapes) :
+    physical_system_descriptor_(&physical_system_descriptor), config_(config) {
+    using namespace ::tt::tt_fabric;
+    std::optional<PinningsByMesh> session_pinnings;
+    MeshGraphDescriptor merged = init_from_parts(physical_system_descriptor, parts, session_pinnings);
     placement_stats_ = std::make_unique<PlacementSolveStats>();
     placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
         physical_grouping_descriptor,
@@ -1594,6 +1599,43 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         asic_id_to_mesh_rank_,
         unique_shapes,
         fabric_node_id_to_mesh_rank_);
+}
+
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const TopologyMappingConfig& config,
+    bool unique_shapes,
+    const std::optional<PinningsByMesh>& pinnings,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) :
+    physical_system_descriptor_(&physical_system_descriptor), config_(config) {
+    using namespace ::tt::tt_fabric;
+    const std::vector<MultiMeshMappingPart> parts{
+        MultiMeshMappingPart{&mesh_graph_descriptor, pinnings, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank}};
+    std::optional<PinningsByMesh> session_pinnings;
+    MeshGraphDescriptor merged = init_from_parts(physical_system_descriptor, parts, session_pinnings);
+    const ValidGroupingsMap groupings = PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mgd(
+        mesh_graph_descriptor, physical_system_descriptor, session_pinnings);
+    placement_stats_ = std::make_unique<PlacementSolveStats>();
+    placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
+        groupings, merged, physical_system_descriptor, placement_stats_.get(), asic_id_to_mesh_rank_, unique_shapes);
+}
+
+MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<MultiMeshMappingPart>& parts,
+    const TopologyMappingConfig& config,
+    bool unique_shapes) :
+    physical_system_descriptor_(&physical_system_descriptor), config_(config) {
+    using namespace ::tt::tt_fabric;
+    std::optional<PinningsByMesh> session_pinnings;
+    MeshGraphDescriptor merged = init_from_parts(physical_system_descriptor, parts, session_pinnings);
+    const ValidGroupingsMap groupings = PhysicalGroupingDescriptor::get_mgd_placement_fallbacks_for_mgd(
+        merged, physical_system_descriptor, session_pinnings);
+    placement_stats_ = std::make_unique<PlacementSolveStats>();
+    placement_session_ = std::make_unique<SatPlacementEnumerationSession>(
+        groupings, merged, physical_system_descriptor, placement_stats_.get(), asic_id_to_mesh_rank_, unique_shapes);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(MultiMeshSolutionEnumerator&&) noexcept = default;
@@ -1710,7 +1752,6 @@ std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     }
 }
 
-// TODO: Fix the PGD issue
 TopologyMappingResult map_multi_mesh_to_physical(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
@@ -1725,6 +1766,34 @@ TopologyMappingResult map_multi_mesh_to_physical(
         std::vector<MultiMeshMappingPart>{
             MultiMeshMappingPart{&mesh_graph_descriptor, pinnings, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank}},
         config);
+    if (local_parts.empty()) {
+        TopologyMappingResult result;
+        result.success = false;
+        result.stats.failure_stage = "sat_placement";
+        result.error_message = "map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found";
+        result.stats.warnings.push_back(result.error_message);
+        log_warning(tt::LogFabric, "{}", result.error_message);
+        return result;
+    }
+    return local_parts.front();
+}
+
+TopologyMappingResult map_multi_mesh_to_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const TopologyMappingConfig& config,
+    const std::optional<PinningsByMesh>& pinnings,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    MultiMeshSolutionEnumerator enumerator(
+        physical_system_descriptor,
+        mesh_graph_descriptor,
+        config,
+        /*unique_shapes=*/false,
+        pinnings,
+        asic_id_to_mesh_rank,
+        fabric_node_id_to_mesh_rank);
+    const auto local_parts = enumerator.next();
     if (local_parts.empty()) {
         TopologyMappingResult result;
         result.success = false;

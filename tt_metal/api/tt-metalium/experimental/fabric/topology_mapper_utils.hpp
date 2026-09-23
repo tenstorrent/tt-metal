@@ -365,6 +365,15 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
+// No PGD: MGD fallback groupings via the enumerator (same next() intra-mesh path).
+TopologyMappingResult map_multi_mesh_to_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const TopologyMappingConfig& config,
+    const std::optional<PinningsByMesh>& pinnings = {},
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
 // One input MGD plus that descriptor's local-space pinnings and host ranks. The enumerator
 // merges these and remaps MeshIds internally; callers never see merged/global ids.
 struct MultiMeshMappingPart {
@@ -416,6 +425,22 @@ public:
         const TopologyMappingConfig& config,
         bool unique_shapes = false);
 
+    // No PGD: seat from MGD fallback groupings, then the same next() intra-mesh path.
+    MultiMeshSolutionEnumerator(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+        const TopologyMappingConfig& config,
+        bool unique_shapes = false,
+        const std::optional<PinningsByMesh>& pinnings = {},
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+    MultiMeshSolutionEnumerator(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const std::vector<MultiMeshMappingPart>& parts,
+        const TopologyMappingConfig& config,
+        bool unique_shapes = false);
+
     MultiMeshSolutionEnumerator(const MultiMeshSolutionEnumerator&) = delete;
     MultiMeshSolutionEnumerator& operator=(const MultiMeshSolutionEnumerator&) = delete;
     MultiMeshSolutionEnumerator(MultiMeshSolutionEnumerator&&) noexcept;
@@ -450,6 +475,10 @@ private:
 
     void fill_host_and_asic_positions_from_psd();
     std::vector<TopologyMappingResult> unsuccessful_parts() const;
+    ::tt::tt_fabric::MeshGraphDescriptor init_from_parts(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const std::vector<MultiMeshMappingPart>& parts,
+        std::optional<PinningsByMesh>& session_pinnings);
 };
 
 // Choose one (exit, peer) FabricNodeId pair per candidate set ("hop") such that no FabricNodeId is

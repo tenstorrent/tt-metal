@@ -256,14 +256,12 @@ public:
         bool require_placement = true,
         const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {}) const;
 
-    // MGD-native mesh groupings that embed on the PSD (torus wraps when the MGD uses RING dims). Pair of
-    // get_valid_groupings_for_mgd; SAT placement adds these to the candidate pool only after PGD variants
-    // are exhausted without a joint placement.
-    ValidGroupingsMap get_mgd_placement_fallbacks_for_mgd(
+    // MGD-native mesh groupings that embed on the PSD (torus wraps when the MGD uses RING dims).
+    // Does not read PGD groupings; SAT uses these as seats when constructed without a PGD.
+    static ValidGroupingsMap get_mgd_placement_fallbacks_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
-        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {}) const;
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt);
 
     // Same as get_valid_groupings_for_mgd for every MGD, merged into one map. Keys are prefixed "mgd{i}_"
     // when there is more than one descriptor. per_mgd_pinnings[i] is forwarded to MGD i (local mesh ids).
@@ -433,6 +431,15 @@ public:
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
         bool unique_shapes = false,
         const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+    // No PGD: seat from an already-resolved groupings map (e.g. MGD fallbacks).
+    SatPlacementEnumerationSession(
+        const ValidGroupingsMap& valid_groupings,
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        PlacementSolveStats* stats,
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+        bool unique_shapes = false);
 
     SatPlacementEnumerationSession(const SatPlacementEnumerationSession&) = delete;
     SatPlacementEnumerationSession& operator=(const SatPlacementEnumerationSession&) = delete;

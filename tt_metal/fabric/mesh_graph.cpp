@@ -1027,8 +1027,8 @@ FabricConfig fabric_config_matching_type(FabricType fabric_type) {
 }  // namespace
 
 MeshGraph::MeshGraph(
-    MeshGraphDescriptor mesh_graph_descriptor, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) :
-    mesh_graph_descriptor_(std::move(mesh_graph_descriptor)) {
+    const MeshGraphDescriptor& mesh_graph_descriptor, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) :
+    mesh_graph_descriptor_(mesh_graph_descriptor) {
     initialize_from_mgd(*mesh_graph_descriptor_, fabric_config, is_ubb_galaxy);
 }
 

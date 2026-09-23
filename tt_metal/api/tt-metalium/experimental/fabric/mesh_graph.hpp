@@ -195,7 +195,7 @@ public:
         std::uint32_t num_connections_per_direction);
 
     explicit MeshGraph(
-        MeshGraphDescriptor mesh_graph_descriptor,
+        const MeshGraphDescriptor& mesh_graph_descriptor,
         std::optional<FabricConfig> fabric_config = std::nullopt,
         bool is_ubb_galaxy = false);
 
