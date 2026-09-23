@@ -9,8 +9,8 @@
 #include <memory>
 #include <string>
 
-#include <tt-metalium/experimental/sockets/host_uva_layout.hpp>
-#include <tt-metalium/experimental/sockets/host_uva.hpp>
+#include "tt_metal/distributed/host_uva_layout.hpp"
+#include "tt_metal/distributed/host_uva.hpp"
 
 namespace ttsl {
 template <typename T>

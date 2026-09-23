@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 
-#include <tt-metalium/experimental/sockets/host_uva_frame.hpp>
+#include "tt_metal/distributed/host_uva_frame.hpp"
 
 namespace tt::tt_metal::experimental {
 
