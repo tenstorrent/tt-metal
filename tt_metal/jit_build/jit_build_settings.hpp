@@ -191,6 +191,7 @@ public:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
     //  - prefetcher_pipe_id: the program PrefetcherPipe slot the accessor constructs its PrefetcherPipe with
     virtual void process_prefetcher_pipe_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
         std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
