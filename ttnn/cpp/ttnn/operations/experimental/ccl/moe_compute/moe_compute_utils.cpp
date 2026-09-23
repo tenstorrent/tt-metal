@@ -611,9 +611,13 @@ ttnn::Tensor prepare_w0_w1_compact(
     const uint32_t block_rows = block_h * TILE_SIZE;  // every block (full or half) is block_h stored tile rows
     // Today's per-core stride shape is kept where the layout is byte-identical to it (14-tile transactions, every
     // core owning the same even column count, one core per bank).
-    const bool uniform = tiles_per_txn == ::moe_ring::DEFAULT_TILES_PER_TXN && num_banks == num_cores &&
-                         shard_map[0] % 2 == 0 &&
-                         std::all_of(shard_map.begin(), shard_map.end(), [&](uint32_t n) { return n == shard_map[0]; });
+    const uint32_t stored0 = ::moe_ring::w0_w1_stored_cols(Nt, 0, num_cores);
+    bool same_stored = true;
+    for (uint32_t c = 1; c < num_cores; ++c) {
+        same_stored = same_stored && ::moe_ring::w0_w1_stored_cols(Nt, c, num_cores) == stored0;
+    }
+    const bool uniform =
+        tiles_per_txn == ::moe_ring::DEFAULT_TILES_PER_TXN && num_banks == num_cores && stored0 % 2 == 0 && same_stored;
 
     ttnn::Tensor working_w0 = tt_w0;
     ttnn::Tensor working_w1 = tt_w1;
@@ -663,16 +667,34 @@ ttnn::Tensor prepare_w0_w1_compact(
     std::vector<ttnn::Tensor> each_slice;
     each_slice.reserve(2 * shard_map.size() + 1);
     uint32_t start_tile = 0;
-    for (uint32_t num_tiles : shard_map) {
-        const uint32_t pairs = num_tiles / 2;
+    for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
+        const uint32_t num_tiles = shard_map[core_id];
+        // Columns this core stores: its own, then zero columns up to the uniform stride for a non-compact shape.
+        const uint32_t stored = ::moe_ring::w0_w1_stored_cols(Nt, core_id, num_cores);
+        auto core_cols = slice_basic(
+            permuted,
+            {0, 0, static_cast<int32_t>(start_tile), 0, 0},
+            {static_cast<int32_t>(L),
+             static_cast<int32_t>(E),
+             static_cast<int32_t>(start_tile + num_tiles),
+             static_cast<int32_t>(Kp),
+             static_cast<int32_t>(2 * TILE_SIZE)});
+        if (stored > num_tiles) {
+            auto zero_cols = zeros_like_dtype({L, E, stored - num_tiles, Kp, 2 * TILE_SIZE}, permuted);
+            auto padded = ttnn::concat({core_cols, zero_cols}, 2);
+            core_cols.deallocate(/*force=*/true);
+            zero_cols.deallocate(/*force=*/true);
+            core_cols = padded;
+        }
+        const uint32_t pairs = stored / 2;
         if (pairs > 0) {
             // (L, E, 2*pairs, Kp_full, 2*TILE) -> (L, E, pairs, Kp_full, 4*TILE): row k = W0 c, W1 c, W0 c+1, W1 c+1
             auto cols = slice_basic(
-                permuted,
-                {0, 0, static_cast<int32_t>(start_tile), 0, 0},
+                core_cols,
+                {0, 0, 0, 0, 0},
                 {static_cast<int32_t>(L),
                  static_cast<int32_t>(E),
-                 static_cast<int32_t>(start_tile + 2 * pairs),
+                 static_cast<int32_t>(2 * pairs),
                  static_cast<int32_t>(Kp_full),
                  static_cast<int32_t>(2 * TILE_SIZE)});
             auto grouped = reshape_to(
@@ -693,11 +715,11 @@ ttnn::Tensor prepare_w0_w1_compact(
                  static_cast<int32_t>(pairs * Kp_full),
                  static_cast<int32_t>(4 * TILE_SIZE)}));
         }
-        if (num_tiles % 2 != 0) {
+        if (stored % 2 != 0) {
             // (L, E, Kp_half, 2*TILE) -> (L, E, Kp_half / 2, 4*TILE): tile row j = K tile rows 2j and 2j+1 side by side
-            const uint32_t col = start_tile + 2 * pairs;
+            const uint32_t col = 2 * pairs;
             auto half = slice_basic(
-                permuted,
+                core_cols,
                 {0, 0, static_cast<int32_t>(col), 0, 0},
                 {static_cast<int32_t>(L),
                  static_cast<int32_t>(E),
@@ -722,6 +744,7 @@ ttnn::Tensor prepare_w0_w1_compact(
                  static_cast<int32_t>(Kp_half / 2),
                  static_cast<int32_t>(4 * TILE_SIZE)}));
         }
+        core_cols.deallocate(/*force=*/true);
         start_tile += num_tiles;
     }
     const uint32_t stream_pad_blocks = num_banks * bank_blocks - expert_blocks;
@@ -756,7 +779,7 @@ ttnn::Tensor prepare_w0_w1_compact(
             {static_cast<int32_t>(num_cores),
              static_cast<int32_t>(L),
              static_cast<int32_t>(E),
-             static_cast<int32_t>(shard_map[0] / 2),
+             static_cast<int32_t>(stored0 / 2),
              static_cast<int32_t>(Kp_full),
              static_cast<int32_t>(4 * TILE_SIZE)});
         packed.deallocate(/*force=*/false);

@@ -744,6 +744,45 @@ def test_moe_compute_single_card_flash_next(mesh_device, mesh_shape, compute_onl
     )
 
 
+# Other public MoE expert shapes, one per W0/W1 layout case on an 8-bank ring: compact (the busiest core owns fewer
+# columns than the uniform even stride) and uniform stride (6/5 and 8/7 columns). name: (hidden, expert intermediate,
+# top-k, experts per device); 16-32 experts keep the BF4 weight preparation short.
+_MOE_OTHER_SHAPES = {
+    "qwen36_35b_a3b": (2048, 512, 8, 32),  # 2 columns per core: compact
+    "gemma4_26b_a4b": (2816, 704, 8, 32),  # 3/2 columns: compact
+    "glm45_air": (4096, 1408, 8, 32),  # 6/5 columns: uniform stride
+    "nemotron3_nano": (2688, 1856, 6, 16),  # 8/7 columns: uniform stride
+}
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("shape", sorted(_MOE_OTHER_SHAPES))
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_other_shapes(mesh_device, mesh_shape, shape):
+    """Single-card MoE compute on a 1x1 mesh for other public expert shapes (compute_only, SILU, no bias)."""
+    hidden_size, intermediate, k, experts = _MOE_OTHER_SHAPES[shape]
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=experts,
+        tokens_per_device=32,
+        selected_experts_k=k,
+        N=intermediate,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=True,
+    )
+
+
 # Regression sweep for tt-metal#50669 (correct output for non-tile-aligned token counts). Small hidden/N
 # keep bf4 weight-prep fast; configs vary tilize_num_cores (largest divisor of hidden/32 <= 4): 512->4,
 # 1344->3, 320->2, with activation/bias/k<E variety. Real model shapes are covered at tokens=32 above.
