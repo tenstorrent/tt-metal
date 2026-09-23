@@ -99,6 +99,34 @@ def prefill_l1_output_ok():
     return is_blackhole()
 
 
+# LoFi + no fp32 dest-acc, for the GDN in/out projections on Wormhole. Both take a BFLOAT8_B
+# weight, whose 8-bit mantissa already dominates the product's error, so HiFi2's ~2x math passes
+# buy precision the operands cannot represent (the same argument PR #54572 makes for the attention
+# prefill matmuls). MEASURED here by tests/perf/test_sweep_gdn_matmuls.py on n150x4 / 35B-A3B,
+# shuffled 3-pass min, drift probe within +-3.3%:
+#     in_proj_decode   M=1   K=2048 N=3088   57.0 -> 47.9us  -16.0%   per-op pcc 0.999838
+#     out_proj_decode  M=1   K=1024 N=2048   81.9 -> 62.6us  -23.6%   per-op pcc 0.999841
+#     in_proj_prefill  M=128 K=2048 N=3088  109.8 -> 97.8us  -11.0%   per-op pcc 0.999926
+# Per-op PCC is NOT the gate that matters: the GDN recurrent state accumulates error across every
+# decode step and all 30 GDN layers. test_gdn_tp is the acceptance gate.
+COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+# LoFi variant: MEASURED FASTER but REJECTED for the GDN projections -- see the model-level numbers
+# in gdn/tp.py where self.cfg is chosen. Kept because it is the right choice for a matmul whose
+# output does NOT feed the recurrent state.
+COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
 # Grid helpers
 def prefill_grid_default():
     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""
