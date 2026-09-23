@@ -47,3 +47,54 @@ Rules: run each test in its own pytest process (socket teardown wedges a later m
 same process), keep the `timeout`, and keep `TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0` on this
 box (issue 55957). Code: `tt/sp_prefill.py` (orchestrator), `tt/sp_handoff.py` (SP -> TP=4 decode
 cache handoff), `tests/test_sp_prefill.py`.
+
+---
+
+## Where the 50 ms TTFT goes (recorded 2026-09-23)
+
+Source: 4-die Tracy trace of the final round-4 code, ISL 4096, die 3 (the die that finishes
+last), last traced replay. CSV: `~/atupe/sp_prefill_reports/2026-09-23_e2e_sp_tp_4k_osl8/`
+(`b_ops_perf_results_2026_09_23_00_32_21.csv`); per-layer split script
+`scripts/analyze_sp4_per_die.py` (usage: `python scripts/analyze_sp4_per_die.py <ops_perf_results.csv>`). Wall-clock time to first token in the
+same run: 49.75 ms.
+
+### Timeline view (die 3)
+
+| Block | ms | Share | What it is |
+|---|---:|---:|---|
+| 18 GDN layers | 32.2 | 65% | 29.2 compute + 3.0 receiving state from die 2 |
+| 6 attention layers | 10.3 | 21% | 5.2 attention over 4096 keys (SDPA 4.2) + 4.2 projections/MLP + 0.9 receiving K/V |
+| Pipeline fill | 4.0 | 8% | Die 3 idles until dies 0, 1, 2 have each run layer 0 and passed the state down |
+| Tail | 1.6 | 3% | Last-token select, final norm, LM head over the 248k vocabulary (1.5), argmax |
+| Dispatch gaps and token readback | 1.6 | 3% | ~1 us between each of ~940 ops, plus reading one token back to the host |
+
+### Work-type view (die 3, same 50 ms)
+
+| Op type | ms | Share |
+|---|---:|---:|
+| Matmuls (projections, MLP, LM head) | 13.1 | 26% |
+| Communication: fill wait + per-layer receives | 7.9 | 16% |
+| GDN kernel (prep + scan) | 7.8 | 16% |
+| Elementwise (SiLU, gating, residual adds) | 4.3 | 9% |
+| SDPA | 4.2 | 8% |
+| Fused conv1d (KDA op) | 3.8 | 8% |
+| Layout ops (untilize, slices, head reshapes) | 3.6 | 7% |
+| Norms | 2.3 | 5% |
+| Gaps, readback, misc small ops | 3.0 | 6% |
+
+### Per-layer numbers vs TTFT
+
+Per-layer cost on die 3, including comm: GDN 1.79 ms, attention 1.72 ms. The layers alone
+do not add up to the TTFT because two one-time costs sit outside them:
+
+| | ms |
+|---|---:|
+| 18 GDN x 1.79 + 6 FA x 1.72 | 42.5 |
+| Pipeline fill before layer 0 | 4.0 |
+| Tail: LM head, norm, argmax | 1.6 |
+| Dispatch gaps and token readback | 1.6 |
+| Total | 49.7 |
+
+Per-die measured means (compute-only / comm, ms per layer): die 0 GDN 1.616 / 0.159, FA
+1.041 / 0.751 (send waits); die 3 GDN 1.622 / 0.166, FA 1.569 / 0.153. SDPA per die 0.146 /
+0.330 / 0.514 / 0.699 ms (1024 to 4096 keys). Fill wait on die 3: 3.96 ms.
