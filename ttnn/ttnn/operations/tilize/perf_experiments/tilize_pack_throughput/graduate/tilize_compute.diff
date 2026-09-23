@@ -1,0 +1,36 @@
+--- ttnn/ttnn/operations/tilize/kernels/tilize_compute.cpp	2026-09-23 21:20:22.332202233 +0000
++++ ttnn/ttnn/operations/tilize/perf_experiments/tilize_pack_throughput/graduate/tilize_compute.cpp	2026-09-23 22:17:35.799862505 +0000
+@@ -17,6 +17,13 @@
+ // NoReconfigure in the middle, uninit on the last. Both input CBs have identical
+ // format and tile geometry, so the one init configures both.
+ //
++// No data-format reconfig: compute_kernel_hw_startup(cb_input_sticks, cb_output_tiles) is the
++// only prior configuration and it programs srcA / srcB / pack for exactly these two CBs, so the
++// helper's UnpackAndPackReconfigure re-issued identical config (STALLWAITs + cfg writes) on the
++// critical path. Measured (WH B0, perf_experiments/tilize_pack_throughput): HEIGHT-resident
++// [1,1,2048,512] 1929 -> 1874 ns, BLOCK-resident [1,1,512,512] 1964 -> 1809 ns, 2-tile rows -15 %;
++// DRAM-bound shapes flat; bit-exact on every dtype pair.
++//
+ // Numeric formats (CT `fp32_lossless`): cb_input_sticks carries the input dtype and
+ // cb_output_tiles the output dtype; the value-preserving cast happens at pack. A 32-bit
+ // input (Float32 / Int32 / UInt32) is tagged UnpackToDestFp32 on the host and runs with
+@@ -35,7 +42,9 @@
+
+ template <uint32_t block_width, uint32_t cb_in, uint32_t cb_out, Fp32Mode fp32_mode>
+ FORCE_INLINE void tilize_one_row(bool first, bool last) {
+-    constexpr auto reconfig = ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure;
++    // compute_kernel_hw_startup(cb_input_sticks, cb_output_tiles) already configured srcA/srcB and
++    // the packer for exactly these formats (the odd CB matches the even one): no reconfig.
++    constexpr auto reconfig = ReconfigureRegisterDatatypeMode::NoReconfigure;
+     if (first && last) {
+         compute_kernel_lib::
+             tilize<block_width, cb_in, cb_out, InitUninitMode::InitAndUninit, WaitMode::WaitBlock, reconfig, fp32_mode>(
+@@ -92,7 +101,7 @@
+             cb_output_tiles,
+             InitUninitMode::InitAndUninit,
+             WaitMode::WaitBlock,
+-            ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
++            ReconfigureRegisterDatatypeMode::NoReconfigure,
+             fp32_mode>(num_blocks);
+     } else {
+         for (uint32_t seq = 0; seq < num_blocks; ++seq) {

@@ -11,10 +11,10 @@ import os
 
 import pytest
 
-# Perf-tournament harnesses (test_tilize_perf1_*.py) drive kernel-dir variants that their
+# Perf-tournament harnesses (test_tilize_perf1_*.py, test_tilize_perf2_*.py) drive kernel-dir variants that their
 # generator scripts under ttnn/ttnn/operations/tilize/perf_experiments/<idea>/ produce (the
 # generated dirs are not committed). They are opt-in: TILIZE_PERF_EXPERIMENTS=1.
-_PERF_EXPERIMENT_PREFIX = "test_tilize_perf1_"
+_PERF_EXPERIMENT_PREFIXES = ("test_tilize_perf1_", "test_tilize_perf2_")
 
 
 def pytest_collection_modifyitems(items):
@@ -22,7 +22,7 @@ def pytest_collection_modifyitems(items):
     for item in items:
         item.add_marker(pytest.mark.use_module_device)
         if (
-            item.fspath.basename.startswith(_PERF_EXPERIMENT_PREFIX)
+            item.fspath.basename.startswith(_PERF_EXPERIMENT_PREFIXES)
             and os.environ.get("TILIZE_PERF_EXPERIMENTS") != "1"
         ):
             item.add_marker(skip)
