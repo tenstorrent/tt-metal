@@ -520,6 +520,31 @@ def _extract_pcc_threshold(pcc_file: Path, default: float = 0.99) -> float:
     return default
 
 
+def _reroot_into_tree(abs_path: Path, tt_root: Path) -> Path:
+    """An absolute --pcc-test typed against ANOTHER checkout (the operator's working copy) is moved
+    into THIS run's tree when the same file exists there.
+
+    optimize measures and edits an isolated worktree, so a gate that stays pointed at the operator's
+    main checkout would pytest the UNEDITED copy on every lever -- a correctness gate that cannot
+    fail. The lead agent caught exactly this on 2026-09-23 and refused the run (three restarts of
+    ~17 min each, all doomed, because the launch flags are replayed verbatim). --perf-test already
+    gets re-rooted (before_loop._relativize_to_model_root); the PCC gate now gets the same treatment,
+    matched on the longest path tail that exists under tt_root so a shared filename in a sibling
+    demo (nemotron_3_nano vs nemotron_3_5_lightning) cannot hijack it. A path already inside tt_root,
+    or one with no counterpart in the tree, is returned unchanged (the caller reports the latter)."""
+    try:
+        abs_path.relative_to(tt_root)
+        return abs_path
+    except ValueError:
+        pass
+    parts = abs_path.parts
+    for i in range(1, len(parts)):
+        cand = tt_root.joinpath(*parts[i:])
+        if cand.is_file():
+            return cand.resolve()
+    return abs_path
+
+
 def resolve_pcc_node(
     model_root: str | Path, pcc_node: str, tt_root: str | Path, threshold: float | None = None
 ) -> tuple[str, float, Path]:
@@ -530,6 +555,8 @@ def resolve_pcc_node(
     tt_root = Path(tt_root).resolve()
     file_part, _, fn = str(pcc_node).partition("::")
     pcc_abs = (Path(file_part) if os.path.isabs(file_part) else tt_root / file_part).resolve()
+    if os.path.isabs(file_part):
+        pcc_abs = _reroot_into_tree(pcc_abs, tt_root)
     if not pcc_abs.is_file():
         raise ModelFilesError(f"--pcc-test file {file_part!r} not found (looked under {tt_root})")
     node_rel = os.path.relpath(pcc_abs, model_root) + (f"::{fn}" if fn else "")
