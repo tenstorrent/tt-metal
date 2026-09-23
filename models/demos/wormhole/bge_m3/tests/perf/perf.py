@@ -255,11 +255,11 @@ def test_perf(mesh_device, batch_size, seq_len, masked, mode):
         # The refilling modes need a host copy that carries the same shard layout.
         host_tensors = _stage_on_host(inputs, mesh_device) if mode != "forward" else {}
 
-        out = model.forward(**device_tensors)
+        out = model.forward(**device_tensors, no_padding=not masked)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(out)
 
-        model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
+        model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0, no_padding=not masked)
         for _ in range(3):
             model.execute_trace(blocking=True)
 
