@@ -92,6 +92,9 @@ def main():
         policy=policy,
         stack=args.stack,
         continuation=args.continuation,
+        base_source_sha256=hashlib.sha256(
+            Path(OptimizedDecoder.__module__.replace(".", "/") + ".py").read_bytes()
+        ).hexdigest(),
     )
     try:
         decoder = (OptimizedDecoder if args.baseline else MultichipDecoder).from_state_dict(
@@ -152,7 +155,16 @@ def main():
         cc, ss = upload(cos[:, :n]), upload(sin[:, :n])
         pt = upload(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         pos = upload(torch.full((b,), n, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        dx = upload(x[:, n : n + 1], shard=sharded)
+        compact_decode = not args.baseline and decoder.policy.get("compact_decode_residual", False)
+
+        def decode_input(tensor):
+            return tensor.reshape(1, 1, b, config.hidden_size) if compact_decode else tensor
+
+        def decode_host(tensor):
+            value = host(tensor, -1 if sharded else None)
+            return value.reshape(b, 1, config.hidden_size) if compact_decode else value
+
+        dx = upload(decode_input(x[:, n : n + 1]), shard=sharded)
         dc, ds = upload(cos[:, n : n + 1]), upload(sin[:, n : n + 1])
         reservation = None
         if args.capacity and not args.baseline:
@@ -373,7 +385,7 @@ def main():
                 return original_linear(x, name, activation=activation, keep_sharded=keep_sharded)
 
             decoder._linear = record_projection
-        expected = host(decode(), -1 if sharded else None)
+        expected = decode_host(decode())
         if args.projection_bench:
             decoder._linear = original_linear
             report["projection_bench"] = {}
@@ -424,7 +436,7 @@ def main():
             projection_inputs.clear()
         last_position_state = state_host() if args.capacity else {}
         changed_inputs = [
-            upload(x[:, n + 1 : n + 2], shard=sharded),
+            upload(decode_input(x[:, n + 1 : n + 2]), shard=sharded),
             upload(cos[:, n + 1 : n + 2]),
             upload(sin[:, n + 1 : n + 2]),
             upload(
@@ -464,7 +476,7 @@ def main():
 
         refresh(changed_inputs)
         restore(changed_prefix)
-        changed_expected = host(decode(), -1 if sharded else None)
+        changed_expected = decode_host(decode())
         changed_state = state_host()
         if n <= 4097:
             changed_positions = n - 1 - torch.arange(b) % min(n, 4)
@@ -486,7 +498,7 @@ def main():
                 stress_output = decode()
                 if iteration + 1 < args.stress_iterations:
                     del stress_output
-            stress_expected = host(stress_output, -1 if sharded else None)
+            stress_expected = decode_host(stress_output)
             stress_state = state_host()
             del stress_output
             restore(prefix)
@@ -506,7 +518,7 @@ def main():
             ttnn.execute_trace(mesh, trace, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh)
             times.append((time.perf_counter() - start) * 1000)
-            actual = host(traced, -1 if sharded else None)
+            actual = decode_host(traced)
             assert torch.equal(expected, actual), "trace differs from eager"
             if args.profile:
                 ttnn.ReadDeviceProfiler(mesh)
@@ -516,7 +528,7 @@ def main():
         refresh(changed_inputs)
         restore(changed_prefix)
         ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-        changed_actual = host(traced, -1 if sharded else None)
+        changed_actual = decode_host(traced)
         assert torch.equal(changed_expected, changed_actual), "changed-input replay mismatch"
         assert not torch.equal(expected, changed_actual), "changed inputs ignored"
         for key, value in (state_host()).items():
@@ -550,7 +562,7 @@ def main():
             for _ in range(args.stress_iterations):
                 ttnn.execute_trace(mesh, trace, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh)
-            assert torch.equal(stress_expected, host(traced, -1 if sharded else None))
+            assert torch.equal(stress_expected, decode_host(traced))
             for key, value in state_host().items():
                 assert torch.equal(stress_state[key], value), f"Queued stress state mismatch: {key}"
             report["queued_stress_iterations"] = args.stress_iterations

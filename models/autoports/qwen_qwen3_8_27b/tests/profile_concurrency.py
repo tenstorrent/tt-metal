@@ -33,6 +33,8 @@ def main():
         help="Replace packed-MLP slices and multiply with the exact packed consumer during prefill",
     )
     parser.add_argument("--compare-single-step", action="store_true", help="Experimental B16 decode recurrence")
+    parser.add_argument("--compare-compact-mlp", action="store_true", help="Compare compact decode MLP rows")
+    parser.add_argument("--compare-decode-layouts", action="store_true", help="Compare cumulative decode layouts")
     parser.add_argument("--compare-sharded-prefill", action="store_true", help="Prefill-only sharded residual")
     parser.add_argument(
         "--compare-row-parallel-norm",
@@ -56,6 +58,8 @@ def main():
                 args.compare_fused_mlp,
                 args.compare_packed_swiglu,
                 args.compare_single_step,
+                args.compare_compact_mlp,
+                args.compare_decode_layouts,
                 args.compare_sharded_prefill,
                 args.compare_row_parallel_norm,
             )
@@ -65,6 +69,8 @@ def main():
         parser.error("Select only one comparison per run")
     if args.compare_single_step and args.batch != 16:
         parser.error("The experimental one-step model path is restricted to batch 16")
+    if (args.compare_compact_mlp or args.compare_decode_layouts) and args.batch < 2:
+        parser.error("Compact MLP comparison requires a multi-request batch")
     if args.replicated_prefill_norm and not args.compare_sharded_prefill:
         parser.error("--replicated-prefill-norm requires --compare-sharded-prefill")
     if args.prefill_head_optimizations and not args.compare_sharded_prefill:
@@ -93,6 +99,8 @@ def main():
 
         with patch("models.autoports.qwen_qwen3_8_27b.tt.model.decoder_policy", side_effect=policy):
             generator = build_generator(Path("models/autoports/qwen_qwen3_8_27b"), mesh)
+        if (args.compare_compact_mlp or args.compare_decode_layouts) and not generator.model.compact_decode_residual:
+            raise ValueError("Compact MLP comparison requires QWEN_COMPACT_DECODE_RESIDUAL=1")
         for layer in generator.model.layers:
             layer.policy["minimal_mlp"] = False
         adapter = Qwen38ForCausalLM(generator, args.batch, context)
@@ -118,19 +126,36 @@ def main():
             if args.distinct_prompts:
                 tokens += torch.arange(args.batch).reshape(-1, 1) * 13
             for trial in range(
-                6
-                if args.compare_row_parallel_norm
-                else 4
-                if args.compare_prefill
-                or args.compare_sdpa
-                or args.compare_fused_mlp
-                or args.compare_packed_swiglu
-                or args.compare_single_step
-                or args.compare_sharded_prefill
-                or args.compare_row_parallel_norm
-                else 2
+                8
+                if args.compare_decode_layouts
+                else (
+                    6
+                    if args.compare_row_parallel_norm
+                    else (
+                        4
+                        if args.compare_prefill
+                        or args.compare_sdpa
+                        or args.compare_fused_mlp
+                        or args.compare_packed_swiglu
+                        or args.compare_single_step
+                        or args.compare_compact_mlp
+                        or args.compare_sharded_prefill
+                        or args.compare_row_parallel_norm
+                        else 2
+                    )
+                )
             ):
                 repeat = trial % 2
+                if args.compare_decode_layouts and repeat == 0:
+                    generator._release_traces()
+                    for layer in generator.model.layers:
+                        layer.policy["compact_decode_mlp"] = trial >= 2
+                        layer.policy["batched_decode_rope"] = trial >= 4
+                        layer.policy["compact_decode_attention"] = trial >= 6
+                if args.compare_compact_mlp and repeat == 0:
+                    generator._release_traces()
+                    for layer in generator.model.layers:
+                        layer.policy["compact_decode_mlp"] = trial >= 2
                 if args.compare_row_parallel_norm and repeat == 0:
                     generator._release_traces()
                     generator.prefill_signatures.clear()
@@ -203,6 +228,10 @@ def main():
                     times.append(time.perf_counter() - begin)
                     outputs.append(decoded.reshape(-1).tolist())
                 row = dict(
+                    compact_decode_residual=generator.model.compact_decode_residual,
+                    compact_decode_mlp=generator.model.layers[0].policy.get("compact_decode_mlp", False),
+                    batched_decode_rope=generator.model.layers[0].policy.get("batched_decode_rope", False),
+                    compact_decode_attention=generator.model.layers[0].policy.get("compact_decode_attention", False),
                     batched_prefill=generator.batched_prefill,
                     fused_prefill_mlp=args.compare_fused_mlp and trial >= 2,
                     packed_prefill_swiglu=args.compare_packed_swiglu and trial >= 2,
@@ -225,7 +254,12 @@ def main():
                     counters=dict(generator.counters),
                 )
                 report["rows"].append(row)
+                if (args.compare_compact_mlp or args.compare_decode_layouts) and trial >= 1:
+                    control = next(r for r in report["rows"] if r["length"] == length and r["trial"] == 0)
+                    row["tokens_match_control"] = outputs == control["tokens"]
                 args.output.write_text(json.dumps(report, indent=2) + "\n")
+                if (args.compare_compact_mlp or args.compare_decode_layouts) and trial >= 1:
+                    assert row["tokens_match_control"], "Decode layout or repeated-run tokens differ from control"
                 print("BATCH_PROFILE", json.dumps({k: v for k, v in row.items() if k != "tokens"}), flush=True)
     finally:
         if adapter is not None:

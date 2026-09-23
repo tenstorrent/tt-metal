@@ -74,6 +74,11 @@ class QwenModel:
             list(range(self.config.num_hidden_layers)) if layer_indices is None else list(layer_indices)
         )
         self.layers = []
+        # TILE [B,1,H] allocates a separate 32-row tile plane for every
+        # request.  Keep multi-request decode residuals as [1,1,B,H] instead,
+        # which has the same compact physical row layout as logical [B,H].
+        # Set QWEN_COMPACT_DECODE_RESIDUAL=0 for an immediate rollback.
+        self.compact_decode_residual = os.getenv("QWEN_COMPACT_DECODE_RESIDUAL", "1") == "1"
         prefill_layout = os.getenv("QWEN_PREFILL_RESIDUAL_LAYOUT", "replicated")
         if prefill_layout not in ("replicated", "sharded", "sharded_replicated_norm"):
             raise ValueError("Unknown QWEN_PREFILL_RESIDUAL_LAYOUT")
@@ -100,7 +105,14 @@ class QwenModel:
                     layer_idx=i,
                     mesh_device=mesh_device,
                     ccl=self.ccl,
-                    policy={**decoder_policy(self.precision, i), **prefill_policy},
+                    policy={
+                        **decoder_policy(self.precision, i),
+                        **prefill_policy,
+                        "compact_decode_residual": self.compact_decode_residual,
+                        "compact_decode_mlp": os.getenv("QWEN_COMPACT_DECODE_MLP", "0") == "1",
+                        "batched_decode_rope": os.getenv("QWEN_BATCHED_DECODE_ROPE", "0") == "1",
+                        "compact_decode_attention": os.getenv("QWEN_COMPACT_DECODE_ATTENTION", "0") == "1",
+                    },
                 )
             )
         self.embedding_weight = self.upload(
@@ -181,7 +193,9 @@ class QwenModel:
                 if tensor is not None:
                     ttnn.copy(ttnn.zeros_like(tensor), tensor)
 
-    def embed(self, tokens, *, batch, length, sharded=False):
+    def embed(self, tokens, *, batch, length, sharded=False, compact=False):
+        if compact and (sharded or length != 1):
+            raise ValueError("Compact embedding is supported only for replicated single-token decode")
         out = ttnn.embedding(
             tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -199,6 +213,8 @@ class QwenModel:
             multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
             barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),
         )
+        if compact:
+            return out
         return ttnn.reshape(out, [batch, length, self.config.hidden_size])
 
     def rope(self, positions, *, batch, length):
@@ -211,8 +227,8 @@ class QwenModel:
         )
 
     def logits(self, hidden, *, decode=False):
+        batch = hidden.shape[-2] if len(hidden.shape) == 4 else hidden.shape[0]
         if decode and self.head_strategy == "dram":
-            batch = hidden.shape[0]
             memory = self.layers[0]._width_memory(40, 32, 128)
             hidden = ttnn.to_memory_config(ttnn.reshape(hidden, [1, 1, batch, 5120]), memory)
             hidden = ttnn.rms_norm(
@@ -236,9 +252,7 @@ class QwenModel:
             compute_kernel_config=self.norm_compute,
         )
         if decode:
-            hidden = ttnn.reshape(
-                ttnn.to_layout(hidden, ttnn.ROW_MAJOR_LAYOUT), [1, 1, hidden.shape[0], self.config.hidden_size]
-            )
+            hidden = ttnn.reshape(ttnn.to_layout(hidden, ttnn.ROW_MAJOR_LAYOUT), [1, 1, batch, self.config.hidden_size])
             hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
         return ttnn.linear(
             hidden,
@@ -369,7 +383,7 @@ class QwenModel:
     def decode(self, tokens, positions, *, cache, page_table, rope_indices=None, active_slots=None):
         b = cache.batch_size
         ids = ttnn.reshape(tokens, [1, 32])[:, :b]
-        x = self.embed(ids, batch=b, length=1)
+        x = self.embed(ids, batch=b, length=1, compact=self.compact_decode_residual and b > 1)
         indices = ttnn.reshape(
             rope_indices if rope_indices is not None else ttnn.typecast(positions, ttnn.uint32), [1, b]
         )

@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Optimized single-mesh Qwen3.8-27B text decoder, with explicit caller-owned request state.
 
-Inputs/outputs are TILE BF16 [batch, sequence, 5120]. Prefill accepts logical
-lengths; it executes bounded chunks internally. Full attention uses paged BFP8
-K/V with 32-token pages; linear attention uses persistent FP32 recurrent state
-and a three-token convolution history. Decode accepts one token and device
-INT32 current positions. Callers refresh input/position/RoPE/page-table tensors
-before trace replay and restore state after warmup/capture.
+Inputs/outputs are TILE BF16 [batch, sequence, 5120]. An optional decode-only
+path carries residuals as compact [1,1,batch,5120], whose physical rows match
+logical [batch,5120]. Prefill accepts logical lengths; it executes bounded
+chunks internally. Full attention uses paged BFP8 K/V with 32-token pages;
+linear attention uses persistent FP32 recurrent state and a three-token
+convolution history. Decode accepts one token and device INT32 current
+positions. Callers refresh input/position/RoPE/page-table tensors before trace
+replay and restore state after warmup/capture.
 
 Weight conversion and state allocation are setup boundaries. Forward methods
 and their helpers contain only TTNN device operations and shape orchestration.
@@ -31,6 +33,7 @@ DEFAULT_POLICY = {
     "carry_input": True,
     "carry_output": True,
     "carry_residual": True,
+    "compact_decode_residual": False,
     "chunk_size": 2048,
     "down_block": 17,
     "down_cores": 32,
@@ -532,10 +535,11 @@ class OptimizedDecoder(LightweightModule):
 
     def _finish(self, x, attention):
         if self.policy.get("carry_residual", False) and self.policy.get("dram", False) and x.shape[1] == 1:
-            memory = self._residual_memory(x.shape[0])
-            shape = x.shape
-            x = ttnn.to_memory_config(ttnn.reshape(x, [1, 1, shape[0], 5120]), memory)
-            attention = ttnn.to_memory_config(ttnn.reshape(attention, [1, 1, shape[0], 5120]), memory)
+            compact = len(x.shape) == 4
+            batch = x.shape[-2] if compact else x.shape[0]
+            memory = self._residual_memory(batch)
+            x = ttnn.to_memory_config(ttnn.reshape(x, [1, 1, batch, 5120]), memory)
+            attention = ttnn.to_memory_config(ttnn.reshape(attention, [1, 1, batch, 5120]), memory)
             h = ttnn.add(
                 x, attention, memory_config=memory, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16"))
             )
@@ -545,11 +549,16 @@ class OptimizedDecoder(LightweightModule):
                     n, self.weights["mlp.interleaved_gate_up.weight"], self.projection_configs["gate"], fuse_swiglu=True
                 )
             elif self.policy.get("packed_mlp", False):
-                packed = self._linear(n, "mlp.gate_up")
+                compact_mlp = compact and self.policy.get("compact_decode_mlp", False)
+                packed = self._linear(n, "mlp.gate_up", keep_sharded=compact_mlp)
+                if compact_mlp:
+                    # Slice the compact rows in interleaved memory without
+                    # expanding each request into a separate tile plane.
+                    packed = ttnn.to_memory_config(packed, ttnn.L1_MEMORY_CONFIG)
                 width = self.config.intermediate_size
                 product = ttnn.mul(
-                    packed[:, :, :width],
-                    packed[:, :, width:],
+                    packed[..., :width],
+                    packed[..., width:],
                     input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
@@ -571,13 +580,12 @@ class OptimizedDecoder(LightweightModule):
                 )
             down = self._linear(product, "mlp.down_proj", keep_sharded=True)
             down = ttnn.to_memory_config(down, memory)
-            return self._public_rows(
-                ttnn.add(
-                    h, down, memory_config=memory, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16"))
-                ),
-                shape[0],
-                5120,
+            result = ttnn.add(
+                h, down, memory_config=memory, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16"))
             )
+            if compact and self.policy.get("compact_decode_residual", False):
+                return result
+            return self._public_rows(result, batch, 5120)
         h = ttnn.add(x, attention, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16")))
         n = self._norm(h, "post_attention_layernorm")
         if self.policy.get("minimal_mlp", False):
@@ -673,6 +681,16 @@ class OptimizedDecoder(LightweightModule):
     def _rope_decode(self, x, cos, sin):
         # Keep [1,B,H,D] from decode head creation through paged attention.
         b, rotary_width = x.shape[1], cos.shape[-1]
+        if b > 1 and self.policy.get("batched_decode_rope", False):
+            # Use the sequence axis for independent request rows. Each row
+            # receives its own position's cos/sin, broadcast across heads.
+            part = ttnn.permute(x[..., :rotary_width], (0, 2, 1, 3))
+            cc = ttnn.reshape(cos, [1, 1, b, rotary_width])
+            ss = ttnn.reshape(sin, [1, 1, b, rotary_width])
+            rotated = ttnn.experimental.rotary_embedding(part, cc, ss)
+            rotated = ttnn.reshape(rotated, part.shape, part.padded_shape)
+            rotated = ttnn.permute(rotated, (0, 2, 1, 3))
+            return ttnn.concat([rotated, x[..., rotary_width:]], dim=-1)
         outputs = []
         for user in range(b):
             part = x[:, user : user + 1, :, :rotary_width]
@@ -690,7 +708,7 @@ class OptimizedDecoder(LightweightModule):
         )
 
     def _full_decode(self, x, state, page_table, current_pos, cos, sin):
-        b = x.shape[0]
+        b = x.shape[-2] if len(x.shape) == 4 else x.shape[0]
         c = self.config
         grid = self.device.compute_with_storage_grid_size()
         cores = ttnn.num_cores_to_corerangeset(b, grid, row_wise=True)
@@ -699,10 +717,13 @@ class OptimizedDecoder(LightweightModule):
             ttnn.BufferType.L1,
             ttnn.ShardSpec(cores, [32, c.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
         )
-        packed = self._linear(x, "self_attn.qkvg")
+        compact_attention = len(x.shape) == 4 and self.policy.get("compact_decode_attention", False)
+        packed = self._linear(x, "self_attn.qkvg", keep_sharded=compact_attention)
+        if compact_attention:
+            packed = ttnn.to_memory_config(packed, ttnn.L1_MEMORY_CONFIG)
         qkv_width = (c.num_attention_heads + 2 * c.num_key_value_heads) * c.head_dim
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
-            ttnn.reshape(packed[:, :, :qkv_width], [1, 1, b, qkv_width]),
+            ttnn.reshape(packed[..., :qkv_width], [1, 1, b, qkv_width]),
             num_heads=c.num_attention_heads,
             num_kv_heads=c.num_key_value_heads,
             memory_config=memory,
@@ -740,7 +761,7 @@ class OptimizedDecoder(LightweightModule):
         q = ttnn.to_memory_config(q, rope_memory)
         k = ttnn.to_memory_config(k, rope_memory)
         q, k = self._rope_decode(q, cos, sin), self._rope_decode(k, cos, sin)
-        gate = packed[:, :, qkv_width:]
+        gate = packed[..., qkv_width:]
         key_cores = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(ttnn.CoreCoord(i % grid.x, i // grid.x), ttnn.CoreCoord(i % grid.x, i // grid.x))
@@ -782,7 +803,14 @@ class OptimizedDecoder(LightweightModule):
                 k_chunk_size=decode_k,
             ),
         )
-        result = ttnn.reshape(result, [b, 1, c.num_attention_heads * c.head_dim])
+        result = ttnn.reshape(
+            result,
+            (
+                [1, 1, b, c.num_attention_heads * c.head_dim]
+                if compact_attention
+                else [b, 1, c.num_attention_heads * c.head_dim]
+            ),
+        )
         return self._linear(
             ttnn.mul(result, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID]), "self_attn.o_proj"
         )
@@ -876,7 +904,10 @@ class OptimizedDecoder(LightweightModule):
         return self._attention_output(attention, gate)
 
     def _delta(self, x, state):
-        b, t, _ = x.shape
+        if len(x.shape) == 4:
+            b, t = x.shape[-2], 1
+        else:
+            b, t, _ = x.shape
         c = self.config
         h, hv, d = c.linear_num_key_heads, c.linear_num_value_heads, c.linear_key_head_dim
         packed = self._linear(x, "linear_attn.packed")
@@ -890,9 +921,12 @@ class OptimizedDecoder(LightweightModule):
             packed[:, :, conv_width + z_width + gate_width : conv_width + z_width + gate_width + hv], ttnn.float32
         )
         padded_t = (t + 31) // 32 * 32
-        padded_qkv = qkv if padded_t == t else ttnn.pad(qkv, [(0, 0), (0, padded_t - t), (0, 0)], 0.0)
+        packed_conv = t == 1 and b >= 8 and b % 8 == 0 and self.policy.get("packed_decode_conv", False)
+        # Packed decode consumes only the live row and constructs its own
+        # four-row history windows. Do not expand its input to 32 time rows.
+        padded_qkv = qkv if padded_t == t or packed_conv else ttnn.pad(qkv, [(0, 0), (0, padded_t - t), (0, 0)], 0.0)
         row_qkv = ttnn.to_layout(padded_qkv, ttnn.ROW_MAJOR_LAYOUT)
-        if t == 1 and b >= 8 and b % 8 == 0 and self.policy.get("packed_decode_conv", False):
+        if packed_conv:
             q, k, v = packed_decode_conv(row_qkv, state.conv, self.conv_taps, (h * d, h * d, hv * d))
         elif t > 1 and b > 1 and self.policy.get("experimental_packed_prefill_conv", False):
             q, k, v = packed_prefill_conv(row_qkv, state.conv, self.conv_taps, (h * d, h * d, hv * d))
@@ -992,10 +1026,12 @@ class OptimizedDecoder(LightweightModule):
         return self._linear(output, "linear_attn.out_proj")
 
     def decode_forward(self, x, *, state, current_pos, page_table=None, cos=None, sin=None):
-        """One token [B,1,5120]; positions/page table/RoPE are device tensors."""
-        if x.shape[1] != 1:
-            raise ValueError("Decode requires one token per request")
-        if self.policy.get("carry_input", False) and x.shape[0] == 1:
+        """One token [B,1,5120] or compact [1,1,B,5120]."""
+        public = len(x.shape) == 3 and x.shape[1] == 1
+        compact = len(x.shape) == 4 and x.shape[0] == 1 and x.shape[1] == 1
+        if not (public or compact):
+            raise ValueError("Decode requires [B,1,5120] or compact [1,1,B,5120]")
+        if self.policy.get("carry_input", False) and public and x.shape[0] == 1:
             x = ttnn.to_memory_config(x, self._residual_memory(1))
         n = self._norm(x, "input_layernorm")
         attention = (
