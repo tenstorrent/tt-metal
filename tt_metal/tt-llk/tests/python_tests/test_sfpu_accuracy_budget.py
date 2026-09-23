@@ -303,6 +303,44 @@ def test_a_key_describes_itself_for_an_error_message():
     assert "output_format" in described and "dest_acc" in described
 
 
+def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch):
+    """`--ulp-measure` associates a reading with the variant `accuracy_contract` was
+    last asked about, and refuses to record when two lookups race one comparison. That
+    has to mean two lookups *in one test*.
+
+    The exhaustive sweep resolves a contract and then skips the cell when it is on the
+    tolerance metric, leaving a query nobody consumed. Treating that as ambiguity threw
+    away the next test's reading: measured, it dropped all 40 readings that followed a
+    skip in a 130-test run.
+    """
+    import helpers.sfpu_accuracy_budget as budget
+
+    def resolve(test_id):
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{test_id} (call)")
+        accuracy_contract(
+            MathOperation.Abs,
+            output_format=DataFormat.Float16_b,
+            arch=MEASURED_ARCH,
+        )
+
+    budget.LAST_QUERY = None
+    budget.PENDING_AMBIGUOUS = False
+
+    # A cell that resolved and then skipped, followed by a different test: ordinary.
+    resolve("t_one")
+    resolve("t_two")
+    assert not budget.PENDING_AMBIGUOUS
+    assert budget.LAST_QUERY[0] == "t_two"
+
+    # Two lookups inside one test with nothing consumed between them: not ordinary.
+    resolve("t_three")
+    resolve("t_three")
+    assert budget.PENDING_AMBIGUOUS
+
+    budget.LAST_QUERY = None
+    budget.PENDING_AMBIGUOUS = False
+
+
 def test_enrolled_ops_is_sorted_and_stable():
     ops = enrolled_ops()
     assert list(ops) == sorted(ops, key=lambda op: op.name)
