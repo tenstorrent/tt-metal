@@ -234,7 +234,7 @@ jobs:
           run: |
             # --no-deps preserves the TTNN build under test; resolving tt-check's
             # dependencies could install a different TTNN release from PyPI.
-            uv pip install --upgrade --no-deps tt-check
+            uv pip install --no-deps tt-check==0.1.2
             tt-check --json
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
