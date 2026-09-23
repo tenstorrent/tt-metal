@@ -9,8 +9,8 @@
 #include <fmt/format.h>
 
 #include "tt_metal/distributed/host_rdma_window.hpp"
-#include <tt-metalium/experimental/sockets/host_uva_frame.hpp>
-#include <tt-metalium/experimental/sockets/host_uva_layout.hpp>
+#include "tt_metal/distributed/host_uva_frame.hpp"
+#include "tt_metal/distributed/host_uva_layout.hpp"
 
 namespace tt::tt_metal::experimental {
 
