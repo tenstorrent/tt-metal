@@ -13,9 +13,7 @@ set_target_properties(
             api
 )
 
-# Phase-1 descriptor-migration scaffolding for index_fill (#42392). The kernels are reused
-# unchanged from ttnn/cpp/ttnn/operations/index_fill/device/kernels/ (installed by
-# ttnn_op_index_fill), so this target ships no kernel file set of its own.
+# Kernels come from ttnn_op_index_fill (index_fill/device/kernels); no kernel file set here.
 target_sources(
     ttnn_op_index_fill_new
     PUBLIC
@@ -31,9 +29,7 @@ target_link_libraries(ttnn_op_index_fill_new PRIVATE TT::Metalium PUBLIC TTNN::C
 
 install(TARGETS ttnn_op_index_fill_new FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
 
-# Python bindings registered on the shared `ttnn` module target (see index_fill/CMakeLists.txt
-# for the rationale). Exposes ttnn.index_fill_new so the existing pytest suite can be pointed at
-# the descriptor path during Phase 2.
+# Python bindings go on the shared `ttnn` module target; see index_fill/CMakeLists.txt.
 if(TARGET ttnn)
     target_sources(ttnn PRIVATE ${TTNN_OP_INDEX_FILL_NEW_NANOBIND_SRCS})
 endif()

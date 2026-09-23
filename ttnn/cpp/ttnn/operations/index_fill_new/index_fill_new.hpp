@@ -7,9 +7,7 @@
 
 namespace ttnn {
 
-// Descriptor-based port of ttnn::index_fill (Phase 1 of the descriptor-migration recipe, #42392).
-// Same contract as ttnn::index_fill; exists side by side with it until Phase 3 replaces the old
-// program factory and deletes this operation.
+// Descriptor-based port of ttnn::index_fill (#42392); same contract, removed once it replaces the legacy factory.
 Tensor index_fill_new(
     const Tensor& input,
     uint32_t dim,
