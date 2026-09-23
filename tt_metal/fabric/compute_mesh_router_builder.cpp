@@ -247,7 +247,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto eth_direction = control_plane.routing_direction_to_eth_direction(location.direction);
 
     // Inter-mesh routers never enable deadlock avoidance, whichever direction (both ends must agree on
-    // DA/FLA polarity, and the far end may be a plain Mesh rank). Intra-mesh keeps the existing policy.
+    // Deadlock avoidance polarity, and the far end may be a plain Mesh rank). Intra-mesh keeps the existing policy.
     const bool is_inter_mesh = (local_node.mesh_id != location.remote_node.mesh_id);
 
     // Get SOC descriptor for eth core lookup
