@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import (
+from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
     SDPA_CHUNK_ALIGN,
     ChunkedPrefillPageTableGuardMixin,
     align_num_cached_tokens_to_sdpa,
@@ -2005,7 +2006,7 @@ def dflash_pv_bucket_ladder(max_context, horizon=None, verify=None, max_rungs=No
     horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048") if horizon is None else horizon)
     verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5") if verify is None else verify)
     p_v = verify + 1
-    tail = horizon + p_v + 64  # what pv_bucket adds on top of ``start``
+    tail = horizon + p_v + VERIFY_WIDTH_MARGIN  # what pv_bucket adds on top of ``start``
 
     def _round(n):
         return ((int(n) + 1023) // 1024) * 1024
@@ -2033,7 +2034,7 @@ def dflash_bucket_for(start, ladder):
     """
     horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
     verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
-    need = int(start) + horizon + verify + 1 + 64
+    need = int(start) + horizon + verify + 1 + VERIFY_WIDTH_MARGIN
     for rung in ladder:
         if rung >= need:
             return rung
@@ -2427,11 +2428,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # The hidden state never leaves the device: the fused verify hands it to
         # the drafter in-body. Required whenever hidden_feed is required.
         "spec_hidden_handoff": ("on_device",),
-        # NOTE output_tokens_per_step below must be 1 for the CONTRACT rail; a
-        # value above 1 selects the block-output rail, which #110 states cannot
-        # be combined with speculation. So the contract rail is reachable only
-        # with GEMMA4_DFLASH_SERVE_BLOCK=1, and the plugin reports the conflict
-        # rather than silently picking a rail.
+        # output_tokens_per_step above 1 selects the block-output rail. The
+        # contract rail is a separate class, Gemma4DFlashContractForCausalLM,
+        # which declares output_tokens_per_step 1 itself.
         # ADAPTIVE block-output: emit the spec block only when decoding ALONE
         # (batch==1); batch>1 decodes as plain baseline (exactly 1 token per
         # request, width-1 row -- the adaptive scheduler reserved exactly one
@@ -2481,9 +2480,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         ``vllm_config`` -- the platform stores those later and two of them
         default to 1 silently (#110 s.2).
 
-        dFlash today: one fused B=1 trace, keyed on the packed-verify bucket, so
-        the supported K is the single configured verify width rather than a
-        range, and concurrency above one request is not speculable.
+        dFlash captures one fused trace per verify width of the width set; the
+        supported K is the single configured verify width rather than a range,
+        and this rail speculates for one request at a time.
         """
         del vllm_config  # nothing here is config-derived yet; see docstring
 
@@ -2506,18 +2505,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 supported_k=(),
             )
 
-        verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
-        if requested_k < verify:
-            # The trace bucket is fixed at capture, so K is a SET, not a range:
-            # a smaller K would need its own packed-verify capture.
-            return SpecReject(
-                reason=(
-                    f"Gemma4 dFlash verifies exactly {verify} drafts per iteration "
-                    f"(GEMMA4_DFLASH_VERIFY); requested_k={requested_k} is below that and no "
-                    "narrower verify bucket is captured."
-                ),
-                supported_k=(verify,),
-            )
+        verify = getattr(cls, "_SPEC_CONTRACT_K", None)
+        if verify is None:
+            verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
 
         snapshot = os.environ.get("GEMMA4_DFLASH_DRAFTER") or _dflash_default_snapshot()
         if not snapshot:
@@ -2538,6 +2528,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             head_dim = int(cfg["head_dim"])
             n_kv = int(cfg["num_key_value_heads"])
         except (OSError, KeyError, TypeError, ValueError) as exc:
+            block_size = int(os.environ.get("GEMMA4_DFLASH_BLOCK", cfg["block_size"]))
             return SpecReject(
                 reason=(
                     f"Gemma4 dFlash drafter config unreadable at {snapshot}: {exc!r}. Point "
@@ -2547,6 +2538,26 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             )
 
         tp = _dflash_mesh_tp()
+        if not 1 <= verify < block_size:
+            return SpecReject(
+                reason=(
+                    f"Gemma4 dFlash verify count {verify} is outside [1, {block_size - 1}] "
+                    f"for drafter block_size={block_size}. Set GEMMA4_DFLASH_VERIFY within that range."
+                ),
+                supported_k=(),
+            )
+        if requested_k < verify:
+            # Captured shapes use the model's resolved count, independent of
+            # how many drafts the scheduler requested.
+            return SpecReject(
+                reason=(
+                    f"Gemma4 dFlash verifies exactly {verify} drafts per iteration "
+                    f"(GEMMA4_DFLASH_VERIFY); requested_k={requested_k} is below that and no "
+                    "narrower verify bucket is captured."
+                ),
+                supported_k=(verify,),
+            )
+
         replicated = os.environ.get("GEMMA4_DFLASH_REPLICATED", "0") == "1"
         local_kv = n_kv if replicated else max(1, n_kv // tp)
 
@@ -2574,7 +2585,8 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             drafter_target_cache_requires=(),
             # The baseline width-1 path exists (adaptive fallback), but it does
             # not carry the contract's per-row side tensors (accepted_counts /
-            # num_valid_drafts). Flip to True with the narrow contract path.
+            # num_valid_drafts). Gemma4DFlashContractForCausalLM.spec_plan sets
+            # this to True.
             supports_narrow_decode=False,
         )
 
@@ -2699,14 +2711,17 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             return None
         logger.info("Gemma4DFlash: warming batched baseline decode buckets")
         out = super().warmup_model_decode(*args, **kwargs)
-        # Phase 2 (enable_trace) is where the plugin captures decode traces, and
-        # where the verify width set belongs: it is the last point before
-        # serving at which a capture is allowed.
-        if self._spec_width_set and kwargs.get("enable_trace"):
+        # Eager warmup prepares persistent dFlash allocations before either
+        # ordinary prefill or ordinary decode records temporary addresses.
+        if kwargs.get("enable_trace") is False:
+            self._spec_get_drafter()
+            if self._spec_width_set:
+                self._spec_capture_width_set(kwargs.get("kv_cache"), kwargs.get("num_blocks"), prepare_only=True)
+        elif self._spec_width_set and kwargs.get("enable_trace"):
             self._spec_capture_width_set(kwargs.get("kv_cache"), kwargs.get("num_blocks"))
         return out
 
-    def _spec_capture_width_set(self, kv_cache, num_blocks):
+    def _spec_capture_width_set(self, kv_cache, num_blocks, *, prepare_only=False):
         """Capture one fused verify trace per width, before the first request.
 
         The decoder built here is PERSISTENT for the life of the server: the
@@ -2748,11 +2763,23 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         blocks = int(num_blocks) if num_blocks else max(1, max_seq_len // 64)
         scratch_pt = torch.zeros(1, blocks, dtype=torch.int32)
         t0 = _time.time()
-        self._spec_release_decoder()
-        dec = DFlashFusedDecoder(self.model[0], self._spec_get_drafter(), kv_layers, scratch_pt)
+        dec = self._spec_decoder
+        if dec is None:
+            dec = DFlashFusedDecoder(
+                self.model[0],
+                self._spec_get_drafter(),
+                kv_layers,
+                scratch_pt,
+                verify_count=getattr(self, "_SPEC_CONTRACT_K", None),
+            )
+            self._spec_decoder = dec
+            self._spec_width_ladder = ladder
+        elif self._spec_width_ladder != ladder:
+            raise RuntimeError("Gemma4 dFlash verify widths changed after preparation")
+        if prepare_only:
+            dec.prepare_widths(ladder)
+            return
         cost = dec.capture_widths(ladder)
-        self._spec_decoder = dec
-        self._spec_width_ladder = ladder
         logger.info(
             f"Gemma4DFlash: captured {len(cost)} verify widths in {_time.time()-t0:.1f}s "
             f"(max_model_len={max_seq_len}, widths={ladder}, per-width={ {k: round(v, 2) for k, v in cost.items()} })"
@@ -2992,7 +3019,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 self._spec_last_pt = None
                 # The largest captured width bounds the generation, not the
                 # horizon: vLLM's own max_model_len stop arrives first.
-                self._spec_budget_end = max(self._spec_width_ladder or [w]) - self._SPEC_N - 64
+                self._spec_budget_end = max(self._spec_width_ladder or [w]) - self._SPEC_N - VERIFY_WIDTH_MARGIN
                 logger.info(
                     f"Gemma4DFlash session: width-set reseed {_time.time()-t0:.2f}s "
                     f"(anchor={int(anchor_id)}, start={start}, width={w})"
@@ -3023,7 +3050,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             # Keep the per-layer tables installed above: the new decoder reads
             # them in __init__ (see _spec_release_decoder's drop_page_tables).
             self._spec_release_decoder(drop_page_tables=False)
-            dec = DFlashFusedDecoder(model0, self._spec_get_drafter(), kv_layers, pt)
+            dec = DFlashFusedDecoder(
+                model0, self._spec_get_drafter(), kv_layers, pt, verify_count=getattr(self, "_SPEC_CONTRACT_K", None)
+            )
             dec.prefill_ingest(taps, n)
             dec.capture(int(anchor_id), int(start), max_new=horizon)
             self._spec_decoder = dec
