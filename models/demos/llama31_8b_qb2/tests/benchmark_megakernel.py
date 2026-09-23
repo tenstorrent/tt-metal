@@ -96,7 +96,7 @@ def parse_args():
     parser.add_argument("--qkv-early-blocks", type=int, choices=(-1, 0, 2, 3, 4, 5, 6), default=-1)
     parser.add_argument("--head-early-blocks", type=int, choices=(0, 2, 3), default=0)
     parser.add_argument("--head-placement", choices=("row", "order", "select", "select32"), default="row")
-    parser.add_argument("--attention-placement", choices=("row", "head_priority"), default="row")
+    parser.add_argument("--attention-placement", choices=("row", "head_priority", "head_priority_all"), default="row")
     parser.add_argument("--attention-workers", type=int, choices=(8, 16, 32), default=32)
     parser.add_argument("--attention-chunk", type=int, choices=(64, 128, 256, 512, 1024), default=256)
     parser.add_argument("--projection-full-dst", choices=("off", "mlp", "head", "all"), default="off")

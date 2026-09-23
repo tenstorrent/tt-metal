@@ -185,20 +185,22 @@ class FusedMLP:
             from .prepare import FusedPreparation
 
             self.preparation = FusedPreparation(self)
-        if self.tuning.attention_placement == "head_priority":
+        if self.tuning.attention_placement != "row":
             if self.preparation is None:
                 raise ValueError("Head-priority placement requires the complete decoder")
             from .placement import terminal_head_placement
             short_attention = self.placement.map(
                 [ttnn.CoreCoord(x, y) for y in range(6, 8) for x in range(8)], row_major=True)
+            if self.tuning.attention_placement == "head_priority_all":
+                short_attention = []
             occupied = {(c.x, c.y) for c in (
                 self.projection_cores + self.sfpu_cores + self.communication_cores +
                 self.norm_cores + self.preparation.cores + short_attention)}
             grid = self.mesh.compute_with_storage_grid_size()
             free = [ttnn.CoreCoord(x, y) for y in range(min(10, grid.y))
                     for x in range(min(11, grid.x)) if (x, y) not in occupied]
-            if len(free) != 40:
-                raise ValueError("Expected 40 terminal/attention placement candidates")
+            if len(free) != 56 - len(short_attention):
+                raise ValueError("Unexpected terminal/attention placement candidate count")
             ordered = terminal_head_placement(self.mesh, free, "select")
             self.reserved_terminal_cores = ordered[:24]
             # Keep all32 native attention ranks and the native reduction shape.

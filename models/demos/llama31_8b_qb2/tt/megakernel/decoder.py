@@ -289,7 +289,7 @@ def enable_experimental_decode(model, *, mode="mlp", reuse_scratch=False, gu_wor
             ]
             if len(free) < 24:
                 raise ValueError("The integrated terminal boundary requires24 free workers on the QB2 grid")
-            if body.tuning.attention_placement == "head_priority":
+            if body.tuning.attention_placement != "row":
                 free = body.reserved_terminal_cores
             elif body.tuning.head_placement != "row":
                 from .placement import terminal_head_placement
