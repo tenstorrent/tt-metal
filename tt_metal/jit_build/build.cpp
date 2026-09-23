@@ -338,6 +338,9 @@ void JitBuildEnv::init(
             // Note: only enabled with streaming profiler.
             this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
         }
+        if (rtoptions.get_profiler_inline_enabled()) {
+            this->defines_ += "-DPROFILE_INLINE_ENABLED=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
