@@ -34,8 +34,6 @@ degrades spectral metrics through its 108-conv chain, and H3's is longer still.
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 import ttnn

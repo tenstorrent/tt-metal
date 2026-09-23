@@ -736,8 +736,7 @@ def test_fused_conditioner_two_refs_real_weights(
 def test_fused_conditioner_t2va_real_weights(
     conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, check_pcc, seq_len
 ):
-    """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only.
-    """
+    """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only."""
     path, reference = conditioner
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     shape = tuple(submesh.shape)
