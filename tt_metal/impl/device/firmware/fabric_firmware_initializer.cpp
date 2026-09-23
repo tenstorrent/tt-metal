@@ -281,7 +281,7 @@ FabricFirmwareInitializer::FabricFirmwareInitializer(
 void FabricFirmwareInitializer::init(
     const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& /*init_done*/) {
     TTZoneScopedDN(FABRIC_BUILDER, "FabricFirmwareInitializer::init");
-    
+
     devices_ = devices;
 
     tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
@@ -337,6 +337,8 @@ void FabricFirmwareInitializer::init(
 }
 
 void FabricFirmwareInitializer::configure() {
+    TTZoneScopedDN(FABRIC_BUILDER, "FabricFirmwareInitializer::configure");
+
     // Mock/Emule: no router ever runs, so the sync below would spin to its timeout and throw.
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
         log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
@@ -431,7 +433,7 @@ bool FabricFirmwareInitializer::is_initialized() const { return initialized_.tes
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
     TTZoneScopedDN(FABRIC_BUILDER, "FabricFirmwareInitializer::compile_and_configure_fabric");
-    
+
     std::vector<std::shared_future<Device*>> events;
     events.reserve(devices_.size());
     for (auto* dev : devices_) {

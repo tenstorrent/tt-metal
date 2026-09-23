@@ -472,7 +472,7 @@ void DeviceManager::initialize_profiler() {
 
 void DeviceManager::initialize_fabric_and_dispatch_fw() {
     TTZoneScopedDN(FABRIC_BUILDER, "DeviceManager::initialize_fabric_and_dispatch_fw");
-    
+
     if (using_fast_dispatch_ && env_impl_.get_cluster().is_galaxy_cluster()) {
         log_info(
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");

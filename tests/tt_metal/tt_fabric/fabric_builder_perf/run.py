@@ -98,7 +98,7 @@ def extract(zones, specs):
     specs = validate_zone_specs(specs)
     markers = {}
     for phase in PHASES:
-        found = [z for z in zones if z.name == f"FabricInitBenchmark::{phase}"]
+        found = [z for z in zones if z.name == f"FabricBuilderBenchmark::{phase}"]
         require(len(found) == 1, f"Expected exactly one {phase} phase marker, got {len(found)}")
         markers[phase] = found[0]
     require(markers["cold"].thread == markers["hot"].thread, "Phases ran on different host threads")
@@ -192,12 +192,12 @@ def compare(samples, baseline, identity, keys, mode):
     return rows
 
 def report(out, rows, mode, identity):
-    lines = [f"# Fabric Init — {identity['hardware']} / FABRIC_2D", "",
+    lines = [f"# Fabric Builder — {identity['hardware']} / FABRIC_2D", "",
              f"Mode: **{mode}**. Inclusive elapsed host-zone durations; milliseconds.", "",
              "| Phase | Zone | Median | Baseline | Delta % | Limit | Result |",
              "|---|---|---:|---:|---:|---:|---|"]
     fmt = lambda v: "—" if v is None else f"{v:.3f}"
-    suite = ET.Element("testsuite", name="fabric-init", tests=str(len(rows)))
+    suite = ET.Element("testsuite", name="fabric-builder", tests=str(len(rows)))
     failures = skips = 0
     for r in rows:
         lines.append("| " + " | ".join([r["phase"], r["zone"], fmt(r["median_ms"]), fmt(r["baseline_ms"]),
@@ -314,7 +314,7 @@ def main(argv=None):
         specs = validate_zone_specs(cfg["zones"])
         keys = [spec["key"] for spec in specs]
         baseline = json.loads((BASELINES_DIR / f"{args.hardware}.json").read_text())
-        args.binary = args.build_dir / "test/tt_metal/tt_fabric/fabric_init_benchmark"
+        args.binary = args.build_dir / "test/tt_metal/tt_fabric/fabric_builder_benchmark"
         args.capture = args.build_dir / "tools/profiler/bin/tracy-capture"
         args.exporter = args.build_dir / "tools/profiler/bin/tracy-csvexport"
         for p in (args.binary, args.capture, args.exporter):
@@ -360,8 +360,8 @@ def main(argv=None):
         return 1 if args.mode == "enforce" and any(r["status"] == "REGRESSION" for r in rows) else 0
     except Exception as e:
         dump(args.output / "error.json", {"status": "MEASUREMENT_ERROR", "error": str(e)})
-        (args.output / "summary.md").write_text(f"# Fabric Init measurement error\n\n{e}\n")
-        suite = ET.Element("testsuite", name="fabric-init", tests="1", errors="1")
+        (args.output / "summary.md").write_text(f"# Fabric Builder measurement error\n\n{e}\n")
+        suite = ET.Element("testsuite", name="fabric-builder", tests="1", errors="1")
         case = ET.SubElement(suite, "testcase", name="measurement-integrity")
         ET.SubElement(case, "error", message=str(e))
         ET.ElementTree(suite).write(args.output / "junit.xml", encoding="utf-8", xml_declaration=True)

@@ -17,8 +17,8 @@
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> perf).
 
 - name: T3K fabric builder cold/hot
-  cmd: python3 tests/tt_metal/tt_fabric/fabric_init_perf/run.py --hardware {sku} --mode report --output generated/fabric-builder/{sku}
-  # Keep the list of skus in sync with the skus in tests/tt_metal/tt_fabric/fabric_init_perf/config.json
+  cmd: python3 tests/tt_metal/tt_fabric/fabric_builder_perf/run.py --hardware {sku} --mode report --output generated/fabric-builder/{sku}
+  # Keep the list of skus in sync with the skus in tests/tt_metal/tt_fabric/fabric_builder_perf/config.json
   skus:
     wh_llmbox_perf:
       timeout: 45 # TODO FIGURE OUT WHAT TO DO HERE

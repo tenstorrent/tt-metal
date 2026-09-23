@@ -2542,7 +2542,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
 
 void ControlPlane::write_routing_tables_to_all_chips() const {
     TTZoneScopedDN(FABRIC_BUILDER, "ControlPlane::write_routing_tables_to_all_chips");
-    
+
     // Configure the routing tables on the chips
     TT_ASSERT(
         this->intra_mesh_routing_tables_.size() == this->inter_mesh_routing_tables_.size(),
