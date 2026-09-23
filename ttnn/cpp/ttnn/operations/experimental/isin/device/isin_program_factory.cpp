@@ -6,9 +6,12 @@
 
 #include "../isin_common.hpp"
 
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/tensor_accessor_args.hpp"
-#include "tt-metalium/work_split.hpp"
+#include <algorithm>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -20,37 +23,27 @@ enum class IsInCB : std::underlying_type_t<tt::CBIndex> {
     OUTPUT = tt::CBIndex::c_2
 };
 
-static CBHandle create_cb(
-    Program& program,
+static CBDescriptor make_cb(
     const DataType& dtype,
     const IsInCB& is_in_cb,
     const CoreRangeSet& core_range_set,
     const uint32_t& page_size_bytes) {
     const uint32_t cb_id{static_cast<uint32_t>(is_in_cb)};
     const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
-    const auto cb_config{
-        CircularBufferConfig{page_size_bytes, {{cb_id, cb_data_format}}}.set_page_size(cb_id, page_size_bytes)};
-    return CreateCircularBuffer(program, core_range_set, cb_config);
+    return CBDescriptor{
+        .total_size = page_size_bytes,
+        .core_ranges = core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_id),
+            .data_format = cb_data_format,
+            .page_size = page_size_bytes,
+        }}},
+    };
 }
 
-static KernelHandle create_kernel(
-    Program& program,
-    const char* kernel_path,
-    const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig>& config,
-    const std::vector<uint32_t>& runtime_args = {}) {
-    auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
-
-    if (!runtime_args.empty()) {
-        SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
-    }
-
-    return kernel_id;
-}
-
-IsInProgramFactory::cached_program_t IsInProgramFactory::create(
+ProgramDescriptor IsInProgramFactory::create_descriptor(
     const IsinParams& args, const IsinInputs& tensor_args, Tensor& output_tensor) {
-    Program program{};
+    ProgramDescriptor desc;
 
     const auto& elements_tensor = tensor_args.elements_tensor;
     const auto& test_elements_tensor = tensor_args.test_elements_tensor;
@@ -61,13 +54,12 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     const bool& invert = args.invert;
     const uint32_t& single_fetch_subchunk_size = args.single_fetch_subchunk_size;
 
-    const auto& elements_buffer = elements_tensor.buffer();
-    const auto& test_elements_buffer = test_elements_tensor.buffer();
-    const auto& output_buffer = output_tensor.buffer();
-
-    const auto elements_tensor_buffer_address = elements_buffer->address();
-    const auto test_elements_tensor_buffer_address = test_elements_buffer->address();
-    const auto output_tensor_buffer_address = output_buffer->address();
+    auto* elements_buffer = elements_tensor.buffer();
+    auto* test_elements_buffer = test_elements_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
+    TT_FATAL(elements_buffer != nullptr, "Elements tensor's buffer is null");
+    TT_FATAL(test_elements_buffer != nullptr, "Test elements tensor's buffer is null");
+    TT_FATAL(output_buffer != nullptr, "Output tensor's buffer is null");
 
     // input dtype byte sizes
     const uint32_t& elements_datum_size = elements_tensor.element_size();
@@ -82,10 +74,11 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     auto* device = elements_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
+    // Slots 0-2 are unused; TensorAccessorArgs starts at 11 and kernels read addresses from runtime args.
     std::vector<uint32_t> compile_time_args{
-        elements_tensor_buffer_address,
-        test_elements_tensor_buffer_address,
-        output_tensor_buffer_address,
+        0u,
+        0u,
+        0u,
         static_cast<uint32_t>(IsInCB::ELEMENTS),
         static_cast<uint32_t>(IsInCB::TEST_ELEMENTS),
         static_cast<uint32_t>(IsInCB::OUTPUT),
@@ -104,7 +97,6 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     // least the number of subchunks work has been split into.
     const uint32_t subchunks_num =
         (elements_tensor.logical_volume() + single_fetch_subchunk_size - 1) / single_fetch_subchunk_size;
-    const auto core_grid = device->compute_with_storage_grid_size();
     const auto
         [num_cores,                       // number of cores utilized
          all_cores,                       // set of all cores used
@@ -112,26 +104,36 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
          core_group_2,                    // Secondary core group
          num_subchunks_per_core_group_1,  // Number of subchunks each core in the primary group processes
          num_subchunks_per_core_group_2   // Number of subchunks each core in the secondary group processes
-    ] = split_work_to_cores(core_grid, subchunks_num);
-    create_cb(program, elements_dtype, IsInCB::ELEMENTS, all_cores, elements_subchunk_size_bytes);
-    create_cb(program, test_elements_dtype, IsInCB::TEST_ELEMENTS, all_cores, test_elements_subchunk_size_bytes);
-    create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes);
+    ] = split_work_to_cores(compute_with_storage_grid_size, subchunks_num);
+    desc.cbs.push_back(make_cb(elements_dtype, IsInCB::ELEMENTS, all_cores, elements_subchunk_size_bytes));
+    desc.cbs.push_back(
+        make_cb(test_elements_dtype, IsInCB::TEST_ELEMENTS, all_cores, test_elements_subchunk_size_bytes));
+    desc.cbs.push_back(make_cb(OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes));
 
     constexpr const char* READER_KERNEL_PATH =
         "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_reader.cpp";
     constexpr const char* WRITER_KERNEL_PATH =
         "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_writer.cpp";
 
-    auto reader_kernel_id =
-        create_kernel(program, READER_KERNEL_PATH, all_cores, ReaderDataMovementConfig{compile_time_args});
-    auto writer_kernel_id =
-        create_kernel(program, WRITER_KERNEL_PATH, all_cores, WriterDataMovementConfig{compile_time_args});
+    KernelDescriptor reader_kernel;
+    reader_kernel.kernel_source = READER_KERNEL_PATH;
+    reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel.core_ranges = all_cores;
+    reader_kernel.compile_time_args = compile_time_args;
+    reader_kernel.config = ReaderConfigDescriptor{};
 
-    uint32_t subchunks_offset = 0;
+    KernelDescriptor writer_kernel;
+    writer_kernel.kernel_source = WRITER_KERNEL_PATH;
+    writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel.core_ranges = all_cores;
+    writer_kernel.compile_time_args = std::move(compile_time_args);
+    writer_kernel.config = WriterConfigDescriptor{};
+
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core{i / num_cores_y, i % num_cores_y};
-        uint32_t subchunks_per_core;
+    const auto cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, num_cores_y);
+    uint32_t subchunks_offset = 0;
+    std::for_each(cores.cbegin(), cores.cend(), [&](const CoreCoord& core) {
+        uint32_t subchunks_per_core = 0;
         if (core_group_1.contains(core)) {
             subchunks_per_core = num_subchunks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -140,43 +142,15 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {elements_tensor_buffer_address,
-             test_elements_tensor_buffer_address,
-             subchunks_per_core,
-             subchunks_offset});
-        SetRuntimeArgs(
-            program, writer_kernel_id, core, {output_tensor_buffer_address, subchunks_per_core, subchunks_offset});
+        reader_kernel.emplace_runtime_args(
+            core, {elements_buffer, test_elements_buffer, subchunks_per_core, subchunks_offset});
+        writer_kernel.emplace_runtime_args(core, {output_buffer, subchunks_per_core, subchunks_offset});
 
         subchunks_offset += subchunks_per_core;
-    }
+    });
 
-    auto cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, num_cores_y);
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
-}
-
-void IsInProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const IsinParams& /*args*/,
-    const IsinInputs& tensor_args,
-    Tensor& output_tensor) {
-    const auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-
-    auto input_buffer_address = tensor_args.elements_tensor.buffer()->address();
-    auto test_elements_buffer_address = tensor_args.test_elements_tensor.buffer()->address();
-    auto output_buffer_address = output_tensor.buffer()->address();
-    for (const auto& core : cores) {
-        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-        reader_runtime_args[0] = input_buffer_address;
-        reader_runtime_args[1] = test_elements_buffer_address;
-        writer_runtime_args[0] = output_buffer_address;
-    }
+    desc.kernels.push_back(std::move(reader_kernel));
+    desc.kernels.push_back(std::move(writer_kernel));
+    return desc;
 }
 }  // namespace ttnn::experimental::prim

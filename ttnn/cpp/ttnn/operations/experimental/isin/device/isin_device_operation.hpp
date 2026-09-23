@@ -7,6 +7,8 @@
 #include "isin_device_operation_types.hpp"
 #include "isin_program_factory.hpp"
 
+#include <variant>
+
 namespace ttnn::experimental::prim {
 
 struct IsInDeviceOperation {

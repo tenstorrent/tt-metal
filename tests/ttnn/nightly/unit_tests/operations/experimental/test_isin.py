@@ -122,18 +122,17 @@ def test_isin_program_cache_and_random_data(
     elements_torch = torch.randint(0, 10000, elements_shape, dtype=torch.int64)
     test_elements_torch = torch.randint(0, 10000, test_elements_shape, dtype=torch.int64)
 
-    # Convert to ttnn tensors
-    elements_ttnn = ttnn.from_torch(elements_torch, device=device, dtype=ttnn.int32)
-    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
-
-    # Act - Compute results multiple times to test program cache
+    # Two allocations of the same spec stay live so the second call hits cache with new addresses.
+    retained = []
     for _ in range(2):
+        elements_ttnn = ttnn.from_torch(elements_torch, device=device, dtype=ttnn.int32)
+        test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
         torch_isin_result = torch.isin(elements_torch, test_elements_torch, invert=invert)
         ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn, invert=invert)
+        retained.append((elements_ttnn, test_elements_ttnn, ttnn_isin_result))
 
-    # Assert - Compare results
-    torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result).to(torch_isin_result.dtype)
-    assert torch_isin_result.shape == torch_result_from_ttnn.shape
-    assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
-    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
+        torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result).to(torch_isin_result.dtype)
+        assert torch_isin_result.shape == torch_result_from_ttnn.shape
+        assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
+        assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
     assert device.num_program_cache_entries() == expected_num_program_cache_entries
