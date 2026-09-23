@@ -36,7 +36,7 @@ BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
@@ -116,11 +116,12 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
 
     // L1 Scratch CB Creation
     DataType dtype = input_tensor.dtype();
-    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    // Cap payloads at the fabric max payload, not the channel buffer size: the channel buffer also holds
+    // the packet header, so a row-major chunk sized to the full buffer overflows the router slot.
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t MAX_PACKET_SIZE_BYTES =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
-    const size_t packet_size_bytes =
-        tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
+    const size_t packet_size_bytes = tilized ? fabric_max_packet_size_bytes : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;

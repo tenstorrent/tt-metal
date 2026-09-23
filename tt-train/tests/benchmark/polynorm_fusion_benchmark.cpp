@@ -118,7 +118,7 @@ RunResult run_single_mode(
     const auto bias_value =
         ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(b_host, b_shape, device, ttnn::Layout::TILE);
     const auto grad_out_value = ttml::core::ones_like(input_value);
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
     const auto make_step_tensors = [&]() {
         const auto input = ttml::autograd::create_tensor(input_value, /*requires_grad=*/true);
@@ -141,20 +141,20 @@ RunResult run_single_mode(
     for (uint32_t step = 0; step < cfg.num_warmup; ++step) {
         run_step();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
     const auto t0 = std::chrono::high_resolution_clock::now();
     for (uint32_t step = 0; step < cfg.num_measure; ++step) {
         run_step();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     const auto t1 = std::chrono::high_resolution_clock::now();
     result.step_ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / cfg.num_measure;
 
     {
         auto memory_guard = ttml::utils::MemoryUsageTracker::begin_capture();
         (void)run_step();
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
         ttml::utils::MemoryUsageTracker::snapshot("STEP_CAPTURE");
         const auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage("STEP_CAPTURE");
         constexpr double kBytesPerMb = 1024.0 * 1024.0;
@@ -162,7 +162,7 @@ RunResult run_single_mode(
     }
 
     ttml::autograd::ctx().reset_graph();
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     ttml::autograd::ctx().close_device();
     return result;
 }

@@ -14,7 +14,8 @@ from loguru import logger
 from transformers.models.t5.modeling_t5 import T5EncoderModel
 
 import ttnn
-from models.tt_dit.encoders.t5.model_t5 import RelativePositionEmbeddings, T5Config, TokenEmbeddings
+from models.tt_dit.encoders.t5.model_t5 import RelativePositionEmbeddings, T5Config
+from models.tt_dit.layers.embeddings import Embedding
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -100,7 +101,7 @@ def test_t5_embeddings(
 
     state_dict = hf_model.state_dict()
 
-    tt_token_embed = TokenEmbeddings(config, encoder_submesh)
+    tt_token_embed = Embedding(config.vocab_size, config.embed_dim, device=encoder_submesh)
     tt_token_embed.load_torch_state_dict({"weight": state_dict["encoder.embed_tokens.weight"]})
     tt_relative_position_embed = RelativePositionEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
     tt_relative_position_embed.load_torch_state_dict(

@@ -14,6 +14,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -35,6 +37,16 @@ const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const Progra
     return kp.advanced_options.common_runtime_varargs;
 }
 
+// The sharded distribution geometry a spec resolves to, or nullopt when it is interleaved. Mirrors
+// shard_distribution_of in tensor_spec_relaxations.cpp, which is file-private there. Distinct name
+// because these two translation units share a unity build.
+static std::optional<BufferDistributionSpec> resolve_shard_distribution(const TensorSpec& spec) {
+    if (!spec.memory_config().is_sharded()) {
+        return std::nullopt;
+    }
+    return spec.compute_buffer_sharding_args().buffer_distribution_spec();
+}
+
 // Emit a precise diagnostic for a tensor argument that failed tensorspecs_match_with_relaxation, then
 // throw. Called only on the rejection path: the branches mirror the match to produce a specific
 // message, and the trailing TT_THROW guarantees rejection even if a branch ever drifts from the match.
@@ -51,14 +63,54 @@ static void report_tensor_arg_mismatch(
             "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
             "page_config, memory_config, and alignment must still match exactly.",
             param_name);
-        TT_FATAL(
-            runtime_spec.logical_shape().rank() == expected_spec.logical_shape().rank(),
-            "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
-            "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
-            "remain constant.",
-            param_name,
-            runtime_spec.logical_shape().rank(),
-            expected_spec.logical_shape().rank());
+        // The rank is the one shape term dynamic_tensor_shape still pins, and relax_logical_rank
+        // frees it. When it is set, tensor_layout above is the whole match, so there is nothing
+        // further to report and the trailing TT_THROW handles the rejection.
+        if (!relaxation.relax_logical_rank) {
+            TT_FATAL(
+                runtime_spec.logical_shape().rank() == expected_spec.logical_shape().rank(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
+                "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
+                "remain constant. Set relax_logical_rank as well if it must not.",
+                param_name,
+                runtime_spec.logical_shape().rank(),
+                expected_spec.logical_shape().rank());
+        }
+        if (relaxation.match_page_size) {
+            TT_FATAL(
+                runtime_spec.compute_page_size_bytes() == expected_spec.compute_page_size_bytes(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose page size ({} bytes) differs from the "
+                "binding's declared page size ({} bytes). match_page_size declares that the page size is constant "
+                "even though the shape varies, so it is pinned rather than re-emitted per dispatch -- which is what "
+                "lets the TensorAccessor keep it as a compile-time constant. Drop match_page_size if the width really "
+                "does vary; on an interleaved row-major tensor the page size is last_dim_width * element_size, so it "
+                "varies with the shape unless the last dimension is held fixed.",
+                param_name,
+                runtime_spec.compute_page_size_bytes(),
+                expected_spec.compute_page_size_bytes());
+        }
+        // The distribution geometry stays load-bearing even though the shape values are free, so it
+        // is the remaining way this mode can reject. Worth its own message: with the layout and rank
+        // both matching, the generic backstop below would leave a user staring at a spec that looks
+        // like it should have been accepted.
+        const std::optional<BufferDistributionSpec> runtime_dist = resolve_shard_distribution(runtime_spec);
+        const std::optional<BufferDistributionSpec> expected_dist = resolve_shard_distribution(expected_spec);
+        if (runtime_dist.has_value() && expected_dist.has_value()) {
+            TT_FATAL(
+                runtime_dist->shard_shape_in_pages() == expected_dist->shard_shape_in_pages() &&
+                    runtime_dist->cores() == expected_dist->cores(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose sharded distribution geometry does not "
+                "match the binding's declared geometry: shard shape in pages {} vs {}, over {} banks vs {}. "
+                "dynamic_tensor_shape frees the shape VALUES, but the shard shape and bank list are baked when the "
+                "ProgramSpec is built and are not re-emitted per dispatch. Note that sharing a shard spec does NOT "
+                "guarantee sharing geometry: the tensor and shard shapes are jointly squeezed to minimize rank, and "
+                "the squeeze depends on the shape values.",
+                param_name,
+                runtime_dist->shard_shape_in_pages(),
+                expected_dist->shard_shape_in_pages(),
+                runtime_dist->cores().size(),
+                expected_dist->cores().size());
+        }
     } else if (relaxation.match_padded_shape_only) {
         TT_FATAL(
             runtime_spec.tensor_layout() == expected_spec.tensor_layout(),
@@ -94,15 +146,26 @@ static void report_tensor_arg_mismatch(
 //   - No duplicate tensor_parameter_name entries
 //   - Every entry references a TensorParameter declared in the ProgramSpec
 //   - The supplied MeshTensor's TensorSpec matches the binding's expected TensorSpec, with the
-//     match relaxed according to the TensorParameter's loosening flags. The three cases form a
-//     lattice from strictest to loosest (dynamic_tensor_shape strictly subsumes
-//     match_padded_shape_only; when both are set, dynamic wins):
+//     match relaxed according to the TensorParameter's loosening flags, ordered here roughly from
+//     strictest to loosest. dynamic_tensor_shape takes PRECEDENCE over match_padded_shape_only when
+//     both are set -- precedence, not containment: the two are not strictly ordered, since padded
+//     shape matching tolerates the logical-rank changes padding absorbs while dynamic_tensor_shape
+//     pins the rank. The worked pair is in CPU_DynamicDoesNotContainPaddedShapeOnly
+//     (test_tensor_spec_relaxations.cpp).
 //       - Neither flag set (default): full TensorSpec equality.
 //       - match_padded_shape_only=true (only): tensor_layout() must match exactly, and
 //         padded_shape() must match exactly. logical_shape() may differ.
 //       - dynamic_tensor_shape=true: tensor_layout() must match exactly, and the logical_shape
 //         rank must match. Both logical_shape and padded_shape per-dim values may differ.
-//     See the field doc comments in tensor_parameter.hpp for the full contracts.
+//       - dynamic_tensor_shape=true with relax_logical_rank=true: tensor_layout() alone must
+//         match. The rank is freed along with the per-dim values.
+//       - match_page_size=true (with dynamic_tensor_shape): as above, plus the page size must
+//         match. A TIGHTENING rather than a relaxation -- it declares that the width is constant
+//         even though the shape varies, so the accessor can keep the page size compile-time.
+//     relax_logical_rank is inert unless dynamic_tensor_shape is also set; the load-bearing field
+//     set for every combination is derived in one place, by pertinent_fields()
+//     (tensor_spec_relaxations.cpp), which both this validation and the relaxation-aware hash use.
+//     See the field doc comments in tensor_spec_relaxations.hpp for the full contracts.
 //   - When require_all is true: every declared TensorParameter must be set.
 //   - When require_all is false (partial update): any TensorParameter may be omitted; its
 //     previously-bound MeshTensor is retained. Supplied entries are still validated as above.
@@ -136,6 +199,108 @@ void ValidateTensorArgs(
                 declared);
         }
     }
+}
+
+// A PrefetcherPipe relay DFB is exactly the pipe ring (entry_size * num_entries == ring_size, entry
+// size == the pipe's dense entry size), so its size cannot be overridden per run.
+void RejectPrefetcherPipeRelayResize(
+    const detail::ProgramImpl& program_impl, const ProgramRunArgs::DFBRunOverrides& dfb_params) {
+    if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
+        return;
+    }
+    const uint32_t dfb_id = program_impl.get_dfb_handle(dfb_params.dfb.get());
+    TT_FATAL(
+        !program_impl.get_prefetcher_pipe_id_for_relay(dfb_id).has_value(),
+        "dfb_run_overrides resizes DFB '{}', which relays a PrefetcherPipe. A relay DFB's geometry is the pipe's "
+        "(entry_size and ring_size are fixed by the PrefetcherPipeParameter) and cannot be overridden per run.",
+        dfb_params.dfb);
+}
+
+// Validates a PrefetcherPipeArgument list against the Program's PrefetcherPipeParameters.
+// Shared by the full path (SetProgramRunArgs; require_all=true) and the partial-update path
+// (UpdateProgramRunArgs; require_all=false).
+//   - Every entry references a PrefetcherPipeParameter declared in the ProgramSpec.
+//   - The supplied pipe lives on the MeshDevice the Program was built for.
+//   - The supplied pipe's geometry (receiver nodes, ring size) matches the parameter's. The spec
+//     names no sender; when this Program runs the sender kernel, the pipe's sender must be one of
+//     that kernel's nodes, which the bind checks per slot.
+//   - The binding is sticky: a parameter already bound to a different pipe object is rejected
+//     (re-supplying the same object is a no-op).
+//   - When require_all is true: every declared parameter must be supplied, unless it is already
+//     bound (the binding is program-lifetime state, so a later full SetProgramRunArgs may omit it).
+// Pipe-object-dependent checks that need the slot (lane capacity, relay ring agreement) run at
+// bind time in ProgramImpl::bind_prefetcher_pipe_parameters.
+void ValidatePrefetcherPipeArgs(
+    const Program& program,
+    const Table<PrefetcherPipeParamName, AdvancedProgramRunArgs::PrefetcherPipeArgument>& pipe_args,
+    bool require_all) {
+    const detail::ProgramImpl& program_impl = program.impl();
+
+    std::unordered_set<std::string> supplied;
+    for (const auto& [param_name, pipe_arg] : pipe_args) {
+        supplied.insert(param_name.get());
+        const auto* binding = program_impl.get_prefetcher_pipe_parameter(param_name.get());
+        TT_FATAL(
+            binding != nullptr,
+            "ProgramRunArgs supplies a PrefetcherPipe argument for '{}', but the Program declares no "
+            "PrefetcherPipeParameter of that name.",
+            param_name);
+        const PrefetcherPipe& pipe = pipe_arg.get();
+        TT_FATAL(
+            pipe.get_device() == binding->device,
+            "PrefetcherPipeArgument for '{}' supplies a pipe allocated on a different MeshDevice than the one this "
+            "Program was built for. A pipe's ring and config pages are L1 on its own mesh; create the pipe on the "
+            "Program's mesh.",
+            param_name);
+        TT_FATAL(
+            binding->bound_pipe == nullptr || binding->bound_pipe == &pipe.impl(),
+            "PrefetcherPipeArgument for '{}' supplies a different PrefetcherPipe object than the one this Program "
+            "is bound to. A Program binds a parameter to one pipe for its lifetime; build a new Program to use "
+            "another pipe.",
+            param_name);
+        TT_FATAL(
+            pipe.receiver_cores().num_cores() == binding->receivers.num_cores() &&
+                pipe.receiver_cores().intersection(binding->receivers).num_cores() == binding->receivers.num_cores(),
+            "PrefetcherPipeArgument for '{}' supplies a pipe whose receiver nodes {} differ from the declared "
+            "receivers {}.",
+            param_name,
+            pipe.receiver_cores().str(),
+            binding->receivers.str());
+        TT_FATAL(
+            pipe.ring_size() == binding->ring_size,
+            "PrefetcherPipeArgument for '{}' supplies a pipe with ring_size {} but the parameter declares ring_size "
+            "{}.",
+            param_name,
+            pipe.ring_size(),
+            binding->ring_size);
+    }
+    if (require_all) {
+        for (const std::string& declared : program_impl.get_registered_prefetcher_pipe_parameter_names()) {
+            if (supplied.contains(declared)) {
+                continue;
+            }
+            TT_FATAL(
+                program_impl.get_prefetcher_pipe_parameter(declared)->bound_pipe != nullptr,
+                "PrefetcherPipeParameter '{}' is declared in the Program but has no PrefetcherPipeArgument entry.",
+                declared);
+        }
+    }
+}
+
+// Bind every supplied PrefetcherPipe to its parameter's slots, as one all-or-nothing batch: the
+// program preflights every binding (slot geometry, lane capacity, relay ring agreement) before it
+// mutates anything, so a rejected SetProgramRunArgs leaves no parameter half-bound. Sticky: an
+// already-bound parameter re-supplied with the same object is a no-op (validation rejected a
+// different object).
+void BindPrefetcherPipeArgs(
+    detail::ProgramImpl& program_impl,
+    const Table<PrefetcherPipeParamName, AdvancedProgramRunArgs::PrefetcherPipeArgument>& pipe_args) {
+    std::vector<detail::ProgramImpl::PrefetcherPipeParameterBind> binds;
+    binds.reserve(pipe_args.size());
+    for (const auto& [param_name, pipe_arg] : pipe_args) {
+        binds.push_back({.name = param_name.get(), .pipe = &pipe_arg.get().impl()});
+    }
+    program_impl.bind_prefetcher_pipe_parameters(binds);
 }
 
 // Internal validation function - validates ProgramRunArgs against the Program's schema.
@@ -332,6 +497,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
                 "non-zero value.",
                 dfb_spec_name);
         }
+        RejectPrefetcherPipeRelayResize(program_impl, dfb_params);
     }
 
     // Unlike kernels, DFBs don't require DFBRunOverrides.
@@ -341,6 +507,9 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 
     // Validate tensor runtime parameters (delegated to shared helper).
     ValidateTensorArgs(program, params.tensor_args);
+
+    // Validate PrefetcherPipe arguments (delegated to shared helper; full path requires all).
+    ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/true);
 }
 
 // Emit the CRTA words for a single tensor binding, in order:
@@ -404,9 +573,11 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     const auto& tensor_shape = bds_opt->tensor_shape_in_pages();
     TT_FATAL(
         tensor_shape.rank() == handle.num_runtime_field_crta_words,
-        "Tensor argument for TensorParameter '{}' supplied a MeshTensor whose shape rank ({}) differs from the rank "
-        "({}) reserved at ProgramSpec resolution time. Rank must remain constant across binds; "
-        "only the per-dim shape values may vary.",
+        "Tensor argument for TensorParameter '{}' supplied a MeshTensor whose sharded distribution rank ({}) differs "
+        "from the rank ({}) reserved at ProgramSpec resolution time. This is the shard-layout rank -- the dim count "
+        "of the shape-in-pages after squeezing -- NOT the tensor's logical rank, so relax_logical_rank does not "
+        "permit it. A permitted shape change can alter it, when the shard shape tiles the tensor differently. Not "
+        "supported; see TensorSpecRelaxations.",
         handle.tensor_parameter_name,
         tensor_shape.rank(),
         handle.num_runtime_field_crta_words);
@@ -698,8 +869,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                     }
                 }
                 if (has_varargs) {
-                    std::copy(
-                        vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
+                    std::copy(vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
                 }
                 kernel->set_runtime_args(node, combined);
             }
@@ -790,10 +960,15 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     }
     program_impl.apply_dfb_size_overrides(size_overrides);
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+
+    // Bind PrefetcherPipe objects to their parameters' slots (per node; a relay DFB over them is
+    // pointed at the pipe ring here). Sticky across calls.
+    BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
     program_impl.mark_program_run_args_initialized();
 }
 
-void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args) {
+void UpdateTensorArgs(
+    Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
     detail::ProgramImpl& program_impl = program.impl();
@@ -808,7 +983,9 @@ void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunA
         "UpdateTensorArgs called on Program before SetProgramRunArgs. Call SetProgramRunArgs at least once first.");
 
     // Validate the TensorArgument list (shared with the full-path validator).
-    ValidateTensorArgs(program, tensor_args);
+    if (!skip_validation) {
+        ValidateTensorArgs(program, tensor_args);
+    }
 
     // Build a tensor_parameter_name -> MeshTensor lookup.
     // As in SetProgramRunArgs, this assumes lockstep mesh allocation:
@@ -1064,6 +1241,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
                 "non-zero value.",
                 dfb_params.dfb);
         }
+        RejectPrefetcherPipeRelayResize(program_impl, dfb_params);
         // A resized borrowed-memory DFB needs its backing tensor supplied here so the per-bank fit check
         // in AttachBorrowedDFBBuffers re-runs against the new size (see the block comment above).
         const bool resizes = dfb_params.entry_size.has_value() || dfb_params.num_entries.has_value();
@@ -1085,6 +1263,10 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // Tensor args: any TensorParameter may be omitted (its prior MeshTensor is retained); supplied
     // ones are validated against their declared spec.
     ValidateTensorArgs(program, params.tensor_args, /*require_all=*/false);
+
+    // PrefetcherPipe args: any may be omitted (the binding is sticky); a supplied one must name a
+    // declared parameter and match its geometry.
+    ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/false);
 }
 
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
@@ -1256,6 +1438,10 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         // Re-attach borrowed-memory DFBs for the supplied tensors (skip omitted ones).
         AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
     }
+
+    // ---- PrefetcherPipe args: omitted parameters keep their bound pipe; a supplied one is bound
+    //      (no-op when it is the already-bound object) ----
+    BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
@@ -1273,6 +1459,18 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
             // the disjoint check the key is absent, so insert takes effect (under skip_validation a
             // collision keeps base's existing entry).
             base.tensor_args.insert({name, arg});
+        }
+
+        // PrefetcherPipe args: union by parameter name (disjoint). Same insert-not-[] reasoning as
+        // tensor_args: reference_wrapper is not default-constructible.
+        for (const auto& [name, arg] : other.advanced_options.prefetcher_pipe_args) {
+            if (!skip_validation) {
+                TT_FATAL(
+                    !base.advanced_options.prefetcher_pipe_args.contains(name),
+                    "MergeProgramRunArgs: PrefetcherPipeParameter '{}' is specified in more than one ProgramRunArgs.",
+                    name);
+            }
+            base.advanced_options.prefetcher_pipe_args.insert({name, arg});
         }
 
         // DFB run overrides: union by DFB name (disjoint).

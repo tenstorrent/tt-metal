@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// A Metal 2.0 port of this kernel exists alongside it as transpose_wh_sharded_metal2.cpp.
+// Ops still on the legacy host API bind this copy; ops on Metal 2.0 bind the fork. Keep the
+// two in sync when changing the compute logic.
+
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"

@@ -73,7 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ---- Run 0: real tilize "polluter" (output discarded) ----
     const std::uint32_t g0_block_ct  = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
-    const std::uint32_t g0_tilize_nf = _llk_unpack_tilize_num_faces_wrapper_(g0_num_faces);
+    const std::uint32_t g0_tilize_nf = g0_num_faces;
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats_array[0].unpack_A_src,

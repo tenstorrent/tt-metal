@@ -122,7 +122,6 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
             .enable_32_bit_dest = config.fp32_dest_acc_en,
             .double_buffer_dest = !config.dst_full_sync_en,
             // Per-DFB unpack_modes is left default for the program factory to set.
-            // The temporary Gen2 field enable_2x_src_register is left default.
         };
     }
     return tt::tt_metal::experimental::ComputeGen1Config{
@@ -132,6 +131,22 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
         .enable_32_bit_dest = config.fp32_dest_acc_en,
         .double_buffer_dest = !config.dst_full_sync_en,
         // Per-DFB unpack_modes is left default for the program factory to set.
+    };
+}
+
+tt::tt_metal::experimental::ComputeHardwareConfig arch_compute_config(
+    tt::ARCH arch, const tt::tt_metal::experimental::ComputeGen1Config& gen1) {
+    if (arch != tt::ARCH::QUASAR) {
+        return gen1;
+    }
+    // Gen2 has no bfp_pack_precision_mode (MXFP replaces BFP); every other field maps 1:1, including the
+    // per-DFB unpack_modes table.
+    return tt::tt_metal::experimental::ComputeGen2Config{
+        .fpu_math_fidelity = gen1.fpu_math_fidelity,
+        .sfpu_precision_mode = gen1.sfpu_precision_mode,
+        .enable_32_bit_dest = gen1.enable_32_bit_dest,
+        .double_buffer_dest = gen1.double_buffer_dest,
+        .unpack_modes = gen1.unpack_modes,
     };
 }
 

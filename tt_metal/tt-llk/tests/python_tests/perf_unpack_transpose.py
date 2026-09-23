@@ -5,7 +5,7 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import PerfRunType, Transpose
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,

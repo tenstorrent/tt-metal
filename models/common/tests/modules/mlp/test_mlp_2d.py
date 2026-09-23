@@ -105,7 +105,7 @@ def test_mlp_2d_config_rejects_1d_mesh():
 
     config = MLP2DConfig(w1=w1, w2=w2, w3=w3)
 
-    with pytest.raises(AssertionError, match="MLP2D requires 2D mesh"):
+    with pytest.raises(AssertionError, match="MLP2D requires 2D mesh"):  # allow-pytest.raises: pre-existing
         _resolve_mlp2d_config(config)
 
 
@@ -161,7 +161,7 @@ def test_mlp_2d_rejects_non_galaxy_from_model_args(cluster_shape):
 
     model_args = _DummyArgs(cluster_shape)
 
-    with pytest.raises(ValueError, match="MLP2D requires Galaxy topology"):
+    with pytest.raises(ValueError, match="MLP2D requires Galaxy topology"):  # allow-pytest.raises: pre-existing
         MLP2D.from_model_args(
             mesh_device=None,
             tt_ccl=None,

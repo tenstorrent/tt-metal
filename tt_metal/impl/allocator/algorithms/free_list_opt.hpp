@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <ostream>
 #include <utility>
@@ -68,16 +69,23 @@ public:
 
     MemoryBlockTable get_memory_block_table() const override;
 
+    void validate_shrink_size(DeviceAddr shrink_size, bool bottom_up = true) const override;
+
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true) override;
 
     void reset_size() override;
 
 private:
+    // Sentinel meaning "no such block", stored in the prev/next link vectors below. Anything that
+    // hands "no block" back to a caller uses std::optional<size_t> instead; the links cannot, because
+    // they are hot SoA data and an optional would double their size.
+    static constexpr size_t no_block = std::numeric_limits<size_t>::max();
+
     // SoA free list components
     std::vector<DeviceAddr> block_address_;
     std::vector<DeviceAddr> block_size_;
-    std::vector<ssize_t> block_prev_block_;
-    std::vector<ssize_t> block_next_block_;
+    std::vector<size_t> block_prev_block_;
+    std::vector<size_t> block_next_block_;
     std::vector<uint8_t> block_is_allocated_;       // not using bool to avoid compacting
     std::vector<uint8_t> meta_block_is_allocated_;  // not using bool to avoid compacting
 
@@ -107,6 +115,8 @@ private:
     // NOTE: This function DOES NOT remove block_index from the segregated list. Caller should do that
     size_t allocate_in_block(size_t block_index, DeviceAddr alloc_size, size_t offset);
 
+    size_t find_block_to_shrink(DeviceAddr shrink_size, bool bottom_up) const;
+
     size_t get_size_segregated_index(DeviceAddr size_bytes) const {
         // std::log2 is SLOW, so we use a simple log2 implementation for integers. I assume GCC compiles this to a
         // count leading zeros instruction then a subtraction.
@@ -121,9 +131,15 @@ private:
     // the SoA vectors)
     void insert_block_to_segregated_list(size_t block_index);
 
+    bool has_prev_block(size_t block_index) const { return block_prev_block_[block_index] != no_block; }
+
+    // Remove block_index from the prev/next chain, healing both neighbours' links. Does not touch the
+    // block's own links, its size, or the segregated lists.
+    void unlink_block(size_t block_index);
+
     // Allocate a new block and return the index to the block
     size_t alloc_meta_block(
-        DeviceAddr address, DeviceAddr size, ssize_t prev_block, ssize_t next_block, bool is_allocated);
+        DeviceAddr address, DeviceAddr size, size_t prev_block, size_t next_block, bool is_allocated);
     // Free the block at block_index and mark it as free
     void free_meta_block(size_t block_index);
 

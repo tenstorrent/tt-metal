@@ -65,7 +65,7 @@ template <bool APPROXIMATION_MODE>
 inline void sigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
-        recip_init<false, false>();
+        recip_init<false, false, false>();
     } else {
         sigmoid_appx_init();
     }

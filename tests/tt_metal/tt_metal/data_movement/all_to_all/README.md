@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions from all master cores to all subordinate cores.
 
 ## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 **Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
 

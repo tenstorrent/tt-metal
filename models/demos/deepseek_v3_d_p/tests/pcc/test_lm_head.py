@@ -9,14 +9,19 @@ Compares torch.nn.Linear (reference) against TtLMHead (multi-chip TTNN)
 to verify correctness with DeepSeek 671B LM head dimensions.
 """
 
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Mapping from torch dtypes to corresponding ttnn dtypes
@@ -57,46 +62,31 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     [
         # fmt: off
         pytest.param(32, 1024, 10240, True, id="small"),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.VOCAB_SIZE, False, id="full-no-pcc"),
+        pytest.param(
+            PREFILL_CHUNK_TOKENS_PER_CHIP,
+            DeepSeekV3Config.EMB_SIZE,
+            DeepSeekV3Config.VOCAB_SIZE,
+            False,
+            id="full-no-pcc",
+        ),
+        # Mistral-Small-4-119B: emb 4096 / vocab 131072, the opposite aspect ratio to DeepSeek's
+        # 7168 x 129280. seq_len is TILE_SIZE because the PCC check only runs at that length, so a
+        # longer row would skip; this is the only row that checks PCC at a real model's dimensions.
+        pytest.param(ttnn.TILE_SIZE, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.VOCAB_SIZE, True, id="mistral4"),
         # fmt: on
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="1x4-ring",
-        ),
+        # The LM head is not part of the prefill transformer any more (decode owns it); this module
+        # test is kept as a minimal standalone check and runs only on a 2x2 mesh.
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            fabric2d_device_params(),
             1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="ring"),
-            id="2x2-ring",
-        ),
-        pytest.param(
-            (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
-            id="2x4-linear",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -110,7 +100,6 @@ def test_lm_head(
     vocab_size: int,
     run_full_pcc_check: bool,
     num_links: int,
-    topology: ttnn.Topology,
     is_balanced: bool,
     is_column_parallel: bool,
 ):
@@ -119,6 +108,7 @@ def test_lm_head(
 
     Torch dtypes are set inline; TTNN dtypes are derived automatically.
     """
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     if batch_seq_len != ttnn.TILE_SIZE and run_full_pcc_check:
         pytest.skip("PCC check is only run for seq_len == TILE_SIZE to avoid slicing complexities")
 

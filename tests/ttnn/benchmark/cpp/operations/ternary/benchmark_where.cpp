@@ -4,6 +4,7 @@
 
 #include <benchmark/benchmark.h>
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/device.hpp"
 
@@ -65,7 +66,7 @@ void BM_where_bf16_ttt(benchmark::State& state) {
 
     for ([[maybe_unused]] auto _ : state) {
         auto out = ttnn::where(cond_tensor, true_value_tensor, false_value_tensor);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
         benchmark::DoNotOptimize(out);
         benchmark::ClobberMemory();
     }

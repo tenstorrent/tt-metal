@@ -274,6 +274,39 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // page_size: (bytes)
     auto [tensor_and_grid, page_size] = GetParam();
     auto [device_tensor_shape, core_grid_size] = tensor_and_grid;
+
+    // The parameters above name a bank count (8 on Blackhole, 12 on Wormhole). A harvested part
+    // exposes fewer DRAM banks than the full grid -- 7 of 8 once a GDDR channel is soft-harvested --
+    // which used to skip every case here, leaving the sharded DRAM path with no coverage at all on
+    // such systems. Rather than drop the test, hold the per-bank shard width fixed and narrow the
+    // tensor to the banks this device actually has. The shard each bank sees is byte-for-byte what
+    // the parameter asked for, so every page/tile divisibility invariant below still holds; only the
+    // total tensor shrinks in proportion to the missing banks.
+    if (const uint32_t available_banks = mesh_device_->dram_grid_size().x;
+        available_banks > 0 && core_grid_size.x > available_banks) {
+        const uint32_t per_bank_width = device_tensor_shape.width() / core_grid_size.x;
+        if (per_bank_width * core_grid_size.x != device_tensor_shape.width()) {
+            GTEST_SKIP() << "tensor width " << device_tensor_shape.width() << " is not divisible by requested grid "
+                         << core_grid_size.x;
+        }
+        const uint32_t adjusted_width = per_bank_width * available_banks;
+        if (adjusted_width % constants::TILE_WIDTH != 0) {
+            GTEST_SKIP() << "width " << adjusted_width << " across " << available_banks
+                         << " banks is not tile-aligned";
+        }
+        log_info(
+            tt::LogTest,
+            "Adapting to harvested DRAM: requested {} banks, {} available. Holding per-bank width {} and narrowing "
+            "tensor width {} -> {}",
+            core_grid_size.x,
+            available_banks,
+            per_bank_width,
+            device_tensor_shape.width(),
+            adjusted_width);
+        core_grid_size.x = available_banks;
+        device_tensor_shape = Shape2D(device_tensor_shape.height(), adjusted_width);
+    }
+
     uint64_t device_tensor_size = device_tensor_shape.height() * device_tensor_shape.width() * ElementSize;
 
     if (!validate_sharded_test_inputs(core_grid_size, device_tensor_shape, *mesh_device_, ElementSize)) {

@@ -25,13 +25,13 @@ namespace ttnn::prim {
 
 namespace {
 
-// Matches ops/repeat/spec.py's READ_BATCH / WRITE_BATCH. kCbDepth lives in
-// the header as kRepeatCbDepth since repeat_codegen_supported.cpp's
-// L1-capacity gate needs the same value.
+// Pages a reader/writer moves per turn of its loop. kCbDepth lives in the header
+// as kRepeatCbDepth since repeat_codegen_supported.cpp's L1-capacity gate needs
+// the same value.
 constexpr uint32_t kReadBatch = 4;
 constexpr uint32_t kWriteBatch = 4;
 
-// SEQ_REPEAT, see codegen/kernels/sequencers.h.
+// SEQ_REPEAT, see common/kernels/codegen/sequencers.h.
 constexpr uint32_t kSeqRepeat = 1;
 
 struct CoreSplit {
@@ -98,7 +98,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
     if (!is_row_major) {
         // TILE-interleaved path: shared pluggable sequencer reader (seq_id=1 == SEQ_REPEAT)
-        // + interleaved writer. Mirrors ops/repeat/spec.py::build_repeat_tile / _plan.
+        // + interleaved writer.
         const uint32_t page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
         desc.cbs.push_back(CBDescriptor{
@@ -116,7 +116,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
         KernelDescriptor reader_desc;
         reader_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_tile_interleaved_unified.cpp";
+            "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_tile_interleaved_unified.cpp";
         reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_desc.core_ranges = split.all_cores;
         reader_desc.compile_time_args = std::move(reader_ct_args);
@@ -126,10 +126,8 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             {"batch", kReadBatch},
             // reader_tile_interleaved_unified.cpp unconditionally reads this named
             // arg in kernel_main() (not gated by SEQ_ID), falling back to the
-            // TensorAccessorArgs page size when 0. builder_utils.py always injects
-            // ("src_page_pitch", 0) for this shared template even though spec.py's
-            // reader_named_ct only lists seq_id/cb_id/batch -- see porting guide's
-            // "NAMED-CT-arg trap".
+            // TensorAccessorArgs page size when 0. It must be supplied even though
+            // the repeat sequencer never consults it.
             {"src_page_pitch", 0},
         };
         reader_desc.config = ReaderConfigDescriptor{};
@@ -140,7 +138,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
         KernelDescriptor writer_desc;
         writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/writer_interleaved.cpp";
+            "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
         writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_desc.core_ranges = split.all_cores;
         writer_desc.compile_time_args = std::move(writer_ct_args);
@@ -167,8 +165,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     }
 
     if (is_last_dim_rm) {
-        // ROW_MAJOR last-dim (within-stick) path. Mirrors
-        // ops/repeat/spec.py::build_repeat_last_dim_rm_factory.
+        // ROW_MAJOR last-dim (within-stick) path.
         const uint32_t in_stick_size = operation_attributes.stick_size;
         const uint32_t in_aligned = static_cast<uint32_t>(src_buffer->aligned_page_size());
         const uint32_t out_aligned = static_cast<uint32_t>(dst_buffer->aligned_page_size());
@@ -222,8 +219,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         return desc;
     }
 
-    // ROW_MAJOR higher-dim path. Mirrors ops/repeat/spec.py::build_repeat_rm_factory.
-    // Input and output share the same last-dim width on this branch (only a non-last
+    // ROW_MAJOR higher-dim path. Input and output share the same last-dim width on this branch (only a non-last
     // dim is repeated), so one aligned page pitch serves reader, writer, and CB.
     const uint32_t aligned_page_size = static_cast<uint32_t>(src_buffer->aligned_page_size());
 

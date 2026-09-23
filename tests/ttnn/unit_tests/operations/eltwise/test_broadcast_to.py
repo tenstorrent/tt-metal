@@ -198,17 +198,19 @@ def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_sp
         ttnn.synchronize_device(device)
 
 
-input_bcast_shape_pairs = [
-    ((1, 1, 1, 1), (1, 1, 1)),
-    ((1, 1, 1, 1), (1, 1, 1, 1, 1)),
-    ((1, 1, 1, 1, 1), (1, 1, 1, 1, 1)),
-    ((2, 1), (3, 1)),
+# Each shape pair provokes a distinct TT_FATAL, so the expected message travels
+# with it — one shared pattern would let any case pass on another's error.
+input_bcast_shape_pairs_and_errors = [
+    ((1, 1, 1, 1), (1, 1, 1), "must be at least as large as the broadcast shape"),
+    ((1, 1, 1, 1), (1, 1, 1, 1, 1), "must be at most 4D"),
+    ((1, 1, 1, 1, 1), (1, 1, 1, 1, 1), "must be at most 4D"),
+    ((2, 1), (3, 1), "cannot be broadcast to output dimension"),
 ]
 
 
 @pytest.mark.parametrize("dtype_pt, dtype_tt", ((torch.bfloat16, ttnn.bfloat16),))
-@pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device):
+@pytest.mark.parametrize("input, bcast, error", input_bcast_shape_pairs_and_errors)
+def test_broadcast_to_invalid(input, bcast, error, dtype_pt, dtype_tt, device, expect_error):
     torch.manual_seed(0)
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(input)
@@ -219,7 +221,7 @@ def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device):
         layout=ttnn.TILE_LAYOUT,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, error):
         _ = ttnn.experimental.broadcast_to(a_tt, bcast)
 
 
@@ -229,7 +231,7 @@ input_bcast_shape_pairs = [
 
 
 @pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_invalid_broadcast_to_sharding(input, bcast, device):
+def test_invalid_broadcast_to_sharding(input, bcast, device, expect_error):
     torch.manual_seed(0)
     dtype_pt, dtype_tt = [torch.bfloat16, ttnn.bfloat16]
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype_tt)(input)
@@ -248,7 +250,7 @@ def test_invalid_broadcast_to_sharding(input, bcast, device):
         memory_config=sharded_config,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "bcast_to: Invalid input memory config"):
         _ = ttnn.experimental.broadcast_to(a_tt, bcast, memory_config=sharded_config)
 
 

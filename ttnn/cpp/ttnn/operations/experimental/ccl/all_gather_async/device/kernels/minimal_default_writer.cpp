@@ -223,8 +223,16 @@ void kernel_main() {
 #else
     fabric_connection.open();
 
+    // An edge device of a line has no neighbour in one direction, so the connection manager holds
+    // no sender for it and get_{forward,backward}_connection() would trip its own ASSERT. Every send
+    // below is already gated on detail::valid_targets(direction) (see the comment there: the writers
+    // at the end of the line pointing outward do not send over fabric), and teardown closes the
+    // manager rather than this pointer, so leave it null in that case. Mirrors the USE_WORKER_MUX
+    // path above, which already nulls the pointer when its connection is invalid.
     auto* fabric_direction_connection =
-        direction ? &fabric_connection.get_backward_connection() : &fabric_connection.get_forward_connection();
+        direction
+            ? (fabric_connection.has_backward_connection() ? &fabric_connection.get_backward_connection() : nullptr)
+            : (fabric_connection.has_forward_connection() ? &fabric_connection.get_forward_connection() : nullptr);
 #endif
     // pre-populate packet headers
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();

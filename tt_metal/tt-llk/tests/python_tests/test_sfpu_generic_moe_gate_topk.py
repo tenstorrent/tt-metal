@@ -21,28 +21,24 @@ Layout, for num_total_experts == 256
 The 256 experts occupy face 0 of the tile with id = 16 * row + column -- that is what
 `_topk_moe_generate_indices_` writes (LTILEID-seeded, stored to the even and odd
 column halves of each row band). The winners come back in COLUMN 0 ("lane 0") of DEST
-rows 0-7. `_generic_moe_gate_top8_merge_instances_` is a reduce-to-one-lane
-rotate-and-merge network, not an all-reduce, so the other even columns are left
-holding partial merges (measured: they contain ids outside the top-8) and only lane 0
-is meaningful. The top-8 path never writes the odd columns; the top-16 path does
+rows 0-7 on the top-8 path and rows 0-15 on the top-16 path.
+`_generic_moe_gate_top8_merge_instances_` is a reduce-to-one-lane rotate-and-merge
+network, not an all-reduce, so the other even columns are left holding partial merges
+(measured: they contain ids outside the top-8) and only lane 0 is meaningful. The
+top-8 path never writes the odd columns; the top-16 path does
 (`_generic_moe_gate_store_16_rows_even_odd_split_` stores both halves), which is why
 the odd-column check below is restricted to the top-8 path.
 
 How many winners come back
 --------------------------
-`_generic_moe_gate_topk_` routes num_selected_experts == 16 to the top-16 path, which
-emits 16 winner rows; every other value routes to top-8, which emits eight rows
-regardless of what was asked for. api/compute/experimental/generic_moe_gate.h documents
-that and deliberately does not static_assert it, because blaze's gptoss_moe_router
-validates 1..16 and forwards straight through.
+`_generic_moe_gate_topk_` routes num_selected_experts > 8 to the top-16 path, which
+emits 16 winner rows; values <= 8 route to top-8, which emits eight rows.
 
-On the top-8 path the tail beyond num_selected_experts is blanked -- id 0, score 0.0 --
-exactly when `zero_tail || (normalize && num_selected_experts < 8)`, which is the
-condition on top8.h:245 guarding `_generic_moe_gate_top8_zero_tail_`. So for
-num_selected_experts=4 the live winner count is 4 with either flag set and 8 with
-neither, and with normalize the denominator is the sum over the live winners only --
-which is the point of blanking before `_generic_moe_gate_normalize_` runs. All measured
-on Blackhole; `_expected_live_winners` encodes the rule.
+On either path the tail beyond num_selected_experts is blanked -- id 0, score 0.0 --
+when `zero_tail || normalize`. With neither flag, the entire 8- or 16-row result
+remains live. With normalize, blanking happens before `_generic_moe_gate_normalize_`
+so its denominator contains only the requested winners. `_expected_live_winners`
+encodes this rule.
 
 num_selected_experts=4 is also distinct code beyond the tail: with full_sort=False,
 `_generic_moe_gate_top8_sort_rows_<4, false>` takes the SFPSWAP + TTI_NOP branch that
@@ -50,12 +46,10 @@ num_selected_experts=8 never reaches.
 
 What this test asserts, and why in this form
 --------------------------------------------
-Row order is asserted only on the top-8 path with full_sort=True, where the winner rows
-do come back in descending-key order (measured). full_sort=False gives a partial order
-there -- measured [1, 3, 4, 5, 7, 8, 6, 2] by golden rank -- which is what the flag
-means. The top-16 path returns an unordered set even with full_sort=True (measured
-[1, 3, 4, 5, 7, 8, 9, 10, 16, 15, 14, 13, 12, 11, 6, 2]), so order is not asserted
-there at all. Callers consume the winners as a set either way. The checks are:
+Row order is asserted whenever full_sort=True. full_sort=False gives a partial order
+on the top-8 path; the intermediate 9-15 path still performs the final 16-row sort
+because truncation requires the requested winners to occupy the leading rows. The
+checks are:
   1. the live winner id set == the golden top-N id set, for the N above;
   2. every returned score matches the normalized original score of the id it is
      paired with -- this is the check that would catch a payload/key mix-up, which is
@@ -78,12 +72,11 @@ by the FPU kernel `_llk_math_deepseek_moe_gate_eltwise_binary_`; here they are s
 by plain datacopy so this test isolates the SFPU half. Cover the FPU kernel
 separately.
 
+The original sweep uses 256 experts. The partial-face regression covers counts
+from 16 through 240, with deliberately large inactive keys to exercise padding.
+
 Configurations left uncovered
 -----------------------------
-* `num_total_experts` is pinned 256, which is one full face and the only layout the
-  stimuli and the id = 16 * row + column expectation here are written for. 128 routes
-  to `_generic_moe_gate_top8_sort_half_face_` instead and needs a half-face stimulus
-  tile, so it wants its own variant rather than an axis bolted onto this one.
 * `dest_acc` is pinned No, structurally: the kernel carries the expert id in the LO16
   and the score in the HI16 of one DEST word, which only exists for a 16-bit DEST
   format. A 32-bit DEST leaves no room for the payload.
@@ -94,7 +87,7 @@ Configurations left uncovered
 """
 
 import torch
-from conftest import skip_for_wormhole
+from conftest import blackhole_only, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -106,10 +99,7 @@ from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    MOE_GATE_NORMALIZE_PARAMS,
-    MOE_GATE_TOPK,
-)
+from helpers.test_variant_parameters import MOE_GATE_NORMALIZE_PARAMS, MOE_GATE_TOPK
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -130,18 +120,15 @@ def _expected_live_winners(
 ) -> tuple[int, int]:
     """(rows the path emits, rows that hold a live winner) for one configuration.
 
-    The top-8 path blanks the tail beyond num_selected_experts exactly when
-    top8.h:245's `zero_tail || (normalize && num_selected_experts < 8)` holds. The
-    top-16 path only runs for num_selected_experts == 16, where there is no tail to
-    blank, so zero_tail does not reach the rows this test reads (it zeroes DEST rows
-    8-15 of the top-8 path's tiles).
+    The top-8 path emits eight rows and the top-16 path emits sixteen. On either
+    path, normalize or zero_tail blanks rows beyond num_selected_experts.
     """
-    if num_selected_experts == TOP16_WINNERS:
-        return TOP16_WINNERS, TOP16_WINNERS
-
-    if num_selected_experts < TOP8_WINNERS and (normalize or zero_tail):
-        return TOP8_WINNERS, num_selected_experts
-    return TOP8_WINNERS, TOP8_WINNERS
+    emitted_rows = (
+        TOP16_WINNERS if num_selected_experts > TOP8_WINNERS else TOP8_WINNERS
+    )
+    if num_selected_experts < emitted_rows and (normalize or zero_tail):
+        return emitted_rows, num_selected_experts
+    return emitted_rows, emitted_rows
 
 
 def _distinct_bf16_keys() -> torch.Tensor:
@@ -202,13 +189,35 @@ def assert_odd_columns_untouched(result_indices, result_scores, scores, rows):
 
 @skip_for_wormhole
 @parametrize(
-    num_selected_experts=[8, 4, 16],
+    num_selected_experts=[4, 8, *range(9, 17)],
     full_sort=[True, False],
     normalize=[True, False],
     zero_tail=[False, True],
 )
 def test_sfpu_generic_moe_gate_topk(
     num_selected_experts, full_sort, normalize, zero_tail
+):
+    _check_moe_gate(num_selected_experts, full_sort, normalize, zero_tail)
+
+
+@blackhole_only
+@parametrize(
+    num_total_experts=[16, 32, 48, 64, 80, 112, 128, 144, 192, 240],
+    num_selected_experts=[4, 8, 12, 16],
+    normalize=[False, True],
+)
+def test_sfpu_generic_moe_gate_partial_face(
+    num_total_experts, num_selected_experts, normalize
+):
+    _check_moe_gate(num_selected_experts, True, normalize, True, num_total_experts)
+
+
+def _check_moe_gate(
+    num_selected_experts,
+    full_sort,
+    normalize,
+    zero_tail,
+    num_total_experts=NUM_TOTAL_EXPERTS,
 ):
     torch.manual_seed(0)
 
@@ -219,6 +228,8 @@ def test_sfpu_generic_moe_gate_topk(
     # deliberately on a different scale from the keys so that reporting the key
     # instead of the score would be caught.
     biased = _distinct_bf16_keys()
+    # Without the SFPU's -inf padding these inactive experts would win.
+    biased[num_total_experts:] = 1000.0
     scores = (
         torch.empty(NUM_TOTAL_EXPERTS, dtype=torch.float32)
         .uniform_(0.05, 0.95)
@@ -245,7 +256,7 @@ def test_sfpu_generic_moe_gate_topk(
         templates=[
             MOE_GATE_TOPK(
                 num_selected_experts=num_selected_experts,
-                num_total_experts=NUM_TOTAL_EXPERTS,
+                num_total_experts=num_total_experts,
                 normalize=normalize,
                 zero_tail=zero_tail,
                 full_sort=full_sort,
@@ -290,13 +301,18 @@ def test_sfpu_generic_moe_gate_topk(
     emitted_rows, num_winners = _expected_live_winners(
         num_selected_experts, normalize, zero_tail
     )
-    is_top16 = num_selected_experts == TOP16_WINNERS
+    is_top16_path = num_selected_experts > TOP8_WINNERS
 
     golden_generator = get_golden_generator(MoeGateTopkGolden)
     scale = _bits_to_float(SCALE_BITS)
     eps = _bits_to_float(EPS_BITS)
     golden_ids, _ = golden_generator(
-        biased, scores, num_winners, normalize, eps=eps, scale=scale
+        biased[:num_total_experts],
+        scores[:num_total_experts],
+        num_winners,
+        normalize,
+        eps=eps,
+        scale=scale,
     )
 
     got_ids = [int(result_indices[row, 0].item()) for row in range(num_winners)]
@@ -323,10 +339,8 @@ def test_sfpu_generic_moe_gate_topk(
         expected_paired, got_scores, formats.output_format, print_errors=True
     ), "returned scores are not the (normalized) original scores of the returned ids"
 
-    # On the top-8 path full_sort delivers a fully ordered winner set. Without it the
-    # rows come back in a partial order, and on the top-16 path they are unordered even
-    # with full_sort=True (measured), so there only the set above is asserted.
-    if full_sort and not is_top16:
+    # full_sort must keep each score paired with its id while ordering by biased key.
+    if full_sort:
         assert got_ids == golden_ids, (
             f"full_sort=True must return the winners in descending-key order.\n"
             f"  got    {got_ids}\n"
@@ -343,7 +357,7 @@ def test_sfpu_generic_moe_gate_topk(
             f"got id {got_id}, score {got_score}"
         )
 
-    if not is_top16:
+    if not is_top16_path and num_total_experts == NUM_TOTAL_EXPERTS:
         # All eight emitted rows, blanked ones included -- the tail zeroing hits the
         # even-column payload, never the odd columns.
         assert_odd_columns_untouched(

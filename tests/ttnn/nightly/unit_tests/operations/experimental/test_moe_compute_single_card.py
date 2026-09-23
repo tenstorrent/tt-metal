@@ -629,6 +629,7 @@ def _run_moe_compute_single_card_test(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "trace_region_size": 500000,
         }
@@ -671,6 +672,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, com
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 500000,
         }
@@ -744,7 +746,7 @@ _MOE_50669_SWEEP_TOKENS = [1, 2, 3, 6, 16, 32, 48, 63, 64]
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
+    [{"l1_small_size": 16384, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
     indirect=True,
 )
 @pytest.mark.parametrize("tokens_per_device", _MOE_50669_SWEEP_TOKENS)
@@ -754,14 +756,14 @@ def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, c
     """Regression for tt-metal#50669: correctness across non-tile-aligned token counts / configs."""
     arch = mesh_device.arch()
     ring_n = effective_matmul_ring_size(mesh_device)
-    # WH matmul ring is always 12 cores; sweep configs use N=256 (8 intermediate tiles). Validation
-    # requires intermediate_tiles >= ring_n; short grids (e.g. wh_n300_civ2 7x8) also fail placement
-    # in get_moe_tilize_drain_core before the op runs.
-    if arch == ttnn.device.Arch.WORMHOLE_B0 and cfg["N"] // 32 < ring_n:
+    N = max(cfg["N"], 32 * ring_n)
+    worker_grid = mesh_device.compute_with_storage_grid_size()
+    # The c4 sweep needs 12 matmul + 16 combine + 4 tilize cores on WH. Even after padding N to the
+    # ring width, that layout cannot be placed on the harvested wh_n300_civ2 7x8 worker grid.
+    if arch == ttnn.device.Arch.WORMHOLE_B0 and cfg["name"] == "c4_silu" and worker_grid.x <= 7 and worker_grid.y <= 8:
         pytest.xfail(
-            f"moe_compute sweep N={cfg['N']} too small for WH matmul ring "
-            f"({cfg['N'] // 32} intermediate tiles < {ring_n} cores; "
-            "https://github.com/tenstorrent/tt-metal/issues/52246)"
+            f"moe_compute cannot place the c4_silu core layout on the {worker_grid.x}x{worker_grid.y} "
+            "Wormhole worker grid; https://github.com/tenstorrent/tt-metal/issues/52246"
         )
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
@@ -769,7 +771,7 @@ def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, c
         experts_per_device=cfg["experts_per_device"],
         tokens_per_device=tokens_per_device,
         selected_experts_k=cfg["selected_experts_k"],
-        N=cfg["N"],
+        N=N,
         hidden_size=cfg["hidden_size"],
         output_height_shard_dim=4,
         output_width_shard_dim=auto_output_width_shard_dim(cfg["hidden_size"], matmul_ring_size=ring_n),
@@ -782,7 +784,7 @@ def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, c
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
+    [{"l1_small_size": 16384, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])

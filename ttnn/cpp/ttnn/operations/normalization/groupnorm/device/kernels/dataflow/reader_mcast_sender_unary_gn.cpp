@@ -72,7 +72,7 @@ void kernel_main() {
     constexpr uint32_t num_mcast_cores = get_named_compile_time_arg_val("num_cores_per_mcast_group");
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
-    uint32_t num_groups = num_batch_group / num_batches;
+    const uint32_t num_groups = num_batch_group / num_batches;
 
     constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
@@ -98,14 +98,14 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
     constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr bool GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2") == 1;
+    constexpr bool GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W") == 1;
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
     // 21 and 22 are used in welford version but unused in this version
     constexpr auto src0_args = TensorAccessorArgs<0>();
-    constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<decltype(src0_args)::next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -115,14 +115,14 @@ void kernel_main() {
     uint32_t index_g_offset = 0;
     uint32_t index_b_offset = 0;
 
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t start_id = get_arg_val<uint32_t>(2);
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
-    uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
-    const bool has_mcast_first_group = get_arg_val<uint32_t>(5);
-    const bool has_mcast_last_group = get_arg_val<uint32_t>(6);
+    const bool has_mcast_first_group = get_arg_val<uint32_t>(5) == 1;
+    const bool has_mcast_last_group = get_arg_val<uint32_t>(6) == 1;
 
     // mid mcast group
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(7);
@@ -132,21 +132,21 @@ void kernel_main() {
     const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(11);
 
     // first mcast group
-    uint32_t mcast_first_group_dest_noc_start_x;
-    uint32_t mcast_first_group_dest_noc_start_y;
-    uint32_t mcast_first_group_dest_noc_end_x;
-    uint32_t mcast_first_group_dest_noc_end_y;
+    uint32_t mcast_first_group_dest_noc_start_x = 0;
+    uint32_t mcast_first_group_dest_noc_start_y = 0;
+    uint32_t mcast_first_group_dest_noc_end_x = 0;
+    uint32_t mcast_first_group_dest_noc_end_y = 0;
     // last mcast group
-    uint32_t mcast_last_group_dest_noc_start_x;
-    uint32_t mcast_last_group_dest_noc_start_y;
-    uint32_t mcast_last_group_dest_noc_end_x;
-    uint32_t mcast_last_group_dest_noc_end_y;
+    uint32_t mcast_last_group_dest_noc_start_x = 0;
+    uint32_t mcast_last_group_dest_noc_start_y = 0;
+    uint32_t mcast_last_group_dest_noc_end_x = 0;
+    uint32_t mcast_last_group_dest_noc_end_y = 0;
     tt_l1_ptr uint32_t* noc_coord_x;
     tt_l1_ptr uint32_t* noc_coord_y;
 
     // number of cores in mcast groups
-    uint32_t num_mcast_cores_first_group;
-    uint32_t num_mcast_cores_last_group;
+    uint32_t num_mcast_cores_first_group = 0;
+    uint32_t num_mcast_cores_last_group = 0;
 
     // first and last group mcast coordinates passed directly in async_write_multicast calls below
 
@@ -163,8 +163,8 @@ void kernel_main() {
         mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(20);
         num_mcast_cores_last_group = get_arg_val<uint32_t>(21);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(22));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(22 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(22));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(22 + num_mcast_cores));
 
     } else if (has_mcast_first_group and not has_mcast_last_group) {
         mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
@@ -173,8 +173,8 @@ void kernel_main() {
         mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
         num_mcast_cores_first_group = get_arg_val<uint32_t>(16);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(17));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(17 + num_mcast_cores));
 
     } else if (not has_mcast_first_group and has_mcast_last_group) {
         mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
@@ -183,15 +183,15 @@ void kernel_main() {
         mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
         num_mcast_cores_last_group = get_arg_val<uint32_t>(16);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(17));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(17 + num_mcast_cores));
 
     } else {
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12 + num_mcast_cores));
     }
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     reduce_sender_sem.set(VALID);
@@ -220,14 +220,13 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
-    DataflowBuffer dfb_out0(dfb_out0_id);
+    const DataflowBuffer dfb_out0(dfb_out0_id);
     DataflowBuffer dfb_reread_out(dfb_reread_out_id);
 #ifdef UNTILIZE_OUT
     DataflowBuffer dfb_reread_rm(dfb_reread_rm_id);
 #endif
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
-    const DataFormat out_data_format = get_dataformat(dfb_out0_id);
     const uint32_t num_bytes_read = datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -253,16 +252,17 @@ void kernel_main() {
     // residual is meaningful only when extra_out_block is true; when false it
     // evaluates to 0 and feeds the false branch of the ternaries below, which
     // never use it.
-    constexpr uint32_t residual = block_h - num_out_blocks * out_block_h_normal;
+    constexpr uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
     constexpr uint32_t num_out_blocks_padded =
-        extra_out_block ? (num_out_blocks + residual / out_block_h_normal + 1) : num_out_blocks;
+        extra_out_block ? (num_out_blocks + (residual / out_block_h_normal) + 1) : num_out_blocks;
     constexpr uint32_t out_block_h_last = extra_out_block ? (residual % out_block_h_normal) : out_block_h_normal;
     constexpr uint32_t out_block_hw_last = out_block_h_last * block_w;
     constexpr uint32_t num_reads_of_input = 3;
     constexpr uint32_t dfb_ex_external_data_bytes =
         num_out_blocks_padded * num_mcast_cores * dfb_ex_external_slot_pitch_bytes;
     constexpr uint32_t dfb_ex_external_tiles_required = (dfb_ex_external_data_bytes / single_tile_size_bytes) +
-                                                       ((dfb_ex_external_data_bytes % single_tile_size_bytes) != 0);
+                                                       static_cast<uint32_t>(
+                                                           (dfb_ex_external_data_bytes % single_tile_size_bytes) != 0);
 
     // Two independent sources of stale SRAM contents in dfb_ex_external that the
     // downstream `reduce_tile` SUM consumer would otherwise sum into the
@@ -348,7 +348,7 @@ void kernel_main() {
                                 out_block_hw_normal);
                         }
 #else
-                        const uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
+                        const uint32_t src0_tile_bytes = dfb_in0.get_tile_size();
                         const auto src_a = TensorAccessor(src0_args, src_addr);
                         uint32_t l1_write_addr;
                         l1_write_addr = dfb_in0.get_write_ptr();
@@ -383,9 +383,9 @@ void kernel_main() {
                             // kernel-startup zero_whole_cb call above (or are statically absent
                             // when datum_size_bytes == dfb_ex_external_slot_pitch_bytes and the
                             // slots tile exactly).
-                            uint32_t l1_read_addr_ex_par =
+                            const uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? dfb_ex_partial.get_read_ptr() : dfb_ex2_partial.get_read_ptr();
-                            UnicastEndpoint remote_ep;
+                            const UnicastEndpoint remote_ep;
                             noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
                             l1_write_addr_external += dfb_ex_external_slot_pitch_bytes;
                             noc.async_read_barrier();
@@ -396,9 +396,9 @@ void kernel_main() {
                                 reduce_receiver_sem.set(0);
 
                                 // read data from other cores
-                                for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
-                                    UnicastEndpoint remote_ep;
-                                    noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par}, {});
+                                for (uint32_t core_i = 0; core_i < num_mcast_cores - 1; ++core_i) {
+                                    const UnicastEndpoint remote_ep;
+                                    noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[core_i + 1], .noc_y = noc_coord_y[core_i + 1], .addr = l1_read_addr_ex_par}, {});
                                     l1_write_addr_external += dfb_ex_external_slot_pitch_bytes;
                                     noc.async_read_barrier();
                                 }
@@ -443,7 +443,7 @@ void kernel_main() {
                             const auto dst_a = TensorAccessor(out_args, out_addr);
 
                             // add or copy with previous output results
-                            uint32_t block_w_curr =
+                            const uint32_t block_w_curr =
                                 index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
 #ifdef UNTILIZE_OUT
@@ -460,7 +460,7 @@ void kernel_main() {
                                 out_block_h_actual,
                                 out_block_hw_normal);
 #else
-                            const uint32_t dst_tile_bytes = get_tile_size(dfb_reread_out_id);
+                            const uint32_t reread_tile_bytes = dfb_reread_out.get_tile_size();
                             uint32_t l1_write_addr;
                             l1_write_addr = dfb_reread_out.get_write_ptr();
                             dfb_reread_out.reserve_back(out_block_hw_normal);
@@ -478,7 +478,7 @@ void kernel_main() {
                                             {});
                                         noc.async_read_barrier();
                                     }
-                                    l1_write_addr += dst_tile_bytes;
+                                    l1_write_addr += reread_tile_bytes;
                                 }
                             }
                             dfb_reread_out.push_back(out_block_hw_normal);
@@ -499,7 +499,7 @@ void kernel_main() {
                                 l1_read_addr_ex = dfb_ex2.get_read_ptr();
                             }
 
-                            MulticastEndpoint mcast_dst;
+                            const MulticastEndpoint mcast_dst;
                             noc.async_write_multicast(
                                 CoreLocalMem<uint32_t>(l1_read_addr_ex),
                                 mcast_dst,
@@ -518,7 +518,7 @@ void kernel_main() {
                                 false);
 
                             if (has_mcast_first_group) {
-                                MulticastEndpoint mcast_first_dst;
+                                const MulticastEndpoint mcast_first_dst;
                                 noc.async_write_multicast(
                                     CoreLocalMem<uint32_t>(l1_read_addr_ex),
                                     mcast_first_dst,
@@ -538,7 +538,7 @@ void kernel_main() {
                             }
 
                             if (has_mcast_last_group) {
-                                MulticastEndpoint mcast_last_dst;
+                                const MulticastEndpoint mcast_last_dst;
                                 noc.async_write_multicast(
                                     CoreLocalMem<uint32_t>(l1_read_addr_ex),
                                     mcast_last_dst,

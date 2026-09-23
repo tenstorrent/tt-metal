@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
@@ -15,9 +16,10 @@
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
+#include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg_defines_core.h"
+#include "overlay/meta/registers/overlay_reg.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -99,16 +101,26 @@ public:
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
         if (params.processor_class == HalProcessorClassType::DM) {
+            const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
+                                                  ? MEM_DISPATCH_DM_GLOBAL_BASE
+                                                  : MEM_DM_GLOBAL_BASE;
+            const DeviceAddr dm_local_base =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_BASE : MEM_DM_LOCAL_BASE;
+            const DeviceAddr dm_local_size =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_SIZE : MEM_DM_LOCAL_SIZE;
             if (params.is_fw) {
-                flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
+                const DeviceAddr dm_firmware_base = params.core_type == HalProgrammableCoreType::DISPATCH
+                                                        ? MEM_DISPATCH_DM_FIRMWARE_BASE
+                                                        : MEM_DM_FIRMWARE_BASE;
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", dm_firmware_base);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             } else {
                 DeviceAddr kn_text = MEM_KERNEL_BASE;
                 if (params.core_type == HalProgrammableCoreType::DISPATCH) {
@@ -130,14 +142,16 @@ public:
                 }
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
+                flags += fmt::format(
+                    "-Wl,--defsym=__kn_data={} ",
+                    dm_global_base + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
             if (params.is_fw) {
@@ -327,6 +341,43 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // Snapshot the env once: defines() runs separately for firmware and
+        // kernel builds, and a mid-process env change must not compile them
+        // against different maps.
+        static const char* const att_map = std::getenv("TT_METAL_NOC_ATT");
+        if (att_map != nullptr) {
+            // ATT enabled => the ATT backend and the V3 API everywhere, one map
+            // per build. The defines reach the JIT build key through the
+            // define hash, so toggling can never reuse stale binaries.
+            const std::string_view map(att_map);
+            if (map == "grendel_qsr1") {
+                defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
+            } else if (map == "quasar_aether_2x3") {
+                defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
+            } else {
+                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+            }
+            // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
+            // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
+            // decodes XY operands and cannot run under ATT currently; the rest of the
+            // watcher never decodes an address, so allow it when the sanitizer
+            // is explicitly disabled.
+            TT_FATAL(
+                !params.rtoptions.get_watcher_enabled() || params.rtoptions.watcher_noc_sanitize_disabled(),
+                "TT_METAL_NOC_ATT supports the watcher only with the NoC sanitizer disabled "
+                "(TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1)");
+            defines.push_back("NOC_ATT_ENABLED");
+            defines.push_back("NOC_API_V3");
+            static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
+            if (params.is_fw && att_program_for_test) {
+                // Firmware-only bring-up hook: replay the generated ATT image
+                // during noc_init on targets whose boot leaves the tables
+                // unprogrammed (the emulator).
+                defines.push_back("ATT_PROGRAM_FOR_TEST");
+            }
+        } else {
+            defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
+        }
         return defines;
     }
 
@@ -362,8 +413,7 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
@@ -387,11 +437,9 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
-                    case HalProcessorClassType::COMPUTE:
-                        TT_THROW("DISPATCH cores do not have compute processors");
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
             default:
                 TT_THROW(
@@ -553,6 +601,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         dev_msgs::AddressableCoreType::ETH,
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
+    this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = true;
     this->supports_implicit_dfb_sync_ = true;

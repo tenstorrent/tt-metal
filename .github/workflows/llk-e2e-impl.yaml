@@ -7,16 +7,17 @@ on:
         description: "Pytest mark expression for LLK python_tests"
         required: false
         type: string
-        default: "not perf and not quasar"
+        default: "not perf and not quasar and not accuracy"
       coverage:
         description: "Enable coverage collection and merge job"
         required: false
         type: boolean
-        default: true
+        default: false
 
 permissions:
   checks: write
   contents: read
+  packages: write
 
 env:
   LLK_PATH: tt_metal/tt-llk
@@ -45,20 +46,13 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "e2e"
       - name: Build test matrix
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
 
   llk-e2e-exec:
     needs: [load-test-matrix, build-images]

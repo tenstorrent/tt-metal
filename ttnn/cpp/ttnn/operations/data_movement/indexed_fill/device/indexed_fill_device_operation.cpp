@@ -119,56 +119,45 @@ void IndexedFillDeviceOperation::validate_on_program_cache_miss(
     require_interleaved_if_not_sharded(
         input_tensor_a.is_sharded(), input_tensor_a.memory_config().memory_layout(), "input_a");
 
-    // For WIDTH_SHARDED / BLOCK_SHARDED input_a the shard-local path requires the output to
-    // use the same sharding layout (same grid + same shard shape). INTERLEAVED or
-    // HEIGHT_SHARDED outputs are handled by the native / generic HEIGHT path.
-    if (input_tensor_a.is_sharded() &&
-        (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
-        // Resolve the output memory config so that configs that omit shard_spec (relying on
-        // compute_output_specs() to derive one) are expanded before the comparison. This avoids
-        // incorrectly rejecting valid callers that pass a shard_spec-less MemoryConfig.
-        const auto resolved_out = ttnn::operations::data_movement::indexed_fill::resolve_output_memory_config(
-            input_tensor_a, input_tensor_a.padded_shape(), args.output_mem_config);
+    // A WIDTH/BLOCK_SHARDED ROW_MAJOR buffer pages at shard width, but the generic path sizes every
+    // page at the full tensor width (generic_aligned_page_size takes the max over input_a, input_b
+    // and the output). Whichever of the three is sharded is then addressed with the wrong stride
+    // and the result is silently wrong, so the generic path is only safe for ROW_MAJOR when none of
+    // them is WIDTH/BLOCK_SHARDED. TILE layout is exempt (a tile is one page either way), as is
+    // HEIGHT_SHARDED (its shards span the full width). Making the generic path shard-width aware is
+    // the real fix; until then these configurations are rejected rather than silently corrupted.
+    //
+    // The output always inherits input_a's layout (see compute_output_specs), and resolution only
+    // fills in a missing shard_spec, so args.output_mem_config's memory_layout is already final.
+    const auto is_row_major_width_or_block_sharded = [](Layout layout, const tt::tt_metal::MemoryConfig& mem_config) {
+        return layout == Layout::ROW_MAJOR && (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+                                               mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED);
+    };
 
+    if (is_row_major_width_or_block_sharded(input_tensor_a.layout(), input_tensor_a.memory_config()) ||
+        is_row_major_width_or_block_sharded(input_tensor_b.layout(), input_tensor_b.memory_config()) ||
+        is_row_major_width_or_block_sharded(input_tensor_a.layout(), args.output_mem_config)) {
         TT_FATAL(
-            resolved_out.is_sharded() && resolved_out.memory_layout() == input_tensor_a.memory_config().memory_layout(),
-            "indexed_fill: WIDTH_SHARDED / BLOCK_SHARDED input_a requires the output to have "
-            "the same sharding layout as input_a");
+            args.dim == 0,
+            "indexed_fill: a ROW_MAJOR WIDTH_SHARDED/BLOCK_SHARDED input_a, input_b or output is "
+            "only supported for dim=0 (got dim={}); other dims take the generic path, which does "
+            "not support ROW_MAJOR sharded page addressing",
+            args.dim);
 
-        // If input_a has an explicit shard_spec, verify the grid and shape match. When input_a
-        // only has nd_shard_spec the detailed comparison is skipped.
-        const bool output_matches =
-            !input_tensor_a.memory_config().shard_spec().has_value() || !resolved_out.shard_spec().has_value() ||
-            (resolved_out.shard_spec()->grid == input_tensor_a.memory_config().shard_spec()->grid &&
-             resolved_out.shard_spec()->shape == input_tensor_a.memory_config().shard_spec()->shape);
+        // create_output_tensors() builds the real output from compute_output_specs(), so going
+        // through it here (rather than resolve_output_memory_config()) picks up any shard-shape
+        // adjustment TensorLayout makes and keeps this in sync with the factory's path choice.
+        const auto resolved_out = IndexedFillDeviceOperation::compute_output_specs(args, tensor_args).memory_config();
         TT_FATAL(
-            output_matches,
-            "indexed_fill: WIDTH_SHARDED / BLOCK_SHARDED input_a requires the output to have "
-            "the same shard grid and shard shape as input_a");
-
-        // For BLOCK_SHARDED the shard-local kernel divides batches evenly across shard rows
-        // (total_batches_per_core = B / n_y). Require B to be divisible by n_y so no batch
-        // is silently skipped.
-        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
-            input_tensor_a.memory_config().shard_spec().has_value()) {
-            const uint32_t n_y = input_tensor_a.memory_config().shard_spec()->grid.bounding_box().grid_size().y;
-            TT_FATAL(
-                n_y > 0 && input_tensor_a_shape[0] % n_y == 0,
-                "indexed_fill: BLOCK_SHARDED input_a requires batch dimension B ({}) to be "
-                "divisible by the shard-grid height n_y ({})",
-                input_tensor_a_shape[0],
-                n_y);
-        }
-
-        // The shard-local kernel assumes even sharding (shard_ppb is uniform across all cores).
-        // Uneven sharding would cause the last core to process a different number of pages,
-        // producing wrong results.  Reject early with a clear message.
-        TT_FATAL(
-            !ttnn::operations::data_movement::indexed_fill::is_uneven(input_tensor_a.tensor_spec()),
-            "indexed_fill: WIDTH_SHARDED / BLOCK_SHARDED input_a must have even sharding "
-            "(shard shape must divide the padded tensor shape evenly); "
-            "the shard shape or tensor shape must be adjusted to make sharding even");
+            ttnn::operations::data_movement::indexed_fill::is_shard_local_indexed_fill(
+                input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), resolved_out),
+            "indexed_fill: a ROW_MAJOR WIDTH_SHARDED/BLOCK_SHARDED input_a, input_b or output is "
+            "only supported via the shard-local path, and this combination is not eligible for it "
+            "(the generic fallback does not support ROW_MAJOR sharded page addressing). "
+            "Eligibility requires: input_a and output in L1 with the same sharding layout, grid "
+            "and shard shape; ROW_MAJOR shard orientation; even sharding; input_b INTERLEAVED or "
+            "WIDTH_SHARDED matching input_a's grid and shard width; and for BLOCK_SHARDED a "
+            "rectangular shard grid with B divisible by the grid row count");
     }
 
     require_interleaved_if_not_sharded(

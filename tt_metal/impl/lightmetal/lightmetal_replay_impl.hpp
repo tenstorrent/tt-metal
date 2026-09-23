@@ -12,6 +12,7 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 
 #include "impl/kernels/kernel.hpp"
@@ -132,6 +133,7 @@ private:
     bool show_reads_ = false;
     bool disable_checking_ = false;
 
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_owner_;
     tt::tt_metal::IDevice* device_ = nullptr;
 
     // Object maps for storing objects by global_id

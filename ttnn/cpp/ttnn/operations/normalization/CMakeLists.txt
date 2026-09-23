@@ -16,7 +16,9 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     batch_norm/device/kernels/*.cpp
+    groupnorm/device/kernels/*.cpp
     groupnorm/device/kernels/*.hpp
+    groupnorm/device/kernels/*.h
     layernorm/device/kernels/*.cpp
     layernorm/device/kernels/*.hpp
     layernorm/device/kernels/*.h

@@ -13,12 +13,8 @@ from helpers.chip_architecture import ChipArchitecture
 from helpers.device_io import read_words_from_device
 from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.logger import logger
-from helpers.perf import PerfReport
-from helpers.perf_schema import (
-    LOOP_FACTOR_COLUMN,
-    MARKER,
-    TEST_NAME_COLUMN,
-)
+from helpers.perf.core import PerfReport
+from helpers.perf.schema import LOOP_FACTOR_COLUMN, MARKER, TEST_NAME_COLUMN
 from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 
@@ -37,6 +33,7 @@ class GlobalConfig:
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
     quasar_use_dvalid: bool = False
+    skip_for_perf: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
     @property
@@ -121,6 +118,9 @@ class FuserConfig(TestConfig):
 
         from .kernel_generator import FUSED_TESTS_DIR
 
+        if self.global_config.skip_for_perf:
+            pytest.skip(f"'{self.global_config.test_name}' opts out of perf runs")
+
         self.global_config.profiler_enabled = True
         self.profiler_build = ProfilerBuild.Yes
 
@@ -138,6 +138,7 @@ class FuserConfig(TestConfig):
         for run_type in run_types:
             runs = []
             self.global_config.perf_run_type = run_type
+            self.global_config.sentinel = FuserSentinel()
 
             self.test_name = (
                 FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
@@ -186,7 +187,7 @@ class FuserConfig(TestConfig):
             perf_report.append(results)
             logger.info("Perf results:\n{}", results)
 
-            csv_prefix = f"{self.global_config.test_name}_fused_test"
+            csv_prefix = f"{self.global_config.test_name.replace('/', '_')}_fused_test"
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.csv")
             perf_report.post_process()
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.post.csv")

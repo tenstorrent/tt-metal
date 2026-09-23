@@ -10,6 +10,10 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <utility>
 
+namespace tt::tt_fabric {
+class ControlPlane;
+}
+
 namespace tt::tt_metal::distributed {
 
 // Multi-Dimensional coordinate struct used to access individual cores in a MeshDevice.
@@ -60,6 +64,9 @@ struct SocketMemoryConfig {
     // TODO: Should data cores be on a different sub device?
     std::optional<SubDeviceId> sender_sub_device = std::nullopt;
     std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
+    // TT_METAL_ALLOCATOR_MODE_HYBRID=1 must be set to enable per-core allocation on socket data buffer.
+    // so data buffers are allocated only on the receiver connection cores instead of every worker core.
+    bool per_core_allocation = false;
 
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
     SocketMemoryConfig() = default;
@@ -67,16 +74,19 @@ struct SocketMemoryConfig {
         BufferType socket_storage_type,
         uint32_t fifo_size,
         std::optional<SubDeviceId> sender_sub_device = std::nullopt,
-        std::optional<SubDeviceId> receiver_sub_device = std::nullopt) :
+        std::optional<SubDeviceId> receiver_sub_device = std::nullopt,
+        bool per_core_allocation = false) :
         socket_storage_type(socket_storage_type),
         fifo_size(fifo_size),
         sender_sub_device(sender_sub_device),
-        receiver_sub_device(receiver_sub_device) {}
+        receiver_sub_device(receiver_sub_device),
+        per_core_allocation(per_core_allocation) {}
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("socket_storage_type", "fifo_size", "sender_sub_device", "receiver_sub_device");
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "socket_storage_type", "fifo_size", "sender_sub_device", "receiver_sub_device", "per_core_allocation");
     auto attribute_values() const {
-        return std::forward_as_tuple(socket_storage_type, fifo_size, sender_sub_device, receiver_sub_device);
+        return std::forward_as_tuple(
+            socket_storage_type, fifo_size, sender_sub_device, receiver_sub_device, per_core_allocation);
     }
 };
 
@@ -146,6 +156,11 @@ enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 // through the socket_config object.
 class MeshSocket {
 public:
+    // A rank-scoped socket is point-to-point between two ranks, so this returns early on every
+    // other rank (a "null socket") and allocates nothing, including on ranks co-owning the
+    // endpoint's mesh. Such a socket must therefore be fully per-core (see
+    // socket_is_fully_per_core): its buffers then occupy L1 only on the two endpoint cores and a
+    // co-owner has nothing to reserve. One needing lockstep buffers is rejected instead.
     MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config);
     // Sockets can only be created in sender/receiver pairs.
     static std::pair<MeshSocket, MeshSocket> create_socket_pair(
@@ -156,6 +171,10 @@ public:
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.
     std::shared_ptr<MeshBuffer> get_config_buffer() const;
+    // The L1 address of the config buffer, as handed to device kernels and to the peer descriptor.
+    // Not the same as get_config_buffer()->address(): a per-core buffer holds its address on each
+    // device's Buffer and leaves the mesh-level scalar at 0, so that would report 0.
+    DeviceAddr get_config_buffer_address() const;
     // Access the underlying configuration of the instantiated socket (connectivity of senders/receivers and the socket
     // memory config).
     const SocketConfig& get_config() const;
@@ -184,8 +203,8 @@ private:
         config_buffer_(std::move(config_buffer)),
         config_(config),
         socket_endpoint_type_(socket_endpoint_type) {}
-    void process_host_ranks();
-    void process_mesh_ids();
+    void process_host_ranks(const tt::tt_fabric::ControlPlane& control_plane);
+    void process_mesh_ids(const tt::tt_fabric::ControlPlane& control_plane);
     static SocketConfig populate_mesh_ids(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,

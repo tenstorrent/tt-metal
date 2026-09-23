@@ -16,9 +16,11 @@
 #include "api/compute/div_int32_sfpu.h"
 #include "api/compute/div_int32_floor.h"
 #include "api/compute/binary_remainder.h"
+#include "api/compute/binary_fmod.h"
 #include "api/compute/quantization.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
+#include "api/compute/nextafter.h"
 #include "api/compute/binary_comp.h"
 #include "api/compute/isclose.h"
 #include "eltwise_utils_common.hpp"
@@ -45,23 +47,30 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
+    // Startup and preprocessing preserve the LHS-format SrcA invariant.
+    copy_init(cb_post_lhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
-    copy_tile_to_dst_init_short_with_dt(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+    reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+    copy_init(cb_post_rhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
-#if ISCLOSE_OP
+#ifdef ISCLOSE_OP
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#elif SCALAR_IS_LHS
+        // Both operands are already loaded in DST, so the swap is purely a matter of
+        // which slot the LLK reads as the left operand -- the scalar tile at i*2+1.
+        BINARY_SFPU_OP(i * 2 + 1, i * 2, i * 2);
 #else
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+    reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
     tile_regs_commit();
 
     tile_regs_wait();
@@ -88,12 +97,16 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
+    static_assert(
+        cb_post_lhs_id == BINARY_PHYSICAL_LHS_FORMAT_CB,
+        "binary_ng: SFPU SrcA startup operand disagrees with the preprocessing restore reference");
 
     CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
 
-    unary_op_init_common(cb_post_lhs_id, cb_out_id);
+    compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
+    copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

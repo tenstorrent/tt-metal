@@ -35,16 +35,6 @@ struct PagedFillCacheDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    // Cache-hit re-derivation: patches the cached program's runtime args in place (no descriptor
-    // rebuild). Re-applies every buffer address plus the args derived from what compute_program_hash
-    // excludes — batch_idx_fallback and noop — which would otherwise freeze at the cache-miss value.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

@@ -26,11 +26,11 @@
 //                             -> the process SIGSEGVs (crashes the binary rather than
 //                             failing gracefully; the deterministic guard is the unit test).
 //
-// The device is opened with the single-MMIO-device CreateDevice() API rather than a mesh
-// fixture: compilation only needs the device for build metadata (arch/build_id), and this
-// keeps the test to one local device open/close.
+// The device is opened with UnitMeshAnyDispatchFixture so the test uses a single local
+// unit mesh in both fast and slow dispatch. Compilation only needs the device for build
+// metadata (arch/build_id).
 
-#include <gtest/gtest.h>
+#include "common/device_fixture.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -44,6 +44,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "jit_build/build.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal {
@@ -86,47 +87,30 @@ void add_tile_cbs(Program& program, const CoreRange& cores) {
 // "sibling" kernels are served instantly and are never in flight when the bad step throws,
 // so the use-after-free never triggers. Same pattern as ClearKernelCache in
 // test_compile_program.cpp.
-void clear_kernel_cache(IDevice* dev) {
-    const std::string kernel_root =
-        BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path();
+void clear_kernel_cache(distributed::MeshDevice& mesh_device) {
+    const std::string kernel_root = BuildEnvManager::get_instance()
+                                        .get_device_build_env(mesh_device.build_id())
+                                        .build_env.get_out_kernel_root_path();
     std::error_code ec;
     std::filesystem::remove_all(kernel_root, ec);
     jit_build_cache_clear();
 }
 
-// Closes the device on scope exit even if an assertion or exception unwinds the test, so a
-// failure here does not leak an open device into sibling tests in the same binary.
-struct DeviceCloser {
-    IDevice* dev;
-    ~DeviceCloser() {
-        if (dev != nullptr) {
-            CloseDevice(dev);
-        }
-    }
-};
-
 }  // namespace
 
-TEST(CompileFailureDrainTest, CompileProgramWithFailingKernelThrowsCleanly) {
-    if (GetNumAvailableDevices() == 0) {
-        GTEST_SKIP() << "requires a device";
-    }
-
-    IDevice* dev = CreateDevice(0);
-    DeviceCloser closer{dev};
-
+TEST_F(UnitMeshAnyDispatchFixture, CompileProgramWithFailingKernelThrowsCleanly) {
     // Sanity: prove the "good" compute kernel actually compiles on this device/arch, so the
     // throw below is attributable to the deliberately-broken kernel and not the valid ones.
     {
         Program good = CreateProgram();
         add_tile_cbs(good, CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
         CreateKernel(good, kGoodComputeKernel, CoreCoord(0, 0), ComputeConfig{.compile_args = {1u, 0u}});
-        EXPECT_NO_THROW(detail::CompileProgram(dev, good));
+        EXPECT_NO_THROW(good.impl().compile(&this->device()));
     }
 
     // Force every repro kernel to compile from scratch (see clear_kernel_cache) so the valid
     // kernels are genuinely in flight when the bad kernel's build step throws.
-    clear_kernel_cache(dev);
+    clear_kernel_cache(this->device());
 
     // Repro program: a grid of valid compute kernels (unique compile args -> each misses the
     // JIT cache and really compiles, staying in flight) plus one uncompilable data-movement
@@ -135,7 +119,7 @@ TEST(CompileFailureDrainTest, CompileProgramWithFailingKernelThrowsCleanly) {
 
     // A small grid keeps several compute kernels (3 TRISC build steps each) genuinely in
     // flight when the bad kernel's step throws, without inflating CI compile time.
-    CoreCoord grid = dev->compute_with_storage_grid_size();
+    CoreCoord grid = this->device().compute_with_storage_grid_size();
     const uint32_t gx = std::min<uint32_t>(grid.x, 2);
     const uint32_t gy = std::min<uint32_t>(grid.y, 2);
     CoreRange all_cores(CoreCoord(0, 0), CoreCoord(gx - 1, gy - 1));
@@ -160,7 +144,7 @@ TEST(CompileFailureDrainTest, CompileProgramWithFailingKernelThrowsCleanly) {
 
     // sync_build_steps drains all in-flight steps, then rethrows the compile failure
     // -> a clean exception. Without the drain: abandons in-flight steps -> UAF -> SIGSEGV.
-    EXPECT_THROW(detail::CompileProgram(dev, program), std::exception);
+    EXPECT_THROW(program.impl().compile(&this->device()), std::exception);
 
     std::error_code ec;
     std::filesystem::remove_all(regression_tmp_dir(), ec);

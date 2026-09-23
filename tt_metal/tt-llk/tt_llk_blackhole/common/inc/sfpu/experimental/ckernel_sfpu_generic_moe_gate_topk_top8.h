@@ -4,10 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
+
 // Top-8 implementation details. Include through
 // ckernel_sfpu_generic_moe_gate_topk.h so shared helpers are defined first.
-
-#include <cstdint>
 
 namespace ckernel
 {
@@ -149,38 +149,28 @@ inline void _generic_moe_gate_top8_sort_half_face_()
     }
 }
 
-template <int num_selected_experts>
-inline void _generic_moe_gate_top8_zero_tail_()
+template <std::uint32_t load_offset, std::uint32_t store_offset, bool store_result = true>
+inline void _generic_moe_gate_top8_sort_quarter_face_()
 {
-    if constexpr (num_selected_experts > 4)
-    {
-        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile);
-        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile + 2);
-    }
-    else if (num_selected_experts <= 4)
-    {
-        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-    }
-    if constexpr (num_selected_experts != 4 && num_selected_experts != 8)
-    {
-        TTI_SFPTRANSP(0, 0, 0, 0);
+    // Four physical rows contain eight values per SFPU instance: four from
+    // even columns and four from odd columns. Fill the unused half of the
+    // existing 16-to-8 network with negative infinity.
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + load_offset + 0);
+    TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + load_offset + 2);
+    TTI_SFPLOADI(p_sfpu::LREG3, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
 
-        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-        if constexpr (num_selected_experts != 7 && num_selected_experts != 3)
-        {
-            TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-            if constexpr (num_selected_experts != 6 && num_selected_experts != 2)
-            {
-                TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
-            }
-        }
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_indices_tile + load_offset + 0);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_indices_tile + load_offset + 2);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_scores_tile + load_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_scores_tile + load_offset + 2);
 
-        TTI_SFPTRANSP(0, 0, 0, 0);
-    }
-    if constexpr (num_selected_experts > 4)
+    _generic_moe_gate_top8_local_sort_16x8_to_8x8_();
+    if constexpr (store_result)
     {
-        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile);
-        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile + 2);
+        _generic_moe_gate_store_8_rows_even_odd_split_<store_offset>();
     }
 }
 
@@ -204,7 +194,7 @@ inline void _generic_moe_gate_top8_accumulate_face_()
 }
 
 template <int num_total_experts>
-inline void _generic_moe_gate_top8_sort_to_instance_()
+inline void _generic_moe_gate_top8_sort_to_instance_128_aligned_()
 {
     static_assert(num_total_experts >= 128 && num_total_experts <= 1024);
     static_assert(num_total_experts % 128 == 0);
@@ -231,8 +221,33 @@ inline void _generic_moe_gate_top8_sort_to_instance_()
     }
 }
 
-template <bool normalize, int num_selected_experts, int num_total_experts, bool zero_tail, bool full_sort>
-inline void _generic_moe_gate_top8_(std::uint32_t eps, std::uint32_t scale)
+template <int num_total_experts>
+inline void _generic_moe_gate_top8_sort_to_instance_()
+{
+    static_assert(num_total_experts >= 64 && num_total_experts <= 1024);
+    static_assert(num_total_experts % 64 == 0);
+
+    if constexpr (num_total_experts % 128 == 0)
+    {
+        _generic_moe_gate_top8_sort_to_instance_128_aligned_<num_total_experts>();
+    }
+    else if constexpr (num_total_experts == 64)
+    {
+        _generic_moe_gate_top8_sort_quarter_face_<0, 0, false>();
+    }
+    else
+    {
+        _generic_moe_gate_top8_sort_to_instance_128_aligned_<num_total_experts - 64>();
+        _generic_moe_gate_store_8_rows_even_odd_split_<0>();
+
+        _generic_moe_gate_top8_sort_quarter_face_<(num_total_experts - 64) / 16, 0, false>();
+        _generic_moe_gate_top8_load_result_into_upper_lregs_<0>();
+        _generic_moe_gate_top8_rebuild_and_merge_16x8_to_8x8_();
+    }
+}
+
+template <bool normalize, int num_selected_experts, int num_total_experts, bool zero_tail, bool full_sort, bool do_extra_scale = false>
+inline void _generic_moe_gate_top8_(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0)
 {
     _generic_moe_gate_top8_sort_to_instance_<num_total_experts>();
     _generic_moe_gate_top8_merge_instances_();
@@ -244,14 +259,14 @@ inline void _generic_moe_gate_top8_(std::uint32_t eps, std::uint32_t scale)
 
     if constexpr (zero_tail || (normalize && num_selected_experts < 8))
     {
-        _generic_moe_gate_top8_zero_tail_<num_selected_experts>();
+        _generic_moe_gate_zero_tail_lregs_<num_selected_experts>();
     }
 
     _generic_moe_gate_store_8_rows_even_odd_split_<0>();
 
     if constexpr (normalize)
     {
-        _generic_moe_gate_normalize_<8, generic_moe_gate_scores_tile>(eps, scale);
+        _generic_moe_gate_normalize_<8, generic_moe_gate_scores_tile, do_extra_scale>(eps, scale, extra_scale);
     }
 
     if constexpr (zero_tail)

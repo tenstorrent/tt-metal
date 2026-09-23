@@ -1,0 +1,77 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// CrossNodeDFB sender kernel
+//
+// Compile-time parameters (via kernel compile_args):
+//   [0] remote_dfb_id      - runtime-assigned slot (CreateCrossNodeDFB remote_dfb_id on host)
+//   [1] entry_size         - bytes per entry (must be L1_ALIGNMENT multiple)
+//   [2] num_entries        - number of entries to push per receiver
+//   [3] write_primitive    - 0=write_broadcast per entry,
+//                            4=decoupled: reserve(n) + write_broadcast(n) + flush + push_back(n)
+//   [4] data_pattern       - 0=multicast counter layout (see cross_node_dfb_test_utils.hpp)
+//   [5] do_barrier         - 1 to call barrier() after pushing all entries
+//
+// Runtime args:
+//   [0] l1_staging_addr    - sender-local L1 scratch region pre-populated by the host
+
+#include "api/dataflow/cross_node_dfb.h"
+#include "api/dataflow/noc.h"
+
+void kernel_main() {
+    constexpr uint8_t remote_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t entry_size = get_compile_time_arg_val(1);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(2);
+    constexpr uint32_t write_primitive = get_compile_time_arg_val(3);
+    constexpr uint32_t data_pattern = get_compile_time_arg_val(4);
+    constexpr uint32_t do_barrier = get_compile_time_arg_val(5);
+
+    // Must match SenderDataPattern in cross_node_dfb_test_utils.hpp.
+    constexpr uint32_t pattern_multicast_counter = 0;
+
+    const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    const CoreLocalMem<uint8_t> staging(staging_base);
+
+    Noc noc;
+    // Spot-check: log first byte of each entry (host pre-populated staging)
+    DPRINT("l1_staging_addr: 0x{:x}\n", staging_base);
+
+    experimental::CrossNodeDFB gdfb(remote_dfb_id);
+
+    DPRINT("Running write_primitive: {}\n", write_primitive);
+
+    static_assert(
+        write_primitive != 0 || data_pattern == pattern_multicast_counter,
+        "write_broadcast expects multicast counter staging");
+    static_assert(
+        write_primitive != 4 || data_pattern == pattern_multicast_counter,
+        "decoupled write_broadcast expects multicast counter staging");
+    static_assert(write_primitive == 0 || write_primitive == 4, "Unsupported CrossNodeDFB write primitive");
+
+    if constexpr (write_primitive == 0) {
+        for (uint32_t i = 0; i < num_entries; ++i) {
+            DPRINT("Reserving back for broadcast\n");
+            gdfb.reserve_back(1);
+            DPRINT("Done reserve back for broadcast to {}\n", staging_base + i * entry_size);
+            gdfb.write_broadcast(noc, staging, 1, {.offset_bytes = i * entry_size});
+            DPRINT("Done write broadcast\n");
+            gdfb.flush_writes(noc);
+            DPRINT("Done posted write flush\n");
+            gdfb.push_back(1, noc);
+            DPRINT("Done push back\n");
+        }
+    } else if constexpr (write_primitive == 4) {
+        // Layered contract: all payload writes land before any pages_sent credit.
+        // write_broadcast does not advance the write position, so one call covers the slot;
+        // a single push_back(n) then publishes credit for the whole batch.
+        gdfb.reserve_back(num_entries);
+        gdfb.write_broadcast(noc, staging, num_entries);
+        gdfb.flush_writes(noc);
+        gdfb.push_back(num_entries, noc);
+    }
+
+    if constexpr (do_barrier) {
+        gdfb.barrier();
+    }
+}

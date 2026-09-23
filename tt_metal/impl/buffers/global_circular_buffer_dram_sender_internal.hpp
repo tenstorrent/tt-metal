@@ -37,9 +37,10 @@ DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
 // Layout: tt_metal/impl/buffers/dram_sender_state_block.hpp. Zero for worker-sender GCBs.
 DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
 
-// Physical worker NOC XY for each sender's receivers. The DRISC kernel uses these as
-// runtime args. Empty for worker-sender GCBs.
-const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
+// Each sender's receivers as logical coords, row-wise (the order the DRISC kernel's slab
+// indices follow). Logical rather than physical because the physical worker coord depends on
+// which device of the mesh is being addressed. Empty for worker-sender GCBs.
+const std::vector<std::vector<CoreCoord>>& receiver_logical_cores_per_sender(const GlobalCircularBuffer& gcb);
 
 // Per-sender bank-local slab indices: entry [s][r] is the bank-local slab index
 // (recv_index_base + r) that sender s's local receiver r reads, in

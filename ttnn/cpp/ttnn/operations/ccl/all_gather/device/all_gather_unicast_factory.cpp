@@ -60,7 +60,7 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     auto data_valid_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
@@ -166,7 +166,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // workers_per_dir in {3,4,5} is a reproducible NOC/core-placement pessimum -- worse than
         // 2 and than >=6 -- so the ramp jumps 2->8->12 and must never emit them.
         const uint32_t txn_bytes = std::min(input_page_size, output_page_size);  // NOC transaction size
-        const uint64_t total_output_bytes = output_tensor.buffer()->num_pages() * output_page_size;
+        const uint64_t total_output_bytes =
+            static_cast<uint64_t>(output_tensor.buffer()->num_pages()) * output_page_size;
         const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
         constexpr uint32_t bw_bound_txn_bytes = 1536;              // NOC txn size needed to benefit from >2 workers
         constexpr uint64_t bw_bound_link_bytes = 4000000ULL;       // bytes/link where fabric link starts saturating

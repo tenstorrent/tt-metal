@@ -35,6 +35,15 @@ wrap edge only at size three or greater. Size-two links retain ordinary mesh
 directionality and boundary ports, while deadlock avoidance remains based on
 the declared torus configuration.
 
+When a torus axis comes from the fabric config rather than the MGD (the config
+overrides `LINE` dim_types with `FABRIC_2D_TORUS_X/Y/XY`), the edge ports of
+that axis are reserved for the torus and excluded from inter-mesh links — just
+as a genuine torus consumes them physically with wrap cables. Deadlock
+avoidance is derived per direction from the fabric config, so an inter-mesh
+link on a config-torused direction could face a peer that labels the axis
+differently and hang (issue #54650). An axis the MGD itself declares as `RING`
+keeps its boundary ports.
+
 
 ## Minimal workflow
 > This is currently TBD

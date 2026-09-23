@@ -13,7 +13,6 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 
@@ -44,16 +43,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-
-    if constexpr (type == DataCopyType::A2D)
-    {
-        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
-    }
-    else
-    {
-        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
-    }
-    llk::san::operation_check<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
 
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
@@ -539,7 +528,6 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
  * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
- * @param skip_bh_tilize_workaround: Skip the Blackhole tilize workaround (set when unpacking 8-bit datums).
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
  * (untilize) which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
@@ -550,40 +538,21 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en             = false,
     PackMode pack_mode             = PackMode::Default>
-inline void _llk_math_eltwise_unary_datacopy_init_(
-    const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255, const bool skip_bh_tilize_workaround = false)
+inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
     constexpr bool tilize = (pack_mode == PackMode::Tilize);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    if constexpr (type == DataCopyType::A2D)
-    {
-        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
-    }
-    else
-    {
-        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
-    }
-    llk::san::operation_init<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
-
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
     {
-        const std::uint32_t num_rows = (tilize && !skip_bh_tilize_workaround) ? 64 : 16;
-
-        if (skip_bh_tilize_workaround)
-        {
-            eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, false /* tilize */, is_int_fpu_en>(
-                p_mova2d::MOV_8_ROWS, 16, num_faces, dst_format);
-        }
-        else
-        {
-            eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
-                p_mova2d::MOV_8_ROWS, num_rows, num_faces, dst_format);
-        }
+        // Tilize: math MOP iterates over all faces of the tile (num_faces * 16 rows).
+        // Non-tilize: single 16-row face pair (MOV_8_ROWS runs twice under the hood).
+        eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
+            p_mova2d::MOV_8_ROWS, tilize ? (num_faces * 16) : 16, num_faces, dst_format);
     }
     else if constexpr (type == DataCopyType::B2D)
     {

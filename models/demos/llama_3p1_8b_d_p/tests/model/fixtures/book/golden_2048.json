@@ -1,0 +1,46 @@
+{
+  "context_length": 2048,
+  "final_position": 2047,
+  "input_ids_sha256": "d7f51bcc61b660061015d64c9f9fe447ee2ef1deea11e503a3445afb34b53677",
+  "reference_top1_id": 1077,
+  "reference_top5_ids": [
+    1077,
+    430,
+    813,
+    11,
+    872
+  ],
+  "reference_top5_logits": [
+    22.795574188232422,
+    22.760948181152344,
+    16.808555603027344,
+    16.744426727294922,
+    15.009101867675781
+  ],
+  "reference_top5_tokens": [
+    " her",
+    " that",
+    " his",
+    ",",
+    " their"
+  ],
+  "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+  "num_layers": 32,
+  "vocab_size": 128256,
+  "reference": "transformers.AutoModelForCausalLM.model + final-row lm_head",
+  "dtype": "float32",
+  "attention_implementation": "sdpa",
+  "torch_version": "2.11.0+cpu",
+  "transformers_version": "5.12.1",
+  "checkpoint_files_sha256": {
+    "config.json": "29e4c210b0d6ac178b16b2a255a568bdb23b581e50ca1ef6a6d071dd85704e6e",
+    "tokenizer_config.json": "177c7b61e616fecb84c17ce0591acb92c6c4d60e9ac5ababfb940ff23bbcd424",
+    "tokenizer.json": "79e3e522635f3171300913bb421464a87de6222182a0570b9b2ccba2a964b2b4",
+    "special_tokens_map.json": "6f38c73729248f6c127296386e3cdde96e254636cc58b4169d3fd32328d9a8ec",
+    "model.safetensors.index.json": "146776fce3f6db1103aa6f249e65ee5544c5923ce6f971b092eee79aa6e5d37b",
+    "model-00001-of-00004.safetensors": "2b1879f356aed350030bb40eb45ad362c89d9891096f79a3ab323d3ba5607668",
+    "model-00002-of-00004.safetensors": "09d433f650646834a83c580877bd60c6d1f88f7755305c12576b5c7058f9af15",
+    "model-00003-of-00004.safetensors": "fc1cdddd6bfa91128d6e94ee73d0ce62bfcdb7af29e978ddcab30c66ae9ea7fa",
+    "model-00004-of-00004.safetensors": "92ecfe1a2414458b4821ac8c13cf8cb70aed66b5eea8dc5ad9eeb4ff309d6d7b"
+  }
+}

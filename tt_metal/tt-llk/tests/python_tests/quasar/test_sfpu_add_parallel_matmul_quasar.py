@@ -31,9 +31,10 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
-    generate_sfpu_format_dest_acc_combinations,
+    generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -69,13 +70,13 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 
 SFPU_ADD_FORMATS = input_output_formats(
     [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
     ]
-)
+    # The MX pair is on the input side: these operands reach the SFPU through UNP_S
+    # into SrcS, a decode port the unpack test (UnpA/UnpB) does not cover.
+) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 
 def _matmul_output_fits_dest(
@@ -92,9 +93,9 @@ def _matmul_output_fits_dest(
 
 def generate_parallel_matmul_add_combinations(formats_list):
     combinations = []
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
-        if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
-            continue
+    for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
+        formats_list
+    ):
         for dest_sync in (DestSync.Half, DestSync.Full):
             for implied_math_format in (
                 ImpliedMathFormat.No,
@@ -244,11 +245,6 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         math_format=pack_src_format,
         dest_acc=dest_acc,
     )
-    if formats.output_format.is_mx_format():
-        golden_matmul = quantize_mx_tensor_chunked(
-            golden_matmul.to(format_dict[pack_src_format]), formats.output_format
-        ).to(torch_format)
-
     generate_add_golden = get_golden_generator(BinarySFPUGolden)
     golden_add = generate_add_golden(
         MathOperation.SfpuElwadd,
@@ -314,7 +310,10 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     outcome = configuration.run()
 
     res_add = torch.tensor(outcome.result, dtype=torch_format)
-    res_matmul = torch.tensor(stimuli.collect_buffer_c_results(), dtype=torch_format)
+    res_matmul = torch.tensor(
+        stimuli.collect_buffer_c_results(TestConfig.TENSIX_LOCATION),
+        dtype=torch_format,
+    )
 
     assert len(res_add) == len(golden_add), "add"
     assert len(res_matmul) == len(golden_matmul), "matmul"

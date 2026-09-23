@@ -11,8 +11,6 @@
 #include "move_overlap_program_factory.hpp"
 #include "move_sharded_program_factory.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/distributed/types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -44,15 +42,6 @@ struct MoveDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
-
-    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses)
-    // from the same create_descriptor the miss path uses. See the .cpp.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::prim

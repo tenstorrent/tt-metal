@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -38,6 +39,28 @@ tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+// Is every hop along this mesh axis wired in same dir? Ex: a 1x8 view of a 2x4 board makes axis-1 turn corners.
+bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis);
+
+// Is the link that would close this mesh axis into a ring wired? Always false for an axis of 2 or
+// fewer devices, which closes on the link it already uses.
+bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis);
+
+// Where to allocate a GlobalSemaphore whose value is CARRIED across invocations (a barrier or arrival
+// counter, written once and thereafter only incremented). A fabric mux carves raw L1 upward from the
+// unreserved base, outside the allocator, and one clobber of a carried counter is unrecoverable
+// (#56769). L1_SMALL sits above the mux's ceiling, so prefer it; with no L1_SMALL region configured
+// there is nowhere safer than general L1, and an op that cannot tolerate that is expected to say so
+// itself (see selective_reduce_combine, whose mux is by far the greediest).
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// Floor of the L1_SMALL region, i.e. the highest address a fabric mux's raw-L1 map may reach. Derived
+// from immutable limits: worker L1 is fixed and the L1_SMALL bank is never shrunk, whereas the L1 bank
+// size IS reduced by a sub-device manager's bottom-up reservation
+// (sub_device_manager_tracker.cpp), which would drag a floor computed as base + L1 bank size below the
+// real one and cost a V1 mux buffers -- or make a V2 mux reject a map that physically fits.
+size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 // Resolve the topology (Ring vs Linear) for a single mesh axis
 tt::tt_fabric::Topology get_axis_topology(
@@ -96,6 +119,26 @@ enum class CoreAllocationStrategy {
     ROW_MAJOR,
     COL_MAJOR,
 };
+
+struct WorkerCoreSelection {
+    CoreRangeSet core_range_set;
+    std::vector<CoreCoord> cores;
+    // Selected cores that core_grid_offset shifted off the device's worker grid. Kernels cannot be placed on these.
+    std::vector<CoreCoord> unplaceable_cores;
+
+    bool all_placeable() const { return unplaceable_cores.empty(); }
+};
+
+// Selects worker cores without asserting on the result. Callers that can adapt to a selection which does not fit at
+// core_grid_offset use this; everyone else should use choose_worker_cores(), which rejects such a selection.
+WorkerCoreSelection try_choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,

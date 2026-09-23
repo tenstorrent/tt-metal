@@ -6,10 +6,17 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <internal/cluster_noc_helpers.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <random>
+#include <stdexcept>
+#include <string>
+#include <thread>
 #include "gmock/gmock.h"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -19,12 +26,15 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
+#include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
+#include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include <umd/device/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -226,7 +236,7 @@ void test_hd_socket_loopback(
                 static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
-    uint32_t num_txns = data_size / page_size;
+    const uint32_t num_txns = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
 
@@ -309,32 +319,81 @@ void test_hd_socket_multithreaded_loopback(
     input_socket.set_page_size(page_size);
     output_socket.set_page_size(page_size);
 
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-    uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const uint32_t page_size_words = page_size / sizeof(uint32_t);
+    const uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const uint32_t total_pages = num_iterations * num_txns;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
-    // Socket Read/Write done over different threads.
-    std::thread write_thread([&]() {
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (uint32_t j = 0; j < num_txns; j++) {
-                input_socket.write(src_vec.data() + (i * data_size_words) + (j * page_size_words), 1);
+    auto retry_until_deadline =
+        [deadline](auto&& operation, const char* timeout_message, uint32_t completed_pages, uint32_t total_pages) {
+            while (!operation()) {
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    throw std::runtime_error(
+                        std::string(timeout_message) + " after " + std::to_string(completed_pages) + "/" +
+                        std::to_string(total_pages) + " pages completed");
+                }
+                std::this_thread::yield();
             }
+        };
+
+    std::exception_ptr write_error;
+    std::exception_ptr read_error;
+
+    // Socket read/write are done on different threads, with each socket confined to one host thread.
+    std::thread write_thread([&]() {
+        try {
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                for (uint32_t j = 0; j < num_txns; j++) {
+                    retry_until_deadline(
+                        [&]() {
+                            return experimental::detail::try_write(
+                                input_socket,
+                                src_vec.data() + (i * data_size_words) + (j * page_size_words),
+                                /*num_pages=*/1);
+                        },
+                        "Timed out waiting for space in the H2D socket",
+                        i * num_txns + j,
+                        total_pages);
+                }
+            }
+        } catch (...) {
+            write_error = std::current_exception();
         }
     });
 
     std::thread read_thread([&]() {
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (uint32_t j = 0; j < num_txns; j++) {
-                output_socket.read(dst_vec.data() + (i * data_size_words) + (j * page_size_words), 1);
+        try {
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                for (uint32_t j = 0; j < num_txns; j++) {
+                    retry_until_deadline(
+                        [&]() {
+                            return experimental::detail::try_read(
+                                output_socket,
+                                dst_vec.data() + (i * data_size_words) + (j * page_size_words),
+                                /*num_pages=*/1);
+                        },
+                        "Timed out waiting for data in the D2H socket",
+                        i * num_txns + j,
+                        total_pages);
+                }
             }
+        } catch (...) {
+            read_error = std::current_exception();
         }
     });
-    // Barrier with a timeout in the main thread ensure that the read/write threads are not hung.
-    input_socket.barrier(10000);
-    output_socket.barrier(10000);
 
     write_thread.join();
     read_thread.join();
 
+    if (write_error) {
+        std::rethrow_exception(write_error);
+    }
+    if (read_error) {
+        std::rethrow_exception(read_error);
+    }
+
+    input_socket.barrier(10000);
+    output_socket.barrier(10000);
     EXPECT_EQ(src_vec, dst_vec);
 }
 
@@ -454,6 +513,144 @@ TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
                 mesh_device_, 16512, 1088, 156672, h2d_mode, 100, MeshCoreCoord(socket_coord, CoreCoord(0, 1)));
         }
     }
+}
+
+// L2CPU socket support: the DRAM bank table, the L2CPU static-TLB registration, and
+// the L2CPU constructors' argument validation. These do not complete construction of
+// an L2CPU socket, which would write to LIM; a partial-line write to LIM whose ECC has
+// not been initialised can fault, and initialising it requires running code on the
+// L2CPU itself. A single device is sufficient throughout.
+using L2CpuSocketFixture = MeshDevice1x1Fixture;
+
+namespace {
+
+// TRANSLATED NOC coords of the unharvested L2CPU tiles on this device, or
+// empty when the architecture has none.
+std::vector<tt::umd::CoreCoord> get_l2cpu_cores(ChipId device_id) {
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    return soc_desc.get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
+}
+
+bool is_blackhole() { return MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE; }
+
+}  // namespace
+
+// Assert the bank table against the same allocator and soc-descriptor sources that
+// RiscFirmwareInitializer programs BRISC from.
+TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
+    auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
+    const ChipId device_id = device->id();
+
+    const auto table = internal::get_dram_bank_table(device_id);
+
+    const auto& allocator = *device->allocator();
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const uint32_t num_banks = allocator.get_num_banks(BufferType::DRAM);
+
+    ASSERT_EQ(table.size(), num_banks) << "one entry per logical DRAM bank";
+
+    for (uint32_t bank_id = 0; bank_id < num_banks; ++bank_id) {
+        const auto& entry = table[bank_id];
+        EXPECT_EQ(entry.bank_id, bank_id) << "table must be indexed by bank_id";
+        EXPECT_EQ(
+            entry.base_addr,
+            static_cast<uint64_t>(static_cast<int64_t>(allocator.get_bank_offset(BufferType::DRAM, bank_id))))
+            << "bank " << bank_id << " base_addr must equal the allocator's bank offset";
+        EXPECT_EQ(entry.bank_size, soc_desc.dram_view_size) << "bank " << bank_id;
+
+        // On virtualized-DRAM architectures the table reports the TRANSLATED coord
+        // verbatim, so it must equal the soc descriptor's DRAM view exactly. Other
+        // architectures route through hal.noc_coordinate().
+        const CoreCoord preferred =
+            soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/0);
+        if (is_blackhole()) {
+            EXPECT_EQ(entry.noc_x, static_cast<uint32_t>(preferred.x))
+                << "bank " << bank_id << " noc_x: table says " << entry.noc_x << ", DRAM view is at " << preferred.x;
+            EXPECT_EQ(entry.noc_y, static_cast<uint32_t>(preferred.y))
+                << "bank " << bank_id << " noc_y: table says " << entry.noc_y << ", DRAM view is at " << preferred.y;
+        }
+    }
+}
+
+// H2D/D2H socket setup maps an L2CPU tile with a window anchored at the LIM base. Every tile must
+// be mappable that way, and the window must cover the LIM aperture the sockets address through it.
+TEST_F(L2CpuSocketFixture, L2CpuIoWindowsAnchoredAtLimBase) {
+    if (!is_blackhole()) {
+        GTEST_SKIP() << "L2CPU tiles only exist on Blackhole";
+    }
+    auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
+    const ChipId device_id = device->id();
+
+    const auto l2cpu_cores = get_l2cpu_cores(device_id);
+    if (l2cpu_cores.empty()) {
+        GTEST_SKIP() << "No unharvested L2CPU tiles on this device";
+    }
+
+    // Spelled out here rather than taken from ll_api so the test checks the aperture the sockets
+    // are built around, not just that it agrees with itself.
+    constexpr uint64_t kL2CpuLimBase = 0x08000000ULL;
+    constexpr uint64_t kL2CpuLimSize = 2ULL * 1024 * 1024;
+    auto& cluster = MetalContext::instance().get_cluster();
+
+    for (const auto& core : l2cpu_cores) {
+        std::unique_ptr<tt::umd::IoWindow> window =
+            cluster.get_driver()->create_io_window(device_id, core, kL2CpuLimBase, {.size = kL2CpuLimSize});
+        ASSERT_NE(window, nullptr) << "L2CPU (" << core.x << ", " << core.y
+                                   << ") cannot be mapped; H2D/D2H socket setup would throw";
+        EXPECT_EQ(window->get_target_config().addr, kL2CpuLimBase)
+            << "L2CPU (" << core.x << ", " << core.y << ") window must be anchored at the LIM base";
+        // The config buffer and (in HOST_PUSH) the data FIFO are addressed through this window, so
+        // the whole LIM aperture has to be reachable from the anchor.
+        EXPECT_GE(window->get_size(), kL2CpuLimSize);
+    }
+}
+
+// The L2CPU constructors take caller-reserved LIM addresses, so argument validation is
+// the only guard against a mis-placed socket. All of these throw before any pinned
+// memory is allocated or any LIM byte is written.
+TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
+    if (!is_blackhole()) {
+        GTEST_SKIP() << "L2CPU sockets are Blackhole-only";
+    }
+    const auto l2cpu_cores = get_l2cpu_cores(mesh_device_->get_device(MeshCoordinate(0, 0))->id());
+    if (l2cpu_cores.empty()) {
+        GTEST_SKIP() << "No unharvested L2CPU tiles on this device";
+    }
+
+    const MeshCoreCoord l2cpu(MeshCoordinate(0, 0), CoreCoord(l2cpu_cores.front().x, l2cpu_cores.front().y));
+    const uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    constexpr uint32_t kLimBase = 0x08000000;
+    constexpr uint32_t kFifoSize = 4096;
+    const uint32_t config_addr = kLimBase;
+    const uint32_t data_addr = kLimBase + 0x10000;
+
+    // Zero addresses are never valid -- 0 is not in LIM at all.
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, /*config_buffer_address=*/0, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data_fifo_address=*/0, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(D2HSocket(*mesh_device_, l2cpu, kFifoSize, /*config_buffer_address=*/0));
+
+    // Misaligned addresses would corrupt the wire structs.
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr + 1, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, data_addr + 1, H2DMode::HOST_PUSH));
+
+    // A non-PCIe-aligned or zero FIFO breaks the ring arithmetic.
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, /*fifo_size=*/0, config_addr, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, pcie_alignment + 1, config_addr, data_addr, H2DMode::HOST_PUSH));
+
+    // In HOST_PUSH the ring lives in LIM and is reached through the IoWindow,
+    // so a ring running past the window end must be rejected at construction.
+    EXPECT_ANY_THROW(H2DSocket(
+        *mesh_device_,
+        l2cpu,
+        /*fifo_size=*/0x200000,
+        /*config_buffer_address=*/kLimBase + 0x100000,
+        kLimBase + 0x180000,
+        H2DMode::HOST_PUSH));
+    // A ring below the LIM window entirely is also invalid in HOST_PUSH.
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data_fifo_address=*/0x1000, H2DMode::HOST_PUSH));
 }
 
 }  // namespace tt::tt_metal::distributed

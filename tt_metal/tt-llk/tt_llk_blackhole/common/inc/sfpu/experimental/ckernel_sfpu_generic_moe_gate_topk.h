@@ -27,6 +27,8 @@ static constexpr std::uint32_t generic_moe_gate_indices_tile    = 1 * generic_mo
 static constexpr std::uint32_t generic_moe_gate_bias_tile       = 2 * generic_moe_gate_dst_tile_offset;
 static constexpr std::uint32_t generic_moe_gate_interm_tile     = 3 * generic_moe_gate_dst_tile_offset;
 
+static constexpr std::uint16_t generic_moe_gate_neg_inf_bf16 = 0xFF80;
+
 // Load a full 16-row face. LREG0-3 hold biased scores; LREG4-7 pack
 // indices into LO16 and original scores into HI16.
 template <std::uint32_t offset>
@@ -95,6 +97,51 @@ inline void _generic_moe_gate_store_8_rows_even_odd_split_()
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_scores_tile + 4 + offset);
 }
 
+template <int num_selected_experts>
+inline void _generic_moe_gate_zero_tail_lregs_()
+{
+    static_assert(num_selected_experts >= 1 && num_selected_experts <= 8);
+
+    if constexpr (num_selected_experts > 4)
+    {
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile);
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile + 2);
+    }
+    else
+    {
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    }
+    if constexpr (num_selected_experts != 4 && num_selected_experts != 8)
+    {
+        TTI_SFPTRANSP(0, 0, 0, 0);
+
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+        if constexpr (num_selected_experts != 7 && num_selected_experts != 3)
+        {
+            TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+            if constexpr (num_selected_experts != 6 && num_selected_experts != 2)
+            {
+                TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+            }
+        }
+
+        TTI_SFPTRANSP(0, 0, 0, 0);
+    }
+    if constexpr (num_selected_experts > 4)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile);
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile + 2);
+    }
+}
+
+template <int num_selected_experts, std::uint32_t offset>
+inline void _generic_moe_gate_zero_tail_()
+{
+    _generic_moe_gate_load_8_rows_even_odd_split_<offset>();
+    _generic_moe_gate_zero_tail_lregs_<num_selected_experts>();
+    _generic_moe_gate_store_8_rows_even_odd_split_<offset>();
+}
+
 // Shared P1-P3 network: build a length-16 bitonic sequence in LREG0-3.
 inline void _generic_moe_gate_build_bitonic8_()
 {
@@ -135,8 +182,8 @@ inline void _generic_moe_gate_bitonic8_steps_3_to_1_()
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
-template <int num_rows, int scores_offset>
-inline void _generic_moe_gate_normalize_(std::uint32_t eps, std::uint32_t scale)
+template <int num_rows, int scores_offset, bool do_extra_scale = false>
+inline void _generic_moe_gate_normalize_(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0)
 {
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, scores_offset + 4);
@@ -159,11 +206,16 @@ inline void _generic_moe_gate_normalize_(std::uint32_t eps, std::uint32_t scale)
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
 
     TTI_SFPCONFIG(0, 0xF, 1);
-    sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vFloat eps_value          = Converter::as_float(eps);
-    l0                              = l0 + eps_value;
-    l0                              = sfpu_reciprocal<false>(l0);
-    sfpi::vFloat scale_value        = Converter::as_float(scale);
+    sfpi::vFloat l0          = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat eps_value   = Converter::as_float(eps);
+    l0                       = l0 + eps_value;
+    l0                       = sfpu_reciprocal<false>(l0);
+    sfpi::vFloat scale_value = Converter::as_float(scale);
+    if constexpr (do_extra_scale)
+    {
+        sfpi::vFloat es = Converter::as_float(extra_scale);
+        scale_value     = scale_value * es;
+    }
     l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
     TTI_SFPNOP;
@@ -189,9 +241,9 @@ inline void _generic_moe_gate_normalize_(std::uint32_t eps, std::uint32_t scale)
 template <int num_total_experts>
 inline void _topk_moe_generate_indices_()
 {
-    static_assert(num_total_experts >= 128 && num_total_experts <= 1024);
-    static_assert(num_total_experts % 128 == 0);
-    constexpr std::uint32_t num_blocks = num_total_experts / 128;
+    static_assert(num_total_experts >= 64 && num_total_experts <= 1024);
+    static_assert(num_total_experts % 64 == 0);
+    constexpr std::uint32_t num_full_blocks = num_total_experts / 128;
 
     TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
 
@@ -200,7 +252,7 @@ inline void _topk_moe_generate_indices_()
     TTI_SFPIADD(65, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
 
 #pragma GCC unroll 8
-    for (std::uint32_t block = 0; block < num_blocks; block++)
+    for (std::uint32_t block = 0; block < num_full_blocks; block++)
     {
         const std::uint32_t offset = block * 8;
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 0);
@@ -212,6 +264,76 @@ inline void _topk_moe_generate_indices_()
         TTI_SFPIADD(128, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(128, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(128, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    }
+
+    if constexpr (num_total_experts % 128 == 64)
+    {
+        constexpr std::uint32_t offset = num_full_blocks * 8;
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_7, generic_moe_gate_indices_tile + offset + 2);
+    }
+}
+
+template <std::uint32_t offset, std::uint32_t first_padding_row>
+inline void _generic_moe_gate_pad_partial_4_rows_()
+{
+    static_assert(first_padding_row >= 1 && first_padding_row <= 3);
+
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 0);
+    TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 2);
+    TTI_SFPLOADI(p_sfpu::LREG3, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+
+    // Turn the four physical rows into four LREGs, replace the trailing rows,
+    // then restore the normal row-within-LREG layout.
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    if constexpr (first_padding_row <= 1)
+    {
+        TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    }
+    if constexpr (first_padding_row <= 2)
+    {
+        TTI_SFPLOADI(p_sfpu::LREG2, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    }
+    TTI_SFPLOADI(p_sfpu::LREG3, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 2);
+}
+
+template <std::uint32_t offset>
+inline void _generic_moe_gate_pad_full_4_rows_()
+{
+    TTI_SFPLOADI(p_sfpu::LREG0, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 2);
+}
+
+template <int num_total_experts, int padded_num_total_experts>
+inline void _generic_moe_gate_pad_bias_tail_()
+{
+    static_assert(num_total_experts >= 16 && num_total_experts <= 1024);
+    static_assert(num_total_experts % 16 == 0);
+    static_assert(padded_num_total_experts >= num_total_experts && padded_num_total_experts <= 1024);
+    static_assert(padded_num_total_experts % 64 == 0);
+
+    if constexpr (num_total_experts < padded_num_total_experts)
+    {
+        constexpr std::uint32_t first_padding_row = num_total_experts / 16;
+        constexpr std::uint32_t aligned_row       = first_padding_row & ~0x3U;
+        constexpr std::uint32_t row_in_lreg       = first_padding_row & 0x3U;
+
+        if constexpr (row_in_lreg != 0)
+        {
+            _generic_moe_gate_pad_partial_4_rows_<aligned_row, row_in_lreg>();
+        }
+
+        constexpr std::uint32_t first_full_lreg_row = row_in_lreg == 0 ? aligned_row : aligned_row + 4;
+        if constexpr (first_full_lreg_row < padded_num_total_experts / 16)
+        {
+            _generic_moe_gate_pad_full_4_rows_<first_full_lreg_row>();
+        }
     }
 }
 
@@ -235,22 +357,38 @@ inline void _init_generic_moe_gate_topk_()
 // caller has already loaded DST[1] with its own mapping (e.g. bit-15-flagged SRAM slots) via
 // copy_tile(input_indices, 0, 1): the sort's LREG4-7 LO16 load then reads those values verbatim and the
 // paired sort carries them through to out_indices.
-template <bool normalize, int num_selected_experts, int num_total_experts, bool zero_tail, bool full_sort, bool generate_indices = true>
-inline void _generic_moe_gate_topk_(std::uint32_t eps, std::uint32_t scale)
+template <
+    bool normalize,
+    int num_selected_experts,
+    int num_total_experts,
+    bool zero_tail,
+    bool full_sort,
+    bool generate_indices = true,
+    bool do_extra_scale   = false>
+inline void _generic_moe_gate_topk_(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0)
 {
+    static_assert(num_selected_experts >= 1 && num_selected_experts <= 16);
+    static_assert(num_total_experts >= 16 && num_total_experts <= 1024);
+    static_assert(num_total_experts % 16 == 0);
+    static_assert(num_selected_experts <= num_total_experts);
+
+    constexpr int expert_block_size        = num_selected_experts > 8 ? 128 : 64;
+    constexpr int padded_num_total_experts = ((num_total_experts + expert_block_size - 1) / expert_block_size) * expert_block_size;
+
     if constexpr (generate_indices)
     {
-        _topk_moe_generate_indices_<num_total_experts>();
+        _topk_moe_generate_indices_<padded_num_total_experts>();
     }
+    _generic_moe_gate_pad_bias_tail_<num_total_experts, padded_num_total_experts>();
     TTI_SFPCONFIG(0x4, 0xF, 1);
 
-    if constexpr (num_selected_experts == 16)
+    if constexpr (num_selected_experts > 8)
     {
-        _generic_moe_gate_top16_<normalize, num_total_experts>(eps, scale);
+        _generic_moe_gate_top16_<normalize, num_selected_experts, padded_num_total_experts, zero_tail, full_sort, do_extra_scale>(eps, scale, extra_scale);
     }
     else
     {
-        _generic_moe_gate_top8_<normalize, num_selected_experts, num_total_experts, zero_tail, full_sort>(eps, scale);
+        _generic_moe_gate_top8_<normalize, num_selected_experts, padded_num_total_experts, zero_tail, full_sort, do_extra_scale>(eps, scale, extra_scale);
     }
 }
 

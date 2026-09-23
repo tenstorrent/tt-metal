@@ -30,12 +30,20 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
+
+    # TP > n_kv_heads (e.g. 27B's 4 KV heads on TP=8): there is no whole KV head per device, so
+    # pre-expand K/V to tp*head_dim rows where device d holds the head its GQA query group maps
+    # to (devices 2d, 2d+1 share head d at TP=8). The per-device slicing below is then uniform.
+    # No-op when tp <= n_kv_heads, so TP=4 weights stay bit-identical.
+    kv_rep = lambda w: tpc.replicate_kv_weight(w, args.n_kv_heads, args.num_devices, args.head_dim)
+    k_proj, v_proj = kv_rep(state_dict["k_proj.weight"]), kv_rep(state_dict["v_proj.weight"])
+
     if fused_qkv:
         if qg_deint:
             fused = tpc.prepare_attn_qkv_deint(
                 state_dict["q_proj.weight"],
-                state_dict["k_proj.weight"],
-                state_dict["v_proj.weight"],
+                k_proj,
+                v_proj,
                 args.n_local_heads,
                 args.head_dim,
                 args.n_local_kv_heads * args.head_dim,
@@ -44,8 +52,8 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         else:
             fused = tpc.prepare_attn_qkv(
                 state_dict["q_proj.weight"],
-                state_dict["k_proj.weight"],
-                state_dict["v_proj.weight"],
+                k_proj,
+                v_proj,
                 args.n_local_heads * args.head_dim * 2,
                 args.n_local_kv_heads * args.head_dim,
                 args.num_devices,
@@ -76,8 +84,10 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             cache_path=c("wqkv" + tag),
             dtype=ttnn.bfloat8_b,
         )
+        # k_proj/v_proj are the KV-replicated weights: shard_w splits tp*head_dim rows evenly, so
+        # each device lands on its GQA-assigned head instead of a fraction of one.
         tw["wk"] = tpc.shard_w(
-            state_dict["k_proj.weight"],
+            k_proj,
             mesh,
             dim=-1,
             memory_config=k_mc,
@@ -85,7 +95,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dtype=ttnn.bfloat8_b,
         )
         tw["wv"] = tpc.shard_w(
-            state_dict["v_proj.weight"],
+            v_proj,
             mesh,
             dim=-1,
             memory_config=v_mc,
@@ -117,6 +127,7 @@ class TPAttention:
         self.tw = tw
         self.tt_ccl = tt_ccl
         self.B = args.max_batch_size
+        self._kv_shard_cfg_cache = {}  # active-width B -> KV-update height shard cfg (bucketed decode)
         self.NH = args.n_local_heads
         self.NKV = args.n_local_kv_heads
         self.HD = args.head_dim
@@ -225,6 +236,7 @@ class TPAttention:
                     weight.shape[-2],
                     weight.shape[-1],
                     max_cols=getattr(self.args, "decode_grid_w", 8),
+                    tuning=getattr(self.args, "prefill_tuning", None),
                 )
                 return ttnn.linear(
                     x,
@@ -467,8 +479,32 @@ class TPAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _kv_shard_cfg(self, B):
+        """Height shard for paged_update_cache (one user per core), sized to the ACTIVE width B.
+        Returns the precomputed max-batch config unchanged when B==self.B (byte-identical prod path);
+        builds a width-B config (B cores) for bucketed decode. Mirrors model_config.kv_update_shard_cfg."""
+        if B == self.B:
+            return self.args.kv_update_shard_cfg
+        cfg = self._kv_shard_cfg_cache.get(B)
+        if cfg is None:
+            cols = next(c for c in range(min(8, B), 0, -1) if B % c == 0)
+            cfg = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.HD),
+                core_grid=ttnn.CoreGrid(x=cols, y=B // cols),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self._kv_shard_cfg_cache[B] = cfg
+        return cfg
+
     def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
-        tw, B, NH, NKV, HD = self.tw, self.B, self.NH, self.NKV, self.HD
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
+        # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
+        # the KV-update shard config below run at this width, and the paged SDPA reads only these B
+        # users' pages via the width-B page_table. The B==self.B path is byte-identical to before.
+        B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
         if not use_paged and self.k_caches is None:
@@ -538,8 +574,9 @@ class TPAttention:
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
-            k_sh = ttnn.to_memory_config(k_p, self.args.kv_update_shard_cfg)
-            v_sh = ttnn.to_memory_config(v_p, self.args.kv_update_shard_cfg)
+            _kv_cfg = self._kv_shard_cfg(B)
+            k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
+            v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
             # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
@@ -569,8 +606,9 @@ class TPAttention:
                 v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
                 ttnn.deallocate(k_h)
                 ttnn.deallocate(v_h)
-                k_sh = ttnn.to_memory_config(k_hp, self.args.kv_update_shard_cfg)
-                v_sh = ttnn.to_memory_config(v_hp, self.args.kv_update_shard_cfg)
+                _kv_cfg = self._kv_shard_cfg(B)
+                k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
+                v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)
                 ttnn.deallocate(k_hp)
                 ttnn.deallocate(v_hp)
                 ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)

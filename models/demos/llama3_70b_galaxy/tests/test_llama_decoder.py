@@ -13,7 +13,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -56,6 +56,11 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize(
+    "generation_start_pos",
+    (0, 127),  # 127 exercises decode across the 127->128 KV-cache tile boundary
+    ids=("start_pos_0", "start_pos_127"),
+)
+@pytest.mark.parametrize(
     "device_params",
     [
         {
@@ -71,6 +76,7 @@ def test_llama_decoder_inference(
     batch_size,
     paged_attention,
     page_params,
+    generation_start_pos,
     mesh_device,
     reset_seeds,
     ensure_gc,
@@ -97,10 +103,10 @@ def test_llama_decoder_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
+    reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
+    ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
-    generation_start_pos = 127
     generation_length = 10
     all_tests_pass = True
 
@@ -227,7 +233,7 @@ def test_llama_decoder_inference(
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        ref_output = reference_model(pt_decode_input.to(ref_dtype), current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
