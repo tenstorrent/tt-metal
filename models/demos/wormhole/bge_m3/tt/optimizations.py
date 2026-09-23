@@ -158,9 +158,14 @@ def _build_mlp_optimizations(
     )
 
     tuned_b1 = max_seq_len == 512 and max_batch == 1
+    tuned_b8 = max_seq_len == 512 and max_batch == 8
     tuned_b16 = max_seq_len == 512 and max_batch == 16
     if tuned_b1:
         wo_prg_tuned = _tuned_mlp_wo_program_config(
+            mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size
+        )
+    elif tuned_b8:
+        wo_prg_tuned = _b8_tuned_mlp_wo_program_config(
             mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size
         )
     elif tuned_b16:
@@ -192,6 +197,7 @@ def _build_attention_optimizations(mesh_device, max_seq_len, max_batch, dtype, h
     minimal_matmul configs for QKV/output; other shapes use tuned or defaults."""
     qkv_out_dim = 3 * hidden_size
     tuned_b1 = max_seq_len == 512 and max_batch == 1
+    tuned_b8 = max_seq_len == 512 and max_batch == 8
     tuned_b16 = max_seq_len == 512 and max_batch == 16
     qkv_minimal = _attention_qkv_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
     out_minimal = _attention_output_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
@@ -220,9 +226,13 @@ def _build_attention_optimizations(mesh_device, max_seq_len, max_batch, dtype, h
                 _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
                 if tuned_b1
                 else (
-                    _b16_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
-                    if tuned_b16
-                    else _attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device)
+                    _b8_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                    if tuned_b8
+                    else (
+                        _b16_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                        if tuned_b16
+                        else _attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device)
+                    )
                 )
             )
         ),
@@ -907,6 +917,41 @@ def _tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_size)
 #   AttnOut: g11x10 ibw8 sub2x1 = 89.1 us vs 100.7 us default (1.13x)
 #   MLPwo:   g11x10 ibw8 sub2x1 = 222.8 us vs 343 us default (1.54x)
 # QKV default (218.9 us) was optimal so it is not overridden.
+def _b8_tuned_attention_output_program_config(mesh_device, *, hidden_size):
+    # In-model sweep, 40 configs: 11x10 ibw8 1x3 takes the B8 forward from
+    # 13.499 ms to 13.425 ms against the auto-selected config.
+    return _tuned_mm2d_program_config(
+        mesh_device,
+        grid_x=11,
+        grid_y=10,
+        M=8 * 512,
+        K=hidden_size,
+        N=hidden_size,
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        fused_activation=None,
+    )
+
+
+def _b8_tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_size):
+    # In-model sweep, 40 configs: 11x10 ibw16 1x3 takes the B8 forward from
+    # 13.467 ms to 13.176 ms against the auto-selected config. K is 128 tiles,
+    # so the larger K block pays.
+    return _tuned_mm2d_program_config(
+        mesh_device,
+        grid_x=11,
+        grid_y=10,
+        M=8 * 512,
+        K=intermediate_size,
+        N=hidden_size,
+        in0_block_w=16,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        fused_activation=None,
+    )
+
+
 def _b16_tuned_attention_output_program_config(mesh_device, *, hidden_size):
     return _tuned_mm2d_program_config(
         mesh_device,
