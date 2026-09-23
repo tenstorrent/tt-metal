@@ -289,6 +289,51 @@ release, regression, Watcher, performance, legacy-joint and host logs/XML.
 numerical preservation and timing deltas. Sub-tile tails and ring integration
 remain open PR2 gates; this is not a complete PR2 merge qualification.
 
+## PR2 sub-tile tails, batch/GQA and SPMD meshes (2026-09-23)
+
+Qualified source: `2a046f66bfe` (sub-tile tails), followed by `d3025e93e82`
+(batch/GQA and uniform meshes). Tests ran on bh-32, IRD reservation 129246,
+two P150b Blackholes, firmware 19.12.0 and SFPI 7.80.0[956]. The build used
+the source overlay corresponding to these commits; the remote clone's Git HEAD
+alone does not identify that overlay.
+
+- Sub-tile release suite: **142 passed**. Dense/joint segment lengths include
+  1, 15, 17, 31, 33, 255, 257, 511, 513 and 767 rows, unequal Q/K lengths,
+  NaN-poisoned physical padding, constant/zero V and changed maxima.
+- Batch/GQA and two-device mesh suite: **52 passed in release and 52 in
+  Watcher**, no skips. GQA equals repeated-KV attention bit-for-bit. Mesh tests
+  cover replicated, head-sharded and query-sharded inputs, plus trace replay.
+- Recipe, frozen accuracy, legacy numerics/prefill, component, FLUX.2 capture
+  and joint regression: **386 passed**, nine existing/opt-in skips. All **147
+  frozen outputs remain bit-identical**.
+- Tail/preparation/joint/recipe Watcher regression: **336 passed**, seven
+  opt-in performance skips. Host policy/addressing tests: **14 passed**.
+- Matched performance: **35 passed**. Compared with the committed pre-tail
+  baseline on this same P150b, resident trace-wall medians change by at most
+  **0.03%**. No measured aligned case regressed by more than 0.04%; apparent
+  improvements of up to 2% in short tests are not claimed as kernel speedups.
+  These comparisons do not quantify tail-mask overhead.
+
+| Variant | Maximum sub-tile-case L2 % | Resident TFLOP/s/core |
+| --- | ---: | ---: |
+| A | 2.9147 | 1.995 |
+| B | 2.9137 | 1.757 |
+| C | 0.3906 | 1.234 |
+| D | 0.1778 | 0.893 |
+| E_bf16 | 2.8932 | 2.137 |
+| E_bfp8 | 2.9368 | 2.089 |
+| E_bfp4 | 16.1242 | 2.090 |
+
+Resident throughput uses the existing Q256/K512 repeat-input test and trace-wall
+timing, not device-profiler duration. The error column is the maximum over the
+new sub-tile suite, not a replacement for the frozen stress qualification.
+
+Artifacts: external `sdpa-pr2-validation-20260923/`, including
+`tails-release`, `geometry-{release,watcher,perf,host}`, `recipe-regression`
+and `tails-watcher` logs/XML. `qualify-geometry.sh` records the command sequence.
+SPMD execution does not exchange KV between devices: **ring continuation and
+communication are not qualified by these results**. No model defaults change.
+
 ## Continuous coverage
 
 The [SDPA sanity group](../tests/pipeline_reorg/ttnn_sanity_tests.yaml) runs the
