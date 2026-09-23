@@ -20,7 +20,7 @@ from .test_decoder import to_device, to_host
 from .test_megakernel import compare, copy_to
 
 
-@pytest.mark.parametrize("count", [1, 2])
+@pytest.mark.parametrize("count", [1, 2, 4])
 def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None, require_exact=True):
     torch.set_num_threads(8)
     mesh = qb2_mesh
@@ -28,7 +28,10 @@ def test_device_layer_loop_real_weights(qb2_mesh, count, tuning=None, require_ex
     config = AutoConfig.from_pretrained(checkpoint_path(), local_files_only=True)
     layers = []
     workspace = None
-    for index in (0, 31)[:count]:
+    if count not in (1, 2, 4):
+        raise ValueError("Focused loop supports one, two or four real layers")
+    indices = (0, 10, 20, 31) if count == 4 else (0, 31)[:count]
+    for index in indices:
         weights = checkpoint.load([name for name in checkpoint.index if name.startswith(f"model.layers.{index}.")])
         layer = LlamaDecoder.from_state_dict(
             weights,
