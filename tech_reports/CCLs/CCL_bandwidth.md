@@ -8,7 +8,7 @@ A collective moves data between devices. Some ops may also reduce, but that arit
 
 The number of bytes a collective puts on a link is closed-form in the tensor size, the device count and the topology. Dividing it out gives achieved bandwidth per link. That single number characterizes any collective on any system, and on a well-optimized implementation it is also independent of datatype, memory layout and page size. Different collectives should converge on the same curve. Where one does not, it has optimization headroom rather than a harder job.
 
-This report measures that number for `all_gather`, `reduce_scatter`, `all_reduce` and `all_to_all`.
+This report measures that number for `all_gather`, `reduce_scatter`, `all_reduce` and `all_to_all`. The figures lead with bus bandwidth, which says how fast a collective runs, and show link utilization beside it.
 
 ## What sets the ceiling
 
@@ -61,11 +61,23 @@ On a **ring**, the closing link gives every device two links on the axis. Splitt
 
 `all_reduce` is a reduce-scatter followed by an all-gather over the same links, so it carries twice the bytes of either.
 
+`all_to_all` differs. Each device holds `B` bytes and sends one chunk to every other device. Chunks bound for far devices relay through the ones in between, so the middle link carries every chunk that crosses it.
+
 | Collective | Bottleneck bytes |
 | --- | --- |
 | `all_gather` | `(N-1)/N × T` |
 | `reduce_scatter` | `(N-1)/N × T` |
 | `all_reduce` | `2(N-1)/N × T` |
+| `all_to_all` | `⌊N/2⌋⌈N/2⌉/N × B` |
+
+### What a ring costs
+
+A ring halves the bytes per direction, so ideally it finishes in half the time of a line. In practice each link runs slower, because a ring needs deadlock avoidance. The fabric adds it to every router once it is configured as a ring:
+
+- **Bubble flow control.** A worker injects a packet only when the next router has at least two free slots.
+- **First-level acknowledgement.** The receiver returns an extra credit for every packet, which doubles the credit traffic.
+
+Both cost every packet, so even a line runs slower on a ring fabric. So lines are measured on a line fabric.
 
 ### How this compares to local memory
 
@@ -113,7 +125,15 @@ The barrier thresholds count devices, so they grow with device count but not wit
 
 ## The metric
 
-Every figure plots achieved bandwidth per ethernet link, per direction:
+Every figure plots bus bandwidth, as `nccl-tests` defines it:
+
+```
+bus_bandwidth = bottleneck_bytes / kernel_time
+```
+
+It says how fast the collective runs, and compares directly to `nccl-tests` output on other hardware. Its ceiling grows with the links in use.
+
+Each curve's peak also carries its link utilization, stated as a percentage of the per-link line rate:
 
 ```
 per_link_bandwidth = bottleneck_bytes / ( kernel_time * num_links * num_directions )
@@ -124,7 +144,7 @@ per_link_bandwidth = bottleneck_bytes / ( kernel_time * num_links * num_directio
 - `num_directions`, 1 for a line and 2 for a ring
 - `kernel_time`, device kernel duration
 
-The numerator is the bytes crossing the busiest link, so the result is directly comparable to line rate. `bottleneck_bytes / kernel_time` is what `nccl-tests` calls bus bandwidth. This report divides further by the link and direction count to read against a single link.
+`all_to_all` is the exception. Its bus bandwidth follows nccl's `(N-1)/N × B`, which leaves out the relay traffic. Its link utilization is the fairer number.
 
 ## What we measure
 
@@ -132,46 +152,41 @@ This report sweeps `ttnn.all_gather`, `ttnn.reduce_scatter`, `ttnn.all_reduce` a
 
 The ops query link count, topology and the rest of the machine's wiring themselves, so nothing is configured by hand and no tuning is applied. The curves show what a caller gets out of the box.
 
-Link count and topology are read back from each op's own profiler attributes, so every figure reports what ran rather than what was requested.
+The topology is read with `ttnn.get_usable_topology`, the same check the ops use. The link count is read from each op's profiler attributes. Every figure reports what ran rather than what was requested.
 
 | Held fixed | Why |
 | --- | --- |
 | Fabric packet payload | A global setting fixed at initialization. It shifts the whole curve, so it belongs to the run rather than the collective. |
-| Fabric configuration | 1D routing. Lower per-hop latency and a smaller header than 2D. |
+| Fabric configuration | 1D routing, with lower per-hop latency and a smaller header than 2D. Lines run on `FABRIC_1D`, rings on `FABRIC_1D_RING`. A ring is measured only where the axis closes. |
 | Datatype | Only a byte count under this metric. |
 
-The benchmark is modelled on nccl-tests. Sizes double from 1 KiB upward, rounded to whole tiles, and `busbw` uses nccl's correction factors, so the numbers compare directly to nccl-tests output on other hardware.
+The benchmark is modeled on nccl-tests. Sizes double from 1 KiB upward, rounded to whole tiles.
 
 The following was run to generate the data in this report:
 
 ```bash
-# Link bandwidth on ring topology for every collective
-./tech_reports/CCLs/run_bench.sh galaxy
+# Every collective: a line at 2, 4 and 8 devices, a ring at 8, DRAM
+./tech_reports/CCLs/run_bench.sh loudbox   # or galaxy
 
-# To get more comprehensive data:
-# Repeat above for linear topology
-CCL_RUNS="line:dram" ./tech_reports/CCLs/run_bench.sh galaxy
-# Repeat above for L1 memory config (for all_gather only)
-CCL_RUNS="ring:l1" CCL_OPS=all_gather ./tech_reports/CCLs/run_bench.sh galaxy
+# L1 against DRAM, all_gather only, ring
+CCL_TOPOLOGY=ring CCL_MEMORY=dram,l1 CCL_SUBMESHES=1x8 CCL_OPS=all_gather ./tech_reports/CCLs/run_bench.sh loudbox
 ```
+
+Each run lands in `data/runs/<timestamp>/`. The runs are merged, keeping the latest measurement of each cell, into the tables in `results/` and the figures in `images/`.
 
 ## Results
 
-### Blackhole Galaxy
-
-![](images/linkbw_blackhole_n8.png)
-
-Eight devices along axis 0 of the 8×4 mesh. The two and four device figures are `images/linkbw_blackhole_n2.png` and `images/linkbw_blackhole_n4.png`; both carry a line panel only, since the wrap-around link only exists across the full axis (i.e. only with 8 devices).
-
 ### Wormhole LoudBox
 
+![](images/bw_wormhole_b0_bfloat16_6144_n8.png)
+
+Additionally, figures for two and four devices: [`n2`](images/bw_wormhole_b0_bfloat16_6144_n2.png), [`n4`](images/bw_wormhole_b0_bfloat16_6144_n4.png). They have no ring panel, because the wraparound link exists only across all eight devices.
+
+### Blackhole Galaxy
+
 <!--
-  TODO(data): images/linkbw_wormhole_n8.png, from
-      ./tech_reports/CCLs/run_bench.sh loudbox
-      CCL_RUNS="line:dram" ./tech_reports/CCLs/run_bench.sh loudbox
-  Caption needs the axis, the packet payload and the size range, as above.
-  N300s are not all host-attached, so expect a lower link count than Blackhole
-  and state the count the figure was normalized by.
+  TODO(data): rerun ./tech_reports/CCLs/run_bench.sh galaxy, then embed
+  images/bw_blackhole_bfloat16_<packet>_n8.png with a caption as above.
 -->
 
 ## Interpreting the curve
@@ -182,7 +197,7 @@ Per-invocation cost acts as a floor. While it dominates, time is roughly constan
 
 Poor packet fill produces a flat plateau instead. At a given fill, neither data in flight nor credit round-trip time depends on tensor size, so bandwidth sits at a reduced level independent of size. Fill improves as tensors grow, because larger tensors offer longer contiguous stretches to pack into each packet.
 
-In our data, every curve keeps falling as size shrinks, and none of them flatten. Hence per-invocation cost sets the small-size behaviour, not packet fill.
+In our data, every curve keeps falling as size shrinks, and none of them flatten. Hence per-invocation cost sets the small-size behavior, not packet fill.
 
 **The ramp.** Fixed costs amortize as the payload grows, and packet fill improves. In our data, the ramp begins near the crossover estimate, and the curve does not reach its asymptote until well past it. The crossover estimate from the latency section leaves out:
 
@@ -191,30 +206,25 @@ In our data, every curve keeps falling as size shrinks, and none of them flatten
 - host dispatch
 - superlinear growth of hop latency with distance
 
-**Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics that differ by collective and topology, so bandwidth should be piecewise. In our data, no steps appear, though the ramp's slope dips slightly where two of the thresholds sit.
+**Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics that differ by collective and topology, so bandwidth should be piecewise. In our data, ring `reduce_scatter` dips at 512 KiB and jumps at 1 MiB. Up to 512 KiB per device it uses a one-shot direct algorithm, which sends about 2.3× the bytes.
 
-**The asymptote.** Fixed costs are negligible here. In our data, the curves flatten well below the payload ceiling. Framing accounts for a few percent of that gap and the next section rules out memory hierarchy, which leaves the transfer pipeline: packet fill, worker count, and how well the implementation keeps the link fed.
+**The asymptote.** Fixed costs are negligible here. In our data, lines flatten at 84–94% of line rate, close to the payload ceiling. Rings flatten at 67–83%. The next section rules out memory hierarchy, which leaves the transfer pipeline: packet fill, worker count, and how well the implementation keeps the link fed.
 
-**Line versus ring.** A ring carries half the bytes per link over half the distance, so it finishes sooner while running each link at the same rate. In our data, at the same device count the two curves overlay. The ring ramp starts later, because halving the bytes per direction means a larger tensor is needed to clear the fixed-cost floor.
+**Line versus ring.** In our data, at eight devices a ring runs `all_gather`, `reduce_scatter` and `all_reduce` 1.5 to 1.8 times faster than a line, short of the ideal 2×. Besides the fabric cost of a ring, the ops behave differently:
+
+- `all_gather` relays each chunk through worker cores, hop by hop. On a line it multicasts, and the routers forward.
+- `reduce_scatter` runs 4 workers per direction at large sizes against 8 on a line, and synchronizes more often.
+- `all_reduce` is a reduce-scatter followed by an all-gather, so it inherits both.
 
 ## L1 versus DRAM tensors
 
-![](images/memcfg_blackhole_n8.png)
-
-<!--
-  TODO(data): images/memcfg_wormhole_n8.png, from
-      CCL_RUNS="ring:l1" CCL_OPS=all_gather ./tech_reports/CCLs/run_bench.sh loudbox
--->
+![](images/memcfg_wormhole_b0_bfloat16_6144_n8.png)
 
 Moving the tensors from DRAM into L1 does not change collective bandwidth. In our data, the two curves overlay wherever both exist. L1 cannot hold the largest tensors, so its sweep stops earlier.
 
 ## All data
 
-<!--
-  TODO(data): collapsed <details> tables, one per run. parse_results.py already
-  writes them as data/results_{arch}_{fabric_config}_{memory}_{dtype}.md, so
-  these are a paste of that output. data/ is not committed, which is why the
-  tables have to live here.
-  Blackhole Galaxy runs to paste: FABRIC_1D_RING dram, FABRIC_1D dram,
-  FABRIC_1D_RING l1. Wormhole LoudBox: the same three.
--->
+Every measured cell is tabulated in `results/`:
+
+- [`SUMMARY_wormhole_b0_bfloat16_6144.md`](results/SUMMARY_wormhole_b0_bfloat16_6144.md): one configuration per collective and device count, ring over line and DRAM over L1.
+- [`FULL_wormhole_b0_bfloat16_6144.md`](results/FULL_wormhole_b0_bfloat16_6144.md): every topology and memory configuration.
