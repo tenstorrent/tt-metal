@@ -158,17 +158,10 @@ if(TT_METAL_USE_EMULE)
     target_link_libraries(
         impl
         PRIVATE
-            tt-emule::headers
+            tt_emule_runtime
             dl
     )
-    # The emule marshaller/host-sanitizer .cpp in impl include emule headers that tt_emule_runtime
-    # exports PUBLIC from its src/emulation (compile-only genex, no link edge).
-    target_include_directories(
-        impl
-        PRIVATE
-            $<TARGET_PROPERTY:tt_emule_runtime,INTERFACE_INCLUDE_DIRECTORIES>
-            ${CMAKE_CURRENT_SOURCE_DIR}/emulation # impl/emulation's own headers (marshaller + host sanitizers), for bare includes
-    )
+    target_include_directories(impl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulation)
 endif()
 
 # Generate Inspector RPC stub file
