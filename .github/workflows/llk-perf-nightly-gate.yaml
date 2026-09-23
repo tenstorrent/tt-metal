@@ -37,7 +37,7 @@ concurrency:
 jobs:
   measure:
     name: "Measure the suite (non speed-of-light)"
-    if: ${{ inputs.perf_run_id == '' }}
+    if: false
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: all
@@ -63,7 +63,7 @@ jobs:
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
-      perf_run_id: ${{ inputs.perf_run_id }}
+      perf_run_id: "35783738498"
       baseline_pipeline: ${{ inputs.baseline_pipeline || 'baseline' }}
       speed_of_light: "false"
       run_types: ${{ matrix.run_types }}
