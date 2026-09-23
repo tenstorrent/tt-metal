@@ -163,7 +163,6 @@ class Qwen38ForCausalLM:
         if params is None:
             if not self.host_compatibility:
                 raise ValueError("Host sampling requires explicit QWEN_VLLM_HOST_COMPATIBILITY=1")
-            print("QWEN_VLLM_EXPLICIT_HOST_COMPATIBILITY", flush=True)
             return False
         n = len(params.temperature)
         temps = list(params.temperature)
