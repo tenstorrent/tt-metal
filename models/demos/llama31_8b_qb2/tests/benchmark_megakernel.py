@@ -118,6 +118,7 @@ def parse_args():
     parser.add_argument("--hoist-pack-config", action="store_true")
     parser.add_argument("--bank-vc", action="store_true")
     parser.add_argument("--wide-subblocks", action="store_true")
+    parser.add_argument("--single-layer-barrier", action="store_true")
     parser.add_argument("--bounded-layer-barrier", action="store_true")
     parser.add_argument("--cache-layer-table", action="store_true")
     parser.add_argument("--inline-cb-reset", action="store_true")
@@ -156,7 +157,7 @@ def run(args):
         custom_o=args.custom_o, custom_down=args.custom_down, custom_gu=args.custom_gu, qkv_custom_mm=args.qkv_custom_mm, qkv_buffers=args.qkv_buffers, qkv_early_blocks=args.qkv_early_blocks,
         attention_workers=args.attention_workers, attention_chunk=args.attention_chunk,
         reader=args.projection_reader, wide_subblocks=args.wide_subblocks,
-        bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, inline_cb_reset=args.inline_cb_reset, cache_layer_table=args.cache_layer_table, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
+        single_layer_barrier=args.single_layer_barrier, bounded_barrier=args.bounded_layer_barrier, multicast_barrier=args.multicast_layer_barrier, inline_cb_reset=args.inline_cb_reset, cache_layer_table=args.cache_layer_table, buffer_count=args.projection_buffers, lookahead=args.projection_lookahead,
         hoist_pack_config=args.hoist_pack_config, bank_vc=args.bank_vc,
         prefetch_gu_blocks=args.prefetch_gu_blocks, prefetch_down_blocks=args.prefetch_down_blocks,
         alias_projection_cbs=args.alias_projection_cbs, prefetch_head_workers=args.prefetch_head_workers,
@@ -295,7 +296,7 @@ def run(args):
                         for index, core in enumerate(storage_cores):
                             # Raw tile words480/481 map to face1,row14,col0/1.
                             cycles, count = int(tiles[index, 14, 16]), int(tiles[index, 14, 17])
-                            assert cycles > 0 and count == 2 * loop.count and count <= 64
+                            assert cycles > 0 and count == (loop.count + 1 if loop.body.tuning.single_layer_barrier else 2 * loop.count) and count <= 64
                             per_barrier = tiles[index, 16:20, :16].reshape(-1)[:count].tolist()
                             assert sum(per_barrier) == cycles and all(v > 0 for v in per_barrier)
                             counters.append(

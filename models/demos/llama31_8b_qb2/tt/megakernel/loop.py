@@ -262,6 +262,7 @@ class DecoderLoop:
                 *kernel.defines,
                 ("LOOP_SOURCE", '"' + original + '"'),
                 ("LOOP_PATCH", str(patch)),
+                ("SINGLE_LAYER_BARRIER", str(int(self.body.tuning.single_layer_barrier))),
                 ("CACHE_LAYER_TABLE", str(int(self.body.tuning.cache_layer_table))),
                 ("INLINE_CB_RESET", str(int(self.body.tuning.inline_cb_reset))),
                 ("BOUNDED_LAYER_BARRIER", str(int(self.body.tuning.bounded_barrier))),

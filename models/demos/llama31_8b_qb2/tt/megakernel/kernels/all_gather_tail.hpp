@@ -53,7 +53,11 @@ if (get_arg_val<uint32_t>(TAIL_RT_OFFSET + 20) && (invocation & 1u))
         for (uint32_t worker = 0; worker < 8; ++worker) {
             const uint32_t x = get_arg_val<uint32_t>(TAIL_RT_OFFSET + 4 + 2 * worker);
             const uint32_t y = get_arg_val<uint32_t>(TAIL_RT_OFFSET + 5 + 2 * worker);
+#if SINGLE_LAYER_BARRIER
+            noc_semaphore_inc(get_noc_addr(x, y, qb2_program_semaphore(12)), 1);
+#else
             noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(12)), 1);
+#endif
         }
         noc_async_atomic_barrier();
     }

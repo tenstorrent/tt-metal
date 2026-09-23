@@ -1,5 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+#if SINGLE_LAYER_BARRIER && (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
+#include "api/dataflow/dataflow_api.h"
+// Keep the terminal norm handoff on the ordinary program semaphore arena.
+inline uintptr_t qb2_program_semaphore(uint32_t id) { return get_semaphore(id); }
+inline uintptr_t qb2_loop_semaphore(uint32_t id) {
+    ASSERT(id < 32);
+    const uint32_t base = get_arg_val<uint32_t>(LOOP_RT_OFFSET);
+    const auto* state = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
+    static_assert(640 * sizeof(uint32_t) + 2 * 32 * L1_ALIGNMENT <= 4096);
+    return base + 640 * sizeof(uint32_t) + ((state[483] & 1u) * 32 + id) * L1_ALIGNMENT;
+}
+#define get_semaphore(id) qb2_loop_semaphore(id)
+#endif
+
 #define QB2_ENTRY loop_layer_main
 #ifdef LOOP_NATIVE
 #define kernel_main loop_layer_main
@@ -134,6 +148,17 @@ void kernel_main() {
     const uint32_t count = get_arg_val<uint32_t>(LOOP_RT_OFFSET + 6);
 #if defined(COMPILE_FOR_NCRISC)
     snapshot_buffers(state, get_arg_val<uint32_t>(LOOP_RT_OFFSET + 1), get_arg_val<uint32_t>(LOOP_RT_OFFSET + 2));
+#if SINGLE_LAYER_BARRIER
+    // Every invocation starts fresh. The two local semaphore generations live
+    // in unused loop-state words640..895, beyond snapshots/profiler counters.
+    state[483] = 0;
+    for (uint32_t bank = 0; bank < 2; ++bank) {
+        for (uint32_t id = 0; id < 32; ++id) {
+            const uint32_t address = reinterpret_cast<uint32_t>(state) + 640 * sizeof(uint32_t) + (bank * 32 + id) * L1_ALIGNMENT;
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(address), 0);
+        }
+    }
+#endif
 #if ALIAS_PROJECTION_CBS && defined(PROJECTION)
     // A multi-format static allocation has one physical extent. Give each
     // phase its original logical ring, preserving exact block wrap points.
@@ -180,7 +205,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
         state[300] = 0;
         state[301] = 0;
-#if SCRATCH_INIT_ONCE
+#if SCRATCH_INIT_ONCE || SINGLE_LAYER_BARRIER
         // Published through the following local/global start boundary. The
         // selected scratch remains physically stable across this layer loop.
         state[483] = layer;
@@ -200,8 +225,9 @@ void kernel_main() {
         noc_async_read_barrier();
 #endif
 #endif
-        // Both cross-RISC and cross-core boundaries are required: a core must
-        // finish resetting local semaphores/CBs before any peer can produce.
+        // This cross-core start joins all previous-layer local completions and
+        // CB resets before any next-layer producer starts. With two semaphore
+        // banks, resetting this generation cannot erase an old-layer arrival.
         unified_kernels::sync_riscs_enter<>(start_sync);
 #if defined(COMPILE_FOR_NCRISC)
         layer_barrier();
@@ -233,7 +259,15 @@ void kernel_main() {
         loop_layer_main();
         unified_kernels::sync_riscs_enter<>(end_sync);
 #if defined(COMPILE_FOR_NCRISC)
+#if SINGLE_LAYER_BARRIER
+        // The next start barrier joins every core after its ordinary local CB
+        // reset. Late old-layer notifications target the other semaphore bank;
+        // the reused bank belongs to layer L-2, finished before L-1 started.
+        // Retain the final join, including the terminal gather/head handoff.
+        if (layer + 1 == count) { layer_barrier(); }
+#else
         layer_barrier();
+#endif
 #endif
 #if INLINE_CB_RESET
         if (layer + 1 < count) { reset_layer_cb_interfaces(state); }

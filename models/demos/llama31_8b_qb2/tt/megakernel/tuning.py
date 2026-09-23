@@ -9,6 +9,7 @@ from dataclasses import dataclass
 class ProjectionTuning:
     reader: str = "original"
     wide_subblocks: bool = False
+    single_layer_barrier: bool = False
     bounded_barrier: bool = False
     multicast_barrier: bool = False
     inline_cb_reset: bool = False
@@ -50,6 +51,8 @@ class ProjectionTuning:
     batch_swiglu: bool = False
 
     def __post_init__(self):
+        if self.single_layer_barrier and (not self.bounded_barrier or self.inline_cb_reset or self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
+            raise ValueError("Single layer boundary requires bounded barriers, ordinary CB reset and no helper prefetch")
         if self.custom_down and (self.prefetch_gu_blocks or self.prefetch_down_blocks or self.prefetch_head_workers):
             raise ValueError("Custom down padding excludes helper prefetch")
         if self.norm_stats_face and (self.norm_tile_height != 16 or self.scratch_init_once != "all"):
