@@ -84,8 +84,32 @@ done
 
 Pending — to be filled in and posted to #57444.
 
-## Packaging note
+## Non-performance findings
+
+Two differences the timings will not surface, both to weigh alongside them.
+
+### `-fno-rtti`
+
+**zoo does not compile under `-fno-rtti`; fu2 does.** This is not about the `RTTI` affordance —
+zoo fails with a plain `Destroy, Move` policy too, because the `typeid` tokens in `VTablePolicy.h`
+(lines 123, 148) and `FunctionPolicy.h` (line 190) are rejected at parse time. Verified on both
+g++-12 and clang++-20; fu2 builds clean under `-fno-rtti` on both.
+
+Nothing in tt-metal that would consume the alias is affected today. The only `-fno-rtti` in the
+tree is device-side — `tt_metal/jit_build/build.cpp:263` for JIT-compiled kernels, plus LLK test
+tooling — and kernels do not include `tt_stl/`. `ThreadPool`, the first planned consumer, is
+host-side, and the host build sets no such flag.
+
+The residual risk is downstream. `tt_stl` is a public API library (`FILE_SET api TYPE HEADERS`), so
+`ttsl/move_only_function.hpp` ships to consumers; anyone building with `-fno-rtti` who includes it
+would get a parse error inside a vendored header. That is bounded — it only affects translation
+units that include it — but it is a constraint fu2 does not impose.
+
+Caveat: this comes from grepping for the usual spellings of the flag, so a compiler wrapper or an
+externally supplied `CMAKE_CXX_FLAGS` could still introduce it, and it says nothing about how
+consumers outside this repo build.
+
+### Release tagging
 
 `fu2` publishes release tags (latest **4.2.5**). `zoo` publishes **no tags at all**, only branches,
-so it can only be pinned by commit SHA (`7fb5eed...`). That is an adoption input alongside the
-performance numbers, not just a packaging detail.
+so it can only be pinned by commit SHA (`7fb5eed...`).
