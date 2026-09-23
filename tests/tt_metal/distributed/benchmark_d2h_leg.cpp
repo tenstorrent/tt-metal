@@ -201,7 +201,10 @@ public:
         HostRegion& region = HostRegion::storage();
         std::string err;
         try {
-            dc.alias_region_base = region.reserved_base(cores_);
+            // Kept for the verify path: reserved_base() is the only accessor for the
+            // mapping's base, and the frame offsets the sink reports are relative to it.
+            region_base_ = region.reserved_base(cores_);
+            dc.alias_region_base = region_base_;
             d2h_ = D2HLeg::create(mesh_, dc, err);
         } catch (const std::exception& ex) {
             fail(state, std::string("host region unavailable: ") + ex.what());
@@ -226,7 +229,6 @@ public:
             fail(state, "region header check failed: " + e);
             return;
         }
-        region_base_ = region.base();
     }
 
     // Unpin before the leg's destructor puts anonymous pages back over the arenas.
