@@ -90,10 +90,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     const DFBSpecName IN_FULL{"in_full"};
-    const DFBSpecName STAGING_FULL{"staging_full"};
+    const ScratchpadSpecName STAGING_FULL{"staging_full"};
     const DFBSpecName OUT_FULL{"out_full"};
     const DFBSpecName IN_CLIFFROW{"in_cliffrow"};
-    const DFBSpecName STAGING_CLIFFROW{"staging_cliffrow"};
+    const ScratchpadSpecName STAGING_CLIFFROW{"staging_cliffrow"};
     const DFBSpecName OUT_CLIFFROW{"out_cliffrow"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
@@ -120,7 +120,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
     const auto in_dfb_of = [&](const BlockBufferSet& set) -> const DFBSpecName& {
         return (&set == &cliffrow_set) ? IN_CLIFFROW : IN_FULL;
     };
-    const auto staging_dfb_of = [&](const BlockBufferSet& set) -> const DFBSpecName& {
+    const auto staging_scratch_of = [&](const BlockBufferSet& set) -> const ScratchpadSpecName& {
         return (&set == &cliffrow_set) ? STAGING_CLIFFROW : STAGING_FULL;
     };
     const auto out_dfb_of = [&](const BlockBufferSet& set) -> const DFBSpecName& {
@@ -145,11 +145,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         // input buffer. One page holds the whole chunk; extra dram_alignment headroom aligns the L1 write.
         const uint32_t staging_entry_size =
             (input_single_tile_size / tile_height) * set->block_tiles + 2 * dram_alignment;
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = staging_dfb_of(*set),
-            .entry_size = staging_entry_size,
-            .num_entries = 1,
-            .data_format_metadata = input_data_format,
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = staging_scratch_of(*set),
+            .size_per_node = staging_entry_size,
         });
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = in_dfb_of(*set),
@@ -188,30 +186,24 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         total_num_rows = output.padded_shape()[-2];
     }
 
-    // One reader and one writer per buffer set, each over that set's cores and bound to that set's DFBs.
-    // A set's cores are exactly the cores whose block width its buffers are sized for, so every instance's
-    // raw block write lands in a buffer that is an exact multiple of it. `staging` is the reader's private
-    // alignment scratch -- one toucher, so it is self-looped (the reader bound both PRODUCER and CONSUMER).
+    // One reader and one writer per buffer set, each over that set's cores and bound to that set's
+    // buffers. A set's cores are exactly the cores whose block width its buffers are sized for, so every
+    // instance's raw block write lands in a buffer that is an exact multiple of it. `staging` is the
+    // reader's private alignment scratch -- one toucher, so it is a Scratchpad (a lone DM kernel filling
+    // and draining a buffer synchronizes nothing, and the DM self-loop shape is unsupported on Gen2).
     auto make_reader_spec = [&](const KernelSpecName& id, const BlockBufferSet& set) {
         return KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path{READER_SRC},
-            .dfb_bindings =
-                {DFBBinding{
-                     .dfb_spec_name = in_dfb_of(set),
-                     .accessor_name = "in",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = staging_dfb_of(set),
-                     .accessor_name = "staging",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = staging_dfb_of(set),
-                     .accessor_name = "staging",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 }},
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = in_dfb_of(set),
+                .accessor_name = "in",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .scratchpad_bindings = {ScratchpadBinding{
+                .scratchpad_spec_name = staging_scratch_of(set),
+                .accessor_name = "staging",
+            }},
             .tensor_bindings = {TensorBinding{
                 .tensor_parameter_name = INPUT,
                 .accessor_name = "src",
