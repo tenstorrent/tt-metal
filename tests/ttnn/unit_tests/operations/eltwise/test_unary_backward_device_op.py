@@ -311,16 +311,16 @@ def test_sigmoid_bw_preserves_input_physical_padding(device):
     torch.testing.assert_close(ttnn.to_torch(output).float()[..., :40, :40], expected, rtol=8e-3, atol=1e-4)
 
 
-def test_sigmoid_bw_rejects_row_major(device, expect_error):
-    """The shared validation guards the cache-key holes the factory has: layout reaches the
-    kernels as a compile-time page size, so a ROW_MAJOR operand must be rejected outright."""
+def test_sigmoid_bw_rejects_mixed_layouts(device, expect_error):
+    """One program walks all operands either by tile or by row, so a ROW_MAJOR grad_output with a
+    TILE input must be rejected rather than read with the wrong page geometry."""
     shape = (1, 1, 32, 32)
     torch_input = torch.randn(shape, dtype=torch.float32)
 
     tile = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     row_major = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    with expect_error(RuntimeError, "TILE layout"):
+    with expect_error(RuntimeError, "same layout"):
         ttnn.sigmoid_bw(row_major, tile)
 
 

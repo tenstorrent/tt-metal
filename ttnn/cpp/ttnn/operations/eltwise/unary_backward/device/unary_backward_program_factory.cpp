@@ -4,6 +4,7 @@
 
 #include "unary_backward_program_factory.hpp"
 
+#include <algorithm>
 #include <map>
 #include <string>
 
@@ -95,58 +96,129 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         // one operand's orientation for all of them -- so aliasing specs that agree on grid and
         // shape but differ in orientation pairs up different logical shards and computes
         // finite, misordered gradients.
-        return a == b && b == c;
+        if (!(a == b && b == c)) {
+            return false;
+        }
+        // A row-major shard is consumed as tile-sized CB pages, so it has to be a whole number of
+        // them, and dense: a row padded out to the buffer alignment leaves gaps in the shard, and
+        // those gaps sit at different element positions for operands of different dtypes.
+        if (input.layout() == Layout::ROW_MAJOR) {
+            if ((static_cast<uint64_t>(a.shape[0]) * a.shape[1]) % TILE_HW != 0) {
+                return false;
+            }
+            for (const Tensor* t : std::initializer_list<const Tensor*>{&grad_output, &input, &output}) {
+                if (t->buffer()->page_size() != t->buffer()->aligned_page_size()) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }();
 
-    const bool grad_output_sharded = can_alias_shards;
-    const bool input_sharded = can_alias_shards;
-    const bool output_sharded = can_alias_shards;
-    const bool any_sharded = can_alias_shards;
+    // Aliasing is all-or-nothing across the three tensors -- see the rule above -- so a single
+    // flag describes every operand; there is no per-operand sharded state.
+    const bool alias = can_alias_shards;
 
-    // Tiles in one shard, for whichever operand is sharded. All sharded operands share a shape
-    // and a grid here (validation pins the padded shapes equal), so one figure serves them all.
-    const auto shard_tiles_of = [](const Tensor& t) -> uint32_t {
-        const auto& shard_shape = t.memory_config().shard_spec()->shape;
-        return (shard_shape[0] / TILE_HEIGHT) * (shard_shape[1] / TILE_WIDTH);
+    // ROW_MAJOR, following eltwise unary's RM_INTERLEAVED path. When the shards cannot be aliased
+    // a row-major tensor is read and written in BLOCKS rather than tiles: rows_per_tile narrow rows
+    // packed into one tile-sized CB page, or a row wider than a tile split into chunks_per_row
+    // tile-sized chunks. Eltwise compute is position-independent and a page round-trips through
+    // the same face layout on unpack and pack, so the compute kernel needs no change. An aliased
+    // row-major shard needs none of this: its pages are consumed in place like a tiled shard's.
+    const bool row_major = input.layout() == Layout::ROW_MAJOR;
+    const bool rm_blocked = row_major && !alias;
+
+    // Row geometry. The element geometry is shared by all three tensors because validation pins
+    // their shapes equal; the paging is per tensor, since a width- or block-sharded row-major buffer
+    // pages each row by shard width while an interleaved one pages it whole, and the dtypes (hence
+    // element sizes) of grad_output and input may differ.
+    struct RmPaging {
+        uint32_t page_elements = 0;
+        uint32_t pages_per_row = 0;
+        uint32_t element_bytes = 0;
+        uint32_t alignment = 0;
     };
-    const uint32_t shard_tiles = grad_output_sharded ? shard_tiles_of(grad_output)
-                                 : input_sharded     ? shard_tiles_of(input)
-                                 : output_sharded    ? shard_tiles_of(output)
-                                                     : 0;
+    uint32_t row_elements = 0;
+    uint32_t chunks_per_row = 1;
+    uint32_t rows_per_tile = 1;
+    uint32_t total_rows = 0;
+    RmPaging grad_paging, input_paging, output_paging;
+    if (rm_blocked) {
+        row_elements = input.padded_shape()[-1];
+        total_rows = static_cast<uint32_t>(input.physical_volume() / row_elements);
+        chunks_per_row = (row_elements + TILE_HW - 1) / TILE_HW;
+
+        const auto paging_of = [&](const Tensor& t, DataFormat df) {
+            const uint32_t element_bytes = datum_size(df);
+            const uint32_t page_elements = static_cast<uint32_t>(t.buffer()->page_size()) / element_bytes;
+            return RmPaging{
+                .page_elements = page_elements,
+                .pages_per_row = (row_elements + page_elements - 1) / page_elements,
+                .element_bytes = element_bytes,
+                .alignment = t.buffer()->alignment()};
+        };
+        grad_paging = paging_of(grad_output, grad_output_cb_data_format);
+        input_paging = paging_of(input, input_cb_data_format);
+        output_paging = paging_of(output, output_cb_data_format);
+
+        // Several rows share one CB page only when a row is narrower than half a tile and every
+        // row lands at a NoC-aligned CB offset. Unary requires the latter as page_size ==
+        // aligned_page_size on its one input; here every tensor has to satisfy it, for its whole
+        // row and for each of its pages, since a piece may start at either boundary.
+        const auto packs_rows = [&](const Tensor& t, const RmPaging& paging) {
+            const uint32_t alignment = t.buffer()->alignment();
+            return (row_elements * paging.element_bytes) % alignment == 0 &&
+                   (paging.page_elements * paging.element_bytes) % alignment == 0;
+        };
+        if (row_elements * 2 <= TILE_HW && packs_rows(grad_output, grad_paging) && packs_rows(input, input_paging) &&
+            packs_rows(output, output_paging)) {
+            rows_per_tile = TILE_HW / row_elements;
+        }
+    }
+
+    // Units the reader and writer walk: blocks for row-major, tiles otherwise. The compute kernel
+    // sees chunks_per_row pages per block.
+    const uint32_t num_units = rm_blocked ? (total_rows + rows_per_tile - 1) / rows_per_tile : num_tiles;
+
+    // Pages in one shard. Counted by elements rather than by tile rows and columns so that it holds
+    // for a row-major shard too, whose shape need not be a multiple of the tile in either dimension
+    // -- only its element count must be (enforced by can_alias_shards).
+    const uint32_t shard_tiles = alias ? static_cast<uint32_t>(shard_of(grad_output)->numel() / TILE_HW) : 0;
 
     IDevice* device = input.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    // Work split: for a sharded program the cores are dictated by the shard grid -- each core
-    // owns exactly its own shard -- so split_work_to_cores (which picks its own grid from a tile
+    // Work split: for an aliased program the cores are dictated by the shard grid -- each core
+    // owns exactly its own shard -- so split_work_to_cores (which picks its own grid from a unit
     // count) must not be used.
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1, core_group_2;
-    uint32_t num_cores = 0, num_tiles_per_core_group_1 = 0, num_tiles_per_core_group_2 = 0;
-    if (any_sharded) {
-        const auto& shard_grid = grad_output_sharded ? grad_output.memory_config().shard_spec()->grid
-                                 : input_sharded     ? input.memory_config().shard_spec()->grid
-                                                     : output.memory_config().shard_spec()->grid;
+    uint32_t num_cores = 0, num_units_per_core_group_1 = 0, num_units_per_core_group_2 = 0;
+    if (alias) {
+        const auto shard_grid = shard_of(grad_output)->grid;
         all_cores = shard_grid;
         core_group_1 = shard_grid;
         num_cores = shard_grid.num_cores();
-        num_tiles_per_core_group_1 = shard_tiles;
+        num_units_per_core_group_1 = shard_tiles;
     } else {
-        auto split = split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        auto split = split_work_to_cores(compute_with_storage_grid_size, num_units);
         num_cores = std::get<0>(split);
         all_cores = std::get<1>(split);
         core_group_1 = std::get<2>(split);
         core_group_2 = std::get<3>(split);
-        num_tiles_per_core_group_1 = std::get<4>(split);
-        num_tiles_per_core_group_2 = std::get<5>(split);
+        num_units_per_core_group_1 = std::get<4>(split);
+        num_units_per_core_group_2 = std::get<5>(split);
     }
 
-    // A globally allocated CB must hold a whole shard; an interleaved one only needs its double
-    // buffer. Applied per operand at the push_cb calls below.
     constexpr uint32_t grad_output_cb_index = CBIndex::c_0;
     constexpr uint32_t input_cb_index = CBIndex::c_1;
     constexpr uint32_t grad_input_cb_index = CBIndex::c_2;
+
+    // An addressed CB is a staging area: two pages, so the reader can fill one while compute
+    // drains the other. An aliased CB is the whole shard in place.
+    constexpr uint32_t kDoubleBufferPages = 2;
+    const uint32_t cb_pages = alias ? shard_tiles : kDoubleBufferPages;
 
     ProgramDescriptor desc;
 
@@ -157,94 +229,109 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     auto* grad_input_buffer = output.buffer();
 
     // `buffer` set means a globally allocated CB: the CB is the tensor's own shard in L1 rather
-    // than a staging area, so the dataflow kernel copies nothing for that operand. Left null for
-    // an interleaved operand, which keeps its double buffer.
-    const auto push_cb =
-        [&desc, &all_cores](
-            uint32_t index, DataFormat data_format, uint32_t tile_size, uint32_t tiles, Buffer* shard_buffer) {
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = tiles * tile_size,
-                .core_ranges = all_cores,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(index),
-                    .data_format = data_format,
-                    .page_size = tile_size,
-                }}},
-                .buffer = shard_buffer,
-            });
-        };
+    // than a staging area, so the dataflow kernel copies nothing for it.
+    const auto push_cb = [&desc, &all_cores, cb_pages](
+                             uint32_t index, DataFormat data_format, uint32_t tile_size, Buffer* shard_buffer) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cb_pages * tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(index),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+            .buffer = shard_buffer,
+        });
+    };
 
     push_cb(
         grad_output_cb_index,
         grad_output_cb_data_format,
         grad_output_single_tile_size,
-        grad_output_sharded ? shard_tiles : 2,
-        grad_output_sharded ? grad_output_buffer : nullptr);
-    push_cb(
-        input_cb_index,
-        input_cb_data_format,
-        input_single_tile_size,
-        input_sharded ? shard_tiles : 2,
-        input_sharded ? input_buffer : nullptr);
-    push_cb(
-        grad_input_cb_index,
-        output_cb_data_format,
-        output_single_tile_size,
-        output_sharded ? shard_tiles : 2,
-        output_sharded ? grad_input_buffer : nullptr);
+        alias ? grad_output_buffer : nullptr);
+    push_cb(input_cb_index, input_cb_data_format, input_single_tile_size, alias ? input_buffer : nullptr);
+    push_cb(grad_input_cb_index, output_cb_data_format, output_single_tile_size, alias ? grad_input_buffer : nullptr);
+
+    // Scratch for the row-major kernels' unaligned pieces (see kernels/dataflow/row_major_pages.hpp):
+    // one staging window of at most a chunk plus two alignment units, plus slack for rounding the
+    // window's start up to the widest alignment. One each, since the reader and writer run
+    // concurrently.
+    if (rm_blocked) {
+        constexpr uint32_t kMaxAlignment = 64;
+        const uint32_t scratch_bytes =
+            std::max({grad_output_single_tile_size, input_single_tile_size, output_single_tile_size}) +
+            (3 * kMaxAlignment);
+        for (uint32_t index : {static_cast<uint32_t>(CBIndex::c_3), static_cast<uint32_t>(CBIndex::c_4)}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = scratch_bytes,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(index),
+                    .data_format = output_cb_data_format,
+                    .page_size = scratch_bytes,
+                }}},
+            });
+        }
+    }
 
     // ---- Reader / writer kernels ----
-    //
-    // Both are the generic interleaved dataflow kernels already used by the forward ops: a
-    // unary gradient reads two same-shaped operands and writes one, which is exactly the
-    // binary reader's and the unary writer's contract.
-
-    // The reader declares a TensorAccessor only for an operand it actually reads, so the
-    // compile-time arg list must carry exactly the accessors the defines leave enabled --
-    // appending one for a sharded operand would shift the other's offset.
-    std::vector<uint32_t> reader_compile_time_args = {0};
-    if (!grad_output_sharded) {
-        TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
-    }
-    if (!input_sharded) {
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-    }
-
-    std::map<std::string, std::string> reader_defines;
-    if (grad_output_sharded) {
-        reader_defines["IN0_SHARDED"] = "1";
-    }
-    if (input_sharded) {
-        reader_defines["IN1_SHARDED"] = "1";
-    }
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     reader_desc.config = ReaderConfigDescriptor{};
 
-    // The writer declares its accessor unconditionally, so it is always appended; under
-    // OUT_SHARDED the kernel just waits on the CB and never uses it.
-    std::vector<uint32_t> writer_compile_time_args = {grad_input_cb_index};
-    TensorAccessorArgs(*grad_input_buffer).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> writer_defines;
-    if (output_sharded) {
-        writer_defines["OUT_SHARDED"] = "1";
-    }
-
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = writer_compile_time_args;
-    writer_desc.defines = {writer_defines.begin(), writer_defines.end()};
     writer_desc.config = WriterConfigDescriptor{};
+
+    if (rm_blocked) {
+        // Unary's row-major block scheme, with page addressing generalized per tensor -- see
+        // kernels/dataflow/row_major_pages.hpp.
+        std::vector<uint32_t> reader_compile_time_args;
+        TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/dataflow/"
+            "reader_unary_backward_row_major.cpp";
+        reader_desc.compile_time_args = reader_compile_time_args;
+
+        std::vector<uint32_t> writer_compile_time_args;
+        TensorAccessorArgs(*grad_input_buffer).append_to(writer_compile_time_args);
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/dataflow/"
+            "writer_unary_backward_row_major.cpp";
+        writer_desc.compile_time_args = writer_compile_time_args;
+    } else {
+        // The reader declares a TensorAccessor only for an operand it actually reads, so the
+        // compile-time arg list must carry exactly the accessors the defines leave enabled --
+        // appending one for an aliased operand would shift the other's offset.
+        std::vector<uint32_t> reader_compile_time_args = {0};
+        std::map<std::string, std::string> reader_defines;
+        if (alias) {
+            reader_defines["IN0_SHARDED"] = "1";
+            reader_defines["IN1_SHARDED"] = "1";
+        } else {
+            TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
+            TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        }
+        reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp";
+        reader_desc.compile_time_args = reader_compile_time_args;
+        reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
+
+        // The writer declares its accessor unconditionally, so it is always appended; under
+        // OUT_SHARDED the kernel just waits on the CB and never uses it.
+        std::vector<uint32_t> writer_compile_time_args = {grad_input_cb_index};
+        TensorAccessorArgs(*grad_input_buffer).append_to(writer_compile_time_args);
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        writer_desc.compile_time_args = writer_compile_time_args;
+        if (alias) {
+            writer_desc.defines = {{"OUT_SHARDED", "1"}};
+        }
+    }
 
     // ---- Compute kernel ----
     //
@@ -295,18 +382,16 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
 
     // ---- Per-core runtime args ----
 
-    // Core enumeration. For an interleaved program the linear-index-to-coordinate mapping below
-    // has to agree with split_work_to_cores, which walks columns of the compute grid. For a
-    // sharded program it instead has to agree with the SHARD's own core order, which follows the
-    // shard spec's orientation -- a linear mapping through the compute grid's height silently
-    // hands each core another core's tile range. That produced correct results only where the
-    // shard grid happened to be one compute-grid column; a full 8x8 grid came out at PCC 0.13.
+    // Core enumeration. For an addressed program the linear-index-to-coordinate mapping below has
+    // to agree with split_work_to_cores, which walks columns of the compute grid. For an aliased
+    // program it instead has to agree with the SHARD's own core order, which follows the shard
+    // spec's orientation -- a linear mapping through the compute grid's height silently hands
+    // each core another core's tile range. That produced correct results only where the shard
+    // grid happened to be one compute-grid column; a full 8x8 grid came out at PCC 0.13.
     std::vector<CoreCoord> cores;
-    if (any_sharded) {
-        const auto& shard_spec = grad_output_sharded ? grad_output.memory_config().shard_spec()
-                                 : input_sharded     ? input.memory_config().shard_spec()
-                                                     : output.memory_config().shard_spec();
-        cores = corerange_to_cores(all_cores, num_cores, shard_spec->orientation == ShardOrientation::ROW_MAJOR);
+    if (alias) {
+        cores =
+            corerange_to_cores(all_cores, num_cores, shard_of(grad_output)->orientation == ShardOrientation::ROW_MAJOR);
     } else {
         cores.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; i++) {
@@ -314,23 +399,61 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         }
     }
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, units_done = 0; i < num_cores; i++) {
         CoreCoord core = cores[i];
-        uint32_t num_tiles_per_core = 0;
+        uint32_t units = 0;
         if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
+            units = num_units_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+            units = num_units_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
         }
 
-        reader_desc.emplace_runtime_args(
-            core, {grad_output_buffer, input_buffer, num_tiles_per_core, num_tiles_written, 0u, 0u, num_cores_y});
-        compute_desc.emplace_runtime_args(core, {num_tiles_per_core});
-        writer_desc.emplace_runtime_args(core, {grad_input_buffer, num_tiles_per_core, num_tiles_written});
+        if (rm_blocked) {
+            reader_desc.emplace_runtime_args(
+                core,
+                {units,
+                 units_done,
+                 row_elements,
+                 TILE_HW,
+                 chunks_per_row,
+                 rows_per_tile,
+                 total_rows,
+                 grad_output_buffer,
+                 grad_paging.page_elements,
+                 grad_paging.pages_per_row,
+                 grad_paging.element_bytes,
+                 grad_paging.alignment,
+                 input_buffer,
+                 input_paging.page_elements,
+                 input_paging.pages_per_row,
+                 input_paging.element_bytes,
+                 input_paging.alignment});
+            writer_desc.emplace_runtime_args(
+                core,
+                {units,
+                 units_done,
+                 row_elements,
+                 TILE_HW,
+                 chunks_per_row,
+                 rows_per_tile,
+                 total_rows,
+                 grad_input_buffer,
+                 output_paging.page_elements,
+                 output_paging.pages_per_row,
+                 output_paging.element_bytes,
+                 output_paging.alignment});
+            // Each block is chunks_per_row CB pages.
+            compute_desc.emplace_runtime_args(core, {units * chunks_per_row});
+        } else {
+            reader_desc.emplace_runtime_args(
+                core, {grad_output_buffer, input_buffer, units, units_done, 0u, 0u, num_cores_y});
+            compute_desc.emplace_runtime_args(core, {units});
+            writer_desc.emplace_runtime_args(core, {grad_input_buffer, units, units_done});
+        }
 
-        num_tiles_written += num_tiles_per_core;
+        units_done += units;
     }
 
     desc.kernels.push_back(std::move(reader_desc));

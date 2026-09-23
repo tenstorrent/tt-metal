@@ -48,10 +48,23 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
         op_name,
         name);
 
+    TT_FATAL(
+        tensor.layout() == Layout::TILE || tensor.layout() == Layout::ROW_MAJOR,
+        "{} operation requires {} to be in TILE or ROW_MAJOR layout, but it has {} layout.",
+        op_name,
+        name,
+        tensor.layout());
+
+    // Row-major operands are processed by element (see the factory), so neither the tile shape
+    // nor the shard shape constrains them.
+    if (tensor.layout() != Layout::TILE) {
+        return;
+    }
+
     // Sharded operands are supported: the factory either aliases each circular buffer to its
     // tensor's shard or addresses every operand through TensorAccessor. What is NOT supported
-    // is a legacy shard spec whose shard is not a whole number of tiles, because the program is
-    // one-to-one on physical tiles.
+    // is a legacy shard spec whose shard is not a whole number of tiles, because the tiled
+    // program is one-to-one on physical tiles.
     //
     // Guarded on the optional rather than on is_sharded(): that is also true for ND_SHARDED,
     // and an ND distribution with no legacy equivalent (CONTIGUOUS_1D) carries no legacy shard
@@ -67,18 +80,6 @@ void validate_operand(std::string_view op_name, const Tensor& tensor, std::strin
             shard_shape[0],
             shard_shape[1]);
     }
-
-    // The factory sizes its circular buffers with tt::tile_size and splits work by
-    // physical_volume() / TILE_HW, and neither the layout nor the tile is in
-    // compute_program_hash. The layout also reaches the kernels as the aligned page size
-    // inside TensorAccessorArgs, a compile-time arg no cache-hit path can refresh, so a
-    // ROW_MAJOR operand would be read as tile pages under a cached key.
-    TT_FATAL(
-        tensor.layout() == Layout::TILE,
-        "{} operation requires {} to be in TILE layout, but it has {} layout.",
-        op_name,
-        name,
-        tensor.layout());
 
     const auto tile = tensor.tensor_spec().tile();
     TT_FATAL(
@@ -138,6 +139,15 @@ void UnaryBackwardDeviceOperation::validate_on_program_cache_miss(
         op_name,
         grad_output.logical_shape(),
         input.logical_shape());
+    // One program serves all three tensors, walking them either by tile or by row, so they must
+    // share a layout. The composite this replaced got there implicitly: every op in it returned
+    // its input's layout.
+    TT_FATAL(
+        grad_output.layout() == input.layout(),
+        "{} operation requires grad_output and input to have the same layout, but got {} and {}.",
+        op_name,
+        grad_output.layout(),
+        input.layout());
     TT_FATAL(
         grad_output.padded_shape() == input.padded_shape(),
         "{} operation requires grad_output and input to have the same padded shape, but got {} and {}.",
@@ -172,6 +182,13 @@ void UnaryBackwardDeviceOperation::validate_on_program_cache_miss(
         // invalid address in a program dispatched on this one. gelu_bw enforces the same
         // invariant for its own preallocated output.
         TT_FATAL(
+            preallocated.layout() == input.layout(),
+            "{} operation requires a preallocated output tensor to have the same layout as the input. Input "
+            "layout: {}, preallocated output layout: {}",
+            op_name,
+            input.layout(),
+            preallocated.layout());
+        TT_FATAL(
             preallocated.device() == input.device(),
             "{} operation requires a preallocated output tensor to be on the same device as the input.",
             op_name);
@@ -197,7 +214,7 @@ UnaryBackwardDeviceOperation::spec_return_value_t UnaryBackwardDeviceOperation::
         tensor_args.input.logical_shape(),
         TensorLayout::fromPaddedShape(
             output_dtype,
-            PageConfig(Layout::TILE),
+            PageConfig(tensor_args.input.layout()),
             args.output_memory_config,
             tensor_args.input.logical_shape(),
             tensor_args.input.padded_shape()));
@@ -226,7 +243,11 @@ ttsl::hash::hash_t UnaryBackwardDeviceOperation::compute_program_hash(
         input.memory_config(),
         grad_output.dtype(),
         grad_output.memory_config(),
-        input.padded_shape().volume());
+        input.padded_shape().volume(),
+        // Selects tile or row-major kernels; for row-major the factory also bakes the row width
+        // and every tensor's page size into its runtime args and CB-aliasing decision.
+        input.layout(),
+        input.padded_shape()[-1]);
 
     // args only carries the requested output_dtype/output_memory_config; when the caller
     // supplies its own output tensor that is what the factory actually binds, sizing the
