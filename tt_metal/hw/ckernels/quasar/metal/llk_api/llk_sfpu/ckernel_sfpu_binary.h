@@ -10,65 +10,20 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_add.h"
+#include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_srcs.h"
 #include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief Converts float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE).
- * Implements the "add 0x7fff + LSB" algorithm for correct tie-breaking, ported
- * from BH. Applied in software before SFPSTORE because SFPSTORE truncates
- * fp32->bf16 on all architectures.
- *
- * @param in: float32 value to convert
- * @return bf16 value packed in the upper 16 bits of a float32
- */
-sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
-    sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
-
-    // Extract the LSB of what will become the bf16 mantissa (bit 16 of float32).
-    // Needed for the tie-breaker: round to even.
-    sfpi::vUInt lsb = (bits >> 16) & 1;
-
-    // Add 0x7fff + lsb to implement RNE:
-    // - lower 16 bits > 0x8000      -> overflow, rounds up
-    // - lower 16 bits < 0x8000      -> no overflow, rounds down
-    // - lower 16 bits == 0x8000 (tie)
-    //     and lsb=0: 0x7fff+0=0xffff, no overflow -> stays even
-    //     and lsb=1: 0x7fff+1=0x8000,    overflow -> rounds up to even
-    bits = bits + 0x7fffU + lsb;
-
-    // Clear the lower 16 bits to get bf16 in upper 16 bits (bf16 format in float32).
-    bits = bits & 0xFFFF0000U;
-
-    return sfpi::as<sfpi::vFloat>(bits);
-}
-
-namespace detail {
-
-// Dest binary ADD owns its optional BF16 narrowing; the shared ADD core only adds.
-template <bool ROUND_TO_BF16>
-struct DestAddFormat : SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat> {
-    template <SfpuReg REG>
-    sfpi_inline static void store(int index, sfpi::vFloat value) {
-        static_assert(REG == SfpuReg::Dest, "Dest ADD rounding policy requires Dest");
-        if constexpr (ROUND_TO_BF16) {
-            value = float32_to_bf16_rne(value);
-        }
-        SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>::template store<REG>(index, value);
-    }
-};
-
-}  // namespace detail
-
-/**
  * @brief Dest-only compatibility wrapper for binary SFPU ADD, SUB, MUL and DIV.
  *
  * Arguments are Dest tile indices. This wrapper advances the hardware Dest cursor.
  * ADD delegates to calculate_add_operands; callers with independently located operands
- * can call that core directly. The SrcS ADD adapters below provide the standard slice layout.
+ * can call that core directly. SUB, MUL and DIV are not yet on the operand model.
  *
  * @note DIV special cases (matching BH semantics):
  *   - 0 / 0 -> NaN
@@ -104,7 +59,7 @@ inline void calculate_sfpu_binary(
         if constexpr (BINOP == BinaryOp::ADD) {
             using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
             constexpr bool round_to_bf16 = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
-            using Output = SfpuOperand<SfpuReg::Dest, detail::DestAddFormat<round_to_bf16>>;
+            using Output = SfpuOperand<SfpuReg::Dest, DestBf16RneFormat<round_to_bf16>>;
             calculate_add_operands<1>(
                 Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
                 Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
@@ -154,28 +109,20 @@ inline void calculate_sfpu_binary(
     }
 }
 
-// SFPI implementation of the SrcS floating-point ADD using the shared operand core.
-// Band layout follows llk_sfpu_srcs_api.h: in0 at the slice base, in1 at + YDIM, result at
-// + 2 * YDIM. SFPI reaches SrcS through UnpackSrcS rather than bit 10 of the address, so
-// SFPU_SRCS_BASE_ADDR is implicit here and no base address is passed in.
-//
-// SFP_ROWS is a MATH property while SFP_SRCSREG_STRIDE is SFPI's addressing choice; the band
-// arithmetic below is only valid while they agree.
-static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi index step must be one SFPU op");
-
+// Reference adapter for the unified Dest/SrcS API; exercised by test_sfpu_add_parallel_matmul_quasar.
 /**
- * @brief Calculates ADD over one SrcS slice.
+ * @brief ADD over one SrcS slice (slots per @ref SrcsLayout).
  *
- * @tparam YDIM: rows per SrcS slice (trisc::srcs_dims::ydim).
- * @tparam LAYOUT: sfpmem layout for the loads and the store. PACK1 reads SrcS directly, so the
- *         packer source format always matches the unpack destination format on this path.
+ * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
+ *         source formats must match.
+ * @note The caller runs unpack/pack and clears the SrcS valids after this call, as
+ *       llk_sfpu_srcs_binary does.
  */
-template <int YDIM, sfpi::DataLayout LAYOUT>
+template <sfpi::DataLayout LAYOUT>
 sfpi_inline void calculate_add_srcs() {
-    static_assert(YDIM > 0 && YDIM % ckernel::math::SFP_ROWS == 0, "SrcS slice must contain whole SFPU passes");
-    constexpr int ops = YDIM / static_cast<int>(ckernel::math::SFP_ROWS);
+    using Layout = SrcsLayout<LAYOUT>;
     using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
-    calculate_add_operands<ops>(Operand{0}, Operand{ops}, Operand{2 * ops});
+    calculate_add_operands<Layout::ops>(Operand{Layout::in0}, Operand{Layout::in1}, Operand{Layout::out});
 }
 
 /**

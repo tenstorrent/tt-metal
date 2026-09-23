@@ -191,6 +191,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
+        // SFPU_ISOLATE = the whole TRISC3 SrcS pipeline (UNP_S -> SFPU -> PACK1) without the matmul TRISCs.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             dispatch_sfpu_srcs_format(
@@ -200,7 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     using Format = decltype(format);
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        llk_sfpu_srcs_binary(num_tiles, srcs_format, [](int, int, int, int) { calculate_add_srcs<Format::rows, Format::layout>(); });
+                        llk_sfpu_srcs_binary(num_tiles, srcs_format, [](int, int, int, int) { calculate_add_srcs<Format::layout>(); });
                     }
                 });
         }

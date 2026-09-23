@@ -1,6 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +18,10 @@ namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief ADD with independently located floating-point inputs and output.
+ * @brief ADD on independently located floating-point operands: output = input0 + input1.
  *
- * The output operand's store policy controls any optional rounding.
- * Default operands advance explicit indices only; the caller owns setup and synchronization.
- * Each input range must coincide with the output or be disjoint from it.
+ * Any rounding is the output operand's store policy. Advances explicit indices only; the caller
+ * owns setup and synchronization. Each input range must coincide with the output or be disjoint.
  */
 template <int ITERATIONS, class Input0, class Input1, class Output>
 sfpi_inline void calculate_add_operands(const Input0& input0, const Input1& input1, const Output& output) {

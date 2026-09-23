@@ -57,23 +57,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.pack_S_dst),
         IMPLIED_MATH_FORMAT);
 
-    // Resolve the two register formats independently, outside the tile/slice loops.
+    // Resolve the SrcS register format once, outside the tile/slice loops. The SFPI slice kernel
+    // uses the same layout for its input and output; PACK1 reads SrcS directly, so the harness
+    // always keeps pack_S_src equal to unpack_S_dst on this path.
     // The pipeline still owns unpack/pack and SrcS completion; square only computes.
-    const DataFormat input_format  = static_cast<DataFormat>(formats.unpack_S_dst);
-    const DataFormat output_format = static_cast<DataFormat>(formats.pack_S_src);
+    const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
+    LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");
     dispatch_sfpu_srcs_format(
-        input_format,
-        [&](auto input)
+        srcs_format,
+        [&](auto layout)
         {
-            using Input = decltype(input);
-            dispatch_sfpu_srcs_format(
-                output_format,
-                [&](auto output)
-                {
-                    using Output = decltype(output);
-                    llk_sfpu_srcs_unary(
-                        params.TILE_CNT, input_format, [](int, int, int) { calculate_square_srcs<Input::rows, Input::layout, Output::layout>(); });
-                });
+            using Layout = decltype(layout);
+            llk_sfpu_srcs_unary(params.TILE_CNT, srcs_format, [](int, int, int) { calculate_square_srcs<Layout::layout>(); });
         });
 
     wait_sfpu_idle();

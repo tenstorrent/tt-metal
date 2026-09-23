@@ -8,6 +8,7 @@
 #include <type_traits>
 
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -17,11 +18,10 @@ namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief Square floating-point operands with independently selected locations and formats.
+ * @brief Square on independently located floating-point operands: output = input * input.
  *
- * Operands supply load/store in SFPI index units. With the default SfpiFormat policy,
- * this loop advances only explicit indices; the caller owns setup and synchronization.
- * Input/output ranges must coincide or be disjoint. Keep offsets constant for immediate addresses.
+ * Advances explicit indices only; the caller owns setup and synchronization. Input/output
+ * ranges must coincide or be disjoint.
  */
 template <int ITERATIONS, class Input, class Output>
 sfpi_inline void calculate_square_operands(const Input& input, const Output& output) {
@@ -70,57 +70,20 @@ inline void calculate_square() {
     }
 }
 
-// SrcS layout follows llk_sfpu_srcs_api.h: input at the slice base, output at
-// + 2 * YDIM. UnpackSrcS selects the register file; indices are in SFPI steps.
-static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi index step must be one SFPU op");
-
+// Reference adapter for the unified Dest/SrcS API; exercised by test_isolate_sfpu_square_quasar.
 /**
- * @brief Calculates floating-point square over one SrcS slice.
+ * @brief Square over one SrcS slice (slots per @ref SrcsLayout).
  *
- * @tparam YDIM: rows per SrcS slice (trisc::srcs_dims::ydim).
- * @tparam IN_LAYOUT: Input sfpmem layout, also selecting the slice geometry.
- * @tparam OUT_LAYOUT: Output sfpmem layout, defaulting to IN_LAYOUT. The caller must
- *         configure PACK1 to read this format and ensure the output fits its SrcS range.
- * @note The caller configures unpack/pack and clears the SrcS valids after this call,
- *       as llk_sfpu_srcs_unary does. This kernel does not signal completion itself.
+ * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
+ *         source formats must match.
+ * @note The caller runs unpack/pack and clears the SrcS valids after this call, as
+ *       llk_sfpu_srcs_unary does.
  */
-template <int YDIM, sfpi::DataLayout IN_LAYOUT, sfpi::DataLayout OUT_LAYOUT = IN_LAYOUT>
+template <sfpi::DataLayout LAYOUT>
 sfpi_inline void calculate_square_srcs() {
-    static_assert(YDIM > 0 && YDIM % ckernel::math::SFP_ROWS == 0, "SrcS slice must contain whole SFPU passes");
-    constexpr int ops = YDIM / static_cast<int>(ckernel::math::SFP_ROWS);
-    using Input = SfpuOperand<SfpuReg::SrcS, SfpiFormat<IN_LAYOUT, sfpi::vFloat>>;
-    using Output = SfpuOperand<SfpuReg::SrcS, SfpiFormat<OUT_LAYOUT, sfpi::vFloat>>;
-    calculate_square_operands<ops>(Input{0}, Output{2 * ops});
-}
-
-/**
- * @brief Square values with independently selected input and output register spaces.
- *
- * @tparam ITERATIONS: Number of SFPI accesses; for a full SrcS slice use YDIM / SFP_ROWS.
- * @tparam IN_LAYOUT: Input load layout.
- * @tparam OUT_LAYOUT: Output store layout, defaulting to IN_LAYOUT.
- * @param input_offset: Input base in SFPI index units (one index step is two address rows).
- * @param output_offset: Output base in SFPI index units, independently of input_offset.
- *
- * Dest indices are relative to the caller's current Dest cursor. SrcS indices are
- * relative to UnpackSrcS's base; do not include SFPU_SRCS_BASE_ADDR. For the current
- * SrcS pipeline, input slot 0 starts at index 0 and output slot 2 at YDIM.
- * The caller configures ADDR_MOD_7 with zero increments, sets up the register files,
- * and handles Dest synchronization and SrcS completion. This function advances
- * only its explicit indices; it does not increment the Dest cursor or clear valids.
- * Supply constant offsets where possible to allow immediate load/store addresses.
- * Input and output ranges may coincide or be disjoint; partial overlap is unsupported.
- */
-template <
-    SfpuReg IN_REG,
-    SfpuReg OUT_REG,
-    int ITERATIONS,
-    sfpi::DataLayout IN_LAYOUT = sfpi::DataLayout::Default,
-    sfpi::DataLayout OUT_LAYOUT = IN_LAYOUT>
-sfpi_inline void calculate_square_regs(const int input_offset, const int output_offset) {
-    using Input = SfpuOperand<IN_REG, SfpiFormat<IN_LAYOUT, sfpi::vFloat>>;
-    using Output = SfpuOperand<OUT_REG, SfpiFormat<OUT_LAYOUT, sfpi::vFloat>>;
-    calculate_square_operands<ITERATIONS>(Input{input_offset}, Output{output_offset});
+    using Layout = SrcsLayout<LAYOUT>;
+    using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
+    calculate_square_operands<Layout::ops>(Operand{Layout::in0}, Operand{Layout::out});
 }
 
 }  // namespace sfpu

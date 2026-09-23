@@ -125,7 +125,10 @@ def generate_parallel_matmul_add_combinations(
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         formats_list
     ):
-        dest_sync_modes = (DestSync.Half, DestSync.Full)
+        # Perf sweeps measure one dest-sync mode; Half is the production default.
+        dest_sync_modes = (
+            (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+        )
         implied_math_modes = (
             (ImpliedMathFormat.Yes,)
             if is_perf
@@ -171,6 +174,7 @@ PARALLEL_MATMUL_ADD_COMBINATIONS = generate_parallel_matmul_add_combinations(
 )
 def test_sfpu_add_parallel_matmul_quasar(
     format_dest_acc_sync_implied_math,
+    *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,

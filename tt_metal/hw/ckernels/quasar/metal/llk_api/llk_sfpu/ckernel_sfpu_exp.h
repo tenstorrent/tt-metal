@@ -11,6 +11,7 @@
 
 #include "ckernel.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
@@ -130,15 +131,31 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return y;
 }
 
+// EXP algorithm policies: apply(vFloat) -> vFloat. The operand loop is independent of the choice.
+
+// HW nonlinear LUT (SFPNONLINEAR EXP); ~1 ULP once the result lands in a bf16 register.
+struct ExpHwLut {
+    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return sfpi::approx_exp(x); }
+};
+
+// fp32 Cody-Waite + degree-6 minimax polynomial (ported from Blackhole); for 32-bit results only.
+struct ExpFp32Accurate {
+    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_(x); }
+};
+
+// Accurate polynomial only for a 32-bit result in non-approximate mode; LUT otherwise.
+template <bool APPROXIMATION_MODE, bool FP32_RESULT>
+using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
+
 /**
- * @brief EXP on independently located floating-point operands.
+ * @brief EXP on independently located floating-point operands: output = Algo::apply(input).
  *
- * FP32_PRECISION selects the accurate algorithm when APPROXIMATION_MODE is false.
- * This is an arithmetic choice, independent of input/output layouts and register spaces.
- * Default operands advance explicit indices only; the caller owns setup and synchronization.
- * Input/output ranges must coincide or be disjoint.
+ * Advances explicit indices only; the caller owns setup and synchronization. Input/output
+ * ranges must coincide or be disjoint.
+ *
+ * @tparam Algo: @ref ExpHwLut or @ref ExpFp32Accurate (see @ref ExpAlgo).
  */
-template <bool APPROXIMATION_MODE, bool FP32_PRECISION, int ITERATIONS, class Input, class Output>
+template <class Algo, int ITERATIONS, class Input, class Output>
 sfpi_inline void calculate_exponential_operands(const Input& input, const Output& output) {
     static_assert(ITERATIONS > 0, "EXP requires at least one SFPI access");
     static_assert(
@@ -147,14 +164,7 @@ sfpi_inline void calculate_exponential_operands(const Input& input, const Output
         "EXP requires floating-point operands");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat value = input.load(d);
-        sfpi::vFloat result;
-        if constexpr (!FP32_PRECISION || APPROXIMATION_MODE) {
-            result = sfpi::approx_exp(value);
-        } else {
-            result = _sfpu_exp_fp32_accurate_(value);
-        }
-        output.store(d, result);
+        output.store(d, Algo::apply(input.load(d)));
     }
 }
 
@@ -177,41 +187,29 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
         exp_base_scale_factor == p_sfpu::kCONST_1_FP16B,
         "Scaling is not supported in the current version of exp on Quasar.");
     using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
+    using Algo = ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_exponential_operands<APPROXIMATION_MODE, EN_32BIT_DEST, 1>(Operand{}, Operand{});
+        calculate_exponential_operands<Algo, 1>(Operand{}, Operand{});
         sfpi::dst_reg++;
     }
 }
 
+// Reference adapter for the unified Dest/SrcS API; not yet wired into a test.
 /**
- * @brief Calculate EXP over one SrcS slice using SFPI.
+ * @brief EXP over one SrcS slice (slots per @ref SrcsLayout), algorithm per @ref ExpAlgo.
  *
- * Uses the llk_sfpu_srcs_unary layout: input at the slice base, output at + 2 * YDIM
- * address rows. Both accesses use LAYOUT, so unpack destination and pack source formats
- * must match. Like the Dest implementation, 16-bit formats always use approximate EXP;
- * F32 uses _sfpu_exp_fp32_accurate_ unless APPROXIMATION_MODE is enabled.
- *
- * @tparam APPROXIMATION_MODE: Select hardware approximate EXP even for F32.
- * @tparam YDIM: Rows per SrcS slice, matching trisc::srcs_dims::ydim for LAYOUT.
- * @tparam LAYOUT: F16a, F16b or F32 load/store layout.
- * @note The caller initializes SFPU/unpack/pack and completes each SrcS slice, as
- *       llk_sfpu_srcs_unary does. This function does not advance Dest or clear SrcS valids.
+ * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
+ *         source formats must match.
+ * @note The caller runs unpack/pack and clears the SrcS valids after this call, as
+ *       llk_sfpu_srcs_unary does.
  */
-template <bool APPROXIMATION_MODE, int YDIM, sfpi::DataLayout LAYOUT>
+template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
 sfpi_inline void calculate_exponential_srcs() {
-    static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi index step must be one SFPU op");
-    static_assert(
-        LAYOUT == sfpi::DataLayout::F16a || LAYOUT == sfpi::DataLayout::F16b || LAYOUT == sfpi::DataLayout::F32,
-        "SrcS EXP supports F16a, F16b and F32 layouts");
-    static_assert(
-        YDIM == static_cast<int>(trisc::srcs_dims::ydim(LAYOUT == sfpi::DataLayout::F32)),
-        "SrcS slice height must match its format");
-
-    constexpr int ops = YDIM / static_cast<int>(ckernel::math::SFP_ROWS);
+    using Layout = SrcsLayout<LAYOUT>;
     using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
-    calculate_exponential_operands<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32, ops>(
-        Operand{0}, Operand{2 * ops});
+    using Algo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
+    calculate_exponential_operands<Algo, Layout::ops>(Operand{Layout::in0}, Operand{Layout::out});
 }
 
 template <

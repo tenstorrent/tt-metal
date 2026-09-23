@@ -24,8 +24,9 @@ sfpi_inline auto sfpu_operand_access(int index)
     }
     else
     {
+        // SFPI's SrcS builtins select the register file (SFP_SRCSREG_BASE is 0); never add
+        // SFPU_SRCS_BASE_ADDR here. The returned proxy owns its address, not this local.
         sfpi::UnpackSrcS srcs;
-        // The returned proxy owns its address; it does not reference this local accessor.
         return srcs[index];
     }
 }
@@ -35,12 +36,11 @@ sfpi_inline auto sfpu_operand_access(int index)
 /**
  * @brief Load/store policy using SFPI's layout and vector-type conversions.
  *
- * LAYOUT describes memory representation; VALUE is the loaded/stored vector type.
- * For example, F16b with vFloat loads BF16 data into a floating-point vector.
- * Supported layout/value pairs are enforced by SFPI. Formats not exposed by SFPI's
- * register proxies require a separate policy with the same load/store interface.
- * STORE_ADDR_MODE defaults to no increment. A Dest adapter may select a different
- * mode to preserve hardware cursor advancement; its caller must configure that mode.
+ * LAYOUT is the register-file representation, VALUE the vector type it converts to (e.g. F16b
+ * with vFloat). SFPI enforces the legal pairs.
+ *
+ * @tparam STORE_ADDR_MODE: NOINC (default) or a Dest ADDR_MOD_* that advances the cursor; the
+ *         caller programs that mode. SrcS stores must use NOINC.
  */
 template <sfpi::DataLayout LAYOUT, typename VALUE, int STORE_ADDR_MODE = sfpi::SFPSTORE_ADDR_MODE_NOINC>
 struct SfpiFormat
@@ -63,19 +63,12 @@ struct SfpiFormat
 };
 
 /**
- * @brief One independently located SFPU input or output operand on Quasar.
+ * @brief One SFPU input or output operand: register file, format policy and base offset.
  *
- * FORMAT supplies value_type and load<REG>(index) / store<REG>(index, value).
- * Base and access indices are in SFPI units, not tile indices or raw instruction
- * addresses. Dest is relative to the current hardware cursor; SrcS is relative
- * to UnpackSrcS's base (do not include SFPU_SRCS_BASE_ADDR).
- *
- * Accesses through SfpiFormat default to the no-increment address mode. The caller sets
- * up ADDR_MOD_7, formats and geometry, checks ranges/overlap, and handles traversal
- * and synchronization. Only an explicitly selected store address mode advances Dest;
- * an operand never completes SrcS slices. Use such modes with single-access kernels
- * when traversal is controlled by an outer loop, to avoid advancing twice.
- * Keep offsets constant where possible to enable immediate instruction addresses.
+ * Indices are SFPI steps (one step = SFP_ROWS rows), not tile indices or raw addresses. Dest is
+ * relative to the current cursor; SrcS to UnpackSrcS's base. An operand never advances the Dest
+ * cursor (unless FORMAT's store mode does) and never completes SrcS slices; the caller owns
+ * traversal and synchronization. Constant offsets compile to immediate addresses.
  */
 template <SfpuReg REG, class FORMAT>
 class SfpuOperand
