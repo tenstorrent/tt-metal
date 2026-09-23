@@ -73,6 +73,11 @@ jobs:
       tracy: ${{ inputs.tracy }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
+      # BRANCH-LOCAL: reuse the build of this branch's head (d0ca81b0) from run 35768856949, so
+      # FIBO dispatches skip both the compile and the manylinux wheel job. Hardcoded rather than
+      # exposed as a dispatch input because workflow_dispatch validates inputs against the default
+      # branch, whose copy of this file has no such input. Artifacts expire 2026-12-21.
+      use-artifacts-from-run: "35768856949"
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -90,10 +95,16 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
+        # BRANCH-LOCAL: briaai/FIBO is gated, so populating its weights into the MLPerf cache needs
+        # a token, as models-{unit,e2e}-tests-impl.yaml do.
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
-        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+        # BRANCH-LOCAL: mounted read-write, so a run can populate the weights cache. The model
+        # workflows take this from their `mlperf-write-access` input (models-unit-tests-impl.yaml
+        # `mlperf-read-only && ':ro' || ':rw'`); here it is hardcoded, as an input cannot be added.
+        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:rw' || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
