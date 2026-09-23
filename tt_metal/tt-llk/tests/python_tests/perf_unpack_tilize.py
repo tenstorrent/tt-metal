@@ -47,12 +47,7 @@ class UnpackTilizeRelevance(PerfRelevance):
 
 UNPACK_TILIZE_RELEVANCE = UnpackTilizeRelevance()
 
-assert UNPACK_TILIZE_RELEVANCE.run_types == (
-    PerfRunType.L1_TO_L1,
-    PerfRunType.UNPACK_ISOLATE,
-    PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
-)
+assert UNPACK_TILIZE_RELEVANCE.run_types == UNPACK_TILIZE_RUN_TYPES
 
 
 @pytest.mark.perf

@@ -19,7 +19,9 @@ from helpers.llk_params import (
 )
 from helpers.perf.core import PerfConfig, PerfReport
 from helpers.perf.relevance import (
+    ALL_PERF_RUN_TYPES,
     LLK_DISABLE_PERF_RELEVANCE,
+    PerfRelevance,
     RunTypeRelevance,
     _hashable,
     execute_key,
@@ -182,6 +184,8 @@ def _matmul_params(fidelity, kt=1):
     >>> next(r for r in runtimes if isinstance(r, CRK_TILE_DIMM)).k_dimm
     32
     """
+    _C_DIMM = 2
+    _R_DIMM = 2
     templates = [
         MATH_FIDELITY(fidelity),
         DEST_SYNC(DestSync.Half),
@@ -191,8 +195,8 @@ def _matmul_params(fidelity, kt=1):
         UNPACK_TRANS_FACES(Transpose.No),
         NUM_FACES(),
         LOOP_FACTOR(64),
-        TILE_COUNT(2 * 2 * kt),
-        CRK_TILE_DIMM(c_dimm=2, r_dimm=2, k_dimm=kt),
+        TILE_COUNT(_C_DIMM * _R_DIMM * kt),
+        CRK_TILE_DIMM(c_dimm=_C_DIMM, r_dimm=_R_DIMM, k_dimm=kt),
     ]
     return templates, runtimes
 
@@ -551,6 +555,22 @@ def test_relevance_map_requires_every_run_type():
             dest_acc=DestAccumulation.No,
             relevance=PACK_RELEVANCE,
         )
+
+
+def test_widened_run_types_name_the_missing_spec():
+    """A subclass that adds a run type this class cannot describe fails at map build.
+
+    ``as_map`` used to index a fixed five-entry dict and raise a bare
+    ``KeyError``. The error names the run type, matching ``PerfConfig``.
+    """
+
+    class _Wide(PerfRelevance):
+        run_types = [*ALL_PERF_RUN_TYPES, PerfRunType.SFPU_ISOLATE]
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="SFPU_ISOLATE"
+    ):
+        _Wide().as_map
 
 
 def test_l1_to_l1_spec_is_full_fidelity():
@@ -975,6 +995,23 @@ def test_execute_key_includes_unpack_to_dest_and_l1_acc():
         spec,
         {**base, "l1_acc": L1Accumulation.No},
         {**base, "l1_acc": L1Accumulation.Yes},
+    )
+
+
+def test_execute_key_includes_unpack_to_srcs():
+    """``unpack_to_srcs`` changes tile size and buffer addresses, so it is always keyed.
+
+    It is the SrcS sibling of ``unpack_to_dest``. A hit across the two modes would
+    replay one L1 layout for the other.
+    """
+    t, runtimes = _matmul_params(MathFidelity.LoFi)
+    spec = MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    base = _execute_kwargs("perf_matmul", t, runtimes)
+    assert_key_miss(
+        PerfRunType.PACK_ISOLATE,
+        spec,
+        {**base, "unpack_to_srcs": False},
+        {**base, "unpack_to_srcs": True},
     )
 
 
@@ -1940,6 +1977,33 @@ def test_sol_run_keeps_caller_pack_src_patch(monkeypatch):
     l1 = _run_config(cfg, PerfRunType.L1_TO_L1)
     cfg._apply_run_config(*l1)
     assert cfg.formats_config[0].pack_src == DataFormat.Bfp8_b
+
+
+def test_sol_run_keeps_caller_stimuli_patch(monkeypatch):
+    """A stimuli edit made after construction survives projection and restore.
+
+    ``passed_stimuli`` used to be copied only in ``__init__``, so a later
+    change to ``variant_stimuli`` was overwritten when ``run()`` restored the
+    stale snapshot.
+    """
+    elf_calls = []
+    seeds = {"n": 0}
+    cfg = PerfConfig(
+        test_name="perf_pack",
+        formats=_format(DataFormat.Float16, DataFormat.Float16),
+        run_types=[PerfRunType.L1_TO_L1],
+        templates=[DEST_SYNC(DestSync.Half)],
+        runtimes=[LOOP_FACTOR(32)],
+        variant_stimuli=_stimuli(4),
+        dest_acc=DestAccumulation.No,
+        relevance=PACK_RELEVANCE,
+    )
+    cfg.variant_stimuli.tile_count_res = 8
+    _stub_hw(monkeypatch, cfg, elf_calls, seeds)
+    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", True)
+    cfg.run(PerfReport(), run_count=1)
+    assert cfg.variant_stimuli.tile_count_res == 8
+    assert cfg.passed_stimuli.tile_count_res == 8
 
 
 def test_sol_refresh_tile_sizes_keeps_narrow_tile_rescale(monkeypatch):

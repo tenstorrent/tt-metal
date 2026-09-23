@@ -1120,6 +1120,7 @@ class PerfConfig(TestConfig):
             speed_of_light=TestConfig.SPEED_OF_LIGHT,
             spec=self._relevance_spec(run_type),
             unpack_to_dest=self.unpack_to_dest,
+            unpack_to_srcs=self.unpack_to_srcs,
             l1_acc=self.l1_acc,
             source=self.relevance_source,
             run_count=run_count,
@@ -1145,11 +1146,14 @@ class PerfConfig(TestConfig):
         counter_results_list = []
         code_sizes = {}
 
-        # Callers may patch formats_config between construction and run()
-        # (e.g. perf_eltwise_unary_typecast). Snapshot after those patches so
-        # SoL projection and the post-loop restore keep them.
+        # Callers may patch formats_config or variant_stimuli between
+        # construction and run() (e.g. perf_eltwise_unary_typecast patches
+        # pack_src). Snapshot after those patches so SoL projection and the
+        # post-loop restore keep them.
         if self.formats_config is not None:
             self.passed_formats_config = [copy(fmt) for fmt in self.formats_config]
+        if self.variant_stimuli is not None:
+            self.passed_stimuli = copy(self.variant_stimuli)
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:

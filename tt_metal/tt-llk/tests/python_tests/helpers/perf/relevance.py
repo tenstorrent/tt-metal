@@ -167,13 +167,13 @@ _IO_FORMATS = _UNPACK_FORMATS | _PACK_FORMATS
 # Canonical order shared by the default relevance map and the public driver
 # list re-exported from core.py. Tests may still pass only the subset they can
 # measure (for example, MATH_ISOLATE alone).
-ALL_PERF_RUN_TYPES = (
+ALL_PERF_RUN_TYPES = [
     PerfRunType.L1_TO_L1,
     PerfRunType.UNPACK_ISOLATE,
     PerfRunType.MATH_ISOLATE,
     PerfRunType.PACK_ISOLATE,
     PerfRunType.L1_CONGESTION,
-)
+]
 
 
 def assert_unique_runtime_field_names(spec: RunTypeRelevance) -> None:
@@ -225,10 +225,11 @@ def spec_is_full_fidelity(spec: RunTypeRelevance | None) -> bool:
 
     Such a key carries the whole L1 identity, which is unique per pytest case.
     ``PerfConfig`` uses this to skip caching entirely for those run types --
-    storing an entry that can never be hit is pure memory cost. Two specs are
-    full fidelity: L1_TO_L1 (deliberately), and ``None``, which is what
-    ``relevance.get(run_type)`` returns for a run type the map omits (e.g.
-    SFPU_ISOLATE, which is not in ``ALL_PERF_RUN_TYPES``).
+    storing an entry that can never be hit is pure memory cost. A spec is
+    full fidelity when every slot is ``KEEP_ALL`` (``L1_TO_L1``, and pack
+    ``MATH_ISOLATE``). ``None`` is full fidelity only when the caller passes
+    ``spec=None`` directly. A run type the map does not contain is not that
+    fallback: ``PerfConfig`` rejects it with ``ValueError``.
 
     Example:
     >>> spec_is_full_fidelity(MATMUL_RELEVANCE[PerfRunType.L1_TO_L1])
@@ -289,7 +290,7 @@ class PerfRelevance:
     its default, and an ``LLK_ASSERT`` on it will ebreak.
     """
 
-    run_types: tuple[PerfRunType, ...] = ALL_PERF_RUN_TYPES
+    run_types: list[PerfRunType] = ALL_PERF_RUN_TYPES
 
     unpack_templates: frozenset[type] | None = frozenset({DEST_SYNC})
     # INIT runs _llk_math_pack_sync_init_<dest_sync>; keep DEST_SYNC so that
@@ -319,11 +320,12 @@ class PerfRelevance:
     def as_map(self) -> dict[PerfRunType, RunTypeRelevance]:
         """Collapse the class attributes into one spec per run type.
 
-        Only the run types in ``self.run_types`` get an entry, so a map for a
-        test with no math phase simply has no MATH_ISOLATE key and
-        ``PerfConfig`` falls back to full fidelity for it. Cached because
-        ``PerfConfig`` looks a spec up once per run type per pytest case, and
-        the maps are module-level singletons.
+        Only the run types in ``self.run_types`` get an entry. A listed run
+        type this class cannot describe (anything outside the five
+        ``ALL_PERF_RUN_TYPES``) raises ``ValueError`` naming it, the same
+        error ``PerfConfig`` raises when a caller asks for a run type the
+        map omits. Cached because ``PerfConfig`` looks a spec up once per
+        run type per pytest case, and the maps are module-level singletons.
 
         Example:
         >>> list(UNPACK_TILIZE_RELEVANCE.as_map)
@@ -359,6 +361,13 @@ class PerfRelevance:
                 format_fields=self.cong_formats,
             ),
         }
+        missing = [run_type for run_type in self.run_types if run_type not in specs]
+        if missing:
+            names = ", ".join(run_type.name for run_type in missing)
+            raise ValueError(
+                f"relevance map has no entry for {names}; "
+                "every PerfConfig run_type must be in the map"
+            )
         mapping = {run_type: specs[run_type] for run_type in self.run_types}
         for spec in mapping.values():
             assert_unique_runtime_field_names(spec)
@@ -1122,6 +1131,7 @@ def execute_key(
     speed_of_light: bool,
     spec: RunTypeRelevance | None,
     unpack_to_dest: Any = False,
+    unpack_to_srcs: Any = False,
     l1_acc: Any = None,
     source: str = "",
     run_count: int = 1,
@@ -1144,7 +1154,7 @@ def execute_key(
                     make sibling cases emit different columns.
     ``stimuli``     Via ``stimuli_key`` -- the L1 layout, which the template
                     and runtime items do not determine.
-    ``dest_acc``, ``unpack_to_dest``, ``l1_acc``
+    ``dest_acc``, ``unpack_to_dest``, ``unpack_to_srcs``, ``l1_acc``
                     Always included; each changes dest geometry or the L1 read
                     path for every thread.
     ``speed_of_light``
@@ -1185,7 +1195,7 @@ def execute_key(
     The PACK key above, with only the fields that survive its spec:
     >>> key(PerfRunType.PACK_ISOLATE, hi, 32)
     ('perf_matmul', 'sources/matmul_test.cpp', <PerfRunType.PACK_ISOLATE: 4>,
-     1, 'No', False, None,
+     1, 'No', False, False, None,
      (('dest_sync', <DestSync.Half: 'SyncHalf'>),),
      (('c_dimm', 4), ('r_dimm', 2), ('loop_factor', 64)),
      (('pack_S_dst', ...), ('pack_S_src', ...), ('pack_dst', ...),
@@ -1230,6 +1240,7 @@ def execute_key(
         run_count,
         _hashable(dest_acc),
         _hashable(unpack_to_dest),
+        _hashable(unpack_to_srcs),
         _hashable(l1_acc),
         tuple(template_items),
         tuple(runtime_items),

@@ -42,11 +42,7 @@ class PackUntilizeRelevance(PerfRelevance):
 
 PACK_UNTILIZE_RELEVANCE = PackUntilizeRelevance()
 
-assert PACK_UNTILIZE_RELEVANCE.run_types == (
-    PerfRunType.L1_TO_L1,
-    PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
-)
+assert PACK_UNTILIZE_RELEVANCE.run_types == PACK_UNTILIZE_RUN_TYPES
 
 
 @pytest.mark.perf
