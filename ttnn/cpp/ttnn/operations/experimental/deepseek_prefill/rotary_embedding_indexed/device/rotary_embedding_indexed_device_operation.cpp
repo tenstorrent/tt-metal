@@ -46,8 +46,6 @@ constexpr auto kReaderKernelPath =
 constexpr uint32_t kMetadataBytes = 16;  // CB page size (16B L1 alignment floor); only 4B (element [0]) is read
 
 // Metadata-path-only names (everything else comes from rope_metal2).
-// meta is a reader-private staging region (NoC-read one page, read it back): a Scratchpad, not a
-// self-loop DFB (Quasar rejects DM self-loops, issue #55526).
 const ScratchpadSpecName META_SCRATCH{"meta"};
 const TensorParamName METADATA_PARAM{"metadata"};
 
@@ -440,12 +438,6 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             .data_format_metadata = output_cb_data_format},
     };
 
-    // Writer-private / reader-private staging regions. Formerly self-loop DFBs (fake FIFOs the writer /
-    // reader ran against themselves); Quasar rejects DM self-loops, so they are Scratchpads (issue
-    // #55526). size_per_node = the old DFB's entry_size * num_entries.
-    //   - "copy" (ZERO_SCRATCH): the writer's passthrough-tile buffer, holding max(1, input_head_dim_t
-    //     - head_dim_t) output tiles.
-    //   - "meta" (META_SCRATCH): the reader's 1-page metadata staging buffer (metadata path only).
     std::vector<ScratchpadSpec> scratchpads = {
         ScratchpadSpec{
             .unique_id = ZERO_SCRATCH,
