@@ -920,13 +920,49 @@
   model: qwen3-tts-1.7b-base
   model_family: Qwen3-TTS
   skus:
+    # One N150: 10.6 min wall with a warm kernel cache, 14.8 cold. 10 was sized on Blackhole.
     wh_n150:
-      timeout: 10
+      timeout: 20
       tier: 3
     # Blackhole single-chip. Bring-up runs on Blackhole, so this leg is the one that
     # exercises the dev architecture. P150 rather than P300 or QuietBox 2: the model is
     # single-device at batch 1, and P150 uses the standard cloud-mlperf cache mount, while
     # P300 runs LFC mode and would need its own wget.
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: unit
+
+- name: Qwen3-TTS 0.6B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-0.6B-Base
+    # The same body as the 1.7B leg, on the 0.6B releases: one code path serves both sizes,
+    # and the files that need CustomVoice switch to the sibling at the ambient size. There is
+    # no 0.6B VoiceDesign, so that file skips. One N150: 7.0 min wall warm, 8 cold.
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_tokenizer.py
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_sampling.py
+    pytest --timeout 600 models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+    pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_clone_pcc.py
+    pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py
+    pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_voice_design_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_generation_stops.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_streaming_pcc.py
+  model: qwen3-tts-0.6b-base
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 12
+      tier: 3
     bh_p150:
       timeout: 10
       tier: 3

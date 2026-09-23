@@ -1576,6 +1576,29 @@ targets:
             owner_id: U09LNK7BT1Q # Andrija Cicovic
             team: models
 
+  qwen3-tts-0.6b-base:
+    aliases: ["Qwen3-TTS-12Hz-0.6B-Base", "Qwen/Qwen3-TTS-12Hz-0.6B-Base"]
+    skus:
+      # Tier 3 like the 1.7B entry, and TODO for the same reason: no accuracy metric yet.
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+
   vit:
     aliases: ["ViT", "vit", "google/vit-base-patch16-224"]
     skus:

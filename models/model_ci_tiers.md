@@ -120,6 +120,7 @@ it is classified differently on different systems.
 | Qwen3-0.6B | WH N150, BH P150 |
 | Qwen3-1.7B | WH N150, BH P150 |
 | Qwen3-TTS-1.7B-Base | WH N150, BH P150 |
+| Qwen3-TTS-0.6B-Base | WH N150, BH P150 |
 | Gemma-4-E2B | WH N150, BH P150 |
 | Gemma-4-E4B | BH P300, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
