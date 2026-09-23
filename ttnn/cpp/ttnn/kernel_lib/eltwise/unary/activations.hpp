@@ -26,6 +26,8 @@ template <Dst Slot = Dst::D0>
 struct Tanh;
 template <Dst Slot = Dst::D0>
 struct Gelu;
+template <Dst Slot = Dst::D0>
+struct Silu;
 
 // Derivatives — Approx::Exact (default) / Approx::Fast.
 template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
