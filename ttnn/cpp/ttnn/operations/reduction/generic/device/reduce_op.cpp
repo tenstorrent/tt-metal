@@ -89,9 +89,12 @@ Tensor reduce_min(
         true);
 }
 
-// Minimum H tiles required to take the H-axis split.
-static constexpr uint32_t k_min_ht_for_split_rm = 16;    // ~H >= 512 rows
-static constexpr uint32_t k_min_ht_for_split_tile = 20;  // ~H >= 640 rows
+// Minimum H tiles required to take the H-axis split. The TILE bar is per math group: a max/min
+// stage 2 folds partials of the input dtype where sum/mean folds FP32, so the two need not break
+// even at the same Ht.
+static constexpr uint32_t k_min_ht_for_split_rm = 16;             // ~H >= 512 rows
+static constexpr uint32_t k_min_ht_for_split_tile_sum_mean = 20;  // ~H >= 640 rows
+static constexpr uint32_t k_min_ht_for_split_tile_min_max = 20;   // ~H >= 640 rows
 
 static constexpr uint32_t k_min_ht_per_slice_rm = 1;
 static constexpr uint32_t k_min_ht_per_slice_tile = 1;
@@ -441,8 +444,10 @@ Tensor reduce(
         const auto grid = prepared_input.device()->compute_with_storage_grid_size();
         const uint32_t grid_cores = sub_core_grids.has_value() ? sub_core_grids->num_cores() : (grid.x * grid.y);
 
+        const uint32_t min_ht_for_split =
+            split_selects ? k_min_ht_for_split_tile_min_max : k_min_ht_for_split_tile_sum_mean;
         const uint32_t num_h_slices =
-            compute_h_slices(col_groups, Ht, grid_cores, k_min_ht_for_split_tile, k_min_ht_per_slice_tile);
+            compute_h_slices(col_groups, Ht, grid_cores, min_ht_for_split, k_min_ht_per_slice_tile);
 
         if (num_h_slices >= 2) {
             // Both stages run this op; AVG lowers to SUM with the scaler applied on stage 2.
