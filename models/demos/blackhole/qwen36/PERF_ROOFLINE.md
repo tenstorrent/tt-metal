@@ -25,7 +25,7 @@ Everything else is one of:
 |---|---|---|
 | **measured** (Tracy / traced microbenchmarks) | per-op costs, collective costs, peak TFLOPS, MLP floor per split | yes -- these are the "now" columns |
 | **estimated** (formula or judgment) | the 8-11 ms budget's "target" column, every pipeline-parallel number | no -- not verified, do not quote as results |
-| **implemented, unverified** | the `QWEN36_REPL_RESIDUAL` path | its A/B runs all timed out -- now attributed to a **device wedge**, not the code (see *Hang diagnosis*); re-verification pending |
+| **implemented, failing** | the `QWEN36_REPL_RESIDUAL` path | retested 2026-09-23 on the healthy device: fails in 17 s with `TT_THROW: Invalid subtile broadcast type` -- a **real bug** in this path (the earlier blank runs were the wedge, but not only the wedge); being located. Off by default. |
 | **verified, default ON** | the `QWEN36_ATUPE_OPTS` port of Aniruddha's round-4 GDN/SDPA/L1 changes | **42.78 -> 39.80 ms**, PCC 0.9994, argmax equal (2026-09-23); per-feature attribution pending |
 
 **Verified savings so far: one -- 2.98 ms (42.78 -> 39.80), from porting Aniruddha's round-4
@@ -220,8 +220,11 @@ printed neither a wavefront time nor a PASSED/FAILED line. Each run had `timeout
 baseline with full stdout captured showed exactly what that looks like: the process hangs
 silently at `Loading 24 transformer layers` (weight upload, before any forward pass) and is
 killed at 25 min with no error. All six modules import cleanly, so it was not an import break.
-See *Hang diagnosis* under the port section for the evidence and recovery. Re-verification of
-this path is pending a clean-device run; it stays off by default.
+See *Hang diagnosis* under the port section for the evidence and recovery. Retested 2026-09-23 on the
+healthy device (with `QWEN36_ATUPE_OPTS` on): **fails in 17 s** with `TT_THROW: Invalid subtile
+broadcast type` -- an eltwise-binary shape/broadcast error, i.e. a real bug in this path on top of
+the wedge. Most likely the fused `ttnn.all_reduce` output's shape or layout differs from what the
+residual add or the local norm expects. Being located; stays off by default.
 
 Today each half-layer pays three collectives:
 
@@ -410,8 +413,31 @@ row-major `[1]` scalar; `[0]` for zero-offset, allocated **once before any trace
 the trace bakes in its address) and `predecessor_carry` ("for local execution, alias history", so
 `cs_rm`). Fixed and re-run; the row above is the fixed run.
 
-**Per-feature isolation (TTFT only, one feature off at a time) and `channel_chunk_size` points:**
-*pending -- results appended below when the sweep lands.*
+**Per-feature attribution** (TTFT only, each feature turned off in turn, healthy device, 2026-09-23):
+
+| variant | wavefront | d0 | vs all-on 39.80 | => that feature is worth |
+|---|---|---|---|---|
+| all three on (reference) | **39.80 ms** | 35.89 | -- | -- |
+| **legacy SDPA** (KDA + L1 on) | 41.44 ms | 37.25 | +1.64 | **SDPA q128/k256 on 8x8: -1.64 ms** |
+| **no KDA conv** (L1 + SDPA on) | 40.90 ms | 36.95 | +1.10 | **KDA fused conv: -1.10 ms** |
+| **no L1 residency** (KDA + SDPA on) | 40.26 ms | 36.35 | +0.46 | **L1-resident eltwise: -0.46 ms** |
+| baseline, all off | 42.78 ms | 38.51 | +2.98 | |
+
+Individual contributions sum to 3.20 ms against 2.98 ms measured together -- close to additive,
+~0.2 ms of overlap. The SDPA change, not the GDN conv, is the largest single term at TP=8: six FA
+layers x ~273 us each. Note this is the *opposite* ranking from Aniruddha's TP=1 numbers (KDA
+conv 643 -> 316 us was his headline), because at TP=8 each chip's conv is 8x narrower while the
+per-head SDPA work is unchanged.
+
+**`channel_chunk_size` for the KDA op at C=768** (all three on):
+
+| chunk | wavefront | d0 |
+|---|---|---|
+| 192 | 39.84 ms | 35.90 |
+| **384 (default: largest tile-aligned divisor <= 512)** | **39.80 ms** | 35.89 |
+| 768 (single chunk) | 40.08 ms | 36.21 |
+
+384 and 192 tie within noise; 768 is +0.28 ms. The default stands; chunk size is second-order here.
 
 Results to be filled in when the runs land; per-feature isolation runs follow only if the
 combined run moves the number.
@@ -480,6 +506,11 @@ none of it has been demonstrated.
 | norms | 0.8 ms | 0.3 | local norms, free with replicated residual | high |
 | misc (unary, socket recv) | 0.9 ms | 0.5 | -- | high |
 | **total** | **~38 ms** | **~11.3 ms** | | |
+
+**Verified against this table so far (2026-09-23):** SDPA **-1.64 ms** (3.0 -> ~1.4, the row's
+target reached), GDN plumbing **-1.10 ms** (KDA fused conv), eltwise DRAM round-trips **-0.46 ms**
+(L1 residency) -- **-2.98 ms combined, 42.78 -> 39.80.** Collectives, the 15.1 ms row, are untouched:
+the replicated-residual attempt at them is currently failing.
 
 So **~11 ms is reachable on measured line items if every estimated cut lands; 8 ms is not**
 without also winning on matmul MFU. Commit to ~11-13 ms; treat 8 ms as stretch.
