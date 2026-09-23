@@ -229,25 +229,41 @@ class BgeM3Attention(LightweightModule):
             if sdpa_mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Stage 4: SDPA (chunk sizes depend on runtime seq_len)
-        sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
-        context = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=False,
-            attn_mask=sdpa_mask,
-            scale=self.config.attention_scale,
-            program_config=sdpa_program_config,
-            compute_kernel_config=self.config.score_compute_kernel_cfg,
-            memory_config=self.config.score_memcfg,
+        # Stage 4: SDPA (chunk sizes depend on runtime seq_len). Without a mask, the
+        # shapes in _concat_sdpa_config run the model-local SDPA, which writes the
+        # concat-heads layout and removes the Stage 5 op.
+        concat_sdpa_config = (
+            _concat_sdpa_config(seq_len, batch_size, self.config.mesh_device, self.config.attention_scale)
+            if sdpa_mask is None and q.dtype == ttnn.bfloat8_b and k.dtype == ttnn.bfloat8_b
+            else None
         )
+        if concat_sdpa_config is not None:
+            from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa.op import bge_encoder_sdpa_experimental
+
+            context = bge_encoder_sdpa_experimental(
+                q, k, v, config=concat_sdpa_config, output_mem_config=self.config.output_memcfg
+            )
+        else:
+            sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
+            context = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                attn_mask=sdpa_mask,
+                scale=self.config.attention_scale,
+                program_config=sdpa_program_config,
+                compute_kernel_config=self.config.score_compute_kernel_cfg,
+                memory_config=self.config.score_memcfg,
+            )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
         # Stage 5: concat heads
-        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
+        if concat_sdpa_config is not None:
+            pass
+        elif self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
 
             concat_head_groups = 16 if self.config.max_batch_size in (8, 16) else 4
@@ -465,6 +481,36 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, data_parallel=False):
     q_chunk = next(q for q in _SDPA_Q_CHUNKS_FLEX if q <= seq_len and seq_len % q == 0)
     k_chunk = next(k for k in _SDPA_K_CHUNKS_FLEX if k <= seq_len and seq_len % k == 0)
     return q_chunk, k_chunk
+
+
+def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
+    """EncoderSDPAConfig for the model-local SDPA that writes [B, 1, S, H*D], or None.
+
+    B1/S512 on Blackhole: same chunk plan and 8x8 grid as the stock call, streaming
+    compute at LoFi. Standalone (tests/perf/encoder_sdpa_concat.py): 20.1 us against
+    30.6 us for stock SDPA + concat, cos 0.99949 against 0.99951 for stock.
+    """
+    if seq_len != 512 or batch_size != 1 or mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
+    from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
+
+    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size)
+    return EncoderSDPAConfig(
+        batch=batch_size,
+        num_q_heads=16,
+        num_kv_heads=16,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        head_dim=64,
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        grid_x=8,
+        grid_y=8,
+        scale=scale,
+        use_streaming=True,
+        fp32_dest_acc_en=False,
+        direct_concat_heads=True,
+    )
 
 
 def _sdpa_exp_approx(seq_len, mesh_device=None):
