@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Unified SFPI square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
+Isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
 No MATH kernel. Unpack and pack use llk_srcs (unpack to SrcS, pack from SrcS).
 Same structure and parameter coverage as test_sfpu_square_quasar.
 """
@@ -65,8 +65,8 @@ SFPU_SQUARE_COMBINATIONS = [
 @parametrize(formats_dest_acc_implied_math_input_dims=SFPU_SQUARE_COMBINATIONS)
 def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
     """
-    Test calculate_square_srcs -> calculate_square_operands on the SrcS pipeline.
-    Covers explicit/implied formats and one/multiple tiles; MATH is stubbed.
+    Test isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
+    No MATH kernel (stub only).
     """
     (formats, dest_acc, implied_math_format, input_dimensions) = (
         formats_dest_acc_implied_math_input_dims[0]
