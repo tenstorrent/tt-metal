@@ -73,6 +73,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     permute/permute.cpp
     pixel_unshuffle/device/pixel_unshuffle_device_op.cpp
     pixel_unshuffle/device/pixel_unshuffle_program_factory.cpp
+    pixel_unshuffle/device/pixel_unshuffle_channels_last_program_factory.cpp
     pixel_unshuffle/pixel_unshuffle.cpp
     repeat/device/repeat_program_factory_last_dim.cpp
     repeat/device/repeat_program_factory_higher_dim.cpp

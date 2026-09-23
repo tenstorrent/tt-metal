@@ -27,7 +27,7 @@ void bind_pixel_unshuffle(nb::module_& mod) {
             "(c_out = rh*(r*C) + rw*C + c_in). Matches ONNX SpaceToDepth channel ordering.");
 
     const auto* doc = R"doc(
-        pixel_unshuffle(input, downscale_factor, *, memory_config=None, output_layout=None, channel_order=PixelUnshuffleChannelOrder.CHANNEL_MAJOR) -> ttnn.Tensor
+        pixel_unshuffle(input, downscale_factor, *, memory_config=None, output_layout=None, channel_order=PixelUnshuffleChannelOrder.CHANNEL_MAJOR, channels_last=False, padded_channels=None) -> ttnn.Tensor
 
         Rearranges elements in a tensor of shape ``[N, C, H, W]`` to a tensor of
         shape ``[N, C * r^2, H / r, W / r]`` where ``r = downscale_factor``.
@@ -89,6 +89,13 @@ void bind_pixel_unshuffle(nb::module_& mod) {
             >>> shard_spec = ttnn.ShardSpec(grid, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
             >>> sharded_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
             >>> y_sharded = ttnn.pixel_unshuffle(x, 4, memory_config=sharded_cfg)
+
+            # NHWC, conv-ready: [N, H/r, W/r, padded_channels] ROW_MAJOR, height-sharded in L1.
+            # Channels are zero-padded to `padded_channels` (default: C*r^2 rounded up to the L1
+            # alignment). Feed straight into a height-sharded conv2d with in_channels=padded_channels.
+            >>> hs = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+            ...                        ttnn.ShardSpec(grid_8x8, [H//2 * W//2 // 64, 16], ttnn.ShardOrientation.ROW_MAJOR))
+            >>> y_nhwc = ttnn.pixel_unshuffle(x, 2, memory_config=hs, channels_last=True, padded_channels=16)
     )doc";
 
     ttnn::bind_function<"pixel_unshuffle">(
@@ -99,7 +106,9 @@ void bind_pixel_unshuffle(nb::module_& mod) {
         nb::arg("downscale_factor"),
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_layout") = nb::none(),
-        nb::arg("channel_order") = ttnn::PixelUnshuffleChannelOrder::CHANNEL_MAJOR);
+        nb::arg("channel_order") = ttnn::PixelUnshuffleChannelOrder::CHANNEL_MAJOR,
+        nb::arg("channels_last") = false,
+        nb::arg("padded_channels") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement
