@@ -39,7 +39,9 @@ SEQ_LEN_8192 = 8192
 
 def prepare_inputs(tokenizer, batch_size, seq_len, pad_token_id):
     """Generate synthetic token inputs on host. Returns dict of torch tensors."""
-    input_ids = torch.randint(1, 1000, (batch_size, seq_len), dtype=torch.long)
+    # Ids start at 5, above the special ids, so no row holds the pad id 1. The
+    # nomask profile states no_padding, which is correct only for such input.
+    input_ids = torch.randint(5, 1000, (batch_size, seq_len), dtype=torch.long)
     token_type_ids = torch.zeros(batch_size, seq_len, dtype=torch.long)
 
     mask = (input_ids != pad_token_id).to(torch.int64)
@@ -113,6 +115,7 @@ def test_n300_dp_tracy(mesh_device):
 SEQ_LEN_512 = 512
 
 
+@pytest.mark.parametrize("masked", [False, True], ids=["nomask", "masked"])
 @pytest.mark.parametrize(
     "batch_size",
     [1, 8, 16, 32],
@@ -123,7 +126,7 @@ SEQ_LEN_512 = 512
     [{"trace_region_size": 50_000_000, "num_command_queues": 1}],
     indirect=True,
 )
-def test_bge_m3_tracy_perf(device, batch_size):
+def test_bge_m3_tracy_perf(device, batch_size, masked):
     """Profile one S512 forward between Tracy signposts for per-op device timing.
 
     Untraced, because Tracy reports the individual ops and a replay hides them.
@@ -151,13 +154,17 @@ def test_bge_m3_tracy_perf(device, batch_size):
         for key in ("input_ids", "token_type_ids", "position_ids")
     }
 
+    # nomask matches perf.py: the input holds no pad token, so the model may
+    # skip the dense mask. masked keeps the default path.
+    no_padding = not masked
+
     # Compile outside the signpost window.
-    out = model.forward(**device_inputs)
+    out = model.forward(**device_inputs, no_padding=no_padding)
     ttnn.synchronize_device(device)
     ttnn.deallocate(out)
 
     signpost("start")
-    out = model.forward(**device_inputs)
+    out = model.forward(**device_inputs, no_padding=no_padding)
     ttnn.synchronize_device(device)
     signpost("stop")
     ttnn.deallocate(out)
