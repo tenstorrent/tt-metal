@@ -269,7 +269,7 @@ protected:
     L1MapNew l1_{};
     CoreRangeSet cores_set_;
     std::vector<CoreCoord> core_list_;
-    const uint8_t* region_base_ = nullptr;
+    uint8_t* region_base_ = nullptr;
     uint32_t page_bytes_ = 0;
     uint32_t cores_ = 0;
     uint32_t ring_pages_ = 0;
