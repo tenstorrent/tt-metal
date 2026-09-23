@@ -63,7 +63,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    std::optional<ttnn::transformer::SDPAPrecision> precision,
+    bool inputs_prepared) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -104,7 +106,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        precision,
+        inputs_prepared);
     return outputs;
 }
 
@@ -614,7 +618,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (ttnn.SDPAProgramConfig)
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):Defaults to None.
-            precision (ttnn.SDPAPrecision, optional): Opt-in Blackhole recipes, with the same numerical contract as ordinary SDPA. Initially D128, batch 1 and tile-aligned segments; partial Q256/K512 chunks are masked internally. Omit to retain legacy support.
+            precision (ttnn.SDPAPrecision, optional): Opt-in Blackhole D128 recipes with the same numerical contract as ordinary SDPA, including batch/GQA and sub-tile tails. Partial Q256/K512 chunks are masked internally. Omit to retain legacy support.
             inputs_prepared (bool): Caller acknowledgment that LOW_PRECISION preparation was applied to both segments. Required only for LOW_PRECISION. Defaults to False.
 
         Returns:
@@ -731,6 +735,11 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole D128, noncausal Q256/K512 recipe.
+                Preserves recurrent state across ring steps; rejects unsupported causal/cache/window/sink features.
+                Omit to retain legacy behavior. Cannot be combined with compute_kernel_config or exp_approx_mode=False.
+            inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint KV
+                before communication. Required only for LOW_PRECISION.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -753,7 +762,7 @@ void bind_sdpa(nb::module_& mod) {
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
               - The attention output for the joint Q/K/V shape [b x nh x L/num_devices x dv] (or [b x nh x L x dv] on the replicated path).
-              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L/num_devices) x 1]
+              - Internal scratch statistics, not a supported log-sum-exp result. Do not consume this tensor.
         )doc";
 
     ttnn::bind_function<"ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
@@ -797,7 +806,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
+        nb::arg("precision") = nb::none(),
+        nb::arg("inputs_prepared") = false);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

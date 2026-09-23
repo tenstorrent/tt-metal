@@ -73,6 +73,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     bool circular_kv_cache = false,
     // When set, the logical_n / logical_l params above are worst-case placeholders (see RingJointSDPAInputs).
     const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
-    const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
+    std::optional<ttnn::transformer::SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::prim

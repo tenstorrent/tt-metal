@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+#if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
 #ifdef TRISC_PACK
 #include "sfpu/ckernel_sfpu_fill.h"
 namespace ckernel::sfpu {
@@ -21,14 +21,21 @@ inline void mask_recipe_columns(uint32_t valid_columns) {
 #endif
 
 static uint32_t recipe_k_tile_offset;
+#ifdef SDPA_RECIPE_RING
+static uint32_t recipe_k_valid_rows;
+#endif
 
 ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
+#ifdef SDPA_RECIPE_RING
+    const uint32_t remaining = tile * 32 < recipe_k_valid_rows ? recipe_k_valid_rows - tile * 32 : 0;
+#else
     constexpr uint32_t primary_padded = ((SDPA_RECIPE_K_PRIMARY_ROWS + 31) / 32) * 32;
     const uint32_t row = tile * 32;
     const uint32_t remaining = row < primary_padded ? SDPA_RECIPE_K_PRIMARY_ROWS - row
                                : row < primary_padded + SDPA_RECIPE_K_JOINT_ROWS
                                    ? SDPA_RECIPE_K_JOINT_ROWS - (row - primary_padded)
                                    : 0;
+#endif
     return remaining < 32 ? remaining : 32;
 }
 
@@ -36,7 +43,12 @@ ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
 // see dummy keys. PACK owns SFPU while MATH overlaps the next matmul; using a
 // math-thread fill here would race the pack-thread exponential. No math-counter
 // reset is needed. Aligned recipes compile without this hook.
-ALWI void mask_recipe_tail(uint32_t col_offset, uint32_t width, uint32_t height) {
+#ifdef SDPA_RECIPE_RING
+__attribute__((noinline, noclone))
+#else
+ALWI
+#endif
+void mask_recipe_tail(uint32_t col_offset, uint32_t width, uint32_t height) {
 #ifdef TRISC_PACK
     bool masked = false;
     for (uint32_t row = 0; row < height; ++row) {

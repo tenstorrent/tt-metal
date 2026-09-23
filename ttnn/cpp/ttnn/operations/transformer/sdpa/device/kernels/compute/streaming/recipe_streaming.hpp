@@ -80,6 +80,14 @@ struct AccumulatorHalf {
     uint32_t sum, max, out;
 };
 
+struct RecipeAccumulatorState {
+    AccumulatorHalf prev, cur;
+    uint32_t processed_chunks = 0;
+#ifndef SDPA_RECIPE_FP32
+    bool group_local_valid[4] = {};
+#endif
+};
+
 // Sentinel for "no CB" — beyond the valid 0-31 range.
 constexpr uint32_t INVALID_CB = 32;
 #ifdef SDPA_RECIPE_FP32
@@ -301,9 +309,12 @@ void blocked_matmul_and_pack(
     tile_regs_commit();
 
     tile_regs_wait();
-#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+#if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
     if constexpr (transpose) {
-        mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
+#ifdef SDPA_RECIPE_RING
+        if (recipe_k_valid_rows < 512)
+#endif
+            mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
     }
 #endif
     if (!skip_pack_configure) {
@@ -1020,7 +1031,8 @@ template <
     uint32_t cb_exp_max_diff,
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
-    uint32_t cb_normalized_out>
+    uint32_t cb_normalized_out,
+    bool independent_q_release = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1031,7 +1043,8 @@ static void sdpa_inner_loop_step(
     uint32_t group_k_index,
     bool* group_local_valid
 #endif
-) {
+    ,
+    bool release_q = false) {
     constexpr uint32_t KT_stride = Sk_chunk_t;
     constexpr uint32_t active_Sk = Sk_chunk_t;
     constexpr uint32_t actual_sbw = qkt_subblock_w;
@@ -1267,10 +1280,10 @@ static void sdpa_inner_loop_step(
         CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
     }
 
-    // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
-    // reader can start fetching the next Q chunk during Phase 2.
+    // Release after the last local use, independently of final normalization
+    // when a ring caller needs to reload Q for the next pass.
     {
-        if (is_last_iter) {
+        if (independent_q_release ? release_q : is_last_iter) {
             sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
         }
     }
@@ -1785,7 +1798,91 @@ template <
     uint32_t cb_exp_max_diff,
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
-    uint32_t cb_normalized_out>
+    uint32_t cb_normalized_out,
+    bool independent_q_release = false>
+ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
+    static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16 && DHt == 4 && vDHt == 4);
+    ASSERT(k_num_chunks > 0);
+    auto& prev = state.prev;
+    auto& cur = state.cur;
+#ifndef SDPA_RECIPE_FP32
+    const uint32_t cb_out_im_A = prev.out;
+    const uint32_t cb_out_im_B = cur.out;
+    if (state.processed_chunks == 0) {
+        group2_initialize_root(cb_out_im_A);
+    }
+#endif
+    for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+        recipe_k_tile_offset = (state.processed_chunks + k_chunk) * Sk_chunk_t;
+#endif
+        const bool is_first = state.processed_chunks == 0 && k_chunk == 0;
+        const bool last_local = k_chunk == k_num_chunks - 1;
+        const bool is_last = final_segment && last_local;
+        sdpa_inner_loop_step<
+            false,
+            Sq_chunk_t,
+            Sk_chunk_t,
+            DHt,
+            vDHt,
+            scale_fp32,
+            qkt_subblock_h,
+            qkt_subblock_w,
+            qktv_subblock_h,
+            qktv_subblock_w,
+            cb_q_in,
+            cb_kt_in,
+            cb_v_in,
+            cb_qkt_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_normalized_out,
+            independent_q_release>(
+            prev,
+            cur,
+            is_last,
+            is_first
+#ifndef SDPA_RECIPE_FP32
+            ,
+            state.processed_chunks + k_chunk,
+            state.group_local_valid
+#endif
+            ,
+            release_q && last_local);
+#ifdef SDPA_RECIPE_FP32
+        // Post-iteration cleanup
+        // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
+#else
+        // Recycle the scratch allocation; its local plane survives in L1.
+        if (!is_last) {
+            sdpa_cb_pop_front_out_of_line(cur.out, Sq_chunk_t * vDHt * sdpa_out_stride);
+        }
+        // Protected output stays fixed; only max and denominator ping-pong.
+#endif
+        if (!is_first) {
+            sdpa_cb_pop_front_out_of_line(prev.max, Sq_chunk_t);
+#ifdef SDPA_RECIPE_FP32
+            if (!sdpa_skip_prev_sum_pop)
+#endif
+                sdpa_cb_pop_front_out_of_line(prev.sum, Sq_chunk_t * sdpa_sum_stride);
+        }
+
+        if (is_last) {
+            sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
+        } else {
+            std::swap(prev, cur);
+#ifndef SDPA_RECIPE_FP32
+            prev.out = cb_out_im_A;
+            cur.out = cb_out_im_B;
+#endif
+        }
+    }
+    state.processed_chunks += k_num_chunks;
+}
+
+template <uint32_t... Configuration>
 void sdpa_standard_v2(
     uint32_t q_chunks_per_core,
     uint32_t k_num_chunks,
@@ -1795,79 +1892,9 @@ void sdpa_standard_v2(
     uint32_t cb_max_B,
     uint32_t cb_sum_A,
     uint32_t cb_sum_B) {
-    static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16 && DHt == 4 && vDHt == 4);
     init_sdpa_streaming_semaphores();
     for (uint32_t q = 0; q < q_chunks_per_core; ++q) {
-        AccumulatorHalf prev = {cb_sum_A, cb_max_A, cb_out_im_A};
-        AccumulatorHalf cur = {cb_sum_B, cb_max_B, cb_out_im_B};
-#ifndef SDPA_RECIPE_FP32
-        group2_initialize_root(cb_out_im_A);
-        bool group_local_valid[4] = {};
-#endif
-        for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
-#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
-            recipe_k_tile_offset = k_chunk * Sk_chunk_t;
-#endif
-            const bool is_first = k_chunk == 0;
-            const bool is_last = k_chunk == k_num_chunks - 1;
-            sdpa_inner_loop_step<
-                false,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                vDHt,
-                scale_fp32,
-                qkt_subblock_h,
-                qkt_subblock_w,
-                qktv_subblock_h,
-                qktv_subblock_w,
-                cb_q_in,
-                cb_kt_in,
-                cb_v_in,
-                cb_qkt_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_normalized_out>(
-                prev,
-                cur,
-                is_last,
-                is_first
-#ifndef SDPA_RECIPE_FP32
-                ,
-                k_chunk,
-                group_local_valid
-#endif
-            );
-#ifdef SDPA_RECIPE_FP32
-            // Post-iteration cleanup
-            // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
-#else
-            // Recycle the scratch allocation; its local plane survives in L1.
-            if (!is_last) {
-                sdpa_cb_pop_front_out_of_line(cur.out, Sq_chunk_t * vDHt * sdpa_out_stride);
-            }
-            // Protected output stays fixed; only max and denominator ping-pong.
-#endif
-            if (!is_first) {
-                sdpa_cb_pop_front_out_of_line(prev.max, Sq_chunk_t);
-#ifdef SDPA_RECIPE_FP32
-                if (!sdpa_skip_prev_sum_pop)
-#endif
-                    sdpa_cb_pop_front_out_of_line(prev.sum, Sq_chunk_t * sdpa_sum_stride);
-            }
-
-            if (is_last) {
-                sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
-            } else {
-                std::swap(prev, cur);
-#ifndef SDPA_RECIPE_FP32
-                prev.out = cb_out_im_A;
-                cur.out = cb_out_im_B;
-#endif
-            }
-        }
-        // Q already popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk.
+        RecipeAccumulatorState state{{cb_sum_A, cb_max_A, cb_out_im_A}, {cb_sum_B, cb_max_B, cb_out_im_B}};
+        sdpa_segment_v2<Configuration...>(state, k_num_chunks, true, true);
     }
 }

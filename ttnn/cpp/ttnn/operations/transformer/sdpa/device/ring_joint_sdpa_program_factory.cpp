@@ -12,6 +12,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -961,6 +962,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
+    const bool named_compute = args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST;
     const bool v_shares_k_buffer = tensor_args.has_latent_v();
     const auto& input_tensor_v = tensor_args.input_v.has_value() ? tensor_args.input_v.value() : input_tensor_k;
 
@@ -1232,6 +1234,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet core_grid_set(core_grid);
+    std::optional<ProgramDescriptor> recipe_program;
+    if (named_compute) {
+        namespace recipes = ttnn::operations::transformer::sdpa::detail;
+        recipe_program = recipes::recipe_compute_program(
+            recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, input_tensor_k.dtype())),
+            core_grid_set,
+            1);
+        desc.cbs = recipe_program->cbs;
+    }
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     // Init fused op signaler — descriptor-pattern equivalent of
@@ -1339,6 +1350,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+    if (named_compute) {
+        qk_out_subblock_h = fp32_dest_acc_en ? 1 : 2;
+        qk_out_subblock_w = 4;
+    }
 
     TT_FATAL(
         Sq_chunk_t % qk_out_subblock_h == 0,
@@ -1354,7 +1369,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
+    const bool use_streaming_compute = named_compute || !fp32_dest_acc_en;
     TT_FATAL(
         !kv_pad_rotation_enabled || use_streaming_compute,
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
@@ -1390,6 +1405,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         dst_size,
         /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
         /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
+    if (named_compute) {
+        out_out_subblock_h = fp32_dest_acc_en ? 1 : 2;
+        out_out_subblock_w = 4;
+    }
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group
     // cadence that compute pushes, otherwise deferred-save rows can be popped and
@@ -1880,7 +1899,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
     log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
 
-    uint32_t next_cb_index = 0;
+    uint32_t next_cb_index = named_compute ? 19 : 0;
     const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
         const uint32_t cb_index = next_cb_index++;
         desc.cbs.push_back(CBDescriptor{
@@ -1894,13 +1913,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         });
         return cb_index;
     };
-    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
+    const auto allocate_tile_cb = [&](uint32_t num_tiles,
+                                      uint32_t tile_size,
+                                      tt::DataFormat data_format,
+                                      uint32_t recipe_index = 32) -> uint32_t {
+        if (named_compute && recipe_index < 32) {
+            return recipe_index;
+        }
         return allocate_cb(tile_size, num_tiles, data_format);
     };
 
-    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
-    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df);
+    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df, 0);
+    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df, 1);
+    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df, 2);
 
     // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
     // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
@@ -1920,24 +1945,24 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }();
 
     const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df, 3);
+    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df, 4);
 
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
-    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df, 6);
+    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df, 8);
+    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df, 9);
+    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, 10);
+    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, 11);
+    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df, 12);
+    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df, 13);
+    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, 14);
 
-    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df, 16);
 
     // Sliding folds every local/halo K/V range into one final pass per Q, so it never saves
     // or restores accumulators through DRAM. Keep valid, format-compatible CB indices in the
     // compile-time ABI without reserving separate L1 storage for those unreachable paths.
-    const bool needs_dram_accumulator_staging = !has_sliding_window;
+    const bool needs_dram_accumulator_staging = !has_sliding_window && !named_compute;
     const uint32_t cb_stats_in =
         needs_dram_accumulator_staging ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
     const uint32_t cb_prev_out =
@@ -1947,7 +1972,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
     // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
-    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb;
+    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df, 5) : inactive_cb;
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     // cb_sum_out = compute pushes sum for writer to save to DRAM.
@@ -1970,6 +1995,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    if (named_compute) {
+        for (uint8_t index : {17, 18}) {
+            desc.cbs.push_back(
+                CBDescriptor{
+                    .total_size = 4096,
+                    .core_ranges = core_grid_set,
+                    .format_descriptors = {{CBFormatDescriptor{
+                        .buffer_index = index, .data_format = tt::DataFormat::UInt32, .page_size = 4096}}}});
+        }
+    }
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -1982,6 +2017,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
         writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
+    if (named_compute) {
+        TensorAccessorArgs(output_tensors.at(3).buffer()).append_to(writer_compile_time_args);
+    }
     auto compute_cb_compile_time_args = cb_compile_time_args;
     compute_cb_compile_time_args.push_back(cb_attention_sink);
     compute_compile_time_args.insert(
@@ -2699,6 +2737,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
+    if (named_compute) {
+        kernel_defines.insert(
+            kernel_defines.end(),
+            recipe_program->kernels.front().defines.begin(),
+            recipe_program->kernels.front().defines.end());
+        kernel_defines.emplace_back("SDPA_RECIPE_RING", "1");
+    }
 
     // Build kernel descriptors locally so we can append per-core runtime args
     // before pushing them into desc.kernels at the end. KernelDescriptor creation
@@ -2755,6 +2800,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
+    if (named_compute) {
+        KernelDescriptor::RTArgList state_args;
+        state_args.push_back(output_tensors.at(3).buffer());
+        writer_kernel.emplace_common_runtime_args(state_args);
+    }
     if (kv_pad_from_metadata || has_logical_length_tensor) {
         KernelDescriptor::RTArgList writer_common_args;
         if (kv_pad_from_metadata) {
@@ -2778,6 +2828,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = math_approx_mode,
     };
+    if (named_compute) {
+        compute_kernel.config = recipe_program->kernels.front().config;
+    }
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {

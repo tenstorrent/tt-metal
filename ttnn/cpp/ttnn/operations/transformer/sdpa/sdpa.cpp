@@ -283,7 +283,38 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    std::optional<SDPAPrecision> precision,
+    bool inputs_prepared) {
+    if (precision) {
+        const auto policy = operations::transformer::sdpa::detail::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, inputs_prepared, scale, compute_kernel_config, program_config);
+        TT_FATAL(
+            !is_causal && !is_balanced && !attention_sink && !sliding_window_size && !circular_kv_cache &&
+                !kv_cache_batch_idx && !kv_actual_isl && !slot_id && !kv_actual_isl_tensor,
+            "Named ring recipes currently require noncausal attention without indexed/cache/window/sink features");
+        TT_FATAL(
+            std::holds_alternative<std::size_t>(logical_n) && std::holds_alternative<std::size_t>(logical_l),
+            "Named ring recipes currently require scalar logical lengths");
+        TT_FATAL(
+            program_config.q_chunk_size == 256 && program_config.k_chunk_size == 512 &&
+                input_tensor_q.logical_shape()[3] == 128 && input_tensor_k.logical_shape()[3] == 128 &&
+                input_tensor_v.logical_shape()[3] == 128,
+            "Named ring recipes require Q256/K512/D128");
+        TT_FATAL(
+            input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
+            "Named ring recipes require BF16 Q and matching KV types");
+        TT_FATAL(
+            is_cross || input_tensor_q.logical_shape()[2] == input_tensor_k.logical_shape()[2],
+            "Named ring recipes do not yet support chunked prefill; use is_cross for noncausal cross attention");
+        compute_kernel_config = BlackholeComputeKernelConfig{
+            .math_fidelity = policy.qk_fidelity,
+            .math_approx_mode = true,
+            .fp32_dest_acc_en = policy.fp32_destination,
+        };
+    } else {
+        TT_FATAL(!inputs_prepared, "inputs_prepared requires an explicit LOW_PRECISION recipe");
+    }
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -350,7 +381,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         sliding_window_size,
         circular_kv_cache,
         logical_n_tensor,
-        logical_l_tensor);
+        logical_l_tensor,
+        precision);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

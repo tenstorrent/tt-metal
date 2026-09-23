@@ -39,21 +39,25 @@ model evidence. Include masked tails, appropriate head dimensions, GQA, and
 joint/ring/paged/chunked/MLA coverage as applicable; qualify multiple devices and
 fresh pretrained-model quality/performance before changing model defaults.
 
-PR2 is developed on `cglagovich/sdpa-streaming-pr2`, stacked on PR1. Its first
-slice adds joint segment addressing with unchanged compute and shared accuracy
-tests. It does not yet qualify PR2 for merge. Remaining integration gates:
+PR2 is developed on `cglagovich/sdpa-streaming-pr2`, stacked on PR1:
 
-- Dense/joint sub-tile tails, batch/GQA and uniform SPMD mesh execution now use
-  the shared recipe implementation and pass release/Watcher/performance
-  regression qualification. SPMD mesh coverage is not ring qualification.
-- Separate Q-block release from final normalization before ring integration.
-  Preserve raw maxima, denominators, numerators and pending compensated groups
-  across ring steps, including state staging for multiple Q blocks.
-- Reuse existing ring communication/scheduling, including skipped iterations and
-  replicated versus sharded joint KV. Normalize only after the final active KV
-  contribution, not separately per segment or ring step.
-- Qualify single- and multiple-Q-block ring paths on real multi-device hardware;
-  extend applicable prefill variants and migrate callers only with model evidence.
+- Dense/joint sub-tile tails, batch/GQA and uniform SPMD meshes reuse the shared
+  recipe implementation and accuracy infrastructure.
+- Ring separates Q release from final normalization, preserving raw state and
+  pending compensated groups through single-Q residency or multi-Q checkpoints.
+  Existing communication/scheduling, skipped iterations and replicated/sharded
+  joint KV are retained. Real two-device release and Watcher tests check against
+  dense attention in the same KV order.
+- Wan self-attention has an explicit opt-in recipe/storage selector, with fresh
+  pretrained attention-block accuracy and preparation-inclusive timing. No
+  model defaults are changed; full-video quality is still a rollout gate.
+
+The original coverage list is a rollout roadmap, not a claim that every prefill
+configuration can switch now. D128 noncausal dense/joint/two-device ring are
+qualified here. Other head dimensions, causal/masked/windowed/sink attention,
+paged/indexed/chunked caches, MLA, Wormhole and larger ring topologies still
+need separate coverage work. Explicit recipes reject them. They must be
+qualified before the corresponding legacy implementation can be removed.
 
 **PR 3:** delete non-streaming loops only after every in-scope supported
 configuration has a qualified replacement. Retain utilities needed by sparse,

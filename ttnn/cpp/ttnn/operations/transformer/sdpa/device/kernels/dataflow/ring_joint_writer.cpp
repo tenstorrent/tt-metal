@@ -397,6 +397,10 @@ inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_
     }
 }
 
+#ifdef SDPA_RECIPE_RING
+#include "recipe_state_transfer.hpp"
+#endif
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -769,6 +773,56 @@ void kernel_main() {
 
         // Deferred normalization is always paired with streaming compute.
         constexpr bool use_deferred_norm = use_streaming_compute;
+
+#ifdef SDPA_RECIPE_RING
+        constexpr auto state_args = TensorAccessorArgs<cb_arg_offset + 24>();
+        const auto state_backing = TensorAccessor(state_args, get_common_arg_val<uint32_t>(0));
+#ifdef SDPA_RECIPE_FP32
+        constexpr bool state_fp32 = true;
+#else
+        constexpr bool state_fp32 = false;
+#endif
+        const bool staged = global_q_end - global_q_start > 1;
+        const bool last_ring = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        for (uint32_t q = global_q_start; q < global_q_end; ++q) {
+            if (staged && !is_first_active_iter) {
+                transfer_recipe_state<state_fp32, 17, 18>(noc, state_backing);
+            }
+            if (last_ring) {
+                const auto decoded = decompose_global_q_index(q, num_q_chunks, NH, false);
+                const auto qi = get_q_chunk_info<has_joint_q>(
+                    decoded.q_chunk,
+                    decoded.nb,
+                    decoded.nq,
+                    num_local_q_chunks,
+                    Sq_chunk_t,
+                    vDHt,
+                    Lt,
+                    q_local_padded_Nt);
+                const auto& gen = [&]() -> const auto& {
+                    if constexpr (has_joint_q) {
+                        if (qi.is_joint_q) {
+                            return joint_out_generator;
+                        }
+                    }
+                    return out_generator;
+                }();
+                write_block_row_grouped_trid<output_has_no_padding>(
+                    noc,
+                    gen,
+                    qi.out_slice,
+                    get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt),
+                    cb_out,
+                    tile_bytes,
+                    out_subblock_h,
+                    0);
+            } else if (staged) {
+                transfer_recipe_state<state_fp32, 17, 18>(noc, state_backing);
+            }
+        }
+        noc.async_write_barrier();
+        continue;
+#endif
 
         if constexpr (has_sliding_window) {
             // Sliding compute consumes every local/halo source for a Q in one pass. There is

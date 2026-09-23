@@ -44,6 +44,8 @@ class WanAttention(Module):
         is_self: bool = True,
         sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -58,6 +60,17 @@ class WanAttention(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_self = is_self
+        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = sdpa_kv_dtype or ttnn.bfloat16
+        if sdpa_precision is not None:
+            if not is_self or not is_blackhole() or self.head_dim != 128:
+                raise ValueError("Named Wan recipes require Blackhole D128 self-attention")
+            if sdpa_chunk_size_overrides:
+                raise ValueError("Named recipes own Q256/K512 blocking")
+        if self.sdpa_kv_dtype != ttnn.bfloat16 and sdpa_precision != ttnn.SDPAPrecision.LOW_PRECISION:
+            raise ValueError("Low-precision KV requires the LOW_PRECISION recipe")
+        if self.sdpa_kv_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
+            raise ValueError("Unsupported SDPA KV dtype")
 
         self.n_local_heads = self.num_heads // self.parallel_config.tensor_parallel.factor
 
@@ -160,6 +173,19 @@ class WanAttention(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
+        self.sdpa_kwargs = {"compute_kernel_config": self.sdpa_compute_kernel_config}
+        if sdpa_precision is not None:
+            self.use_exp_ring_sdpa = False
+            self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=full_grid, q_chunk_size=256, k_chunk_size=512
+            )
+            self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid, q_chunk_size=256, k_chunk_size=512
+            )
+            self.sdpa_kwargs = {
+                "precision": sdpa_precision,
+                "inputs_prepared": sdpa_precision == ttnn.SDPAPrecision.LOW_PRECISION,
+            }
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -342,6 +368,8 @@ class WanAttention(Module):
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
+        if self.sdpa_precision is not None and (prompt_1BLP is not None or cross_attn_mask is not None):
+            raise ValueError("Named Wan recipes support unmasked self-attention only")
         if rope_cos is not None:
             # If ROPE is given, this is self-attention
             assert rope_sin is not None
@@ -375,7 +403,7 @@ class WanAttention(Module):
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Set norm output dtype to the input dtype required for ring self-attn.
-        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        sdpa_input_dtype = None if self.sdpa_precision is not None else getattr(self, "_sdpa_input_dtype", None)
         use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
         norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
 
@@ -407,6 +435,11 @@ class WanAttention(Module):
             return out
 
         v_BHNE = create_heads(v_1BNF)
+        if self.sdpa_precision == ttnn.SDPAPrecision.LOW_PRECISION:
+            prepare = ttnn.transformer.prepare_sdpa_input
+            q_BHNE = prepare(q_BHNE, is_query=True)
+            k_BHNE = prepare(k_BHNE, is_query=False, dtype=self.sdpa_kv_dtype)
+            v_BHNE = prepare(v_BHNE, is_query=False, dtype=self.sdpa_kv_dtype)
 
         if prompt_1BLP is None:
             # Self attention
@@ -467,7 +500,7 @@ class WanAttention(Module):
                         joint_strategy="rear",
                         logical_n=N,
                         program_config=self.ring_sdpa_program_config,
-                        compute_kernel_config=self.sdpa_compute_kernel_config,
+                        **self.sdpa_kwargs,
                         dim=2,
                         multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                             self.parallel_config.sequence_parallel.mesh_axis
@@ -487,7 +520,7 @@ class WanAttention(Module):
                     v_BHNE,
                     is_causal=False,
                     program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    **self.sdpa_kwargs,
                 )
         else:
             # Cross attention
