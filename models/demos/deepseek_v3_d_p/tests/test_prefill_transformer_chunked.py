@@ -423,6 +423,55 @@ def _record_indexer_k_cache_pcc(
     assert idx_min >= INDEXER_K_PCC_THRESHOLD, f"Indexer-K cache min PCC {idx_min:.6f} < {INDEXER_K_PCC_THRESHOLD}"
 
 
+class _CacheDeterminism:
+    """Bit-exact re-run check on the KV cache: iteration 0 is the baseline, every later iteration must
+    gather back identical to it. torch.equal, not PCC -- PCC rounds away a single flipped element in
+    num_layers x seq x kvpe.
+
+    `tp_shard_kv` must match the cache layout: gather_cache_natural silently returns 1/tp of the rows
+    when it is False for a TP-sharded (DSA) cache, and two same-shaped quarter-caches compare equal.
+
+    Raw storage, no valid-length slice: update_padded_kv_cache clamps every write to the chunk's REAL
+    tokens (valid_global, zero-filling the pad cells of the tile holding the last one), so rows past the
+    written region are never touched -- they compare equal for free, and start differing the moment a
+    pad lane writes one."""
+
+    def __init__(self, mesh_device, tp_shard_kv):
+        self.mesh_device, self.tp_shard_kv = mesh_device, tp_shard_kv
+        self.baseline = None
+        self.failures = []
+
+    @staticmethod
+    def maybe(determinism_check, num_iters, **kwargs):
+        """None when off; skip rather than silently pass when there is no second iteration to compare."""
+        if not determinism_check:
+            return None
+        if num_iters < 2:
+            pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
+        return _CacheDeterminism(**kwargs)
+
+    def observe(self, it, tt_cache):
+        cache_now, _ = gather_cache_natural(tt_cache, self.mesh_device, self.tp_shard_kv)
+        if self.baseline is None:
+            self.baseline = cache_now
+            logger.info(f"[determinism] iter {it} baseline KV cache {tuple(cache_now.shape)}")
+        elif torch.equal(self.baseline, cache_now):
+            logger.info(f"[determinism] iter {it} KV cache bit-identical to iter 0")
+        else:
+            diff = (self.baseline - cache_now).abs()
+            self.failures.append((it, int((diff > 0).sum()), float(diff.max())))
+            logger.error(
+                f"[determinism] iter {it} KV cache DIFFERS from iter 0: "
+                f"{self.failures[-1][1]} element(s), max abs delta {self.failures[-1][2]:.3e}"
+            )
+
+    def finish(self, context):
+        assert not self.failures, "replay is not deterministic: " + "; ".join(
+            f"iter {it}: {n} element(s), max abs delta {mx:.3e}" for it, n, mx in self.failures
+        )
+        logger.success(f"[determinism] KV cache bit-identical across iterations ({context})")
+
+
 def _to_tp_stripe_major(bc, sp, tp, local, head_dim, seq_len_cache):
     """Re-lay one layer's block-cyclic [seq, D] host rows as [tp, seq/tp, D] for a TP-deduped cache.
 
@@ -796,6 +845,8 @@ def run_chunked_transformer(
     topology,
     routing_use_l1_small_for_semaphores=False,
     preload_isl=0,
+    num_iters=1,
+    determinism_check=False,
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
@@ -972,54 +1023,66 @@ def run_chunked_transformer(
 
     # min PCC per layer across chunks (for the summary)
     layer_min_pcc = {i: 1.0 for i in range(num_layers)}
+    det = _CacheDeterminism.maybe(determinism_check, num_iters, mesh_device=mesh_device, tp_shard_kv=tp_shard_kv)
 
-    profiler.start("tt_forward")
-    for c in range(n_chunks):
-        kv_actual = preload_isl + c * CHUNK  # chunk-aligned -> rotation degenerates
-        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
-        flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
-        local_pos = flat - kv_actual  # permutation of [0, CHUNK)
+    for it in range(num_iters):
+        profiler.start("tt_forward")
+        # Iteration 0 alone SCORES the golden -- later iterations replay identical chunks into identical
+        # rows. return_intermediates stays on regardless: TtMoe defers three deallocations under it, so
+        # flipping it would make the replay structurally different from its baseline.
+        score_layers = it == 0
+        for c in range(n_chunks):
+            kv_actual = preload_isl + c * CHUNK  # chunk-aligned -> rotation degenerates
+            positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+            flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
+            local_pos = flat - kv_actual  # permutation of [0, CHUNK)
 
-        # token_ids in block-cyclic chip-major order -> [sp, 1, chunk_local], SP-sharded on dim 0.
-        chunk_tok = token_ids_full[flat].reshape(sp, 1, chunk_local)
-        tt_tokens = ttnn.from_torch(
-            chunk_tok,
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
-        )
+            # token_ids in block-cyclic chip-major order -> [sp, 1, chunk_local], SP-sharded on dim 0.
+            chunk_tok = token_ids_full[flat].reshape(sp, 1, chunk_local)
+            tt_tokens = ttnn.from_torch(
+                chunk_tok,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
 
-        # forward (not a separate forward_chunk): full chunk, all positions real, so actual_end is
-        # kv_actual + CHUNK. With return_intermediates it snapshots each layer to host as
-        # intermediates["layer_i"]; forward uses self.indexed_rope.
-        layer_outputs = transformer.forward(
-            tt_tokens,
-            tt_kvpe_cache,
-            actual_isl=CHUNK,
-            actual_start=kv_actual,
-            actual_end=kv_actual + CHUNK,
-            cache_user_id=0,
-            return_intermediates=True,
-            index_kv_cache=tt_index_kv_cache,
-        )
-        ttnn.synchronize_device(mesh_device)
+            # forward (not a separate forward_chunk): full chunk, all positions real, so actual_end is
+            # kv_actual + CHUNK. With return_intermediates it snapshots each layer to host as
+            # intermediates["layer_i"]; forward uses self.indexed_rope.
+            layer_outputs = transformer.forward(
+                tt_tokens,
+                tt_kvpe_cache,
+                actual_isl=CHUNK,
+                actual_start=kv_actual,
+                actual_end=kv_actual + CHUNK,
+                cache_user_id=0,
+                return_intermediates=True,
+                index_kv_cache=tt_index_kv_cache,
+            )
+            ttnn.synchronize_device(mesh_device)
 
-        for i in range(num_layers):
-            # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); index [0] -> [CHUNK, emb].
-            out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+            if score_layers:
+                for i in range(num_layers):
+                    # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); [0] -> [CHUNK, emb].
+                    out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
 
-            natural = torch.zeros(CHUNK, emb_dim, dtype=torch.float32)
-            natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order
-            ref = _ref_layer_slice(trace_dir, layout, i, kv_actual, kv_actual + CHUNK)
-            _, pcc = comp_pcc(ref, natural)
-            layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
-            logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
-            if pcc < LAYER_PCC_THRESHOLD:
-                logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
-        logger.info(f"  chunk {c} done ({num_layers} layers)")
-    profiler.end("tt_forward")
+                    natural = torch.zeros(CHUNK, emb_dim, dtype=torch.float32)
+                    natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order
+                    ref = _ref_layer_slice(trace_dir, layout, i, kv_actual, kv_actual + CHUNK)
+                    _, pcc = comp_pcc(ref, natural)
+                    layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
+                    logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
+                    if pcc < LAYER_PCC_THRESHOLD:
+                        logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
+            logger.info(f"  chunk {c} done ({num_layers} layers)")
+        profiler.end("tt_forward")
+        logger.info(f"iter {it} done ({n_chunks} chunks)")
+        if det:
+            # The cache is what every later chunk attends to, so a write landing out of order shows
+            # up here even when the final hidden state looks fine.
+            det.observe(it, tt_kvpe_cache.storage)
 
     logger.info("Per-layer min PCC across chunks:")
     for i in range(num_layers):
@@ -1054,6 +1117,9 @@ def run_chunked_transformer(
             tp_shard_kv=tp_shard_kv,
         )
 
+    if det:
+        det.finish(f"num_layers={num_layers}, n_chunks={n_chunks}")
+
     profiler.end("total_test_time")
     logger.success(
         f"Chunked prefill transformer passed (num_layers={num_layers}, n_chunks={n_chunks}, "
@@ -1063,6 +1129,7 @@ def run_chunked_transformer(
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
@@ -1090,6 +1157,7 @@ def test_ds_prefill_transformer_chunked(
     num_layers,
     n_chunks,
     num_links,
+    determinism_check,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer(
@@ -1102,6 +1170,10 @@ def test_ds_prefill_transformer_chunked(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
+        # Derived, not a second axis: only the determinism rows need a second pass, and a num_iters
+        # axis would multiply an already expensive matrix.
+        num_iters=2 if determinism_check else 1,
+        determinism_check=determinism_check,
     )
 
 
@@ -1160,6 +1232,7 @@ def test_ds_prefill_transformer_chunked_padded(
 _PADDED_MODES = ["notrace", "traced"]
 
 
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("mode", _PADDED_MODES, ids=_PADDED_MODES)
 @pytest.mark.parametrize("splits", [_PADDED_MID_15K, _PADDED_FULL_55K], ids=["mid15k", "full55k"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
@@ -1194,6 +1267,7 @@ def test_kimi_prefill_transformer_chunked_padded(
     splits,
     num_links,
     mode,
+    determinism_check,
 ):
     """Padded/rotated chunked prefill, traced vs untraced (see _PADDED_MODES). Both modes exercise
     padding-aware MoE over the same `splits` and assert per-layer KV-cache PCC against the golden, so
@@ -1215,6 +1289,10 @@ def test_kimi_prefill_transformer_chunked_padded(
         *common,
         routing_use_l1_small_for_semaphores=True,
         mode="traced" if mode == "traced" else "scalar",
+        # Derived, not a second axis: only the determinism rows need a second pass, and a num_iters
+        # axis would multiply an already expensive matrix.
+        num_iters=2 if determinism_check else 1,
+        determinism_check=determinism_check,
     )
 
 
@@ -1230,6 +1308,7 @@ def test_kimi_prefill_transformer_chunked_padded(
 #     NOT independent of the reference.
 # It also needs a TTNN weight cache for `num_layers`; the row asserts completeness rather than
 # building one, so stage the cache first (TT_MISTRAL4_PREFILL_TTNN_CACHE).
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("mode", _PADDED_MODES, ids=_PADDED_MODES)
 @pytest.mark.parametrize("splits", [_PADDED_MID_15K, _PADDED_FULL_55K], ids=["mid15k", "full55k"])
 @pytest.mark.parametrize("num_layers", [1, 36], ids=["L1", "L36"])
@@ -1263,6 +1342,7 @@ def test_mistral4_prefill_transformer_chunked_padded(
     splits,
     num_links,
     mode,
+    determinism_check,
 ):
     """Padded/rotated chunked prefill for Mistral, traced vs untraced, asserted per-layer against the
     golden KV cache.
@@ -1284,6 +1364,10 @@ def test_mistral4_prefill_transformer_chunked_padded(
         topology,
         routing_use_l1_small_for_semaphores=True,
         mode="traced" if mode == "traced" else "scalar",
+        # Derived, not a second axis: only the determinism rows need a second pass, and a num_iters
+        # axis would multiply an already expensive matrix.
+        num_iters=2 if determinism_check else 1,
+        determinism_check=determinism_check,
     )
 
 
@@ -1385,6 +1469,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
 # in both modes.
 # notrace/traced, not trace: "notrace" CONTAINS "trace", so `-k trace` would select both modes.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize(
     "n_chunks, preload_isl",
     [(1, 10 * CHUNK), (11, 0)],
@@ -1442,6 +1527,7 @@ def test_glm_prefill_transformer_chunked(
     preload_isl,
     num_links,
     use_trace,
+    determinism_check,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_updated(
@@ -1454,10 +1540,13 @@ def test_glm_prefill_transformer_chunked(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
-        1,  # num_iters: accuracy, not timing
+        # num_iters: accuracy, not timing -- the second pass exists only so the determinism check
+        # has something to compare iteration 0 against.
+        2 if determinism_check else 1,
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
         check_pcc=True,
+        determinism_check=determinism_check,
         check_layer_pcc=not use_trace,  # per-layer PCC needs a host readback, impossible under capture
         use_trace=use_trace,
         kv_pcc_threshold=KV_CACHE_PCC_THRESHOLD,
@@ -2041,10 +2130,7 @@ def run_chunked_transformer_updated(
         # Zero them so the replay starts from the same state the untraced path starts from.
         _reset_kda_carries("after capture")
 
-    if determinism_check and num_iters < 2:
-        pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
-    det_baseline = None
-    det_failures = []
+    det = _CacheDeterminism.maybe(determinism_check, num_iters, mesh_device=mesh_device, tp_shard_kv=tp_shard_kv)
 
     profiler.start("tt_forward")
     for it in range(num_iters):
@@ -2108,9 +2194,10 @@ def run_chunked_transformer_updated(
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
-            if check_layer_pcc:
-                # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
-                # each iteration replays the same chunks into the same cache region).
+            # Iteration 0 only: later iterations replay the same chunks into the same cache region, so
+            # they would re-derive the same PCCs. return_intermediates stays on either way, so the
+            # allocator trajectory is the same for every iteration.
+            if check_layer_pcc and it == 0:
                 local_pos = chunk_local_pos[c]
                 for i in range(num_layers):
                     # kv_only_last_layer=True strips the LAST layer's output path (it writes KV and
@@ -2144,37 +2231,17 @@ def run_chunked_transformer_updated(
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
-        if determinism_check:
-            # Compare the whole cache the iteration just wrote, bit-exactly. PCC rounds away a single
-            # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
-            # surface because it is what every later chunk attends to, so a write landing out of order
-            # inside the replay shows up here even when the final hidden state looks fine.
-            cache_now, _ = gather_cache_natural(tt_kvpe_cache.storage, mesh_device)
-            if det_baseline is None:
-                det_baseline = cache_now
-                logger.info(f"[determinism] iter {it} baseline KV cache {tuple(cache_now.shape)}")
-            elif torch.equal(det_baseline, cache_now):
-                logger.info(f"[determinism] iter {it} KV cache bit-identical to iter 0")
-            else:
-                diff = (det_baseline - cache_now).abs()
-                det_failures.append((it, int((diff > 0).sum()), float(diff.max())))
-                logger.error(
-                    f"[determinism] iter {it} KV cache DIFFERS from iter 0: "
-                    f"{det_failures[-1][1]} element(s), max abs delta {det_failures[-1][2]:.3e}"
-                )
+        if det:
+            # The cache is the right surface because it is what every later chunk attends to, so a write
+            # landing out of order inside the replay shows up here even when the hidden state looks fine.
+            det.observe(it, tt_kvpe_cache.storage)
         # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
 
-    if determinism_check:
-        assert not det_failures, "captured-trace replay is not deterministic: " + "; ".join(
-            f"iter {it}: {n} element(s), max abs delta {mx:.3e}" for it, n, mx in det_failures
-        )
-        logger.success(
-            f"[determinism] replay bit-identical across {num_iters} iterations "
-            f"(num_layers={num_layers}, n_chunks={n_chunks}, use_trace={use_trace})"
-        )
+    if det:
+        det.finish(f"num_layers={num_layers}, n_chunks={n_chunks}, use_trace={use_trace}")
 
     if profile_call_counts is not None:
         expected_calls_per_layer = n_chunks * num_iters
@@ -2556,6 +2623,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     )
 
 
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
@@ -2614,6 +2682,7 @@ def test_kimi_prefill_transformer_chunked(
     perf_margin,
     use_trace,
     preload_isl,
+    determinism_check,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
@@ -2644,6 +2713,7 @@ def test_kimi_prefill_transformer_chunked(
         preload_isl=preload_isl,
         check_pcc=True,  # this test exists for the KV PCC; the timing table is incidental
         use_trace=use_trace,
+        determinism_check=determinism_check,
     )
 
 
@@ -2910,6 +2980,8 @@ def run_chunked_transformer_padded_trace(
     topology,
     routing_use_l1_small_for_semaphores=False,
     mode="traced",
+    num_iters=1,
+    determinism_check=False,
 ):
     """VARIABLE/partial-chunk prefill on ONE kv_only build, in one of three independent modes (pytest
     param `mode`), each asserted ONLY against the golden kv_post_transform (no cross-path comparison):
@@ -3015,6 +3087,11 @@ def run_chunked_transformer_padded_trace(
         ka += isl
     chunk_tok_host = [_padded_chunk_tok(ks, e - ks) for (ks, e) in starts]
 
+    def _make_determinism():
+        # One per mode, since each mode owns its own cache. tp_shard_kv=False: both variants driven here
+        # are dense, and _make_cache passes no tp_axis.
+        return _CacheDeterminism.maybe(determinism_check, num_iters, mesh_device=mesh_device, tp_shard_kv=False)
+
     def _make_cache():
         return init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BFP8_TILE,
@@ -3037,6 +3114,7 @@ def run_chunked_transformer_padded_trace(
     # ---- SCALAR mode: untraced scalar path (host actual_start/actual_end), asserted vs GOLDEN. ----
     if mode == "scalar":
         cache = _make_cache()
+        det = _make_determinism()
         # UNTRACED ONLY: also PCC each layer's DECODER OUTPUT, not just the KV cache. This needs
         # return_intermediates=True, whose _to_host(h) + synchronize_device is a host readback and so
         # cannot live inside a trace capture — which is why the metadata/traced modes below assert KV
@@ -3054,57 +3132,66 @@ def run_chunked_transformer_padded_trace(
         # Declared by the adapter, not keyed on the variant name: a model with massive activation
         # channels needs the RMS-normalised score (see PrefillModelAdapter).
         gate_on_npcc = variant.gate_hidden_states_on_npcc
-        for c, ((ks, e), tok) in enumerate(zip(starts, chunk_tok_host)):
-            isl = e - ks
-            # Same rotated layout _padded_chunk_tok gathered with: recomputed here (cheap, host-side)
-            # so the valid rows can be un-rotated back to natural order for the golden comparison.
-            positions = rotated_chip_positions(ks, sp, chunk_local)
-            flat = [positions[ch][r] for ch in range(sp) for r in range(chunk_local)]
-            valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < e]
-            src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
-            dst = torch.tensor([gp - ks for _, gp in valid_pairs], dtype=torch.long)  # 0..isl-1
-            tt_tokens = ttnn.from_torch(
-                tok,
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=sp_mapper,
-            )
-            layer_outputs = transformer.forward(
-                tt_tokens,
-                cache,
-                actual_isl=isl,
-                actual_start=ks,
-                actual_end=e,
-                cache_user_id=0,
-                metadata=None,
-                return_intermediates=True,
-            )
-            ttnn.deallocate(tt_tokens)
-            ttnn.synchronize_device(mesh_device)
-            for i in range(n_decoder_layers):
-                # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); [0] -> [CHUNK, emb].
-                out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
-                natural = torch.zeros(isl, emb_dim, dtype=torch.float32)
-                natural[dst] = out_flat[src]  # un-rotate valid rows -> natural [ks, e)
-                ref = _ref_layer_slice(trace_dir, layout, i, ks, e)
-                _, pcc = comp_pcc(ref, natural)
-                # Both scores always: the gated one is asserted, the other is context in the log.
-                # Row-subsampled when it is only context -- at full resolution this second comp_pcc
-                # costs ~75 s per row, which the non-gated variants (Kimi/DeepSeek/GLM) would pay for
-                # a number nothing asserts. Stride 8 still correlates 1.6M elements.
-                nstride = 1 if gate_on_npcc else 8
-                _, npcc = comp_pcc(token_normalized(ref[::nstride]), token_normalized(natural[::nstride]))
-                score = npcc if gate_on_npcc else pcc
-                layer_min_pcc[i] = min(layer_min_pcc[i], score)
-                logger.info(
-                    f"  chunk {c} (kv_actual={ks} isl={isl}) layer {i} decoder "
-                    f"PCC: {pcc:.6f} nPCC: {npcc:.6f} ({'npcc' if gate_on_npcc else 'pcc'} gated)"
+        for it in range(num_iters):
+            # Iteration 0 alone SCORES the golden -- this mode pays two comp_pcc per layer per split.
+            # return_intermediates stays on regardless: TtMoe defers three deallocations under it, so
+            # flipping it would make the replay structurally different from its baseline.
+            score_layers = it == 0
+            for c, ((ks, e), tok) in enumerate(zip(starts, chunk_tok_host)):
+                isl = e - ks
+                # Same rotated layout _padded_chunk_tok gathered with: recomputed here (cheap, host-side)
+                # so the valid rows can be un-rotated back to natural order for the golden comparison.
+                positions = rotated_chip_positions(ks, sp, chunk_local)
+                flat = [positions[ch][r] for ch in range(sp) for r in range(chunk_local)]
+                valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < e]
+                src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
+                dst = torch.tensor([gp - ks for _, gp in valid_pairs], dtype=torch.long)  # 0..isl-1
+                tt_tokens = ttnn.from_torch(
+                    tok,
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=sp_mapper,
                 )
-                if score < LAYER_PCC_THRESHOLD:
-                    logger.warning(f"  chunk {c} layer {i} decoder score {score:.6f} below {LAYER_PCC_THRESHOLD}")
-        ttnn.synchronize_device(mesh_device)
+                layer_outputs = transformer.forward(
+                    tt_tokens,
+                    cache,
+                    actual_isl=isl,
+                    actual_start=ks,
+                    actual_end=e,
+                    cache_user_id=0,
+                    metadata=None,
+                    return_intermediates=True,
+                )
+                ttnn.deallocate(tt_tokens)
+                ttnn.synchronize_device(mesh_device)
+                if not score_layers:
+                    continue
+                for i in range(n_decoder_layers):
+                    # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); [0] -> [CHUNK, emb].
+                    out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+                    natural = torch.zeros(isl, emb_dim, dtype=torch.float32)
+                    natural[dst] = out_flat[src]  # un-rotate valid rows -> natural [ks, e)
+                    ref = _ref_layer_slice(trace_dir, layout, i, ks, e)
+                    _, pcc = comp_pcc(ref, natural)
+                    # Both scores always: the gated one is asserted, the other is context in the log.
+                    # Row-subsampled when it is only context -- at full resolution this second comp_pcc
+                    # costs ~75 s per row, which the non-gated variants (Kimi/DeepSeek/GLM) would pay for
+                    # a number nothing asserts. Stride 8 still correlates 1.6M elements.
+                    nstride = 1 if gate_on_npcc else 8
+                    _, npcc = comp_pcc(token_normalized(ref[::nstride]), token_normalized(natural[::nstride]))
+                    score = npcc if gate_on_npcc else pcc
+                    layer_min_pcc[i] = min(layer_min_pcc[i], score)
+                    logger.info(
+                        f"  chunk {c} (kv_actual={ks} isl={isl}) layer {i} decoder "
+                        f"PCC: {pcc:.6f} nPCC: {npcc:.6f} ({'npcc' if gate_on_npcc else 'pcc'} gated)"
+                    )
+                    if score < LAYER_PCC_THRESHOLD:
+                        logger.warning(f"  chunk {c} layer {i} decoder score {score:.6f} below {LAYER_PCC_THRESHOLD}")
+            ttnn.synchronize_device(mesh_device)
+            if det:
+                det.observe(it, cache.storage)
 
         logger.info("[padded-trace] NOTRACE per-layer min decoder-output PCC across chunks:")
         for i in range(n_decoder_layers):
@@ -3135,6 +3222,8 @@ def run_chunked_transformer_padded_trace(
             assert_threshold=LAYER_PCC_THRESHOLD,
             assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
         )
+        if det:
+            det.finish(f"scalar, num_layers={num_layers}, splits={len(splits)}")
         ttnn.deallocate(cache.storage)
         transformer.release_sub_device_managers()
         logger.success("[padded-trace] SCALAR run complete (asserted vs golden)")
@@ -3142,6 +3231,7 @@ def run_chunked_transformer_padded_trace(
 
     # ---- METADATA modes (eager / traced): on-device per-split scalars, asserted vs GOLDEN. ----
     cache_B = _make_cache()  # persistent (captured) cache
+    det = _make_determinism()
     trace_input = ttnn.from_torch(
         chunk_tok_host[0],
         device=mesh_device,
@@ -3208,34 +3298,42 @@ def run_chunked_transformer_padded_trace(
         # golden and succeed — a green run that exercised no trace at all.
         assert controller.num_segments > 0, "traced mode captured 0 segments — nothing was recorded to replay"
 
-        for c, (ks, e) in enumerate(starts):
-            ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
-            write_chunk_metadata(
-                trace_metadata,
-                (0, ks, e),
-                hf_config=config,
-                mesh_device=mesh_device,
-                chunk_size_global=CHUNK,
-                sp_axis=sp_axis,
-            )
-            controller.replay()
-        ttnn.synchronize_device(mesh_device)
+        # One capture, replayed across every iteration -- re-capturing per iteration would test a
+        # different thing.
+        for it in range(num_iters):
+            for c, (ks, e) in enumerate(starts):
+                ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
+                write_chunk_metadata(
+                    trace_metadata,
+                    (0, ks, e),
+                    hf_config=config,
+                    mesh_device=mesh_device,
+                    chunk_size_global=CHUNK,
+                    sp_axis=sp_axis,
+                )
+                controller.replay()
+            ttnn.synchronize_device(mesh_device)
+            if det:
+                det.observe(it, cache_B.storage)
         controller.release()
         transformer.set_trace_controller(None)
     else:
         logger.info("[padded-trace] EAGER metadata (eager mode): per-split forward, no capture")
-        for c, (ks, e) in enumerate(starts):
-            ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
-            write_chunk_metadata(
-                trace_metadata,
-                (0, ks, e),
-                hf_config=config,
-                mesh_device=mesh_device,
-                chunk_size_global=CHUNK,
-                sp_axis=sp_axis,
-            )
-            _fwd_meta()
-        ttnn.synchronize_device(mesh_device)
+        for it in range(num_iters):
+            for c, (ks, e) in enumerate(starts):
+                ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
+                write_chunk_metadata(
+                    trace_metadata,
+                    (0, ks, e),
+                    hf_config=config,
+                    mesh_device=mesh_device,
+                    chunk_size_global=CHUNK,
+                    sp_axis=sp_axis,
+                )
+                _fwd_meta()
+            ttnn.synchronize_device(mesh_device)
+            if det:
+                det.observe(it, cache_B.storage)
     ttnn.deallocate(trace_input)
     # [:3]: field 3 is the persistent llama4 buffer, not per-chunk state (see ChunkMetadata).
     for t in trace_metadata[:3]:
@@ -3254,5 +3352,7 @@ def run_chunked_transformer_padded_trace(
         assert_threshold=LAYER_PCC_THRESHOLD,
         assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
     )
+    if det:
+        det.finish(f"{mode}, num_layers={num_layers}, splits={len(splits)}")
     transformer.release_sub_device_managers()
     logger.success(f"[padded-trace] {mode} metadata run complete (asserted vs golden)")
