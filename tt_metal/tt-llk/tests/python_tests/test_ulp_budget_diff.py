@@ -35,6 +35,11 @@ def _head(*rows):
     )
 
 
+def _refuses(match):
+    """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
+    return pytest.raises(ValueError, match=match)  # allow-pytest.raises: host-only test
+
+
 def _kinds(base, head):
     return {c.cell[1]: c.kind for c in compare(parse_table(base), parse_table(head))}
 
@@ -474,5 +479,5 @@ def test_a_duplicated_cell_is_refused_rather_than_judged():
         "{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP",
         "{in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP",
     )
-    with pytest.raises(ValueError, match="duplicate row"):
+    with _refuses("duplicate row"):
         parse_table(duplicated)
