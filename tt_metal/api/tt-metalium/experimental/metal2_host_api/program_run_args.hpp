@@ -131,6 +131,13 @@ struct ProgramRunArgs {
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
     Group<DFBRunOverrides> dfb_run_overrides;
+
+    ////////////////////////////////////////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    ////////////////////////////////////////////////////////////////////////
+    // Companion to ProgramAdvancedOptions on the schema side; holds the
+    // experimental PrefetcherPipe arguments.
+    AdvancedProgramRunArgs advanced_options;
 };
 
 //-----------------------------------------------------
