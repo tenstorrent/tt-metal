@@ -15,8 +15,13 @@
 #include <memory>
 #include <cctype>
 #include <functional>
+#include <cstdlib>
+#include <cstring>
 #include <optional>
+#include <vector>
+#include <llrt/tt_cluster.hpp>
 #include <tt_stl/assert.hpp>
+#include "impl/context/metal_context.hpp"
 #include <fmt/format.h>
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
@@ -782,6 +787,97 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
             }
         }
     }
+}
+
+PhysicalGroupingDescriptor PhysicalGroupingDescriptor::find_and_load(
+    const std::optional<std::filesystem::path>& pgd_path,
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
+    const char* tt_metal_home_env = std::getenv("TT_METAL_HOME");
+    const std::filesystem::path groupings_dir =
+        std::filesystem::path(tt_metal_home_env != nullptr ? tt_metal_home_env : ".") / "tests" / "tt_metal" /
+        "tt_fabric" / "physical_groupings";
+    const std::filesystem::path default_path = groupings_dir / "default_physical_grouping_descriptor.textproto";
+
+    auto load_if_regular_file = [](const std::filesystem::path& path) -> std::optional<PhysicalGroupingDescriptor> {
+        if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
+            log_info(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
+            return PhysicalGroupingDescriptor(path);
+        }
+        return std::nullopt;
+    };
+
+    if (pgd_path.has_value() && !pgd_path->empty()) {
+        if (auto loaded = load_if_regular_file(*pgd_path)) {
+            return std::move(*loaded);
+        }
+        TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", pgd_path->string());
+    }
+
+    const char* pgd_path_env = std::getenv("TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH");
+    if (pgd_path_env != nullptr && std::strlen(pgd_path_env) > 0) {
+        const std::filesystem::path explicit_path(pgd_path_env);
+        if (auto loaded = load_if_regular_file(explicit_path)) {
+            return std::move(*loaded);
+        }
+        TT_THROW(
+            "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: {}", explicit_path.string());
+    }
+
+    std::vector<std::filesystem::path> specific_paths;
+    const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
+    if (cluster_name_env != nullptr && cluster_name_env[0] != '\0') {
+        const std::string cluster_name(cluster_name_env);
+        specific_paths.push_back(
+            std::filesystem::path("/data/scaleout_configs") / cluster_name /
+            (cluster_name + "_physical_grouping_descriptor.textproto"));
+        specific_paths.push_back(groupings_dir / (cluster_name + "_physical_grouping_descriptor.textproto"));
+    }
+
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = context.get_cluster();
+    const tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
+    const tt::ARCH arch = cluster.arch();
+    std::optional<std::string> arch_cluster_filename;
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
+        arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    } else if (
+        (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || cluster.is_ubb_galaxy()) &&
+        arch == tt::ARCH::BLACKHOLE) {
+        if (physical_system_descriptor != nullptr && physical_system_descriptor->is_bh_galaxy_rev_c()) {
+            arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+        } else {
+            arch_cluster_filename = "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+        }
+    } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
+        arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
+    }
+    if (arch_cluster_filename.has_value()) {
+        specific_paths.push_back(groupings_dir / *arch_cluster_filename);
+    }
+
+    for (const auto& path : specific_paths) {
+        if (auto loaded = load_if_regular_file(path)) {
+            return std::move(*loaded);
+        }
+    }
+
+    if (auto loaded = load_if_regular_file(default_path)) {
+        log_info(
+            tt::LogFabric, "No specific Physical Grouping Descriptor found; using default: {}", default_path.string());
+        return std::move(*loaded);
+    }
+
+    std::string error_msg = "Could not find Physical Grouping Descriptor file. Searched:\n";
+    for (const auto& path : specific_paths) {
+        error_msg += "  - " + path.string() + "\n";
+    }
+    error_msg += "  - " + default_path.string() + "\n";
+    if (cluster_name_env != nullptr && cluster_name_env[0] != '\0') {
+        error_msg += std::string("Cluster name from TT_CLUSTER_NAME: ") + cluster_name_env + "\n";
+    } else {
+        error_msg += "TT_CLUSTER_NAME not set\n";
+    }
+    throw std::runtime_error(error_msg);
 }
 
 }  // namespace tt::tt_fabric

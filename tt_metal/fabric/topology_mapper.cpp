@@ -514,26 +514,19 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
         }
 
-        auto pgd = ::tt::tt_fabric::try_find_and_load_physical_grouping_descriptor(
+        auto pgd = ::tt::tt_fabric::PhysicalGroupingDescriptor::find_and_load(
             /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
         const auto asic_ranks = config.disable_rank_bindings ? decltype(asic_id_to_mesh_rank){} : asic_id_to_mesh_rank;
         const auto fabric_ranks =
             config.disable_rank_bindings ? decltype(fabric_node_id_to_mesh_rank){} : fabric_node_id_to_mesh_rank;
-        auto mapping_result = pgd.has_value() ? ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(
-                                                    physical_system_descriptor_,
-                                                    *pgd,
-                                                    mesh_graph_descriptor,
-                                                    config,
-                                                    pinnings_by_mesh,
-                                                    asic_ranks,
-                                                    fabric_ranks)
-                                              : ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(
-                                                    physical_system_descriptor_,
-                                                    mesh_graph_descriptor,
-                                                    config,
-                                                    pinnings_by_mesh,
-                                                    asic_ranks,
-                                                    fabric_ranks);
+        auto mapping_result = ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(
+            physical_system_descriptor_,
+            pgd,
+            mesh_graph_descriptor,
+            config,
+            pinnings_by_mesh,
+            asic_ranks,
+            fabric_ranks);
 
         // Check if mapping succeeded
         TT_FATAL(
