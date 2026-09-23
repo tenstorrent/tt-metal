@@ -30,6 +30,7 @@ class TransformerBlock(LightweightModule):
         paged_attention_config=None,
         use_paged_kv_cache=False,
         attention_class=None,
+        mlp_class=None,
         prefetcher=None,
     ):
         super().__init__()
@@ -51,6 +52,9 @@ class TransformerBlock(LightweightModule):
         self.is_mixture_of_experts = False
         self.layer_num = layer_num
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
+        # Mirrors attention_class: lets a model supply its own dense-MLP implementation
+        # (e.g. a fused-SwiGLU variant) without forking this decoder.
+        ActualMLPClass = mlp_class if mlp_class is not None else MLP
 
         self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
@@ -88,7 +92,7 @@ class TransformerBlock(LightweightModule):
                 tt_ccl=self.tt_ccl,
             )
         else:
-            self.feed_forward = MLP(
+            self.feed_forward = ActualMLPClass(
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 args=args,
