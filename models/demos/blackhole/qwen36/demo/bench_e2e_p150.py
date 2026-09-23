@@ -249,7 +249,7 @@ ALL_QWEN_FLAG_DEFAULTS = {
     "QWEN_GDN_INV_DOUBLING": ("0", "experimental fused-GDN: use doubling-based matrix inversion; 0=default"),
     "QWEN_GDN_PATH": (
         "<unset>",
-        "select the GDN prefill implementation; fused=experimental fused FLA prim (needs the fused-prim build), unset/other=phased chunk-parallel (this branch, F12)",
+        "select the GDN prefill implementation; fused=experimental fused FLA prim (needs the fused-prim build), unset/other=phased chunk-parallel (a different tree/branch)",
     ),
     "QWEN_SDPA_BF8": ("0", "experimental gated-attention: store SDPA KV in bfp8; 1=enable"),
 }

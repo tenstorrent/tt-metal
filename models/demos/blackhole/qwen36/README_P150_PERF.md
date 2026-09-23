@@ -23,11 +23,16 @@ Run-to-run: TTFT stays within 1%; TPOT varies up to ~5% between processes.
 6. Make sure nothing else holds `/dev/tenstorrent/0` — only one process may use the device at a
    time.
 
-## Run
+## The two runs
+
+The first command uses a real 4096-token passage from the demo's source document (Frankenstein),
+plus "Summarize the text above in a few bullet points." It generates 8 tokens, over 5 timed runs
+(the ISL 4096 / OSL 8 case). The second command uses the demo's own 2642-token AI-history prompt.
+It generates 100 tokens, over 3 timed runs (the same case as `pytest text_demo.py -k traced_4k`).
 
 ```bash
-models/demos/blackhole/qwen36/demo/run_bench_e2e_p150.sh f13 4096 8 5
-models/demos/blackhole/qwen36/demo/run_bench_e2e_p150.sh f13 demo 100 3
+models/demos/blackhole/qwen36/demo/run_bench_e2e_p150.sh 4096 8 5
+models/demos/blackhole/qwen36/demo/run_bench_e2e_p150.sh demo 100 3
 ```
 
 The runner sets every `QWEN*` flag itself, including `QWEN_GDN_PATH=fused QWEN_GDN_NP=6` for the

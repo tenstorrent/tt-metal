@@ -6,27 +6,22 @@
 # explicitly (so results never depend on a stale shell), checks the device is free, and runs the
 # benchmark under a 30-minute watchdog. See ../REPRODUCE_P150_PERF.md.
 #
-# Usage: run_bench_e2e_p150.sh [f12|f13] [isl] [osl] [runs]
-#   f12 (default) - phased chunk-parallel GDN prefill, this branch (atupe/qwen35-2b-p150-prefill-perf).
-#   f13            - experimental fused FLA prim (QWEN_GDN_PATH=fused). Only works in a tree that
-#                    has the fused prim built in (see the fused_fla_available check below); refuses
-#                    to run otherwise. As of this branch, that means the fla-fused-eval branch/worktree.
+# Usage: run_bench_e2e_p150.sh [isl|demo] [osl] [runs]
 #   isl  (default 4096) - or the literal "demo": passes --demo-prompt to bench_e2e_p150.py
 #                          instead of --isl, and names the output file
-#                          <config>_demo_osl<osl>_<timestamp>.json.
+#                          demo_osl<osl>_<timestamp>.json.
 #   osl  (default 8)
 #   runs (default 5)
+#
+# This branch has a single GDN-prefill configuration: the experimental fused FLA prim
+# (QWEN_GDN_PATH=fused QWEN_GDN_NP=6), which the runner always exports. It only works in a tree
+# that has the fused prim built in (see the FUSED_FLA_GREP check below); it refuses to run
+# otherwise.
 set -euo pipefail
 
-CONFIG="${1:-f12}"
-ISL="${2:-4096}"
-OSL="${3:-8}"
-RUNS="${4:-5}"
-
-case "$CONFIG" in
-  f12|f13) ;;
-  *) echo "usage: $(basename "$0") [f12|f13] [isl] [osl] [runs]" >&2; exit 2 ;;
-esac
+ISL="${1:-4096}"
+OSL="${2:-8}"
+RUNS="${3:-5}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
@@ -152,11 +147,11 @@ export QWEN_SDPA_BF8=0
 #   QWEN36_GDN_CONV_XIN_L1_MAX_T    - fallback is str(xin_l1_max_t), a runtime local.
 #   QWEN36_GDN_FLA_INPUTS_DRAM      - fallback depends on QWEN_GDN_PATH ("1" if fused else "0");
 #                                     leaving it unset lets the code compute the right value for
-#                                     whichever of f12/f13 this invocation is running.
+#                                     the fused FLA configuration this invocation is running.
 #   QWEN36_MAX_TOKENS_ALL_USERS     - bare truthy; vLLM-serving only, unused by this bench.
 #   QWEN36_SDPA_PREFILL_CHUNKS      - bare truthy; experimental gated-attention path only.
 #   QWEN9B_GDN_DBG                  - bare truthy debug-print switch.
-#   QWEN_GDN_PATH                   - set explicitly below per CONFIG (f12: empty: f13: "fused").
+#   QWEN_GDN_PATH                   - set explicitly below (always "fused"; see section 4 below).
 export QWEN_GDN_PATH=""
 
 FUSED_FLA_GREP() {
@@ -168,23 +163,23 @@ FUSED_FLA_GREP() {
     2>/dev/null
 }
 
-if [ "$CONFIG" = "f13" ]; then
-  if ! FUSED_FLA_GREP; then
-    echo "ERROR: --config f13 (QWEN_GDN_PATH=fused) requested, but this tree's" >&2
-    echo "       chunk_gated_delta_rule.cpp does not mention QWEN_GDN_PATH -- the fused FLA prim" >&2
-    echo "       is not wired into this build. Build/checkout the fla-fused-eval branch" >&2
-    echo "       (or whichever tree has the fused prim) and re-run there. Refusing to run." >&2
-    exit 1
-  fi
-  export QWEN_GDN_PATH="fused"
-  export QWEN_GDN_NP=6
-  echo "== CONFIG=f13: QWEN_GDN_PATH=fused QWEN_GDN_NP=6 =="
-else
-  echo "== CONFIG=f12: phased chunk-parallel GDN prefill (QWEN_GDN_PATH unset) =="
+# ---------------------------------------------------------------------------------------------
+# 4. This branch has a single configuration: the fused FLA prim (QWEN_GDN_PATH=fused). Refuse to
+# run if the tree does not actually have the fused prim wired in.
+# ---------------------------------------------------------------------------------------------
+if ! FUSED_FLA_GREP; then
+  echo "ERROR: the fused FLA configuration (QWEN_GDN_PATH=fused) requires this tree's" >&2
+  echo "       chunk_gated_delta_rule.cpp to mention QWEN_GDN_PATH -- the fused FLA prim" >&2
+  echo "       is not wired into this build. Build/checkout the fla-fused-eval branch" >&2
+  echo "       (or whichever tree has the fused prim) and re-run there. Refusing to run." >&2
+  exit 1
 fi
+export QWEN_GDN_PATH="fused"
+export QWEN_GDN_NP=6
+echo "== QWEN_GDN_PATH=fused QWEN_GDN_NP=6 (fused FLA configuration) =="
 
 # ---------------------------------------------------------------------------------------------
-# 4. Device must be free: exactly one process on the device at a time.
+# 5. Device must be free: exactly one process on the device at a time.
 # ---------------------------------------------------------------------------------------------
 if [ -e /dev/tenstorrent/0 ]; then
   HOLDERS="$(lsof /dev/tenstorrent/0 2>/dev/null || true)"
@@ -199,7 +194,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
-# 5. tt-smi summary (best-effort; bench_e2e_p150.py also captures this into the JSON header).
+# 6. tt-smi summary (best-effort; bench_e2e_p150.py also captures this into the JSON header).
 # ---------------------------------------------------------------------------------------------
 if command -v tt-smi >/dev/null 2>&1; then
   tt-smi -s 2>/dev/null | python3 -c "
@@ -219,7 +214,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
-# 6. Run.
+# 7. Run.
 # ---------------------------------------------------------------------------------------------
 RESULTS_DIR="$REPO_ROOT/models/demos/blackhole/qwen36/demo/bench_results"
 mkdir -p "$RESULTS_DIR"
@@ -232,10 +227,10 @@ if [ ! -f "$RESULTS_DIR/.gitignore" ]; then
 fi
 
 if [ "$ISL" = "demo" ]; then
-  OUT="$RESULTS_DIR/${CONFIG}_demo_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
+  OUT="$RESULTS_DIR/demo_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
   PROMPT_ARGS=(--demo-prompt)
 else
-  OUT="$RESULTS_DIR/${CONFIG}_isl${ISL}_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
+  OUT="$RESULTS_DIR/isl${ISL}_osl${OSL}_$(date +%Y%m%d_%H%M%S).json"
   PROMPT_ARGS=(--isl "$ISL")
 fi
 echo "== running: isl=$ISL osl=$OSL runs=$RUNS chunk=2048 -> $OUT =="
