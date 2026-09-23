@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""CCL benchmark, modelled on nccl-tests.
+"""CCL benchmark, modeled on nccl-tests.
 
     tech_reports/CCLs/run_bench.sh
 
@@ -9,9 +9,9 @@ Gated on TTNN_RUN_CCL_BANDWIDTH_BENCHMARK=1, so ordinary collection skips it.
 
 Every machine setting is a constant below, each overridable by an environment
 variable so one checkout can drive several configurations without editing this
-file. Only the architecture is detected, and only to pick a line rate. If a
-setting does not match the machine the op fails, or runs on whatever topology
-the fabric actually resolved to.
+file. Only the architecture is detected, and only to pick a line rate. A ring
+cell whose devices have no wraparound link is skipped rather than measured as a
+line on a ring fabric.
 
 nccl-tests sweeps bytes (-b 1K -e 16G -f 2) and derives the element count from
 the dtype. This does the same, then rounds each target to a whole number of
@@ -43,7 +43,7 @@ DTYPES = {
     "float32": (ttnn.float32, 4096, 0.9999),
 }
 
-TOPOLOGIES = {
+FABRIC_CONFIGS = {
     "ring": ttnn.FabricConfig.FABRIC_1D_RING,
     "line": ttnn.FabricConfig.FABRIC_1D,
 }
@@ -79,45 +79,48 @@ def _shape(raw):
     return tuple(int(x) for x in raw.lower().split("x"))
 
 
-MESH_SHAPE = _env("CCL_MESH", (1, 8), _shape)                 # mesh to open
-TOPOLOGY_NAME = _env("CCL_TOPOLOGY", "ring")                  # ring | line
-TOPOLOGY = TOPOLOGIES[TOPOLOGY_NAME]                          # fabric config
-CLUSTER_AXIS = _env("CCL_AXIS", 1, int)                       # mesh axis the collective runs along
-SUBMESH_SHAPES = _env("CCL_SUBMESHES", [(1, 2), (1, 4), (1, 8)],
-                      lambda r: [_shape(x) for x in r.split(",")])   # one run per shape
+def _list(raw):
+    return raw.split(",")
 
-MEMORY = _env("CCL_MEMORY", "dram")                           # dram | l1
-DTYPE = _env("CCL_DTYPE", "bfloat16")                         # bfloat16 | bfloat8_b | float32
+
+MESH_SHAPE = _env("CCL_MESH", (1, 8), _shape)  # mesh to open
+TOPOLOGIES = _env("CCL_TOPOLOGY", ["line", "ring"], _list)  # line | ring
+CLUSTER_AXIS = _env("CCL_AXIS", 1, int)  # mesh axis the collective runs along
+SUBMESH_SHAPES = _env(
+    "CCL_SUBMESHES", [(1, 2), (1, 4), (1, 8)], lambda r: [_shape(x) for x in r.split(",")]
+)  # one run per shape
+
+MEMORIES = _env("CCL_MEMORY", ["dram"], _list)  # dram | l1
+DTYPE = _env("CCL_DTYPE", "bfloat16")  # bfloat16 | bfloat8_b | float32
 TT_DTYPE, TILE_BYTES, PCC = DTYPES[DTYPE]
 
 # The most whole pages that fit one hardware packet, capped at the four segments
 # a scatter write carries.
-PACKET_PAYLOAD = _env("CCL_PACKET",
-                      min(MAX_PACKET_PAYLOAD.get(ARCH, 4352) // TILE_BYTES, 4) * TILE_BYTES, int)
+PACKET_PAYLOAD = _env("CCL_PACKET", min(MAX_PACKET_PAYLOAD.get(ARCH, 4352) // TILE_BYTES, 4) * TILE_BYTES, int)
 LINE_RATE = _env("CCL_LINE_RATE", LINE_RATE_GBPS.get(ARCH), float)
 
-OPS = _env("CCL_OPS", ["all_gather", "all_reduce", "reduce_scatter", "all_to_all"],
-           lambda r: r.split(","))
+OPS = _env("CCL_OPS", ["all_gather", "all_reduce", "reduce_scatter", "all_to_all"], _list)
 
-BYTE_TARGETS = [1 << k for k in range(10, 35)]    # 1 KiB .. 16 GiB
+BYTE_TARGETS = [1 << k for k in range(10, 35)]  # 1 KiB .. 16 GiB
 ITERS = _env("CCL_ITERS", 20, int)
 ITERS_LARGE = _env("CCL_ITERS_LARGE", 5, int)
-LARGE_BYTES = 1 << 30                             # fewer iterations above this
-CHECK_MAX_BYTES = 1 << 30                         # correctness runs below this only
+LARGE_BYTES = 1 << 30  # fewer iterations above this
+CHECK_MAX_BYTES = 1 << 30  # correctness runs below this only
 
 # Generated files all live in the report's data directory, which is gitignored.
-CONFIG_LOG = (Path(os.environ.get("TT_METAL_HOME", "."))
-              / "tech_reports" / "CCLs" / "data" / "ccl_bench_configs.jsonl")
+CONFIG_LOG = Path(os.environ.get("TT_METAL_HOME", ".")) / "tech_reports" / "CCLs" / "data" / "ccl_bench_configs.jsonl"
 
 pytestmark = pytest.mark.skipif(
     os.environ.get(BENCHMARK_ENV) != "1",
     reason=f"CCL bandwidth benchmark is gated on {BENCHMARK_ENV}=1",
 )
 
-_MEM = ttnn.MemoryConfig(
-    ttnn.TensorMemoryLayout.INTERLEAVED,
-    ttnn.BufferType.L1 if MEMORY == "l1" else ttnn.BufferType.DRAM,
-)
+
+def mem_config(memory):
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.BufferType.L1 if memory == "l1" else ttnn.BufferType.DRAM,
+    )
 
 
 def _router_config(payload):
@@ -126,14 +129,16 @@ def _router_config(payload):
     return cfg
 
 
-DEVICE_PARAMS = {
-    "fabric_config": TOPOLOGY,
-    "trace_region_size": 500000,
-    "fabric_router_config": _router_config(PACKET_PAYLOAD),
-}
+def device_params(topology):
+    return {
+        "fabric_config": FABRIC_CONFIGS[topology],
+        "trace_region_size": 500000,
+        "fabric_router_config": _router_config(PACKET_PAYLOAD),
+    }
 
 
 # ------------------------------------------------------------------ geometry
+
 
 def plan(op, target_bytes, n):
     """Tile geometry for one cell, or None if it cannot be expressed.
@@ -189,37 +194,45 @@ def cells(op, n, max_bytes=None):
     return out
 
 
-def _case_id(op, shape, target):
-    return f"{op}-n{shape[CLUSTER_AXIS]}-{target}B"
+def _cases(max_bytes=None):
+    return [
+        pytest.param(
+            device_params(topology),
+            topology,
+            memory,
+            op,
+            shape,
+            target,
+            id=f"{op}-{topology}-{memory}-n{shape[CLUSTER_AXIS]}-{target}B",
+        )
+        for topology in TOPOLOGIES
+        for memory in MEMORIES
+        for op in OPS
+        for shape in SUBMESH_SHAPES
+        # A ring can only close across the whole axis.
+        if topology == "line" or shape[CLUSTER_AXIS] == MESH_SHAPE[CLUSTER_AXIS]
+        for target in cells(op, shape[CLUSTER_AXIS], max_bytes)
+    ]
 
 
-PERF_CASES = [
-    (op, shape, target)
-    for op in OPS
-    for shape in SUBMESH_SHAPES
-    for target in cells(op, shape[CLUSTER_AXIS])
-]
-CHECK_CASES = [
-    (op, shape, target)
-    for op in OPS
-    for shape in SUBMESH_SHAPES
-    for target in cells(op, shape[CLUSTER_AXIS], max_bytes=CHECK_MAX_BYTES)
-][::7]  # a sample across the grid, not every cell
+CASE_ARGS = "device_params, topology, memory, op, submesh_shape, target_bytes"
+PERF_CASES = _cases()
+CHECK_CASES = _cases(CHECK_MAX_BYTES)[::7]  # a sample across the grid, not every cell
 
 
 # ------------------------------------------------------------------ fixtures
 
+
 @pytest.fixture(scope="session", autouse=True)
 def banner():
-    topo = getattr(TOPOLOGY, "name", str(TOPOLOGY))
     print(
         "\n"
         "================= CCL benchmark =================\n"
         f"  mesh          {MESH_SHAPE}\n"
-        f"  topology      {topo}\n"
+        f"  topology      {', '.join(TOPOLOGIES)}\n"
         f"  cluster axis  {CLUSTER_AXIS}\n"
         f"  submeshes     {'  '.join(str(s) for s in SUBMESH_SHAPES)}\n"
-        f"  memory        {MEMORY.upper()} interleaved\n"
+        f"  memory        {', '.join(m.upper() for m in MEMORIES)} interleaved\n"
         f"  dtype         {DTYPE}  ({TILE_BYTES} B pages)\n"
         f"  packet        {PACKET_PAYLOAD} B\n"
         f"  arch          {ARCH}  (line rate {LINE_RATE} GB/s per link per direction)\n"
@@ -241,28 +254,28 @@ def get_submesh(mesh_device, shape):
     return mesh_device.create_submesh(ttnn.MeshShape(*shape), ttnn.MeshCoordinate(0, 0))
 
 
-def run_op(op, tt_in):
+def run_op(op, tt_in, mem):
     if op == "all_gather":
-        return ttnn.all_gather(tt_in, dim=3, memory_config=_MEM, cluster_axis=CLUSTER_AXIS)
+        return ttnn.all_gather(tt_in, dim=3, memory_config=mem, cluster_axis=CLUSTER_AXIS)
     if op == "all_reduce":
-        return ttnn.all_reduce(tt_in, memory_config=_MEM, cluster_axis=CLUSTER_AXIS)
+        return ttnn.all_reduce(tt_in, memory_config=mem, cluster_axis=CLUSTER_AXIS)
     if op == "reduce_scatter":
-        return ttnn.reduce_scatter(tt_in, dim=3, memory_config=_MEM, cluster_axis=CLUSTER_AXIS)
+        return ttnn.reduce_scatter(tt_in, dim=3, memory_config=mem, cluster_axis=CLUSTER_AXIS)
     return ttnn.experimental.all_to_all_async_generic(
-        tt_in, in_dim=3, out_dim=2, memory_config=_MEM, cluster_axis=CLUSTER_AXIS)
+        tt_in, in_dim=3, out_dim=2, memory_config=mem, cluster_axis=CLUSTER_AXIS
+    )
 
 
 # ---------------------------------------------------------------- perf test
 
+
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize(
-    "op, submesh_shape, target_bytes", PERF_CASES,
-    ids=[_case_id(*c) for c in PERF_CASES])
+@pytest.mark.parametrize(CASE_ARGS, PERF_CASES, indirect=["device_params"])
 @pytest.mark.timeout(3600)
-def test_perf(mesh_device, op, submesh_shape, target_bytes, device_params):
+def test_perf(mesh_device, device_params, topology, memory, op, submesh_shape, target_bytes):
     submesh = get_submesh(mesh_device, submesh_shape)
     n = submesh.shape[CLUSTER_AXIS]
+    mem = mem_config(memory)
     p = plan(op, target_bytes, n)
     iters = ITERS_LARGE if p["bytes"] > LARGE_BYTES else ITERS
 
@@ -272,9 +285,12 @@ def test_perf(mesh_device, op, submesh_shape, target_bytes, device_params):
         # Uninitialised on-device allocation. from_torch builds the tensor on the
         # host first, which dominates the run at multi-GB sizes. Inside the try
         # because an L1 run is expected to outgrow the buffer and must skip.
-        tt_in = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(p["dev_shape"]), TT_DTYPE, ttnn.TILE_LAYOUT, submesh, _MEM)
-        out = run_op(op, tt_in)
+        tt_in = ttnn.allocate_tensor_on_device(ttnn.Shape(p["dev_shape"]), TT_DTYPE, ttnn.TILE_LAYOUT, submesh, mem)
+        # The same demotion the CCL ops apply, so this is the topology they run.
+        resolved = ttnn.get_usable_topology(tt_in, cluster_axis=CLUSTER_AXIS).name
+        if topology == "ring" and resolved != "Ring":
+            pytest.skip(f"no wraparound link along axis {CLUSTER_AXIS} at n={n}")
+        out = run_op(op, tt_in, mem)
         ttnn.synchronize_device(submesh)
         # Free it before capturing, or the traced run allocates a second output
         # and peak memory doubles.
@@ -283,7 +299,7 @@ def test_perf(mesh_device, op, submesh_shape, target_bytes, device_params):
 
         trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
         capturing = True
-        out = run_op(op, tt_in)
+        out = run_op(op, tt_in, mem)
         ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
         capturing = False
         ttnn.synchronize_device(submesh)
@@ -296,15 +312,33 @@ def test_perf(mesh_device, op, submesh_shape, target_bytes, device_params):
 
         CONFIG_LOG.parent.mkdir(parents=True, exist_ok=True)
         with CONFIG_LOG.open("a") as f:
-            f.write(json.dumps({
-                "op": op, "n": n, "topology": getattr(TOPOLOGY, "name", str(TOPOLOGY)),
-                "mesh": list(MESH_SHAPE), "submesh": list(submesh.shape),
-                "cluster_axis": CLUSTER_AXIS, "memory": MEMORY, "dtype": DTYPE,
-                "arch": ARCH, "line_rate_gbps": LINE_RATE,
-                "packet": PACKET_PAYLOAD, "target_bytes": target_bytes,
-                "bytes": p["bytes"], "count": p["count"], "num_pages": p["num_pages"],
-                "page_size": TILE_BYTES, "shape": p["dev_shape"], "iters": iters,
-            }) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "op": op,
+                        "n": n,
+                        "topology": topology,
+                        "resolved": resolved,
+                        "fabric": FABRIC_CONFIGS[topology].name,
+                        "mesh": list(MESH_SHAPE),
+                        "submesh": list(submesh.shape),
+                        "cluster_axis": CLUSTER_AXIS,
+                        "memory": memory,
+                        "dtype": DTYPE,
+                        "arch": ARCH,
+                        "line_rate_gbps": LINE_RATE,
+                        "packet": PACKET_PAYLOAD,
+                        "target_bytes": target_bytes,
+                        "bytes": p["bytes"],
+                        "count": p["count"],
+                        "num_pages": p["num_pages"],
+                        "page_size": TILE_BYTES,
+                        "shape": p["dev_shape"],
+                        "iters": iters,
+                    }
+                )
+                + "\n"
+            )
     except Exception as e:
         pytest.skip(f"{op} n={n} {target_bytes}B: {str(e)[:200]}")
     finally:
@@ -324,37 +358,48 @@ def test_perf(mesh_device, op, submesh_shape, target_bytes, device_params):
 
 # ------------------------------------------------------------- correctness
 
+
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize(
-    "op, submesh_shape, target_bytes", CHECK_CASES,
-    ids=[_case_id(*c) for c in CHECK_CASES])
+@pytest.mark.parametrize(CASE_ARGS, CHECK_CASES, indirect=["device_params"])
 @pytest.mark.timeout(1800)
-def test_correctness(mesh_device, op, submesh_shape, target_bytes, device_params):
+def test_correctness(mesh_device, device_params, topology, memory, op, submesh_shape, target_bytes):
     """Not timed. Uses real data, so it takes the slow host allocation path."""
     submesh = get_submesh(mesh_device, submesh_shape)
     n = submesh.shape[CLUSTER_AXIS]
+    mem = mem_config(memory)
     p = plan(op, target_bytes, n)
     torch.manual_seed(0)
     h, w = p["dev_shape"][2], p["dev_shape"][3]
 
     if op in ("all_gather", "all_to_all"):
         golden = torch.rand(1, 1, h, w * n).bfloat16()
-        tt_in = ttnn.from_torch(golden, dtype=TT_DTYPE, layout=ttnn.TILE_LAYOUT, device=submesh,
-                                memory_config=_MEM,
-                                mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=3))
-        expected = ([golden] * n if op == "all_gather"
-                    else [golden[:, :, i * h // n:(i + 1) * h // n, :] for i in range(n)])
+        tt_in = ttnn.from_torch(
+            golden,
+            dtype=TT_DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=mem,
+            mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=3),
+        )
+        expected = (
+            [golden] * n if op == "all_gather" else [golden[:, :, i * h // n : (i + 1) * h // n, :] for i in range(n)]
+        )
     else:
         base = torch.rand(1, 1, h, w).bfloat16()
-        tt_in = ttnn.from_torch(base, dtype=TT_DTYPE, layout=ttnn.TILE_LAYOUT, device=submesh,
-                                memory_config=_MEM,
-                                mesh_mapper=ttnn.ReplicateTensorToMesh(submesh))
+        tt_in = ttnn.from_torch(
+            base,
+            dtype=TT_DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=mem,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        )
         summed = base.float() * n
-        expected = ([summed] * n if op == "all_reduce"
-                    else [summed[:, :, :, i * w // n:(i + 1) * w // n] for i in range(n)])
+        expected = (
+            [summed] * n if op == "all_reduce" else [summed[:, :, :, i * w // n : (i + 1) * w // n] for i in range(n)]
+        )
 
-    out = run_op(op, tt_in)
+    out = run_op(op, tt_in, mem)
     ttnn.synchronize_device(submesh)
     for i, dev_out in enumerate(ttnn.get_device_tensors(out)):
         ok, msg = comp_pcc(ttnn.to_torch(dev_out), expected[i], PCC)
