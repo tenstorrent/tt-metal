@@ -264,6 +264,32 @@ TensorSpec TensorSpec::sharded(
 }
 
 void TensorSpec::populate_sharding_specs() {
+    // Re-certification fallback: a config carrying both specs whose nd_shard_spec cannot be
+    // certified against *this* tensor's shape is demoted to legacy 2D sharding. The 2D spec's
+    // flattened semantics are shape-robust, so it stays authoritative; the nd side is regenerated
+    // as the rank-<=2 shadow instead of a stale spec that allocation (which prefers nd) would
+    // either abort on or silently diverge from. Allocation flags are carried by hand because the
+    // legacy MemoryConfig constructor drops them (per_core is impossible here: it is rejected for
+    // nd-created configs at set time).
+    auto demote_to_legacy_sharding = [this]() {
+        const auto& mem_config = memory_config();
+        const bool range_lockstep = experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config);
+        MemoryConfig legacy_config(mem_config.memory_layout(), mem_config.buffer_type(), mem_config.shard_spec());
+        if (range_lockstep) {
+            experimental::range_lockstep_allocation::set_range_lockstep_allocation(legacy_config, true);
+        }
+        tensor_layout_ = TensorLayout(
+            tensor_layout_.get_data_type(),
+            tensor_layout_.get_page_config(),
+            std::move(legacy_config),
+            tensor_layout_.get_alignment());
+        tensor_layout_ = TensorLayout(
+            tensor_layout_.get_data_type(),
+            tensor_layout_.get_page_config(),
+            populate_nd_shard_spec_from_legacy(),
+            tensor_layout_.get_alignment());
+    };
+
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
             tensor_layout_ = TensorLayout(
@@ -271,6 +297,17 @@ void TensorSpec::populate_sharding_specs() {
                 tensor_layout_.get_page_config(),
                 *upd_mem_config,
                 tensor_layout_.get_alignment());
+            // The derivation certifies placement equivalence, but a retained nd spec of higher
+            // rank than this tensor still cannot allocate (BufferDistributionSpec requires shard
+            // rank <= tensor rank): it was created for a different, higher-rank shape.
+            if (memory_config().nd_shard_spec()->shard_shape.rank() > padded_shape().rank()) {
+                demote_to_legacy_sharding();
+            }
+        } else if (memory_config().shard_spec().has_value()) {
+            // Both specs present, but no 2D equivalent of the nd spec exists at this shape: the
+            // stored 2D spec was derived at some earlier shape, so the pair cannot be certified
+            // consistent here (a transplanted config).
+            demote_to_legacy_sharding();
         }
     } else if (memory_config().shard_spec()) {
         tensor_layout_ = TensorLayout(
