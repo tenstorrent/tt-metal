@@ -30,24 +30,76 @@ graph_descriptors {
   }
 }
 # --- Pinnings ---------------------------------------------------------------
+# Per-board-revision corner pinnings (mirrors gemma_4galaxy): each 4x4 corner is locked to one
+# galaxy tray (1 NW, 2 NE, 3 SW, 4 SE). M0 takes the "Middle" column (asic 3), M1 the "Edge"
+# column (asic 2). Rev A/B and Rev C swap the SW/SE corners (chip 3 / chip 12 on M0, chip 0 /
+# chip 15 on M1); one extra pin per mesh (loc 7 / loc 6) anchors the corner orientation.
 
+# M0 (Middle, asic 3)
 pinnings {
-  logical_fabric_node_id { mesh_id: 0 chip_id_regex: "0,3,12,15" }
-  physical_asic_position { tray_id_regex: "1-4" asic_location: 3 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
 }
-
-pinnings {
-  logical_fabric_node_id { mesh_id: 1 chip_id_regex: "0,3,12,15" }
-  physical_asic_position { tray_id_regex: "1-4" asic_location: 2 }
-}
-
 pinnings {
   logical_fabric_node_id { mesh_id: 0 chip_id: 1 }
   physical_asic_position { tray_id: 1 asic_location: 7 }
 }
-
 pinnings {
-  logical_fabric_node_id { mesh_id: 1 chip_id: 2 }
-  physical_asic_position { tray_id: 4 asic_location: 6 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+
+# M1 (Edge, asic 2)
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 0 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 15 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 0 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 15 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
 }
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
