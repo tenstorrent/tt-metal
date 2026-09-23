@@ -330,18 +330,21 @@ class CosyVoiceTTNN:
         mel_len2 = TtMaskedDiffWithXvec.mel_len_for(len(tokens), self.input_frame_rate, self.sample_rate)
         prompt_feat = ctx.prompt_feat if ctx.prompt_feat is not None else torch.zeros(1, 0, self.flow.output_size)
         z = rng.z_for(mel_len1 + mel_len2, self.flow.output_size)
-        return (
-            self.flow.inference(
-                self._ids(all_tokens),
-                ctx.n_prompt_tokens,
-                mel_len1,
-                mel_len2,
-                self._dev(prompt_feat),
-                self._dev(ctx.flow_embedding),
-                self._dev(z),
-            ),
+        mel = self.flow.inference(
+            self._ids(all_tokens),
+            ctx.n_prompt_tokens,
+            mel_len1,
             mel_len2,
+            self._dev(prompt_feat),
+            self._dev(ctx.flow_embedding),
+            self._dev(z),
         )
+        # One flow call per utterance, so a kept trace would next be replayed by a
+        # different utterance -- after the vocoder and the LLM have allocated beside it.
+        # See `TtMaskedDiffWithXvec.release_trace`. Streaming keeps its trace within one
+        # stream and does not come through here.
+        self.flow.release_trace()
+        return mel, mel_len2
 
     def mel_to_wav(self, mel, mel_frames: int, rng: RandomSources):
         """Stage 3: the vocoder. `TtHiFTGenerator.inference` builds the NSF
