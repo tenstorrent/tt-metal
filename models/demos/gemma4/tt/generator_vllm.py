@@ -3069,20 +3069,11 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             f"(anchor={int(anchor_id)}, start={start}, bucket={self._spec_decoder_bucket})"
         )
 
-    def _spec_release_decoder(self, drop_page_tables=True):
+    def _spec_release_decoder(self, drop_page_tables=True, *, teardown=False):
         dec = self._spec_decoder
-        if self._spec_width_set and getattr(dec, "_pv_widths", None):
-            # The captured WIDTH SET lives on this decoder, and its traces are
-            # the whole point: tearing it down here would push every later
-            # request back onto a per-session capture, which is the behaviour
-            # the width set exists to remove. End the SESSION instead -- the
-            # per-layer page tables still go, so a batched baseline step rebuilds
-            # its own set. This holds for capture teardown too: the width set is
-            # a WARMUP artifact, not a per-session capture, so the hook that
-            # exists to free per-session captures has nothing to free here.
-            # Freeing it anyway would leave the process with no captured widths
-            # and no way to recapture them (warmup is over), silently restoring
-            # the per-session capture AND the horizon generation cap.
+        if not teardown and self._spec_width_set and getattr(dec, "_pv_widths", None):
+            # Session release preserves startup widths. Final teardown bypasses
+            # retention and releases their traces while the mesh is open.
             self._spec_active = False
             self._spec_active_owner = None
             self._spec_decoder_bucket = None
@@ -3411,7 +3402,10 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_pending = None
         self._spec_pending_owner = None
         self._spec_carry = []
-        self._spec_release_decoder()
+        try:
+            self._spec_release_decoder(teardown=True)
+        finally:
+            super().release_persistent_capture()
 
 
 class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
@@ -4472,4 +4466,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         # NOT force: the warm branch keeps the warmup-captured widths on
         # purpose, because warmup is over and nothing could recapture them.
         self._spec_owner_slot = None
-        self._spec_release_session()
+        try:
+            self._spec_release_session()
+        finally:
+            super().release_persistent_capture()
