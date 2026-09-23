@@ -335,7 +335,10 @@ scripts):
 
 - **Memory placement** (Section 2): L1-resident activations for bs≤4/ISL≤512
   (batched-L1, 12 MiB cap — bs=4 is the throughput-optimal config at 27.4k tok/s);
-  DRAM + the **130-core (13×10)** MinimalMatmul grid for every larger shape.
+  DRAM + the **full-device MinimalMatmul grid** for every larger shape. A P150
+  is nominally 13×10 but ships harvested: this board reports 12×10 = **120**
+  workers, and the profile confirms `cores=120` on every batched matmul.
+  `_clamp_grid_to_device` keeps the request portable across harvest configs.
 - **BFP4 weights** for QKV + WO **and FF2 (down_proj)** projections. FF2 BFP4 is
   on by default after on-device validation on this P150 (ISL=512, masked-attn
   pool): STS-B Spearman `0.8287` (FF2 BFP8) → `0.8276` (FF2 BFP4) — a 0.0011 delta
@@ -365,6 +368,49 @@ Two optimizations are intentionally **not enabled** (documented in
 `tt/attention.py`): skipping the trained Q/K RMSNorm (load-bearing — collapses
 retrieval accuracy when removed) and `QWEN_LN_BLOCK_SHARDED` is set but inert for
 the 4B model (dim=2560 exceeds the 16-tile per-core LN budget, so it auto-disables).
+
+### Tested and rejected (2026-09-23)
+
+Measured end-to-end on this P150, ISL=512, 10 iterations, best-of. Baseline
+reproduced the committed FINAL numbers exactly, so these deltas are real.
+
+| config | bs1 | bs8 | bs16 | bs32 |
+|---|---|---|---|---|
+| **baseline (shipping)** | **25.9 ms** | **157.1 ms** | **290.9 ms** | **557.8 ms** |
+| SDPA `grid=12x10` | 26.0 (+0.4%) | 156.3 (−0.5%) | 291.2 (+0.1%) | 555.3 (−0.4%) |
+| SDPA `10x10` + `q_chunk=128` | 26.0 (+0.4%) | 170.4 (+8.5%) | 326.9 (+12.4%) | 617.4 (+10.7%) |
+
+**Block-sharded activations.** Suggested on the theory that sharding reduces
+data movement within an op. Tested tuned-vs-tuned (both arms swept over grids
+8×8→12×10, every legal `in0_block_w` divisor, and every `out_subblock_h*w ≤ 8`):
+
+- bs1 path (`MatmulDeviceOperation`, 2D mcast, in0 already in L1): block-sharded
+  is **+1.0% to +3.5%** across QKV/FF13/FF2/WO — a wash. The mcast broadcasts in0
+  along each core row regardless, so sharding changes where in0 *starts*, not how
+  many bytes cross the NoC.
+- batched path (`MinimalMatmulDeviceOperation`, in0 DRAM-interleaved bfp8, 120
+  cores): block-sharded is −2.6% / +0.3% / −2.4% / −3.7% on the four shapes that
+  are 93% of batched matmul time. Share-weighted **−2.0% of matmul**, and matmul
+  is ~39% of bs32 → **<1% e2e**, smaller than the spread between shard configs.
+
+Contrast with LayerNorm, where sharding *did* pay (−1.9 ms at bs1): LN has a real
+gather to remove, a mcast matmul does not.
+
+**SDPA core utilization.** SDPA runs on 64 (bs1) / 80 (batched) of 120 cores, and
+at bs1 `q_chunk=512` over `Sq=512` yields only `1*32*1 = 32` work units. An
+isolated sweep suggested 94.6 → 76.5 µs. **This did not survive e2e** — the
+microbenchmark was run at `HiFi2` while the model uses LoFi, so its 94.6 µs
+"baseline" was already slower than the model's real 75.2 µs. The 76.5 µs "win"
+only recovered ground the harness had lost. Shrinking `q_chunk` to create work
+units actively hurts at batch (+8.5% to +12.4%), because per-chunk softmax and CB
+overhead outweighs the extra parallelism.
+
+`QWEN_SDPA_GRID=x,y` is retained as a default-off probe knob (clamped to the real
+device grid) so the grid can be re-swept if the fidelity or shapes change.
+
+**Lesson for future sweeps:** an isolated op microbenchmark must replicate the
+model's dtype, memory config *and* compute-kernel config, or its baseline can be
+slower than production and manufacture a win that does not exist.
 
 All env vars use `os.environ.setdefault`, so any single knob can be overridden
 from the shell for A/B comparisons, e.g.:
