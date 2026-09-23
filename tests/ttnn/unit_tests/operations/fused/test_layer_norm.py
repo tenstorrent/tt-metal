@@ -138,6 +138,7 @@ def test_layer_norm_streaming_welford_requires_reciprocal_tensor(device, expect_
         )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("h", [32, 42])
 @pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -416,6 +417,7 @@ def test_layer_norm_rejects_mismatched_parameter_tile(device, parameter_name, ti
         )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("h", [32, 42])
 @pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])

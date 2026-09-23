@@ -485,11 +485,24 @@ uint32_t get_pending_l1_output_reservation(
     // busiest bank holds ceil(num_pages / num_banks) of them. Reserving the average
     // (total_bytes / num_banks) underestimates whenever num_pages is not a multiple of
     // num_banks, which can still leave the CBs overlapping the output on the fullest bank.
-    const uint64_t alignment = input_tensor_a.device()->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
-    const uint64_t aligned_page_bytes = tt::align(static_cast<uint64_t>(page_bytes), alignment);
+    const auto& allocator = *input_tensor_a.device()->allocator();
+    const uint64_t page_alignment = allocator.get_alignment(tt::tt_metal::BufferType::L1);
+    const uint64_t aligned_page_bytes = tt::align(static_cast<uint64_t>(page_bytes), page_alignment);
     const uint64_t num_pages = tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(page_bytes));
     const uint64_t pages_on_fullest_bank = tt::div_up(num_pages, static_cast<uint64_t>(num_banks));
-    return static_cast<uint32_t>(pages_on_fullest_bank * aligned_page_bytes);
+    const uint64_t bytes_on_fullest_bank = pages_on_fullest_bank * aligned_page_bytes;
+
+    // That per-bank size is what the bank manager asks its free list for, but the L1 free lists are
+    // built with the DRAM alignment as both their block alignment and their minimum allocation
+    // (BankManager::init_allocators is handed dram_alignment_bytes so L1<->DRAM transfers stay
+    // aligned), so the allocation that actually lowers lowest_occupied_compute_l1_address is that
+    // size rounded up once more. Reserve what the allocator will take, not what the pages add up
+    // to, or a decision made within that last granule of the budget is more permissive than the
+    // program factory it predicts. (Under the opt-in HYBRID allocator mode the per-page rounding is
+    // also the DRAM alignment; tile pages and tile-width row-major pages are multiples of it, so
+    // that mode is not accounted for separately here.)
+    const uint64_t allocation_granule = allocator.get_alignment(tt::tt_metal::BufferType::DRAM);
+    return static_cast<uint32_t>(tt::align(std::max(bytes_on_fullest_bank, allocation_granule), allocation_granule));
 }
 
 bool is_enough_space(

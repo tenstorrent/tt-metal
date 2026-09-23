@@ -45,6 +45,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
     test_work_split_tilize.cpp
+    test_unary_program_hash.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
