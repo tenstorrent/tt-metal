@@ -12,6 +12,14 @@ sender/writer that #53329 was originally filed for. #53329 is the Qwen3.6 suite 
 
 Shapes and program config mirror the Qwen3.6-27B GDN prefill out projection
 (models/demos/blackhole/qwen36/tt/tp_common.py::matmul_reduce_scatter_prefill).
+
+M is parametrized because the two rows exercise different bugs. M=128 keeps the reduce-scatter in
+the 2-worker band and is the scatter-header case above. M=2048 is the real prefill size: the data
+moved per link crosses the Blackhole 1 MiB ring threshold, so reduce_scatter_default_workers asks
+for 8 workers, and with reduce_scatter_core_grid_offset=(0, 8) only the two bottom rows of the
+grid can host them. Before the heuristic counted only the cores that stay on the grid after the
+offset, that combination failed in try_choose_worker_cores with "Not all worker cores could be
+placed" (#57507).
 """
 import math
 
@@ -27,9 +35,10 @@ TILE = 32
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 24576}], indirect=True
 )
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-def test_fused_matmul_reduce_scatter_atomic_barrier(mesh_device):
+@pytest.mark.parametrize("M", [128, 2048], ids=["M128_scatter_header", "M2048_worker_count"])
+def test_fused_matmul_reduce_scatter_atomic_barrier(mesh_device, M):
     nd = mesh_device.get_num_devices()
-    M, K_local, N = 128, 1536, 5120
+    K_local, N = 1536, 5120
     grid = (8, 8)
     rs_dtype = ttnn.float32
 

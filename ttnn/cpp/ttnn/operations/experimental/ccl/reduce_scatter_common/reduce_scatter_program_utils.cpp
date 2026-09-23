@@ -108,8 +108,13 @@ uint32_t reduce_scatter_default_workers(
     }
     TT_THROW(
         "Not enough cores available on the subdevice or device for the requested configuration to match the number of "
-        "links {}",
-        num_links);
+        "links {}: {} worker cores stay on the grid after core_grid_offset ({}, {}), the smallest candidate needs {}",
+        num_links,
+        num_cores,
+        core_grid_offset.x,
+        core_grid_offset.y,
+        num_links * reduce_scatter_core_count_per_link(
+                        candidate_worker_counts.back(), num_directions_per_link, num_mux_cores_per_direction_per_link));
 }
 
 uint32_t reduce_scatter_default_chunks_per_sync(
