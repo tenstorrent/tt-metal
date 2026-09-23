@@ -11,6 +11,7 @@
 #include <limits>
 #include <numbers>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -371,6 +372,61 @@ void expect_chunks_eq(
     return maximum;
 }
 
+[[nodiscard]] bool oracle_uniform_allocation_fits(
+    const std::vector<wavelet::Lwt2DChunkPlan>& chunks, const uint64_t budget) {
+    std::array<uint32_t, 5> heights{};
+    std::array<uint32_t, 5> widths{};
+    for (const auto& chunk : chunks) {
+        for (size_t slot = 0; slot < heights.size(); ++slot) {
+            heights[slot] = std::max(heights[slot], chunk.resources.plane_heights_elements[slot]);
+            widths[slot] = std::max(widths[slot], chunk.resources.plane_widths_elements[slot]);
+        }
+    }
+    uint64_t allocated = wavelet::plan_2d_detail::kCircularBufferBytes + wavelet::plan_2d_detail::kMetadataBytes +
+                         wavelet::plan_2d_detail::kSynchronizationBytes;
+    for (size_t slot = 0; slot < heights.size(); ++slot) {
+        allocated += static_cast<uint64_t>(heights[slot]) * widths[slot] * sizeof(float);
+    }
+    return allocated <= budget;
+}
+
+[[nodiscard]] wavelet::plan_2d_detail::Candidate oracle_best_candidate(
+    const std::vector<wavelet::plan_2d_detail::Candidate>& candidates, const bool latency_oriented) {
+    EXPECT_FALSE(candidates.empty());
+    const uint64_t minimum_cost = std::min_element(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+                                      return a.estimated_cost < b.estimated_cost;
+                                  })->estimated_cost;
+    uint32_t anchor_cores = 0;
+    for (const auto& candidate : candidates) {
+        if (candidate.estimated_cost == minimum_cost) {
+            anchor_cores = std::max(anchor_cores, candidate.active_core_count);
+        }
+    }
+    const auto score = [&](const auto& candidate) {
+        const uint64_t area = static_cast<uint64_t>(candidate.chunk_tiles_y) * candidate.chunk_tiles_x;
+        const uint32_t aspect = candidate.chunk_tiles_y > candidate.chunk_tiles_x
+                                    ? candidate.chunk_tiles_y - candidate.chunk_tiles_x
+                                    : candidate.chunk_tiles_x - candidate.chunk_tiles_y;
+        return std::tuple{
+            candidate.active_core_count,
+            latency_oriented ? -static_cast<long double>(candidate.estimated_cost) : 0.0L,
+            -candidate.max_dependency_overhead,
+            area,
+            -static_cast<int32_t>(aspect)};
+    };
+    const wavelet::plan_2d_detail::Candidate* best = nullptr;
+    for (const auto& candidate : candidates) {
+        const bool eligible = !latency_oriented || candidate.estimated_cost == minimum_cost ||
+                              (candidate.active_core_count > anchor_cores &&
+                               static_cast<unsigned __int128>(candidate.estimated_cost) * 10 <=
+                                   static_cast<unsigned __int128>(minimum_cost) * 11);
+        if (eligible && (best == nullptr || score(candidate) > score(*best))) {
+            best = &candidate;
+        }
+    }
+    return *best;
+}
+
 [[nodiscard]] wavelet::plan_2d_detail::Candidate exhaustive_forward_candidate(
     const wavelet::LiftingForwardPlan& y_plan,
     const wavelet::LiftingForwardPlan& x_plan,
@@ -409,17 +465,15 @@ void expect_chunks_eq(
                 "oracle horizontal even",
                 "oracle horizontal odd");
         });
-    wavelet::plan_2d_detail::Candidate best{};
-    bool found = false;
+    std::vector<wavelet::plan_2d_detail::Candidate> candidates;
     for (uint32_t tiles_y = 1; tiles_y <= band_tiles_y; ++tiles_y) {
         for (uint32_t tiles_x = 1; tiles_x <= band_tiles_x; ++tiles_x) {
             auto chunks = wavelet::plan_2d_detail::build_chunks(
                 y_plan, x_plan, tiles_y, tiles_x, fuse_terminal_scale, route_domain);
             double max_dependency_overhead = 0.0;
-            bool fits = true;
+            bool fits = oracle_uniform_allocation_fits(chunks, l1_budget_bytes);
             for (const auto& chunk : chunks) {
                 max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
-                fits = fits && chunk.resources.total_l1_bytes <= l1_budget_bytes;
             }
             const auto representative = wavelet::plan_2d_detail::evaluate_candidate(
                 y_classes[tiles_y],
@@ -456,14 +510,10 @@ void expect_chunks_eq(
                 EXPECT_EQ(representative->max_dependency_overhead, candidate.max_dependency_overhead);
                 EXPECT_EQ(representative->estimated_cost, candidate.estimated_cost);
             }
-            if (!found || wavelet::plan_2d_detail::is_better_candidate(candidate, best, latency_oriented)) {
-                best = std::move(candidate);
-                found = true;
-            }
+            candidates.push_back(std::move(candidate));
         }
     }
-    EXPECT_TRUE(found);
-    return best;
+    return oracle_best_candidate(candidates, latency_oriented);
 }
 
 [[nodiscard]] wavelet::plan_2d_detail::Candidate exhaustive_inverse_candidate(
@@ -484,16 +534,14 @@ void expect_chunks_eq(
         x_plan.original_length, output_tiles_x, wavelet::kTileWidth2D, [&](const wavelet::IndexInterval output) {
             return wavelet::inverse_2d_detail::make_inverse_axis_signature(x_plan, output, wavelet::kTileWidth2D);
         });
-    wavelet::plan_2d_detail::Candidate best{};
-    bool found = false;
+    std::vector<wavelet::plan_2d_detail::Candidate> candidates;
     for (uint32_t tiles_y = 1; tiles_y <= output_tiles_y; ++tiles_y) {
         for (uint32_t tiles_x = 1; tiles_x <= output_tiles_x; ++tiles_x) {
             auto chunks = wavelet::inverse_2d_detail::build_chunks(y_plan, x_plan, tiles_y, tiles_x);
             double max_dependency_overhead = 0.0;
-            bool fits = true;
+            bool fits = oracle_uniform_allocation_fits(chunks, l1_budget_bytes);
             for (const auto& chunk : chunks) {
                 max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
-                fits = fits && chunk.resources.total_l1_bytes <= l1_budget_bytes;
             }
             const auto representative = wavelet::plan_2d_detail::evaluate_candidate(
                 y_classes[tiles_y],
@@ -531,14 +579,10 @@ void expect_chunks_eq(
                 EXPECT_EQ(representative->max_dependency_overhead, candidate.max_dependency_overhead);
                 EXPECT_EQ(representative->estimated_cost, candidate.estimated_cost);
             }
-            if (!found || wavelet::plan_2d_detail::is_better_candidate(candidate, best, true)) {
-                best = std::move(candidate);
-                found = true;
-            }
+            candidates.push_back(std::move(candidate));
         }
     }
-    EXPECT_TRUE(found);
-    return best;
+    return oracle_best_candidate(candidates, true);
 }
 
 template <typename Scheme>
@@ -677,6 +721,60 @@ TEST(WaveletPlanner, BoundaryMacroTilesFitDeviceScratchCapacity) {
     expect_boundary_macro_tile_capacity<wavelet::BoundaryMode::kSmooth>(general_capacity);
     expect_boundary_macro_tile_capacity<wavelet::BoundaryMode::kAntisymmetric>(general_capacity);
     expect_boundary_macro_tile_capacity<wavelet::BoundaryMode::kAntireflect>(general_capacity);
+}
+
+TEST(WaveletPlanner, InverseCandidateFitsUniformSlotAllocationAcrossOddPhases) {
+    const wavelet::plan_2d_detail::AxisChunkClasses y_classes{
+        .representatives = {{.begin = 0, .end = 32}, {.begin = 64, .end = 65}}, .class_ids = {0, 0, 1}};
+    const wavelet::plan_2d_detail::AxisChunkClasses x_classes{
+        .representatives = {{.begin = 0, .end = 67}}, .class_ids = {0}};
+    const uint64_t fixed_bytes = wavelet::plan_2d_detail::kCircularBufferBytes +
+                                 wavelet::plan_2d_detail::kMetadataBytes +
+                                 wavelet::plan_2d_detail::kSynchronizationBytes;
+    const uint64_t individual_bytes = fixed_bytes + 48 * 32 * sizeof(float);
+    const auto candidate = wavelet::plan_2d_detail::evaluate_candidate(
+        y_classes,
+        x_classes,
+        1,
+        3,
+        2,
+        individual_bytes,
+        [&](const wavelet::IndexRectangle output) {
+            wavelet::Lwt2DChunkPlan chunk;
+            chunk.final_band_rect = output;
+            chunk.resources.plane_heights_elements = output.y.begin == 0
+                                                         ? std::array<uint32_t, 5>{32, 16, 0, 0, 0}
+                                                         : std::array<uint32_t, 5>{16, 32, 0, 0, 0};
+            chunk.resources.plane_widths_elements = {32, 32, 0, 0, 0};
+            chunk.resources.total_l1_bytes = fixed_bytes + 48 * 32 * sizeof(float);
+            return chunk;
+        },
+        [](const wavelet::Lwt2DChunkPlan&) { return uint64_t{1}; },
+        0);
+    EXPECT_FALSE(candidate.has_value());
+}
+
+TEST(WaveletPlanner, LatencyCandidateChoiceIsIndependentOfScanOrder) {
+    const std::array<wavelet::plan_2d_detail::Candidate, 3> candidates = {{
+        {.chunk_tiles_y = 1, .chunk_tiles_x = 1, .active_core_count = 2, .estimated_cost = 100},
+        {.chunk_tiles_y = 2, .chunk_tiles_x = 1, .active_core_count = 4, .estimated_cost = 108},
+        {.chunk_tiles_y = 3, .chunk_tiles_x = 1, .active_core_count = 6, .estimated_cost = 115},
+    }};
+    for (const auto& order : std::array<std::array<size_t, 3>, 6>{{
+             {0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}}) {
+        std::vector<wavelet::plan_2d_detail::Candidate> permuted;
+        for (const size_t index : order) {
+            permuted.push_back(candidates[index]);
+        }
+        EXPECT_EQ(wavelet::plan_2d_detail::select_best_candidate(std::move(permuted), true).chunk_tiles_y, 2U);
+    }
+}
+
+TEST(WaveletPlanner, ForwardPlannerRejectsUnfusedTerminalScale) {
+    EXPECT_ANY_THROW({
+        [[maybe_unused]] const auto plan = wavelet::make_lwt_2d_execution_plan<PlannerTestScheme>(
+            33, 35, 4, 768 * 1024, wavelet::BoundaryMode::kSymmetric, false);
+    });
 }
 
 TEST(WaveletPlanner, HaarSymmetricMatchesPyWaveletsAndRoundTripsEvenAndOddLengths) {

@@ -335,8 +335,7 @@ inline void append_axis_routes(
         x_plan.original_length, maximum_tiles_x, kTileWidth2D, [&](const IndexInterval output) {
             return inverse_2d_detail::make_inverse_axis_signature(x_plan, output, kTileWidth2D);
         });
-    plan_2d_detail::Candidate best{};
-    bool found = false;
+    std::vector<plan_2d_detail::Candidate> candidates;
     for (uint32_t tiles_y = 1; tiles_y <= maximum_tiles_y; ++tiles_y) {
         const uint32_t candidate_tiles_x = static_cast<uint32_t>(
             std::min<uint64_t>(maximum_tiles_x, maximum_tile_area / static_cast<uint64_t>(tiles_y)));
@@ -356,13 +355,11 @@ inline void append_axis_routes(
             if (!candidate.has_value()) {
                 continue;
             }
-            if (!found || plan_2d_detail::is_better_candidate(*candidate, best, true)) {
-                best = std::move(*candidate);
-                found = true;
-            }
+            candidates.push_back(std::move(*candidate));
         }
     }
-    TT_FATAL(found, "No 2D ILWT chunk fits the {}-byte L1 budget", l1_budget_bytes);
+    TT_FATAL(!candidates.empty(), "No 2D ILWT chunk fits the {}-byte L1 budget", l1_budget_bytes);
+    plan_2d_detail::Candidate best = plan_2d_detail::select_best_candidate(std::move(candidates), true);
     best.chunks = inverse_2d_detail::build_chunks(y_plan, x_plan, best.chunk_tiles_y, best.chunk_tiles_x);
 
     std::array<uint32_t, 5> heights{};

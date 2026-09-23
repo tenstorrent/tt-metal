@@ -324,7 +324,6 @@ template <typename Plan>
     const char* compute_scheme_header,
     const char* compute_scheme_type,
     const BoundaryMode boundary_mode,
-    const bool compact_boundary_code,
     const bool inverse,
     const uint32_t scratch_tile_count) {
     tt::tt_metal::ProgramDescriptor descriptor;
@@ -372,9 +371,6 @@ template <typename Plan>
     tt::tt_metal::KernelDescriptor::Defines reader_defines;
     if (inverse) {
         reader_defines.emplace_back("ILWT_2D", "1");
-    }
-    if (compact_boundary_code) {
-        reader_defines.emplace_back(inverse ? "ILWT_2D_COMPACT_BOUNDARY_CODE" : "LWT_2D_COMPACT_BOUNDARY_CODE", "1");
     }
     tt::tt_metal::KernelDescriptor reader_descriptor;
     reader_descriptor.kernel_source = kReaderKernel;
@@ -444,7 +440,6 @@ template <typename Plan>
 namespace {
 
 constexpr uint32_t kL1SignalBudgetBytes2D = 768 * 1024;
-constexpr size_t kCompactBoundaryRouteThreshold = 52;
 
 void validate_2d_tensor(const Tensor& tensor, const char* tensor_name) {
     wavelet_tensor_validation::validate_device_tensor(tensor, tensor_name);
@@ -636,10 +631,6 @@ template <typename Scheme>
         buffers.plane_tile_counts[slot] =
             checked_u32(plan.allocated_plane_slot_bytes[slot] / kTileBytes, "2D LWT workspace plane tiles");
     }
-    const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
-    const bool compact_boundary_code = architecture_policy.compact_2d_reader ||
-                                       route_count >= kCompactBoundaryRouteThreshold ||
-                                       operation_attributes.boundary_mode == BoundaryMode::kAntireflect;
     auto descriptor = create_program_descriptor(
         core_range_set(buffers.cores),
         input_buffers,
@@ -647,7 +638,6 @@ template <typename Scheme>
         Scheme::compute_scheme_header,
         Scheme::compute_scheme_type,
         operation_attributes.boundary_mode,
-        compact_boundary_code,
         false,
         scratch_tile_count);
     const std::vector<CoreChunkWork> work =
@@ -766,7 +756,6 @@ template <typename Scheme>
         buffers.plane_tile_counts[slot] =
             checked_u32(plan.allocated_plane_slot_bytes[slot] / kTileBytes, "2D ILWT workspace plane tiles");
     }
-    const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     auto descriptor = create_program_descriptor(
         core_range_set(buffers.cores),
         band_buffers,
@@ -774,7 +763,6 @@ template <typename Scheme>
         InverseScheme::compute_scheme_header,
         InverseScheme::compute_scheme_type,
         operation_attributes.boundary_mode,
-        architecture_policy.compact_2d_reader,
         true,
         scratch_tile_count);
     const std::vector<CoreChunkWork> work =

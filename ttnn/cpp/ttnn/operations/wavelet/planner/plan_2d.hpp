@@ -134,6 +134,8 @@ constexpr uint64_t kMetadataBytes = device_protocol::kLwt2DChunkConfigPageBytes 
                                     2 * device_protocol::kLwt2DRouteConfigPageBytes +
                                     device_protocol::kLwt2DBandConfigPageBytes;
 constexpr uint64_t kSynchronizationBytes = 64 + device_protocol::kLwt2DSplitScratchBytes;
+static_assert(device_protocol::kLwt2DSplitScratchTileRows >= 5);
+static_assert(device_protocol::kLwt2DSymmetricSplitScratchTileRows >= 3);
 
 [[nodiscard]] inline size_t checked_area(const size_t height, const size_t width, const char* label) {
     TT_FATAL(width == 0 || height <= std::numeric_limits<size_t>::max() / width, "{} area overflows size_t", label);
@@ -725,15 +727,34 @@ template <typename ChunkBuilder, typename CostEstimator>
     std::vector<uint64_t> costs;
     costs.reserve(checked_area(y_classes.representatives.size(), class_columns, "2D planner chunk classes"));
     double max_dependency_overhead = 0.0;
+    std::array<uint32_t, 5> allocated_heights{};
+    std::array<uint32_t, 5> allocated_widths{};
     for (const IndexInterval y : y_classes.representatives) {
         for (const IndexInterval x : x_classes.representatives) {
             const Lwt2DChunkPlan chunk = build_chunk(IndexRectangle{.y = y, .x = x});
             if (chunk.resources.total_l1_bytes > l1_budget_bytes) {
                 return std::nullopt;
             }
+            for (size_t slot = 0; slot < allocated_heights.size(); ++slot) {
+                allocated_heights[slot] = std::max(allocated_heights[slot], chunk.resources.plane_heights_elements[slot]);
+                allocated_widths[slot] = std::max(allocated_widths[slot], chunk.resources.plane_widths_elements[slot]);
+            }
             max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
             costs.push_back(estimate_cost(chunk));
         }
+    }
+    uint64_t allocated_bytes = kCircularBufferBytes + kMetadataBytes + kSynchronizationBytes;
+    if (allocated_bytes > l1_budget_bytes) {
+        return std::nullopt;
+    }
+    for (size_t slot = 0; slot < allocated_heights.size(); ++slot) {
+        const uint64_t slot_bytes = checked_bytes(
+            checked_area(allocated_heights[slot], allocated_widths[slot], "2D candidate workspace plane"),
+            "2D candidate workspace plane");
+        if (slot_bytes > l1_budget_bytes - allocated_bytes) {
+            return std::nullopt;
+        }
+        allocated_bytes += slot_bytes;
     }
 
     const RowMajorScheduleEstimate schedule =
@@ -901,19 +922,7 @@ enum class AlignmentCostClass : uint8_t {
     return cost;
 }
 
-[[nodiscard]] inline bool is_better_candidate(
-    const Candidate& candidate, const Candidate& best, const bool latency_oriented) noexcept {
-    if (latency_oriented && candidate.estimated_cost != best.estimated_cost) {
-        if (candidate.active_core_count < best.active_core_count) {
-            return static_cast<long double>(candidate.estimated_cost) <
-                   planner_cost_model::kFewerCoresCostRatio * static_cast<long double>(best.estimated_cost);
-        }
-        if (candidate.active_core_count > best.active_core_count) {
-            return static_cast<long double>(candidate.estimated_cost) <=
-                   planner_cost_model::kMoreCoresCostRatio * static_cast<long double>(best.estimated_cost);
-        }
-        return candidate.estimated_cost < best.estimated_cost;
-    }
+[[nodiscard]] inline bool is_better_candidate(const Candidate& candidate, const Candidate& best) noexcept {
     if (candidate.active_core_count != best.active_core_count) {
         return candidate.active_core_count > best.active_core_count;
     }
@@ -933,6 +942,47 @@ enum class AlignmentCostClass : uint8_t {
     return candidate_aspect < best_aspect;
 }
 
+[[nodiscard]] inline Candidate select_best_candidate(std::vector<Candidate> candidates, const bool latency_oriented) {
+    TT_FATAL(!candidates.empty(), "No feasible 2D wavelet candidate");
+    Candidate best = candidates.front();
+    if (!latency_oriented) {
+        for (const Candidate& candidate : candidates) {
+            if (is_better_candidate(candidate, best)) {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    const uint64_t minimum_cost = std::min_element(
+                                      candidates.begin(), candidates.end(), [](const Candidate& lhs, const Candidate& rhs) {
+                                          return lhs.estimated_cost < rhs.estimated_cost;
+                                      })
+                                      ->estimated_cost;
+    uint32_t minimum_cost_cores = 0;
+    for (const Candidate& candidate : candidates) {
+        if (candidate.estimated_cost == minimum_cost) {
+            minimum_cost_cores = std::max(minimum_cost_cores, candidate.active_core_count);
+        }
+    }
+    bool found = false;
+    for (const Candidate& candidate : candidates) {
+        const bool eligible = candidate.estimated_cost == minimum_cost ||
+                              (candidate.active_core_count > minimum_cost_cores &&
+                               static_cast<long double>(candidate.estimated_cost) <=
+                                   planner_cost_model::kMoreCoresCostRatio * static_cast<long double>(minimum_cost));
+        if (eligible &&
+            (!found || candidate.active_core_count > best.active_core_count ||
+             (candidate.active_core_count == best.active_core_count &&
+              (candidate.estimated_cost < best.estimated_cost ||
+               (candidate.estimated_cost == best.estimated_cost && is_better_candidate(candidate, best)))))) {
+            best = candidate;
+            found = true;
+        }
+    }
+    return best;
+}
+
 }  // namespace plan_2d_detail
 
 [[nodiscard]] inline Lwt2DExecutionPlan make_lwt_2d_execution_plan(
@@ -940,10 +990,11 @@ enum class AlignmentCostClass : uint8_t {
     LiftingForwardPlan x_plan,
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
-    const bool fuse_terminal_scale = false,
+    const bool fuse_terminal_scale = true,
     const bool latency_oriented_planner = false,
     const Lwt2DRouteDomainPolicy route_domain = Lwt2DRouteDomainPolicy::kExact) {
     TT_FATAL(core_limit > 0, "2D LWT requires at least one worker core");
+    TT_FATAL(fuse_terminal_scale, "2D LWT compute requires fused terminal scales");
     TT_FATAL(y_plan.preprocess_layout.input.length > 0, "2D LWT input height must be positive");
     TT_FATAL(x_plan.preprocess_layout.input.length > 0, "2D LWT input width must be positive");
     TT_FATAL(
@@ -992,8 +1043,7 @@ enum class AlignmentCostClass : uint8_t {
                 x_plan, output, plan_2d_detail::kTileWidth, route_domain, "horizontal even", "horizontal odd");
         });
 
-    plan_2d_detail::Candidate best{};
-    bool found = false;
+    std::vector<plan_2d_detail::Candidate> candidates;
     for (uint32_t tiles_y = 1; tiles_y <= maximum_tiles_y; ++tiles_y) {
         const uint32_t candidate_tiles_x = static_cast<uint32_t>(
             std::min<uint64_t>(maximum_tiles_x, maximum_tile_area / static_cast<uint64_t>(tiles_y)));
@@ -1013,19 +1063,18 @@ enum class AlignmentCostClass : uint8_t {
             if (!candidate.has_value()) {
                 continue;
             }
-            if (!found || plan_2d_detail::is_better_candidate(*candidate, best, latency_oriented_planner)) {
-                best = std::move(*candidate);
-                found = true;
-            }
+            candidates.push_back(std::move(*candidate));
         }
     }
 
     TT_FATAL(
-        found,
+        !candidates.empty(),
         "No 2D LWT band-tile chunk fits the {}-byte L1 budget for input {}x{}",
         l1_budget_bytes,
         y_plan.preprocess_layout.input.length,
         x_plan.preprocess_layout.input.length);
+    plan_2d_detail::Candidate best =
+        plan_2d_detail::select_best_candidate(std::move(candidates), latency_oriented_planner);
     best.chunks = plan_2d_detail::build_chunks(
         y_plan, x_plan, best.chunk_tiles_y, best.chunk_tiles_x, fuse_terminal_scale, route_domain);
     const size_t input_height = y_plan.preprocess_layout.input.length;
@@ -1087,7 +1136,7 @@ template <typename Scheme>
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
     const BoundaryMode boundary_mode = BoundaryMode::kSymmetric,
-    const bool fuse_terminal_scale = false,
+    const bool fuse_terminal_scale = true,
     const bool latency_oriented_planner = false,
     const Lwt2DRouteDomainPolicy route_domain = Lwt2DRouteDomainPolicy::kExact) {
     TT_FATAL(input_height > 0 && input_width > 0, "2D LWT input dimensions must be positive");
