@@ -9,7 +9,6 @@
 
 #include "emule_descriptor_builder.hpp"
 
-#include <cstdlib>
 #include <set>
 #include <string>
 #include <tuple>
@@ -18,6 +17,7 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -165,10 +165,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
-    const char* four_row = std::getenv("TT_METAL_QUASAR_FOUR_ROW");
+    auto& metal_context = MetalContext::instance(impl.get_context_id());
+    const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
     const bool quasar_four_row =
-        MetalContext::instance(impl.get_context_id()).get_cluster().arch() == ARCH::QUASAR &&
-        four_row != nullptr && (std::string(four_row) == "1" || std::string(four_row) == "true");
+        metal_context.get_cluster().arch() == tt::ARCH::QUASAR && rtoptions.get_quasar_four_row();
 
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());

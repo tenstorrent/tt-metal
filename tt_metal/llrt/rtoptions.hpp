@@ -413,6 +413,9 @@ class RunTimeOptions {
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
 
+    // Use the four-row FPU LLK variant on Quasar
+    bool quasar_four_row = false;
+
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
@@ -677,7 +680,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -685,7 +688,8 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace());
+            get_eth_ptp_trace(),
+            get_quasar_four_row());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -983,6 +987,7 @@ public:
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
+    bool get_quasar_four_row() const { return quasar_four_row; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
