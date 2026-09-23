@@ -255,7 +255,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         false /* narrow_tile */,
         1 /* num_tiles */);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false /* is_fp32_dest_acc_en */, PackMode::Default>();
-    _llk_pack_reduce_mask_config_<ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    _llk_pack_reduce_mask_config_<ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(pack_dst_format1);
     for (std::uint32_t batch = 0; batch < 1; ++batch)
     {
         _llk_packer_wait_for_math_done_();

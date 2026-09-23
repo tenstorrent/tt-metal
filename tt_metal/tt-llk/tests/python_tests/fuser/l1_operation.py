@@ -300,7 +300,7 @@ class L1Operation:
         init_code = config.sentinel.hw_configure_pack(config, self, pack_only)
         if hoist_reconfig and pack_only:
             init_code += config.sentinel.configure_pack(config, self, pack_only[0])
-        init_code += pack_common.pack_reduce_mask_config(self)
+        init_code += pack_common.pack_reduce_mask_config(self, pack_only[0])
         init_code += pack_common.pack_dest_init(config, self, pack_only[0])
         if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].init(self, config, None)
