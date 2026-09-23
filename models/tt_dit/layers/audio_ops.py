@@ -658,7 +658,7 @@ def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_dev
     return ttnn.concat(pieces, dim=1)
 
 
-def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache, *, tight_t_align=False):
+def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
     """Cached T-sharded validity mask ``M`` (1.0 real, 0.0 on trailing ``tpad_image`` rows) and its complement ``inv``."""
     key = (global_T, tpad_image, dtype)
     cached = cache.get(key)
@@ -1306,7 +1306,6 @@ class ConvTranspose1dViaConv3d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tight_t_align: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -1318,7 +1317,6 @@ class ConvTranspose1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        self.tight_t_align = tight_t_align
 
         # Inner conv stays UNSHARDED; forward gathers T, runs unsharded, then re-partitions.
         self.conv = _AlignedOutConv1d(
