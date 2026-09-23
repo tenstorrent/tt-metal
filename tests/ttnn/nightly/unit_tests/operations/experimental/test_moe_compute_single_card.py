@@ -706,6 +706,44 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only, 
     )
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "fused_local"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_flash_next(mesh_device, mesh_shape, compute_only):
+    """Single-card MoE compute on a 1x1 mesh, Qwen3.8-Flash-Next-shaped workload (hidden=2560, N=640, SILU).
+
+    512 routed experts over four devices = 128 experts per device. N=640 is 20 intermediate tiles, so on an
+    8-bank Blackhole ring the cores own 3 or 2 gate/up columns (odd and even counts on one ring), and on a
+    12-core Wormhole ring 2 or 1.
+    """
+    hidden_size = 2560
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=128,
+        tokens_per_device=32,
+        selected_experts_k=8,
+        N=640,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=compute_only,
+    )
+
+
 # Regression sweep for tt-metal#50669 (correct output for non-tile-aligned token counts). Small hidden/N
 # keep bf4 weight-prep fast; configs vary tilize_num_cores (largest divisor of hidden/32 <= 4): 512->4,
 # 1344->3, 320->2, with activation/bias/k<E variety. Real model shapes are covered at tokens=32 above.
