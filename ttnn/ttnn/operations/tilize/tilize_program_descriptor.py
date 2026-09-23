@@ -26,7 +26,7 @@ or RT arg (every dependent quantity derives from it):
   tile_row  axis  ->  block_height = core_row_tiles   (RT, from split_work_to_cores)
                       rows_per_quantum = streaming window along tile_row (CT; from QUANTUM_MIN_TILES)
   tile_col  axis  ->  block_width  = balanced_width(core_col_tiles_max, block_width_cap)   (CT)
-                      num_col_groups = 1 (Phase 0; grid_2d_split refinement turns it)
+                      num_col_groups = grid_2d_split(R, C, N) (1 = the row split)
   depth knobs     ->  DEPTH_IN, DEPTH_OUT   (CB total_size and per_col_tile_bytes only)
   in-flight       ->  read_ahead / write_ahead = CB quanta covering READ_WINDOW_MIN_TILES /
                       WRITE_WINDOW_MIN_TILES; depth_in / depth_out = max(DEPTH_*, window)
@@ -103,10 +103,12 @@ CB_BUDGET_BYTES = {False: 524288, True: 65536}
 # Fast-tilize eligibility cap on block_width (tilize_helpers.inl: block_width_tiles < 256).
 FAST_TILIZE_MAX_BLOCK_WIDTH = 255
 
-# Number of column groups the tile_col axis is split into across Tensix cores.
-# Phase 0 = 1 (row split); the grid_2d_split refinement replaces this with the
-# assignment rule pinned in op_design.md.
-NUM_COL_GROUPS = 1
+# grid_2d_split (op_design.md -> Regimes): the tile_col axis is split into num_col_groups column
+# groups across Tensix cores when that lowers the busiest core's tile count (grid_2d_split()).
+# Transaction-size floor (op_design.md perf lamp "Transaction size vs occupancy"): a column group
+# holds at least MIN_GROUP_COL_TILES tile-columns (rounded up to col_align_tiles), so a stick
+# segment read is at least MIN_GROUP_COL_TILES * 32 * elem_bytes bytes. 1 = maximum participation.
+MIN_GROUP_COL_TILES = 1
 
 # Split-reader knob (op_design.md perf lamp "Reader issue-rate"). When a core's
 # stick-segment reads are small, one RISC-V is issue-bound; BRISC (the writer,
@@ -247,6 +249,41 @@ def balanced_width(core_col_tiles_max, *, per_col_tile_bytes, low_l1, col_align_
     num_col_blocks = _div_up(core_col_tiles_max, cap)
     width = _round_up(_div_up(core_col_tiles_max, num_col_blocks), col_align_tiles)
     return min(width, cap)
+
+
+def grid_2d_split(R, C, num_cores, *, col_align_tiles, row_align=1, min_group_col_tiles=None):
+    """op_design.md `grid_2d_split` assignment rule -> (g_r, g_c).
+
+    Rows are counted in units of `row_align` tile-rows (retile: an input tile-row never straddles
+    two Tensix cores), columns in units of `col_align_tiles` tile-columns (NoC alignment of every
+    column start). Minimizes the busiest core's tiles; tie-break 1: wider column groups (larger
+    stick segments); tie-break 2: fewer Tensix cores. g_c == 1 is the row split.
+    """
+    if min_group_col_tiles is None:
+        min_group_col_tiles = MIN_GROUP_COL_TILES
+    row_units = R // row_align
+    col_units = _div_up(C, col_align_tiles)
+    max_g_c = max(1, col_units // _div_up(min_group_col_tiles, col_align_tiles))
+    best = None
+    for g_r in range(1, min(row_units, num_cores) + 1):
+        rows_busiest = _div_up(row_units, g_r) * row_align
+        for g_c in range(1, min(col_units, max_g_c, num_cores // g_r) + 1):
+            units_busiest = _div_up(col_units, g_c)
+            key = (rows_busiest * units_busiest * col_align_tiles, -units_busiest, g_r * g_c)
+            if best is None or key < best[0]:
+                best = (key, g_r, g_c)
+    return best[1], best[2]
+
+
+def _balanced(total, groups):
+    """[(start, count)] of `total` units over `groups` groups, the first `total % groups` one larger."""
+    base, rem = divmod(total, groups)
+    out, start = [], 0
+    for g in range(groups):
+        n = base + (1 if g < rem else 0)
+        out.append((start, n))
+        start += n
+    return out
 
 
 def _column_groups(C, num_col_groups, col_align_tiles):
@@ -450,25 +487,41 @@ def create_program_descriptor(
     any_resident = input_resident or output_resident
 
     if assignment is None:
-        # row_split_interleaved (also every streamed-only sharded case: DRAM-sharded sides,
-        # ND specs without a 2-D equivalent). The Tensix core count is read from the device.
-        assert NUM_COL_GROUPS == 1, "grid_2d_split (NUM_COL_GROUPS > 1) is a deferred regime"
-        col_groups = _column_groups(C, NUM_COL_GROUPS, col_align_tiles)
-        col_start, core_col_tiles = col_groups[0]  # NUM_COL_GROUPS == 1: every core owns [0, C)
+        # No shard fixes the core assignment (interleaved sides, and every streamed-only sharded
+        # case: DRAM-sharded sides, ND specs without a 2-D equivalent). The Tensix core count is
+        # read from the device. The split's row unit is row_align tile-rows (1 except retile), so
+        # an input tile-row never straddles two Tensix cores.
         grid = device.compute_with_storage_grid_size()
-        # The split's unit is row_align tile-rows (1 except retile), so an input tile-row
-        # never straddles two Tensix cores.
         assert R % row_align == 0
-        _n, all_cores, core_group_1, core_group_2, units_g1, units_g2 = ttnn.split_work_to_cores(
-            grid, R // row_align, row_wise=True
+        num_row_groups, num_col_groups = grid_2d_split(
+            R, C, grid.x * grid.y, col_align_tiles=col_align_tiles, row_align=row_align
         )
         assignment = []
-        row_start = 0
-        for group, units in ((core_group_1, units_g1), (core_group_2, units_g2)):
-            for core in ttnn.corerange_to_cores(group, None, True):
-                assignment.append((core, row_start, units * row_align, col_start, core_col_tiles))
-                row_start += units * row_align
-        assert row_start == R, f"row split covered {row_start} of {R} tile-rows"
+        if num_col_groups == 1:
+            # row_split_interleaved: every core owns columns [0, C).
+            _n, all_cores, core_group_1, core_group_2, units_g1, units_g2 = ttnn.split_work_to_cores(
+                grid, R // row_align, row_wise=True
+            )
+            row_start = 0
+            for group, units in ((core_group_1, units_g1), (core_group_2, units_g2)):
+                for core in ttnn.corerange_to_cores(group, None, True):
+                    assignment.append((core, row_start, units * row_align, 0, C))
+                    row_start += units * row_align
+            assert row_start == R, f"row split covered {row_start} of {R} tile-rows"
+        else:
+            # grid_2d_split: g_r row groups x g_c column groups on the first g_r * g_c Tensix
+            # cores (row-wise). Core k owns row group k // g_c and column group k % g_c, so the
+            # column groups of one row group sit side by side along a grid row.
+            num_cores = num_row_groups * num_col_groups
+            all_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
+            cores = ttnn.corerange_to_cores(all_cores, None, True)
+            row_groups = _balanced(R // row_align, num_row_groups)
+            col_groups = _column_groups(C, num_col_groups, col_align_tiles)
+            for k, core in enumerate(cores):
+                row_unit_start, row_units = row_groups[k // num_col_groups]
+                col_start, core_col_tiles = col_groups[k % num_col_groups]
+                assignment.append((core, row_unit_start * row_align, row_units * row_align, col_start, core_col_tiles))
+            assert sum(rows * cols for _, _, rows, _, cols in assignment) == R * C
     else:
         # sharded_resident: the owning shard grid (only the Tensix cores holding data).
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, *_ in assignment])
