@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.tt.vision.vision_block import VisionBlock
@@ -84,6 +86,7 @@ class VisionTransformer(LightweightModule):
         pixel_position_ids,
         unpadded_seq_len,
         seq_len,
+        num_valid_patches=None,
     ):
         """
         Vision encoder forward: rotary cos/sin -> transformer blocks.
@@ -122,10 +125,30 @@ class VisionTransformer(LightweightModule):
             sin = ttnn.pad(sin, [(0, 0), (0, 0), (0, seq_len - num_patches), (0, 0)], value=0.0)
         rot_mats = [cos, sin]
 
+        # Bidirectional padding mask, as window boundaries. ``Gemma4VisionModel``
+        # passes ``attention_mask=~padding_positions`` to its encoder; without an
+        # equivalent here every real patch attends to the (-1,-1) padding patches
+        # in all 27 blocks. ``num_valid_patches`` counts the real ones; the rest
+        # of ``seq_len`` is padding (image padding first, then any tile padding),
+        # and both are a contiguous suffix, so a single split is the whole mask.
+        cu_window_seqlens = None
+        if num_valid_patches is not None and 0 < num_valid_patches < seq_len:
+            cu_window_seqlens = ttnn.from_torch(
+                torch.tensor([0, int(num_valid_patches), int(seq_len)], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.args.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.args.mesh_device)
+                if self.args.mesh_device.get_num_devices() > 1
+                else None,
+            )
+
         for block in self.blocks:
             x = block(
                 x,
                 rot_mats=rot_mats,
+                cu_window_seqlens=cu_window_seqlens,
             )
 
         x = x[:, :, :unpadded_seq_len, :]

@@ -64,9 +64,12 @@ def test_vision_model_inference(
         pytest.skip("CI only runs the two_layers test")
 
     dtype = ttnn.bfloat8_b
-    pcc = (
-        0.99 if num_layers and num_layers <= 3 else 0.91
-    )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
+    # Set from measurement, not from another repo's number. Full depth against the
+    # correctly masked reference measures ~0.99, so 0.98 is earned with margin.
+    # The previous 0.91 was justified as "Llama 3 repo allows 0.91 for prefill,
+    # vision probably even less sensitive to pcc" -- a guess, and it sat below a
+    # real defect (no bidirectional padding mask) rather than above a result.
+    pcc = 0.99 if num_layers and num_layers <= 3 else 0.98
     batch_size = 1  # For prefill we only support batch_size = 1
     ref_seq_len = image_grid_chw[1] * image_grid_chw[2]
     seq_len = ((token_budget // 2048) + 1) * 2048
@@ -106,7 +109,11 @@ def test_vision_model_inference(
     # (both reference and TT) is fed already-embedded patch hidden states.
     inputs_embeds = reference_model.patch_embedder(pt_pixel_values, pixel_position_ids, padding_positions)
     reference_output = reference_model.encoder(
-        inputs_embeds=inputs_embeds, pixel_position_ids=pixel_position_ids, attention_mask=None
+        inputs_embeds=inputs_embeds,
+        pixel_position_ids=pixel_position_ids,
+        # As Gemma4VisionModel does. Previously None, to match a TT encoder that
+        # applied no padding mask; that handicap hid the defect (see the tower test).
+        attention_mask=~padding_positions,
     ).last_hidden_state
 
     # Initialize TT model (rotary + transformer blocks, all on device)
@@ -144,6 +151,11 @@ def test_vision_model_inference(
         tt_position_ids,
         unpadded_seq_len=ref_seq_len,
         seq_len=seq_len,
+        # Real patch count, so the encoder applies the same bidirectional padding
+        # mask the reference gets above. Note this is a DIFFERENT padding from
+        # ``unpadded_seq_len``: that is tile padding (num_patches -> seq_len),
+        # this is the (-1,-1) image padding inside num_patches.
+        num_valid_patches=int((~padding_positions).sum().item()),
     )
 
     tt_out = ttnn.to_torch(
@@ -153,10 +165,16 @@ def test_vision_model_inference(
 
     tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.hidden_size].squeeze(0).squeeze(0)
 
-    # Compare outputs
-    print(reference_output.shape, tt_output_torch.shape)
-    passing, pcc_message = comp_pcc(reference_output.squeeze(), tt_output_torch, pcc)
-    logger.info(comp_allclose(reference_output.squeeze(), tt_output_torch))
+    # Compare the VALID patches only. Padded rows are masked out of attention on
+    # both sides, so what they contain is undefined and differs between the two
+    # implementations -- and ``Gemma4VisionModel`` discards them anyway via the
+    # pooler mask, exactly as the tower test does. Including them would compare
+    # values no consumer ever reads.
+    valid = ~padding_positions.squeeze(0)  # [num_patches], True = real patch
+    ref_valid = reference_output.squeeze()[valid]
+    tt_valid = tt_output_torch[valid]
+    passing, pcc_message = comp_pcc(ref_valid, tt_valid, pcc)
+    logger.info(comp_allclose(ref_valid, tt_valid))
     logger.info(f"PCC of output: {pcc_message}")
 
     # Generate test summary message
