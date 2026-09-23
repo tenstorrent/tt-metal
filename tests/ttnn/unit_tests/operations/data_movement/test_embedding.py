@@ -9,6 +9,25 @@ from models.common.utility_functions import torch_random, run_for_wormhole_b0, s
 from tests.ttnn.utils_for_testing import assert_equal
 
 
+def test_embedding_rm_oversized_weight_double_buffer(device):
+    # Weight row over the 1 MB budget and more than one token per core, so the staging buffer is double-buffered.
+    torch.manual_seed(0)
+    vocabulary_size = 4
+    hidden_embedding_dim = (1024 * 1024 // 2) + 64  # bfloat16 row just over 1 MB
+    sentence_size = 256
+
+    torch_input_tensor = torch.randint(0, vocabulary_size, (1, sentence_size))
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    weights = ttnn.to_device(
+        ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16), device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.embedding(input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT)
+    assert_equal(torch_output_tensor, ttnn.to_torch(output_tensor))
+
+
 def test_base_case(device):
     torch.manual_seed(1234)
     indices = ttnn.to_device(ttnn.from_torch(torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]]), dtype=ttnn.uint32), device)
