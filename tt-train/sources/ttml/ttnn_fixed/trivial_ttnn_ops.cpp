@@ -22,8 +22,18 @@
 
 namespace ttml::ttnn_fixed {
 
-ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim) {
-    return sum_moreh(t, dim, /* keepdim */ true);
+uint32_t normalize_dim(const ttnn::Shape& shape, int dim) {
+    const auto rank = static_cast<int64_t>(shape.rank());
+    TT_FATAL(
+        static_cast<int64_t>(dim) >= -rank && static_cast<int64_t>(dim) < rank,
+        "Dimension {} is out of range for rank {}",
+        dim,
+        rank);
+    return shape.get_normalized_index(dim);
+}
+
+ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, int dim) {
+    return sum_moreh(t, static_cast<int>(normalize_dim(t.logical_shape(), dim)), /* keepdim */ true);
 }
 
 ttnn::Tensor sum_over_batch(const ttnn::Tensor& t) {
@@ -32,11 +42,12 @@ ttnn::Tensor sum_over_batch(const ttnn::Tensor& t) {
 
 // Stable log-softmax implementation
 ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim) {
-    auto t_max = ttnn::max(t, dim, /* keepdim */ true);
+    const auto normalized_dim = static_cast<int>(normalize_dim(t.logical_shape(), dim));
+    auto t_max = ttnn::max(t, normalized_dim, /* keepdim */ true);
     auto t_sub_max = ttnn::subtract(t, t_max);
 
     auto t_sub_max_exp = ttnn::exp(t_sub_max);
-    auto t_sum_over_dim = sum_over_dim(t_sub_max_exp, dim);
+    auto t_sum_over_dim = sum_over_dim(t_sub_max_exp, normalized_dim);
 
     auto log_t_sum_over_dim = ttnn::log(t_sum_over_dim, /*fast_and_approximate_mode=*/true);
     return ttnn::subtract(t_sub_max, log_t_sum_over_dim);

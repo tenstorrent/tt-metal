@@ -8,12 +8,14 @@
 #include <sys/random.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <random>
 #include <ranges>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -22,6 +24,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/core/xmath.hpp"
 
 namespace ttml::ops::tests {
@@ -108,6 +111,25 @@ public:
     }
 };
 
+TEST(TtnnFixedHostTest, NormalizeDimUsesSignedAxisContract) {
+    const ttnn::Shape shape({2, 3, 32, 64});
+    constexpr std::array<std::pair<int, uint32_t>, 8> cases = {
+        std::pair{-4, 0U},
+        std::pair{-3, 1U},
+        std::pair{-2, 2U},
+        std::pair{-1, 3U},
+        std::pair{0, 0U},
+        std::pair{1, 1U},
+        std::pair{2, 2U},
+        std::pair{3, 3U}};
+    for (const auto& [dim, expected] : cases) {
+        EXPECT_EQ(ttnn_fixed::normalize_dim(shape, dim), expected);
+    }
+    for (const int dim : {-5, 4, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()}) {
+        EXPECT_THROW(ttnn_fixed::normalize_dim(shape, dim), std::runtime_error) << "dim=" << dim;
+    }
+}
+
 TEST_F(UnaryOpsTest, GlobalMean) {
     std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
 
@@ -150,6 +172,56 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
     EXPECT_EQ(tensor_grad.size(), expected_grad.size());
     for (uint32_t idx = 0; idx < tensor_grad.size(); ++idx) {
         EXPECT_NEAR(tensor_grad[idx], expected_grad[idx], 2e-2F);
+    }
+}
+
+TEST_F(UnaryOpsTest, LogSoftmaxAcceptsNegativeDim) {
+    auto* device = &autograd::ctx().get_device();
+    const ttnn::Shape shape({2, 3, 32, 64});
+    std::vector<float> test_data(shape.volume());
+    std::vector<float> upstream_data(shape.volume());
+    for (size_t i = 0; i < shape.volume(); ++i) {
+        test_data[i] = static_cast<float>(static_cast<int>(i % 97U) - 48) / 16.0F;
+        upstream_data[i] = static_cast<float>(static_cast<int>((i * 7U) % 53U) - 26) / 32.0F;
+    }
+    constexpr std::array<std::pair<int, int>, 4> axes = {{{-4, 0}, {-3, 1}, {-2, 2}, {-1, 3}}};
+
+    for (auto log_softmax_op : {log_softmax, log_softmax_moreh}) {
+        for (const auto& [negative_dim, positive_dim] : axes) {
+            SCOPED_TRACE(::testing::Message() << "negative_dim=" << negative_dim);
+            auto negative_input =
+                autograd::create_tensor(core::from_vector(test_data, shape, device), /* requires_grad */ true);
+            auto positive_input =
+                autograd::create_tensor(core::from_vector(test_data, shape, device), /* requires_grad */ true);
+            auto negative_result = log_softmax_op(negative_input, negative_dim);
+            auto positive_result = log_softmax_op(positive_input, positive_dim);
+            EXPECT_TRUE(xt::allclose(
+                core::to_xtensor(negative_result->get_value()),
+                core::to_xtensor(positive_result->get_value()),
+                2e-2F,
+                2e-2F));
+
+            auto upstream = core::from_vector(upstream_data, shape, device);
+            negative_result->set_grad(upstream);
+            positive_result->set_grad(upstream);
+            negative_result->backward();
+            positive_result->backward();
+            EXPECT_TRUE(xt::allclose(
+                core::to_xtensor(negative_input->get_grad()),
+                core::to_xtensor(positive_input->get_grad()),
+                2e-2F,
+                2e-2F));
+        }
+    }
+
+    for (auto log_softmax_op : {log_softmax, log_softmax_moreh}) {
+        for (const int invalid_dim : {-5, 4}) {
+            auto input = autograd::create_tensor(core::from_vector(test_data, shape, device), /* requires_grad */ true);
+            const size_t entries_before = device->num_program_cache_entries();
+            EXPECT_THROW(log_softmax_op(input, invalid_dim), std::runtime_error) << "dim=" << invalid_dim;
+            EXPECT_EQ(device->num_program_cache_entries(), entries_before)
+                << "invalid dimension dispatched a device program";
+        }
     }
 }
 
