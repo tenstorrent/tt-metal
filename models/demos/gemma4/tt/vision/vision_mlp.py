@@ -87,10 +87,18 @@ class Gemma4VisionMLP(LightweightModule):
 
         # fc1: column-sharded matmul + bias + GELU. Output is column-sharded
         # along the intermediate dim; no comm yet.
+        #
+        # ``gelu``, not ``gelu_approx``: the checkpoint declares
+        # ``hidden_act: gelu_pytorch_tanh`` and the reference calls
+        # ``ACT2FN[...]``. Measured against that reference on device, the
+        # approximate variant sits 5.5e-3 away (mean abs) while the accurate one
+        # is 9.4e-4 -- 6x closer, and the formula gap between exact-erf GELU and
+        # gelu_pytorch_tanh is only 1.5e-4, so accurate is the better match.
+        # Worth +0.012 full-depth tower PCC; see the ablation in the commit.
         gate_out = ttnn.linear(
             x,
             self.gate_proj,
-            activation="gelu_approx",
+            activation="gelu",
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2_fp16,
