@@ -8,7 +8,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tt_metal/distributed/host_ring_alias.hpp"
-#include <tt-metalium/experimental/sockets/host_uva_layout.hpp>
+#include "tt_metal/distributed/host_uva_layout.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
