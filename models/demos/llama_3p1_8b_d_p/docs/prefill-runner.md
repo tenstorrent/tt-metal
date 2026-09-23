@@ -14,8 +14,8 @@ prefill chunks.
 | --- | --- |
 | Runtime contracts | The engine owns the input/cache. Compile warmup leaves no logical user prefix. All 32 layer acknowledgements follow device synchronization. Failed work cannot acknowledge success. |
 | `test_kv_cache_table.py` | Every one of 65,536 synthetic cache pages maps to the expected slot, layer, head and token position. Serialization preserves addresses and ownership. Real QKV/RoPE writes are readable through the table. |
-| `test_producer_runner_pcc[llama31_two_slots]` | The producer sends two different book prompts through the common runner. Both slots' K and V for all 32 layers meet PCC ≥ 0.99 against independent FP32 Hugging Face traces. Uses the common completion drain before readback and checks clean runner shutdown. |
-| `run_multirank_pcc.sh llama31 sc1` | The standard launcher discovers the Galaxy, publishes the address table, checks the populated rank verdict for both slots, and verifies shutdown. |
+| `test_producer_runner_pcc[llama31_two_slots]` | The producer sends two different book prompts through the common runner. Both slots' K and V for all 32 layers meet PCC ≥ 0.99 against independent FP32 Hugging Face traces. Uses the common completion drain before readback and the existing fixture teardown. |
+| `run_multirank_pcc.sh llama31 sc1` | The standard launcher discovers the Galaxy, publishes the address table, checks the populated rank verdict for both slots, and uses the shared shutdown path. |
 
 The SC1 tests validate the prefill source and table readback in a separate
 producer process. They do not transfer the cache to a second Galaxy or validate
