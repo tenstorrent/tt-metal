@@ -148,7 +148,7 @@ TEST_F(PerCoreAllocationTest, CachedPerCoreLayoutRevalidatesPostCacheAllocations
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
 
     {
-        auto overlapping_buffer = Buffer::create(
+        auto overlapping_buffer = BufferImpl::create(
             mesh_device->get_devices()[0],
             PAGE_SIZE,
             PAGE_SIZE,
@@ -174,7 +174,7 @@ TEST_F(PerCoreAllocationTest, SlowDispatchRevalidatesPostCompileAllocations) {
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
 
     auto overlapping_buffer =
-        Buffer::create(device, PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args, /*bottom_up=*/true);
+        BufferImpl::create(device, PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args, /*bottom_up=*/true);
     EXPECT_THROW(detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/true), std::exception);
 }
 
@@ -243,7 +243,8 @@ TEST_F(PerCoreAllocationTest, UniformAddressGroupCoexistsWithMultiDeviceLockstep
     std::vector<std::shared_ptr<Buffer>> lockstep_buffers;
     for (size_t device_index = 0; device_index < 2; ++device_index) {
         auto* device = this->devices_[device_index]->get_devices()[0];
-        lockstep_buffers.push_back(Buffer::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args));
+        lockstep_buffers.push_back(
+            BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args));
     }
     ASSERT_EQ(lockstep_buffers[0]->address(), lockstep_buffers[1]->address());
 
