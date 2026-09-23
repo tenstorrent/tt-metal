@@ -63,6 +63,7 @@ inline std::uint8_t* x_row(std::uint8_t* table, std::uint32_t y_size, std::uint3
 }  // namespace routing_2d_table_builder_detail
 
 // Packs destination-major first-hop vectors. Y actions may be N/S/Z; X actions may be E/W.
+// Reuse callbacks as lvalues for every coordinate pair, including callbacks passed as temporaries.
 // Returns false without writing when the shape or output span is invalid. An off-axis action is a
 // topology error and may leave the live span partially populated; ControlPlane treats it as fatal.
 template <typename YActionSource, typename XActionSource>
@@ -71,8 +72,8 @@ inline bool pack_2d_route_vectors(
     std::size_t out_size,
     std::uint32_t y_size,
     std::uint32_t x_size,
-    YActionSource&& y_action,
-    XActionSource&& x_action) {
+    YActionSource&& y_action,    // NOLINT(cppcoreguidelines-missing-std-forward)
+    XActionSource&& x_action) {  // NOLINT(cppcoreguidelines-missing-std-forward)
     if (!is_valid_2d_route_table_shape(y_size, x_size)) {
         return false;
     }
