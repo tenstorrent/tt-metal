@@ -7,8 +7,17 @@
 #
 # Each entry pins the mesh a CCL op is verified on. A CCL acceptance/golden test
 # MUST open EXACTLY this entry's mesh_shape with this fabric_config, or fabric init
-# hangs ("Fabric Router Sync: Timeout"); on a box with too few chips it fails with
-# "system_mesh.cpp: requested_size <= system_size".
+# hangs ("Fabric Router Sync: Timeout").
+#
+# List one entry per topology (mesh_shape x fabric_config x arch x runtime). The
+# reduction collectives require a (1, N) LINE mesh view (their validate() rejects a
+# 2-D mesh), so every entry here is a 1-D line. `run_multidevice_sim_pytest.py --op OP`
+# runs pytest once per topology whose applies_to_ops lists OP; on a runtime:hardware
+# entry the runner AUTO-SKIPS (MULTIDEV_SIM_RESULT[...]: SKIP) when the box has fewer
+# chips than the mesh needs, instead of the "system_mesh.cpp: requested_size <=
+# system_size" fatal — so a partial box grades the lines it can fit and everything
+# runs on sim. run_eval grades the dashboard on the single grade_primary entry per
+# runtime (keep exactly one, matching test_golden.py's ccl_topology_marks pin).
 #
 # runtime: "sim"      -> craq-sim multichip simulator (the default; needs the
 #                        descriptor triple below, resolved by the runner).
@@ -45,6 +54,52 @@ topologies:
     mesh_shape: [1, 8]
     fabric_config: FABRIC_1D
     grade_primary: true            # the ONE hardware topology run_eval grades
+    applies_to_ops:
+      - reduce_scatter
+      - reduce_scatter_average
+
+  # ---- Wormhole T3K, 1x4 line (narrower line view on the same box; ring size 4) ----
+  - name: wh_t3k_1x4_line_sim
+    runtime: sim
+    arch: wormhole
+    mesh_shape: [1, 4]
+    fabric_config: FABRIC_1D
+    applies_to_ops:
+      - reduce_scatter
+      - reduce_scatter_average
+    cluster_desc: wormhole_t3k_1x4.yaml
+    mesh_graph_desc: wormhole_t3k_1x4_mesh_graph_descriptor.textproto
+    cq_wait_clocks: 200
+    hang_watchdog_clocks: 500000000
+
+  - name: wh_t3k_1x4_line_hw
+    runtime: hardware
+    arch: wormhole
+    mesh_shape: [1, 4]
+    fabric_config: FABRIC_1D
+    applies_to_ops:
+      - reduce_scatter
+      - reduce_scatter_average
+
+  # ---- Blackhole QuietBox, 1x4 line (the ops' proven BH case: p150 x4) ----
+  - name: bh_quietbox_1x4_line_sim
+    runtime: sim
+    arch: blackhole
+    mesh_shape: [1, 4]
+    fabric_config: FABRIC_1D
+    applies_to_ops:
+      - reduce_scatter
+      - reduce_scatter_average
+    cluster_desc: blackhole_quietbox_1x4.yaml
+    mesh_graph_desc: blackhole_quietbox_1x4_mesh_graph_descriptor.textproto
+    cq_wait_clocks: 200
+    hang_watchdog_clocks: 500000000
+
+  - name: bh_quietbox_1x4_line_hw
+    runtime: hardware
+    arch: blackhole
+    mesh_shape: [1, 4]
+    fabric_config: FABRIC_1D
     applies_to_ops:
       - reduce_scatter
       - reduce_scatter_average
