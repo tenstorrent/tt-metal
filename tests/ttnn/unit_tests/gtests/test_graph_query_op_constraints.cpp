@@ -777,13 +777,14 @@ TEST_P(MatmulOpIfTest, Matmul) {
             output_spec.tensor_layout().get_memory_config(),
             output_spec.data_type(),
             matmul_program_config,
-            std::nullopt,   // activation
-            std::nullopt,   // compute_kernel_config
-            std::nullopt,   // core_grid
-            std::nullopt,   // output_tile
-            std::nullopt,   // optional_output_tensor
-            std::nullopt,   // global_cb
-            std::nullopt);  // sub_device_id
+            std::nullopt,                                     // activation
+            std::nullopt,                                     // compute_kernel_config
+            std::nullopt,                                     // core_grid
+            std::nullopt,                                     // output_tile
+            std::nullopt,                                     // optional_output_tensor
+            std::nullopt,                                     // global_cb
+            std::nullopt,                                     // sub_device_id
+            ttnn::operations::matmul::PrefetcherPipeList{});  // prefetcher_pipes
 
         log_info(
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));

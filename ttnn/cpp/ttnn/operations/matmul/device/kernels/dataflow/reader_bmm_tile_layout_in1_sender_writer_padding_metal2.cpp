@@ -53,6 +53,13 @@
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
 
+#ifdef ENABLE_PREFETCHER_PIPE
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery into this matmul needs matmul_block_in1_at, which Quasar lacks"
+#endif
+#include "api/dataflow/prefetcher_pipe.h"
+#endif
+
 void kernel_main() {
     // READER
 #if defined(FUSE_OP_ALL_GATHER) || defined(FUSE_OP_REDUCE_SCATTER)
@@ -210,12 +217,21 @@ void kernel_main() {
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(dfb::out);
 
 //  READER
-#ifdef IN1_SHARDED
+#if defined(ENABLE_PREFETCHER_PIPE)
+    // in1 is a relay laid over this worker's PrefetcherPipe ring, so the prefetcher's K-blocks arrive
+    // already in place: this kernel only turns a delivered entry into in1 credit for compute and, once
+    // compute is done with it, that entry's credit back into an ack to the sender. One accessor names
+    // every pipe; the one present on this worker is the one bound here. bind_relay() aligns in1 to the
+    // pipe's durable cursor (firmware resets it at launch) and makes pop_front wait for compute. The
+    // pipe lives to the end of kernel_main; its destructor stores the cursor back.
+    experimental::PrefetcherPipe pipe(pipe::in1);
+    auto in1_relay = pipe.bind_relay();
+#elif defined(IN1_SHARDED)
     dfb_in1.reserve_back(in1_block_num_tiles * num_blocks_inner_dim);
     dfb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
 #else
     [[maybe_unused]] const auto s1 = TensorAccessor(tensor::in1);
-#endif  // IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
 
     //  WRITER
     const auto s = TensorAccessor(tensor::out);
@@ -309,7 +325,13 @@ void kernel_main() {
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
 #endif
-#ifndef IN1_SHARDED
+#if defined(ENABLE_PREFETCHER_PIPE)
+                        // One K-block of lookahead over the pipe: publish this block to compute, then
+                        // hand the previous block's entry back to the sender once compute has drained
+                        // it. One in1 entry is one K-block, which is also one pipe entry.
+                        in1_relay.reserve_back(1);
+                        pipe.wait_front(block == 0 ? 1u : 2u);
+#elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_write_offset = 0;
@@ -338,7 +360,7 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
-#endif  // IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
 
 #ifndef SKIP_MCAST
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
@@ -384,10 +406,23 @@ void kernel_main() {
                             in1_mcast_num_cores);
 #endif  // SKIP_MCAST
 
-#ifndef IN1_SHARDED
+#if defined(ENABLE_PREFETCHER_PIPE)
+                        // pop_front waits for compute to have popped that block out of in1 before
+                        // acking it, so no free-space spin is needed. Publish only through the relay
+                        // view: pushing dfb_in1 as well would double the credit compute sees.
+                        in1_relay.push_back(1);
+                        if (block >= 1) {
+                            pipe.pop_front(1, noc);
+                        }
+#elif !defined(IN1_SHARDED)
                         dfb_in1.push_back(in1_block_num_tiles);
-#endif  // IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
                     }
+#ifdef ENABLE_PREFETCHER_PIPE
+                    if (num_blocks_inner_dim > 0) {
+                        pipe.pop_front(1, noc);
+                    }
+#endif
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks
                     if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
