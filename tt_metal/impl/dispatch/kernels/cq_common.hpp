@@ -209,15 +209,9 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 #ifdef ARCH_BLACKHOLE
 // NOC_RET_ADDR_MID holds the high 32 bits of the destination and the with_state issuers only reprogram the low
 // 32, so a destination that carries past 2^32 part way through a transfer would keep writing into the previous
-// 4GB window. Returns the high word now programmed, for the caller to carry into the next burst.
-FORCE_INLINE uint32_t cq_noc_sync_ret_addr_mid(uint32_t noc, uint32_t cmd_buf, uint64_t dst_addr, uint32_t mid) {
-    const uint32_t next = (uint32_t)(dst_addr >> 32);
-    // A carry happens once per 4GB of destination, so the register write is the rare path and the compare is
-    // what runs per burst.
-    if (__builtin_expect(next != mid, 0)) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, next);
-    }
-    return next;
+// 4GB window.
+FORCE_INLINE void cq_noc_set_ret_addr_mid(uint32_t noc, uint32_t cmd_buf, uint64_t dst_addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
 }
 #endif
 
@@ -231,17 +225,9 @@ template <
     bool flush_last_transfer = false,
     enum CQNocSend send = CQ_NOC_SEND>
 inline uint32_t cq_noc_async_write_with_state_any_len(
-    uint32_t src_addr,
-    uint64_t dst_addr,
-    uint32_t size = 0,
-    uint32_t ndests = 1,
-    uint8_t noc = noc_index,
-    [[maybe_unused]] uint32_t* mid_shadow = nullptr) {
+    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
 #ifdef ARCH_BLACKHOLE
-    // A caller that advances dst_addr across calls passes its own shadow, so the entry sync knows what the
-    // register still holds from last time. Without one the register is assumed to already match.
-    uint32_t mid = (mid_shadow != nullptr) ? *mid_shadow : (uint32_t)(dst_addr >> 32);
-    mid = cq_noc_sync_ret_addr_mid(noc, cmd_buf, dst_addr, mid);
+    cq_noc_set_ret_addr_mid(noc, cmd_buf, dst_addr);
 #endif
     if (size > NOC_MAX_BURST_SIZE) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, send, cmd_buf, update_counters>(
@@ -250,7 +236,7 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
 #ifdef ARCH_BLACKHOLE
-        mid = cq_noc_sync_ret_addr_mid(noc, cmd_buf, dst_addr, mid);
+        cq_noc_set_ret_addr_mid(noc, cmd_buf, dst_addr);
 #endif
         while (size > NOC_MAX_BURST_SIZE) {
             cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, send, cmd_buf, update_counters>(
@@ -259,17 +245,10 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
             dst_addr += NOC_MAX_BURST_SIZE;
             size -= NOC_MAX_BURST_SIZE;
 #ifdef ARCH_BLACKHOLE
-            mid = cq_noc_sync_ret_addr_mid(noc, cmd_buf, dst_addr, mid);
+            cq_noc_set_ret_addr_mid(noc, cmd_buf, dst_addr);
 #endif
         }
     }
-#ifdef ARCH_BLACKHOLE
-    // Hand back what the register holds now, which describes the final burst rather than wherever the caller
-    // advances to next.
-    if (mid_shadow != nullptr) {
-        *mid_shadow = mid;
-    }
-#endif
     if constexpr (write_last_packet) {
 #if defined(ARCH_QUASAR)
         if constexpr (flush_last_transfer) {
