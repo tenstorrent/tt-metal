@@ -138,12 +138,34 @@ qualified. Causal/balanced, indexed/paged/chunked-cache, sliding-window, sink,
 MLA and device-tensor logical lengths remain legacy-only and reject explicit recipes.
 The third returned tensor is internal scratch, **not a supported LSE result**.
 
+## Exp ring attention
+
+`exp_ring_joint_scaled_dot_product_attention` (fused K/V all-gather over the fabric MUX) accepts the
+same `precision` and `inputs_prepared` arguments. FAST (A) keeps the existing exp-ring compute with
+the recipe's HiFi2/approximate-exponential configuration. B/C/D/E replace it with the shared streaming
+recipe: each core keeps one recurrent state resident in L1 across every active ring iteration,
+releases Q and normalizes only on the last KV chunk of the last active iteration, and masks key tails
+(local shard padding, the global `logical_n` tail and the joint tail) from valid-row counts. The
+existing reader's chunk skipping, phase-alignment chunks and MUX forwarding are reused unchanged.
+The recipe owns CB indices 0-16; the MUX-writer K/V aliases move to 19/20 and Q is single-slot
+(each Q chunk is read once and stays resident), so B/E_bf16/C/D fit Q256/K512 in the pipeline's L1.
+
+Current exp-ring recipe scope is Blackhole, D128, Q128-Q320 in 32-row steps (as L1 allows; B/E need
+a multiple of 64) with K512, scalar
+`logical_n`, the default scale and **one head-segment per core row** (a single pass). Several
+passes per row (and therefore the streamed-Q fallback) and a device-tensor `logical_n` are rejected:
+per-pass recipe state would need a pass-outer loop order or DRAM checkpoints. An L1 overflow is
+rejected with the required and usable sizes. Two connected devices (1x2 `FABRIC_1D_RING`, two links)
+are qualified: B/C/D/E equal dense recipe attention bit-for-bit on the chip's KV in ring visiting
+order whenever every visited segment but the last is a whole number of K512 chunks, and otherwise
+match its error level.
+
 `WanPipeline`, `WanTransformer3DModel`, `WanTransformerBlock` and `WanAttention`
 have opt-in `sdpa_precision` and `sdpa_kv_dtype` arguments that apply to both
-self- and unmasked cross-attention. Ring self-attention keeps the mesh-tuned Q
-chunk when the recipe supports it and otherwise uses Q256; exp_ring (the 4x32
-Galaxy path) is not yet integrated, so a recipe routes that mesh through
-ring_joint. E preparation happens after norm/RoPE and before
+self- and unmasked cross-attention. Ring and exp-ring self-attention keep the
+mesh-tuned Q chunk when the recipe supports it and otherwise use Q256; the 4x32
+Galaxy mesh uses exp_ring with the recipe, which is not yet qualified on Galaxy
+hardware. E preparation happens after norm/RoPE and before
 ring communication; ping-pong KV buffers use the selected storage dtype.
 Omitting these arguments retains the original model behavior. Fresh pretrained
 attention-block tests qualify this integration, not generated-video quality or

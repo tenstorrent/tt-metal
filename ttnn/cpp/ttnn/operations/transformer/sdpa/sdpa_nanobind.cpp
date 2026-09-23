@@ -188,7 +188,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel) {
+    uint32_t num_buffers_per_channel,
+    std::optional<ttnn::transformer::SDPAPrecision> precision,
+    bool inputs_prepared) {
     return ttnn::transformer::ExecuteExpRingJointAttention::invoke(
         input_tensor_q,
         input_tensor_k,
@@ -211,7 +213,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        precision,
+        inputs_prepared);
 }
 
 }  // namespace
@@ -932,6 +936,17 @@ void bind_sdpa(nb::module_& mod) {
             mesh_device (ttnn.MeshDevice): Multi-device mesh for distributed computation.
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
+            num_workers_per_link (int): Must equal half the SDPA grid rows. Defaults to 1.
+            num_buffers_per_channel (int): Fabric MUX buffers per channel. Defaults to 8.
+            precision (ttnn.SDPAPrecision, optional): Explicit Blackhole D128, noncausal Q128-Q320/K512
+                numerical recipe (see docs/sdpa_precision.md). One recurrent state per Q chunk is kept in L1
+                across all active ring steps and normalized once on the last one. Currently requires a
+                single head-segment per core row (one pass), a scalar logical_n and the default scale.
+                Omit to retain the legacy behavior. Cannot be combined with compute_kernel_config or
+                exp_approx_mode=False.
+            inputs_prepared (bool): LOW_PRECISION caller acknowledgment; prepare Q and both primary/joint
+                KV with ttnn.transformer.prepare_sdpa_input before communication. Required only for
+                LOW_PRECISION. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -966,7 +981,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("num_workers_per_link") = 1,
-        nb::arg("num_buffers_per_channel") = 8);
+        nb::arg("num_buffers_per_channel") = 8,
+        nb::arg("precision") = nb::none(),
+        nb::arg("inputs_prepared") = false);
 
     const auto* const mla_doc =
         R"doc(

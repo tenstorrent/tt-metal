@@ -5,6 +5,9 @@
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/exp_ring_recipe_cbs.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -209,6 +212,22 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         args.topology,
         args.cluster_axis);
 
+    // A two-device ring axis has no wraparound (ccl::get_boundary_mode is NONE for extent 2), so each
+    // device sees only one neighbor -- which is both its ring predecessor and successor. Route the
+    // missing direction's rows to that same device over the next num_links fabric links, so the
+    // backward and forward MUX kernels never share an ethernet channel. Rings of 3+ are unchanged.
+    uint32_t backward_link_offset = 0;
+    uint32_t forward_link_offset = 0;
+    if (args.ring_size == 2) {
+        if (!backward_coord.has_value() && forward_coord.has_value()) {
+            backward_coord = forward_coord;
+            backward_link_offset = args.num_links;
+        } else if (!forward_coord.has_value() && backward_coord.has_value()) {
+            forward_coord = backward_coord;
+            forward_link_offset = args.num_links;
+        }
+    }
+
     auto scale = args.scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
@@ -299,6 +318,23 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+
+    // Named recipes B/C/D/E replace the exp-ring compute with the shared streaming recipe
+    // (SDPA_RECIPE_EXP_RING): fixed recipe CB layout, compute config and defines. FAST (A) keeps the
+    // existing exp-ring compute with the recipe's fidelity/approximation (set by the entry point).
+    const bool named_compute = args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST;
+    std::optional<ttnn::operations::transformer::sdpa::detail::PrecisionPolicy> recipe_policy;
+    if (named_compute) {
+        namespace recipes = ttnn::operations::transformer::sdpa::detail;
+        recipe_policy =
+            recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, input_tensor_k.dtype()));
+        TT_FATAL(
+            fp32_dest_acc_en == recipe_policy->fp32_destination,
+            "Named exp ring recipe expects fp32_dest_acc_en={} from its compute config",
+            recipe_policy->fp32_destination);
+    }
+    // Recipe matmul subblocks are fixed by the recipe schedule: (FP32 ? 1 : 2) x 4.
+    const uint32_t recipe_subblock_h = named_compute && recipe_policy->fp32_destination ? 1 : 2;
 
     // Grid layout:
     //   user_grid:        Full grid from program_config (or device default). Contains SDPA workers + fabric MUX.
@@ -460,6 +496,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+    if (named_compute) {
+        qk_out_subblock_h = recipe_subblock_h;
+        qk_out_subblock_w = 4;
+    }
 
     TT_FATAL(
         Sq_chunk_t % qk_out_subblock_h == 0,
@@ -477,11 +517,17 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
     // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                                       Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1;
+    const bool use_streaming_compute =
+        named_compute || (!fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
+                          Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1);
 
     auto [out_out_subblock_h, out_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+    if (named_compute) {
+        // The writer drains cb_out in rows of out_out_subblock_h, matching the recipe's QK@V cadence.
+        out_out_subblock_h = recipe_subblock_h;
+        out_out_subblock_w = 4;
+    }
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
@@ -768,6 +814,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
     const auto sdpa_grid_set = CoreRangeSet(sdpa_grid_range);
+    std::optional<ComputeConfigDescriptor> recipe_compute_config;
 
     // Q input. NOTE: sized for resident Q here; the streamed-Q fallback below (search stream_q)
     // patches desc.cbs[0].total_size down to one chunk when the resident total does not fit L1.
@@ -1059,6 +1106,37 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // CBs must end below the lowest live L1 buffer (validate_circular_buffer_region enforces
     // exactly this). In the pipeline, global semaphores and persistent buffers occupy the top of
     // L1, so budgeting against the raw L1 size over-promises and the program clashes at allocate.
+    if (named_compute) {
+        // Adopt the recipe CB layout (fixed indices 0-16) in place of the exp-ring CBs built above;
+        // this discards them unchanged, so the legacy layout stays byte-identical when precision is unset.
+        // Only K/V gain second handles for the MUX writer (the recipe's c_14 is exp_max_diff, so the exp
+        // aliases move to exp_ring::kRecipe{K,V}WriterAliasCb). Q is single-slot: with one pass every Q
+        // chunk is read once and stays resident across all ring iterations, so the recipe's second Q
+        // slot would be dead L1.
+        namespace recipes = ttnn::operations::transformer::sdpa::detail;
+        namespace exp_ring_cbs = ttnn::operations::transformer::sdpa::exp_ring;
+        auto recipe_program = recipes::recipe_compute_program(*recipe_policy, sdpa_grid_set, 1, Sq_chunk_t);
+        desc.cbs = std::move(recipe_program.cbs);
+        for (auto& cb : desc.cbs) {
+            auto& format = cb.format_descriptors.front();
+            if (format.buffer_index == 0) {
+                cb.total_size = Sq_chunk_t * DHt * format.page_size;
+            } else if (format.buffer_index == 1 || format.buffer_index == 2) {
+                auto alias = format;
+                alias.buffer_index = static_cast<uint8_t>(
+                    format.buffer_index == 1 ? exp_ring_cbs::kRecipeKWriterAliasCb
+                                             : exp_ring_cbs::kRecipeVWriterAliasCb);
+                cb.format_descriptors.push_back(alias);
+            }
+        }
+        auto& recipe_compute = recipe_program.kernels.front();
+        for (const auto& [name, value] : recipe_compute.defines) {
+            defines[name] = value;
+        }
+        defines["SDPA_RECIPE_EXP_RING"] = "1";
+        recipe_compute_config = std::get<ComputeConfigDescriptor>(recipe_compute.config);
+    }
+
     const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
     const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
                                                                : mesh_device->l1_size_per_core();
@@ -1068,6 +1146,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     for (const auto& cb : desc.cbs) {
         total_cb_bytes += cb.total_size;
     }
+    TT_FATAL(
+        !named_compute || total_cb_bytes <= usable_l1,
+        "Named exp ring SDPA recipe needs {} B of L1 per core at Q{}/K512 but only {} B are usable; use a "
+        "smaller q_chunk_size",
+        total_cb_bytes,
+        q_chunk_size,
+        usable_l1);
     const bool stream_q = (num_passes > 1) && (total_cb_bytes > usable_l1);
     if (stream_q) {
         total_cb_bytes -= desc.cbs[0].total_size;
@@ -1629,6 +1714,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = math_approx_mode,
     };
+    if (recipe_compute_config) {
+        compute_kernel.config = *recipe_compute_config;
+    }
 
     // Live-length tensor address for all three kernels -- each derives chunk-skip counts from it and
     // the credit/gate protocol requires they agree. Buffer* (not ->address()) so a cache hit re-patches it.
@@ -1950,7 +2038,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (backward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, desc, mux_backward_logical_cores[link]);
+                    src_node_id, dst_node_id, link + backward_link_offset, desc, mux_backward_logical_cores[link]);
                 KernelDescriptor::RTArgList mux_args;
                 mux_args.append(mux_rt_args);
                 mux_kernel.emplace_runtime_args(mux_backward_logical_cores[link], mux_args);
@@ -1958,7 +2046,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (forward_coord.has_value()) {
                 const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                 auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link, desc, mux_forward_logical_cores[link]);
+                    src_node_id, dst_node_id, link + forward_link_offset, desc, mux_forward_logical_cores[link]);
                 KernelDescriptor::RTArgList mux_args;
                 mux_args.append(mux_rt_args);
                 mux_kernel.emplace_runtime_args(mux_forward_logical_cores[link], mux_args);
