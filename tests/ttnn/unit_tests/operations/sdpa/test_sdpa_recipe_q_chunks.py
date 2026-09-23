@@ -20,8 +20,6 @@ from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, m
 
 Q_CHUNKS = (128, 192, 224, 288, 320)
 UNSUPPORTED_Q_CHUNKS = (96, 100, 352)
-# Compensated BF16 state pairs query tile rows; odd tile counts are rejected for B/E.
-PAIRED_VARIANTS = ("B", "E_bf16", "E_bfp8", "E_bfp4")
 
 
 def options(variant, grid, q_chunk_size):
@@ -78,10 +76,6 @@ def test_recipe_q_chunk_preserves_accuracy(
             upload(device, [x[..., -rows:, :].contiguous() for x, rows in split], variant),
         ]
     expected = torch.cat([ttnn.to_torch(x) for x in invoke(segments, variant, grid, 256)], dim=2)
-    if variant in PAIRED_VARIANTS and (q_chunk_size // 32) % 2:
-        with pytest.raises(RuntimeError, match="multiple of 64"):
-            invoke(segments, variant, grid, q_chunk_size)
-        return
     try:
         outputs = invoke(segments, variant, grid, q_chunk_size)
     except RuntimeError as error:

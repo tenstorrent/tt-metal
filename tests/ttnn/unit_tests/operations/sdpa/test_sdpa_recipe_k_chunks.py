@@ -15,7 +15,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from .sdpa_recipe_test_utils import PRECISIONS, VARIANTS, digest, make_inputs, metrics, prepare, reference
 
-PAIRED_VARIANTS = ("B", "E_bf16", "E_bfp8", "E_bfp4")
 
 
 def options(variant, grid, q_chunk, k_chunk):
@@ -87,10 +86,6 @@ def test_recipe_k_chunk_preserves_accuracy(
             upload(device, [x[..., :-rows, :].contiguous() for x, rows in split], variant),
             upload(device, [x[..., -rows:, :].contiguous() for x, rows in split], variant),
         ]
-    if variant in PAIRED_VARIANTS and (q_chunk // 32) % 2:
-        with pytest.raises(RuntimeError, match="multiple of 64"):
-            invoke(segments, variant, grid, q_chunk, k_chunk)
-        return
     try:
         actual = run(segments, variant, grid, q_chunk, k_chunk)
     except RuntimeError as error:

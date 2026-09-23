@@ -24,12 +24,13 @@ inline void group2_initialize_root(uint32_t root_cb, uint32_t tiles) {
     CircularBuffer(root_cb).push_back(tiles);
 }
 
-inline void group2_bootstrap_row(uint32_t root_cb, uint32_t scratch_cb, uint32_t global_row, uint32_t read_row) {
+inline void group2_bootstrap_row(
+    uint32_t root_cb, uint32_t scratch_cb, uint32_t global_row, uint32_t read_row, uint32_t rows = 2) {
     // K0 has no correction-CB publication, so explicitly publish preceding PV.
     group2_pack_visibility_fence();
     PACK((llk_pack_reconfig_l1_acc(0)));
     configure_pack_width(root_cb, 4);
-    for (uint32_t i = 0; i < 2; ++i) {
+    for (uint32_t i = 0; i < rows; ++i) {
         tile_regs_acquire();
         copy_init(scratch_cb);
         copy_block(scratch_cb, 8 * (read_row + i), 0, 4);
@@ -51,7 +52,8 @@ inline void group2_numerator_row(
     bool identity,
     bool boundary,
     bool odd,
-    bool has_local) {
+    bool has_local,
+    uint32_t rows = 2) {
     // Original correction-CB push already publishes PV. Protected/local
     // updates are in-place; the subsequent scratch publication drains them.
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -66,7 +68,7 @@ inline void group2_numerator_row(
         // slots may be stale; ALL local readers below are excluded by this branch.
         PACK((ckernel::sfpu::init_sdpa_compensated_block_macros()));
         configure_pack_width(root_cb, 2);
-        for (uint32_t i = 0; i < 2; ++i) {
+        for (uint32_t i = 0; i < rows; ++i) {
             for (uint32_t j = 0; j < 4; j += 2) {
                 tile_regs_acquire();
                 copy_init(root_cb);
@@ -101,7 +103,7 @@ inline void group2_numerator_row(
             PACK((ckernel::sfpu::init_group2_identity_replay()));
         }
         configure_pack_width(root_cb, 2);
-        for (uint32_t i = 0; i < 2; ++i) {
+        for (uint32_t i = 0; i < rows; ++i) {
             for (uint32_t j = 0; j < 4; j += 2) {
                 tile_regs_acquire();
                 copy_init(root_cb);
@@ -133,7 +135,7 @@ inline void group2_numerator_row(
     }
     // Max changes force a fold, independently of the fixed group boundary.
     configure_single_tile_pack(root_cb);
-    for (uint32_t i = 0; i < 2; ++i) {
+    for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < 4; ++j) {
             tile_regs_acquire();
             copy_init(root_cb);

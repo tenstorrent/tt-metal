@@ -776,18 +776,22 @@ ALWI void sdpa_compensated_sum_update(
     uint32_t new_lo,
     uint32_t correction_row,
     uint32_t new_read_hi,
-    bool identity_correction = false) {
+    bool identity_correction = false,
+    uint32_t rows = 2) {
+    // A single remaining row runs the paired SFPU program with row 0 duplicated
+    // into the second slot. SFPU lanes are independent; only row 0 is packed.
     tile_regs_acquire();
     copy_init(old_cb);
     for (uint32_t b = 0; b < 2; ++b) {
-        copy_tile(old_cb, old_hi + b * 2, 3 * b);
-        copy_tile(old_cb, old_lo + b * 2, 3 * b + 1);
-        copy_tile(new_cb, new_read_hi + b * 2, 3 * b + 2);
+        const uint32_t r = b < rows ? b : 0;
+        copy_tile(old_cb, old_hi + r * 2, 3 * b);
+        copy_tile(old_cb, old_lo + r * 2, 3 * b + 1);
+        copy_tile(new_cb, new_read_hi + r * 2, 3 * b + 2);
     }
     if (!identity_correction) {
         unary_bcast_init<BroadcastType::COL>(correction_cb);
         unary_bcast<BroadcastType::COL>(correction_cb, correction_row, 6);
-        unary_bcast<BroadcastType::COL>(correction_cb, correction_row + 1, 7);
+        unary_bcast<BroadcastType::COL>(correction_cb, correction_row + (rows > 1 ? 1 : 0), 7);
         unary_bcast_uninit<BroadcastType::COL>(correction_cb);
     }
     tile_regs_commit();
@@ -801,7 +805,7 @@ ALWI void sdpa_compensated_sum_update(
         VectorMode::None,
         identity_correction)));
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-    for (uint32_t b = 0; b < 2; ++b) {
+    for (uint32_t b = 0; b < rows; ++b) {
         pack_tile<true>(3 * b, new_cb, new_hi + b * 2);
         pack_tile<true>(3 * b + 1, new_cb, new_lo + b * 2);
     }
@@ -884,7 +888,7 @@ void salad_correct_fused(
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row * sdpa_sum_stride);
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
 
-    static_assert(sbh_t == 2 && sbw_t == 4 && dst_size == 8);
+    static_assert((sbh_t == 1 || sbh_t == 2) && sbw_t == 4 && dst_size == 8);
     group2_numerator_row(
         out_in_cb,
         out_out_cb,
@@ -896,14 +900,13 @@ void salad_correct_fused(
         identity_correction,
         group_boundary,
         group_odd,
-        group_has_local);
+        group_has_local,
+        tiles_per_row);
     PACK((ckernel::sfpu::init_sdpa_compensated_block_macros()));
 
     configure_single_tile_pack(sum_out_cb);
-    if constexpr (tiles_per_row >= 2) {
-        PACK((ckernel::sfpu::init_sdpa_compensated_sum_replay()));
-    }
-    for (uint32_t i = 0; i + 1 < tiles_per_row; i += 2) {
+    PACK((ckernel::sfpu::init_sdpa_compensated_sum_replay()));
+    for (uint32_t i = 0; i < tiles_per_row; i += 2) {
         sdpa_compensated_sum_update(
             sum_in_cb,
             sum_out_cb,
@@ -914,7 +917,8 @@ void salad_correct_fused(
             2 * (write_row_base + i) + 1,
             ob_row_base + i,
             2 * (current_sum_popped ? write_row_base + i : sum_row_base + i),
-            identity_correction);
+            identity_correction,
+            tiles_per_row - i < 2 ? 1 : 2);
     }
     PACK((llk_pack_reconfig_l1_acc(1)));
 #endif
@@ -1061,18 +1065,25 @@ static void sdpa_inner_loop_step(
     PACK(sdpa_pack.format_cb = INVALID_CB; sdpa_pack.width = 0;)
     sdpa_skip_prev_sum_pop = false;
 #else
-    // Row groups pair two query tile rows; odd Q chunks need a single-row group (not yet supported).
+    // Row groups pair two query tile rows; an odd Q chunk ends with a single-row group.
     static_assert(
-        Sq_chunk_t % 2 == 0 && Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> &&
-        vDHt == 4 &&
+        Sq_chunk_t >= 4 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt == 4 &&
         qkt_subblock_h == 2 && qktv_subblock_h == 2);
 #endif
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t in0_block_w = DHt;
-    constexpr uint32_t q_num_subblocks = Sq_chunk_t / qkt_subblock_h;
+    // An odd Q chunk (BF16 recipes, two-row subblocks) ends with a one-row subblock. Helpers
+    // address rows as index * height, so that subblock uses row index 2 * (n - 1) and height 1.
+    constexpr bool q_tail_row = Sq_chunk_t % qkt_subblock_h != 0;
+    constexpr uint32_t q_num_subblocks = Sq_chunk_t / qkt_subblock_h + (q_tail_row ? 1 : 0);
     constexpr uint32_t q_subblock_num_tiles = qkt_subblock_h * in0_block_w;
-    constexpr uint32_t row_tiles = qkt_subblock_h * KT_stride;  // Use KT_stride for cb_qkt_im row width
+    auto qk_rows = [](uint32_t q_subblock) -> uint32_t {
+        return q_tail_row && q_subblock == q_num_subblocks - 1 ? 1 : qkt_subblock_h;
+    };
+    auto qk_index = [](uint32_t q_subblock) -> uint32_t {
+        return q_tail_row && q_subblock == q_num_subblocks - 1 ? q_subblock * qkt_subblock_h : q_subblock;
+    };
 
 #ifdef SDPA_RECIPE_FP32
     static_assert(qkt_subblock_h == 1, "Early identity scan handles one query tile row per QK subblock");
@@ -1103,8 +1114,7 @@ static void sdpa_inner_loop_step(
     };
 #else
     static_assert(
-        Sq_chunk_t % 2 == 0 && qkt_subblock_h == 2 && qktv_subblock_h == 2,
-        "Early guard pairs query tile rows; K512 materialized-V geometry only");
+        qkt_subblock_h == 2 && qktv_subblock_h == 2, "Early guard pairs query tile rows (odd chunks end with one row)");
     // Per-K-step flags; only UNPACK fills these. Other threads obtain the
     // matching decision at the original correction mailbox rendezvous.
     uint32_t sdpa_identity_flags[Sq_chunk_t] = {};
@@ -1148,7 +1158,9 @@ static void sdpa_inner_loop_step(
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
-        CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
+        const uint32_t cur_qk_h = qk_rows(q_subblock);
+        const uint32_t cur_qk_index = qk_index(q_subblock);
+        CircularBuffer(cb_q_in).wait_front(q_wait_tiles - (qkt_subblock_h - cur_qk_h) * in0_block_w);
         kt_index_offset = 0;
 
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
@@ -1157,7 +1169,7 @@ static void sdpa_inner_loop_step(
 #else
         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
 #endif
-        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
         MATH((llk_math_matmul_init_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
@@ -1199,7 +1211,7 @@ static void sdpa_inner_loop_step(
 #else
                     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
 #endif
-                    mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+                    mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
 #ifdef SDPA_RECIPE_FP32
 #ifndef SDPA_RECIPE_ACCURATE
                     MATH((llk_math_matmul_reinit_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(
@@ -1215,10 +1227,10 @@ static void sdpa_inner_loop_step(
                         cb_qkt_im,
                         q_index_offset,
                         kt_index_offset,
-                        q_subblock,
+                        cur_qk_index,
                         kt_subblock * actual_sbw,
                         actual_sbw,
-                        qkt_subblock_h,
+                        cur_qk_h,
                         in0_block_w,
                         in0_block_w,
 #ifdef SDPA_RECIPE_FP32
@@ -1255,7 +1267,7 @@ static void sdpa_inner_loop_step(
 #endif
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
-        cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
+        cb_push_back_hold_wr_ptr(cb_qkt_im, cur_qk_h * KT_stride);
 
         // reduce_trigger barrier. Posted after pack + push so it dominates every
         // cb_qkt_im writer; gates run()#2 (and run()#1 on the non-overlap path). STALL_PACK drains
@@ -1267,20 +1279,20 @@ static void sdpa_inner_loop_step(
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
-            CircularBuffer(cur.max).reserve_back(qkt_subblock_h);
+            CircularBuffer(cur.max).reserve_back(cur_qk_h);
             configure_single_tile_pack(cur.max);
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
             // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
             reduce_c_row_group<cb_qkt_im, cb_identity_scale_in, KT_stride>(
                 cur.max,
                 prev.max,
-                q_subblock,
+                cur_qk_index,
                 !is_first_iter /*do_eltwise_max*/,
-                qkt_subblock_h,
+                cur_qk_h,
                 active_Sk,
                 reduce_trigger,
                 overlap_first_half);
-            CircularBuffer(cur.max).push_back(qkt_subblock_h);
+            CircularBuffer(cur.max).push_back(cur_qk_h);
         }
 
         q_index_offset += qkt_subblock_h * in0_block_w;
@@ -1306,12 +1318,20 @@ static void sdpa_inner_loop_step(
         constexpr uint32_t qktv_h =
             ttnn::transformer::sdpa::streaming_qktv_h(qktv_subblock_h, qktv_subblock_w, dst_size, Sq_chunk_t);
         constexpr uint32_t qktv_remainder_h = Sq_chunk_t % qktv_h;
-        static_assert(qktv_remainder_h == 0 && Sq_chunk_t / qktv_h > 1);
+        // QK and PV row groups coincide; an odd BF16 chunk ends with one single-row group.
+        static_assert(qktv_h == qkt_subblock_h && qktv_remainder_h <= 1 && Sq_chunk_t / qktv_h > 1);
         static_assert(Sq_chunk_t >= qktv_h, "Sq_chunk_t must be at least qktv_h");
 
         static_assert(vDHt % qktv_subblock_w == 0, "vDHt must be evenly divisible by qktv_subblock_w");
         static_assert(qktv_h * qktv_subblock_w <= dst_size, "qktv subblock must fit in dest register file");
-        constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_h;  // full subblocks only
+        constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_h + (qktv_remainder_h ? 1 : 0);
+        constexpr uint32_t last_group = qktv_q_num_subblocks - 1;
+        constexpr uint32_t last_h = qktv_remainder_h ? qktv_remainder_h : qktv_h;
+        // Group g's row index in units of its own height.
+        auto pv_rows = [](uint32_t group) -> uint32_t { return group == last_group ? last_h : qktv_h; };
+        auto pv_index = [](uint32_t group) -> uint32_t {
+            return group == last_group && last_h != qktv_h ? group * qktv_h : group;
+        };
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt * sdpa_out_stride;
         // cb_qkt_im row width is KT_stride (for pointer alignment), not Sk_chunk_t
@@ -1402,9 +1422,9 @@ static void sdpa_inner_loop_step(
                         cur.max,
                         cur.sum,
                         KT_stride,
-                        q_num_subblocks - 1,
+                        qk_index(q_num_subblocks - 1),
                         kt_sub * matmul_inner,
-                        qkt_subblock_h,
+                        qk_rows(q_num_subblocks - 1),
                         matmul_inner);
 
                     if (kt_sub == 0) {
@@ -1466,7 +1486,10 @@ static void sdpa_inner_loop_step(
                             UNPACK({
                                 if (!is_first_iter && kt_sub == 0 && v_subblock == 0) {
                                     sdpa_identity_flags[q_num_subblocks - 1] = sdpa_scan_identity_maxima(
-                                        prev.max, cur.max, q_num_subblocks - 1, qkt_subblock_h);
+                                        prev.max,
+                                        cur.max,
+                                        qk_index(q_num_subblocks - 1),
+                                        qk_rows(q_num_subblocks - 1));
                                 }
                             })
 #endif
@@ -1559,7 +1582,7 @@ static void sdpa_inner_loop_step(
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
 #ifndef SDPA_RECIPE_FP32
             if (is_first_iter) {
-                group2_bootstrap_row(prev.out, out_cb, pushed * sbh, 0);
+                group2_bootstrap_row(prev.out, out_cb, pushed * qktv_h, 0, sbh);
             }
 #endif
             CircularBuffer(cur.sum).push_back(sbh * sdpa_sum_stride);
@@ -1607,6 +1630,7 @@ static void sdpa_inner_loop_step(
                 // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
                 // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
                 {
+#ifdef SDPA_RECIPE_FP32
                     salad_correct_fused<qktv_h, vDHt, dst_size>(
                         prev.out,
                         prev.sum,
@@ -1617,13 +1641,40 @@ static void sdpa_inner_loop_step(
                         salad_row,
                         w_salad,
                         is_last_iter,
-#ifdef SDPA_RECIPE_FP32
                         identity_corrections[salad_row]);
 #else
-                        identity_corrections[salad_row],
-                        is_last_iter || (group_k_index % 2 == 0),
-                        (group_k_index % 2 == 1),
-                        has_local);
+                    if (qktv_remainder_h == 0 || sbh == qktv_h) {
+                        salad_correct_fused<qktv_h, vDHt, dst_size>(
+                            prev.out,
+                            prev.sum,
+                            cb_exp_max_diff,
+                            out_cb,
+                            cur.sum,
+                            0,
+                            salad_row,
+                            w_salad,
+                            is_last_iter,
+                            identity_corrections[salad_row],
+                            is_last_iter || (group_k_index % 2 == 0),
+                            (group_k_index % 2 == 1),
+                            has_local);
+                    } else if constexpr (qktv_remainder_h != 0) {
+                        // Single-row tail group: row indices in units of one row.
+                        salad_correct_fused<1, vDHt, dst_size>(
+                            prev.out,
+                            prev.sum,
+                            cb_exp_max_diff,
+                            out_cb,
+                            cur.sum,
+                            0,
+                            salad_row * qktv_h,
+                            w_salad * qktv_h,
+                            is_last_iter,
+                            identity_corrections[salad_row],
+                            is_last_iter || (group_k_index % 2 == 0),
+                            (group_k_index % 2 == 1),
+                            has_local);
+                    }
 #endif
                 }
             }
@@ -1645,7 +1696,7 @@ static void sdpa_inner_loop_step(
         exp_packthread_tile_init<EXP_APPROX_MODE>();
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
-            const uint32_t cur_h = qktv_h;
+            const uint32_t cur_h = pv_rows(q_subblock);
             uint32_t salad_row = q_subblock - 1;
             uint32_t w_salad = salad_row - pushed_rows;
             uint32_t w_q = q_subblock - pushed_rows;
@@ -1666,7 +1717,7 @@ static void sdpa_inner_loop_step(
 
             // V matmul for the current row group.
             {
-                CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles - (qktv_h - cur_h) * KT_stride);
             }
             {
 #ifdef SDPA_RECIPE_FP32
@@ -1691,7 +1742,7 @@ static void sdpa_inner_loop_step(
                         out_cb,
                         qktv_in0_index_offset,
                         qktv_in1_index,
-                        w_q,
+                        cur_h == qktv_h ? w_q : w_q * qktv_h,
 #ifdef SDPA_RECIPE_FP32
                         v_subblock * qktv_subblock_w,
 #else
@@ -1712,8 +1763,8 @@ static void sdpa_inner_loop_step(
                 // Last main-loop iteration: hoist drain's sub_exp so both salads
                 // (current row and drain row) chain back-to-back with one FPU init.
                 if (q_subblock == total_v_row_groups - 1) {
-                    constexpr uint32_t drain_h = qktv_h;
-                    const uint32_t drain_salad_row = qktv_q_num_subblocks - 1;
+                    constexpr uint32_t drain_h = last_h;
+                    const uint32_t drain_salad_row = last_group;
 
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
 #ifdef SDPA_RECIPE_FP32
@@ -1725,7 +1776,7 @@ static void sdpa_inner_loop_step(
                         prev.max,
                         cur.max,
                         cb_exp_max_diff,
-                        drain_salad_row,
+                        pv_index(drain_salad_row),
                         drain_h,
                         sdpa_identity_flags[drain_salad_row]);
 #endif
@@ -1740,7 +1791,7 @@ static void sdpa_inner_loop_step(
                         pushed_rows++;
                     }
 
-                    const uint32_t drain_w = qktv_q_num_subblocks - 1 - pushed_rows;
+                    const uint32_t drain_w = last_group - pushed_rows;
                     salad_correct_row(drain_salad_row, drain_w, drain_h);
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
@@ -1776,7 +1827,7 @@ static void sdpa_inner_loop_step(
 
         // Pipeline drain: SALAD for the last group
         {
-            constexpr uint32_t drain_h = qktv_h;
+            constexpr uint32_t drain_h = last_h;
             {
                 // Drain was hoisted into the last main-loop iteration above.
                 // For is_first_iter (no SALAD), the drain row still needs push/normalize.
@@ -1785,8 +1836,7 @@ static void sdpa_inner_loop_step(
                         normalize_row(pushed_rows, drain_h);
                     } else {
 #ifndef SDPA_RECIPE_FP32
-                        group2_bootstrap_row(
-                            prev.out, out_cb, (total_v_row_groups - 1) * qktv_h, (total_v_row_groups - 1) * qktv_h);
+                        group2_bootstrap_row(prev.out, out_cb, last_group * qktv_h, last_group * qktv_h, drain_h);
 #endif
                         CircularBuffer(cur.sum).push_back(drain_h * sdpa_sum_stride);
                         CircularBuffer(out_cb).push_back(drain_h * vDHt * sdpa_out_stride);

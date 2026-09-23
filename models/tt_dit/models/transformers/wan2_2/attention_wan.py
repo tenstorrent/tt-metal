@@ -344,10 +344,12 @@ class WanAttention(Module):
 
     @staticmethod
     def _recipe_q_chunk(q_chunk: int, precision: ttnn.SDPAPrecision, *, ring: bool) -> int:
-        """Largest-fidelity reuse of a tuned Q chunk that the recipe supports, else Q256."""
+        """Reuse a tuned Q chunk when the recipe supports it, else Q256.
+
+        Ring checkpoints need an even Q tile count; dense and exp-ring recipes accept any 32-row step.
+        """
         tiles = q_chunk // 32
-        paired = precision in (ttnn.SDPAPrecision.COMPENSATED, ttnn.SDPAPrecision.LOW_PRECISION)
-        supported = q_chunk % 32 == 0 and 128 <= q_chunk <= 320 and (tiles % 2 == 0 or not (paired or ring))
+        supported = q_chunk % 32 == 0 and 128 <= q_chunk <= 320 and (tiles % 2 == 0 or not ring)
         return q_chunk if supported else 256
 
     def _self_sdpa_kwargs(self) -> dict:
