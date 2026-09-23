@@ -298,7 +298,13 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
             const auto& neighbor_node_id = conn.next_hop_dst;
             if (key.use_vc2()) {
                 append_fabric_vc2_connection_rt_args(
-                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+                    tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context(),
+                    fabric_node_id,
+                    neighbor_node_id,
+                    key.link_idx,
+                    program_handle,
+                    core,
+                    rt_args);
             } else {
                 append_fabric_connection_rt_args(
                     fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);

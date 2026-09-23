@@ -35,29 +35,6 @@ namespace tt::tt_metal {
 class Program;
 }  // namespace tt::tt_metal
 
-namespace {
-
-// checks if the connection b/w src and dst is a connection b/w TG gateway and a remote chip
-bool is_TG_gateway_connection(
-    const tt::tt_fabric::FabricNodeId& src_fabric_node_id, const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
-        return false;
-    }
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    tt::ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    tt::ChipId dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
-    const auto mmio_chip_id1 =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(src_chip_id);
-    const auto mmio_chip_id2 =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dst_chip_id);
-
-    // both of the chips should have the same associated mmio device and
-    // one of the chips should be the mmio device itself
-    return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
-}
-
-}  // namespace
-
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes() {
@@ -133,9 +110,7 @@ void append_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
-    // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
-    // but the routing is simple and doesn't need any special inter-mesh handling
-    if (!is_2d_fabric && !is_TG_gateway_connection(src_fabric_node_id, dst_fabric_node_id)) {
+    if (!is_2d_fabric) {
         TT_FATAL(
             src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
             "Currently only the chips on the same mesh are supported for 1D fabric. Src: {}, Dst: {}",
