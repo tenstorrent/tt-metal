@@ -9,11 +9,11 @@
 #include <memory>
 #include <string>
 
-#include <tt-metalium/experimental/sockets/internal/host_d2h_leg.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_h2d_leg.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_h2h_socket.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_l1_map.hpp>
-#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
+#include "tt_metal/distributed/host_d2h_leg.hpp"
+#include "tt_metal/distributed/host_h2d_leg.hpp"
+#include "tt_metal/distributed/host_h2h_socket.hpp"
+#include "tt_metal/distributed/host_l1_map.hpp"
+#include "tt_metal/distributed/host_region.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
