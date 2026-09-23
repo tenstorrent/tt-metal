@@ -485,7 +485,7 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
 
 
 # ===========================================================================
-# Family 3 — max / min (float + Int32). Ported from test_binary_max_min_quasar.py.b
+# Family 3 — max / min (float + Int32). Ported from test_binary_max_min_quasar.py.
 # Layout in0=Dest[0], in1=Dest[1], out=Dest[2]; dual unpack path; torch golden.
 # ===========================================================================
 SFPU_BINARY_MAX_MIN_FLOAT_FORMATS = input_output_formats(
