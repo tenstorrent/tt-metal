@@ -4,6 +4,7 @@
 
 #include "unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -142,6 +143,20 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
+
+    // The compute kernel is chosen from op_chain[0] alone, and dedicated kernels (other than MAC_TSS)
+    // hard-code their op and never expand SFPU_OP_CHAIN_0, while those same ops emit an empty
+    // init/func into eltwise_sfpu.cpp. Either way, one of them in a longer chain is silently dropped.
+    if (args.op_chain.size() > 1) {
+        for (const auto& op : args.op_chain) {
+            const auto kernel = utils::get_compute_kernel_path(op.type(), input_tensor.dtype());
+            TT_FATAL(
+                kernel == "eltwise_sfpu.cpp" || op.type() == operations::unary::UnaryOpType::MAC_TSS,
+                "Unary: {} uses a dedicated compute kernel and must be the only op in the chain (chain has {} ops)",
+                op.type(),
+                args.op_chain.size());
+        }
+    }
 
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
